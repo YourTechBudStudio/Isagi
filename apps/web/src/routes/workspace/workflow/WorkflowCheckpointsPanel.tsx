@@ -2,14 +2,12 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowCheckpointSummaryDto } from '@isagi/contracts';
 
-import type { WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
+import { useWorkflowCheckpointList } from '../../../lib/workspace/workflow/queries.js';
+import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import {
-  useWorkflowCheckpoint,
-  useWorkflowCheckpointList,
-} from '../../../lib/workspace/workflow/queries.js';
-import {
-  checkpointBaseLabel,
+  checkpointCommitLabel,
   checkpointExportCommand,
+  checkpointScopeNames,
   groupCheckpoints,
   resolveCheckpointSelection,
 } from './checkpoint-view.js';
@@ -22,13 +20,11 @@ import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
  * The Checkpoints tab: what an export of each checkpoint in the run would contain.
  *
  * Every checkpoint the run saved on the left, grouped by the node that saved it; the chosen one's
- * final file tree in the middle; the chosen file and the export line on the right. Nothing here
- * compares layers or counts warnings. Those belong to the dock's column for one visit, and a timeline
- * of badges would turn a list of places to look into a list of alarms.
+ * file tree in the middle; the chosen file and the export line on the right.
  *
  * The choice is the inspector's, not the panel's, so it survives the tab being closed. A choice that
  * still exists is kept whatever the dock does. Only when there is none does the panel seed one: the
- * dock's own checkpoint visit, or the most recent checkpoint.
+ * dock's own checkpoint execution, or the most recent checkpoint.
  *
  * The list is one tab stop. Up, Down, Home and End move the choice through the checkpoints in the
  * order they are drawn, exactly as a click would, and `aria-activedescendant` names the chosen one.
@@ -36,25 +32,25 @@ import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
  */
 export function WorkflowCheckpointsPanel({
   runId,
-  state,
+  view,
   chosenId,
   dockCheckpointId,
   onSeed,
   onSelect,
 }: {
   readonly runId: number;
-  readonly state: WorkflowRunState | null;
-  readonly chosenId: string | null;
-  /** The checkpoint of the visit the dock shows, if it shows one. Used only to seed. */
-  readonly dockCheckpointId: string | null;
+  readonly view: WorkflowRunView | null;
+  readonly chosenId: number | null;
+  /** The checkpoint of the execution the dock shows, if it shows one. Used only to seed. */
+  readonly dockCheckpointId: number | null;
   /** Records a choice without moving the dock. */
-  readonly onSeed: (checkpointId: string) => void;
-  /** A person's choice, which also moves the dock to the visit that saved it. */
+  readonly onSeed: (checkpointId: number) => void;
+  /** A person's choice, which also moves the dock to the execution that saved it. */
   readonly onSelect: (checkpoint: WorkflowCheckpointSummaryDto) => void;
 }) {
-  const list = useWorkflowCheckpointList(state);
+  const list = useWorkflowCheckpointList(runId);
   const items = list.data ?? null;
-  const groups = useMemo(() => groupCheckpoints(state, items ?? []), [state, items]);
+  const groups = useMemo(() => groupCheckpoints(view, items ?? []), [view, items]);
 
   const resolved =
     items === null ? null : resolveCheckpointSelection(chosenId, items, dockCheckpointId);
@@ -65,7 +61,7 @@ export function WorkflowCheckpointsPanel({
   const selected = items?.find((item) => item.checkpointId === resolved) ?? null;
 
   const idPrefix = useId();
-  const optionId = (checkpointId: string) => `${idPrefix}-${checkpointId}`;
+  const optionId = (checkpointId: number) => `${idPrefix}-${checkpointId}`;
   const order = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const selectedIndex = order.findIndex((item) => item.checkpointId === resolved);
 
@@ -132,11 +128,11 @@ export function WorkflowCheckpointsPanel({
       {selected === null ? (
         <div className="min-h-0 flex-1" />
       ) : (
-        <SelectedCheckpoint
+        <WorkflowCheckpointFiles
           key={selected.checkpointId}
-          runId={runId}
-          state={state}
-          item={selected}
+          checkpointId={selected.checkpointId}
+          layout="panes"
+          aside={<ExportLine command={checkpointExportCommand(selected.checkpointId)} />}
         />
       )}
     </div>
@@ -174,7 +170,10 @@ function CheckpointItem({
       <span className="min-w-0">
         <span className="block truncate text-[13px] text-fg">{item.title}</span>
         <span className="mt-0.5 block font-mono text-[10.5px] text-fg-subtle">
-          {formatClock(item.createdAt)} · {checkpointBaseLabel(item.base)}
+          {formatClock(item.createdAt)} · {checkpointCommitLabel(item.commitSha)}
+        </span>
+        <span className="mt-0.5 block truncate font-mono text-[10.5px] text-cyan opacity-80">
+          {checkpointScopeNames(item.scopes)}
         </span>
       </span>
     </div>
@@ -182,47 +181,9 @@ function CheckpointItem({
 }
 
 /**
- * The chosen checkpoint's tree and file.
- *
- * Its counts come from the visit's own summary in run state when that visit is there, which it is for
- * every checkpoint this client has seen committed; the detail is read only otherwise.
- */
-function SelectedCheckpoint({
-  runId,
-  state,
-  item,
-}: {
-  readonly runId: number;
-  readonly state: WorkflowRunState | null;
-  readonly item: WorkflowCheckpointSummaryDto;
-}) {
-  const inline = state?.executions.get(item.executionId)?.checkpoint ?? null;
-  const detail = useWorkflowCheckpoint(runId, inline === null ? item.checkpointId : null);
-  const counts = inline?.counts ?? detail.data?.checkpoint.counts ?? null;
-
-  if (counts === null) {
-    return (
-      <p className="min-h-0 flex-1 px-4.5 py-3 font-mono text-[11.5px] text-fg-subtle">
-        {detail.error ? inspectorCopy.checkpointDetailFailed : inspectorCopy.checkpointFilesLoading}
-      </p>
-    );
-  }
-  return (
-    <WorkflowCheckpointFiles
-      runId={runId}
-      checkpointId={item.checkpointId}
-      base={item.base}
-      counts={counts}
-      layout="panes"
-      aside={<ExportLine command={checkpointExportCommand(item.checkpointId, runId)} />}
-    />
-  );
-}
-
-/**
  * The `isagi checkpoints export` line for this checkpoint, shown and copyable.
  *
- * It names the checkpoint and run and leaves the output folder for the person to fill in: the
+ * It names the checkpoint and leaves the output folder for the person to fill in: the
  * command rebuilds the files there, and the panel has no business choosing where.
  */
 function ExportLine({ command }: { readonly command: string }) {

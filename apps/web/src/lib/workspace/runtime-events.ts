@@ -104,9 +104,8 @@ export function useRuntimeEventSubscription() {
             activeSocket = nextSocket;
             publishTerminalWorkspaceFact({ type: 'runtime_connected' });
             sendRuntimeEventInput(nextSocket, { type: 'attention_snapshot_requested' });
-            // Published before the snapshot is requested, so every workflow listener is registered
-            // and buffering before the first fact can arrive. A listener attached afterwards would
-            // miss exactly the transitions committed while the baseline was in flight.
+            // Published before the snapshot is requested, so open run views re-read what they may
+            // have missed while the socket was down.
             publishWorkflowSignal({ type: 'connected' });
             sendRuntimeEventInput(nextSocket, { type: 'workflow_run_snapshot_requested' });
           });
@@ -174,15 +173,8 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
     case 'workflow_run_changed':
       publishWorkflowSignal({ type: 'run_changed', summary: event.payload });
       break;
-    case 'workflow_run_detached':
-      publishWorkflowSignal({
-        type: 'run_detached',
-        runId: event.payload.runId,
-        surfaceId: event.payload.surfaceId,
-      });
-      break;
-    case 'workflow_run_transition':
-      publishWorkflowSignal({ type: 'transition', delta: event.payload });
+    case 'workflow_run_event':
+      publishWorkflowSignal({ type: 'run_event', event: event.payload });
       break;
     case 'durable_session_deleted':
       break;

@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { WorkflowRunSummary } from '@isagi/contracts';
 
-import { workflowCopy } from '../../../copy/index.js';
+import { workflowErrorStageHeadline } from '../../../copy/index.js';
 import { workflowSummaryFixture } from '../../../lib/workspace/workflow/test-support.js';
 import { inspectorCopy } from './copy.js';
 import { WorkflowInspectorHeader } from './WorkflowInspectorHeader.js';
@@ -54,9 +54,9 @@ function plainText(markup: string): string {
     .replaceAll('&amp;', '&');
 }
 
-function placed(preparation: Partial<WorkflowRunSummary['preparation']>): WorkflowRunSummary {
+function placed(placement: Partial<WorkflowRunSummary['placement']>): WorkflowRunSummary {
   const base = workflowSummaryFixture();
-  return workflowSummaryFixture({ preparation: { ...base.preparation, ...preparation } });
+  return workflowSummaryFixture({ placement: { ...base.placement, ...placement } });
 }
 
 test('a default placement adds nothing, so the common case is untouched', () => {
@@ -76,12 +76,6 @@ test('a run the workflow placed says so, and names the worktree it created', () 
         surface: { kind: 'create', title: 'Implement story #44' },
       },
       baseCommit: '9f3e1c2a4b5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f',
-      surface: {
-        surfaceId: 9,
-        requestedTitle: 'Implement story #44',
-        title: 'Implement story #44',
-        recordedAt: '2026-09-15T10:00:00.000Z',
-      },
     }),
   );
 
@@ -102,10 +96,9 @@ test('a caller override says so, and reuse is named by what the request asked fo
   );
 
   assert.match(markup, new RegExp(inspectorCopy.placementByOverride));
-  // The folder comes from the destination the commit wrote, not from a live worktree row.
+  // The folder comes from where preparation put the run, not from a live worktree row.
   assert.match(placementLine(markup) ?? '', /existing worktree/);
-  // No title: the summary carries none for a surface this launch did not create, and inventing one
-  // from live workspace state would put a deletable fact in a line of retained history.
+  // No title: the summary carries none for a surface this launch did not create.
   const line = placementLine(markup) ?? '';
   assert.match(line, /existing surface/);
   assert.doesNotMatch(line, /existing surface "/);
@@ -141,13 +134,14 @@ test('a created worktree with no resolved base commit is named without one', () 
   assert.doesNotMatch(line, /@/);
 });
 
-test('the placement line coexists with the reason line when the worktree was later deleted', () => {
+test('a failed run names the stage and whose code threw, beside the placement line', () => {
   const base = workflowSummaryFixture();
   const markup = render(
     workflowSummaryFixture({
-      destination: { ...base.destination, available: false },
-      preparation: {
-        ...base.preparation,
+      status: 'failed',
+      error: { stage: 'edge', message: 'boom', graphKey: 'root', nodeId: 'review' },
+      placement: {
+        ...base.placement,
         source: 'selector',
         request: {
           worktree: { kind: 'create', branch: 'feat/story-44', fromRef: 'main' },
@@ -158,9 +152,7 @@ test('the placement line coexists with the reason line when the worktree was lat
     }),
   );
 
-  // What was created is still a true statement about this run, even once it is gone, and it sits
-  // beside the reason line rather than replacing it.
   assert.match(placementLine(markup) ?? '', /new worktree feat\/story-44/);
-  assert.ok(plainText(markup).includes(workflowCopy.environmentUnavailable));
-  assert.match(markup, /holding/);
+  assert.ok(plainText(markup).includes(workflowErrorStageHeadline('edge')));
+  assert.match(plainText(markup), /edge · root\/review · boom/);
 });

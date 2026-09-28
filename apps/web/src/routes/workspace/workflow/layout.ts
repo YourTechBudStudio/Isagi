@@ -3,7 +3,7 @@ import type { DeclaredElement, DeclaredTopology } from './topology.js';
 /**
  * What goes to the layout worker, and what may cause a relayout.
  *
- * Positions depend on the shape alone: which elements exist under the current pin, how they are
+ * Positions depend on the shape alone: which elements exist under the current build, how they are
  * connected, and which subgraph boxes are open. Status, timers, selection, visit pips and operation
  * settlement change with every transition and move nothing — a live run that relayouts on every step
  * visibly twitches, and a person loses their place several times a minute.
@@ -87,18 +87,18 @@ export const boxPadding = '[top=54,left=20,bottom=20,right=20]';
 /**
  * The identity of a drawing.
  *
- * The pin decides the topology and the open set decides which registrations are drawn expanded.
+ * The build decides the topology and the open set decides which registrations are drawn expanded.
  * Nothing else appears here, and nothing else may: adding a field is the same as asking for a
  * relayout every time that field changes.
  */
 export function layoutIdentity(input: {
   /**
-   * The pin's own artifact hash, not a summary of the topology.
+   * The build's own artifact hash, not a summary of the topology.
    *
-   * A descriptor is immutable under one pin, so the hash identifies the shape exactly. Deriving an
+   * A descriptor is immutable under one build, so the hash identifies the shape exactly. Deriving an
    * identity from the element keys instead looked equivalent and was not: a Retry that changed an
    * edge's destinations, a node's kind or a title without renaming anything produced the identical
-   * summary, the relayout never happened, and the new pin was drawn with the old pin's geometry.
+   * summary, the relayout never happened, and the new build was drawn with the old build's geometry.
    */
   readonly artifactHash: string;
   readonly expanded: ReadonlySet<string>;
@@ -107,7 +107,7 @@ export function layoutIdentity(input: {
 }
 
 /**
- * Builds the worker request for the current pin and open set.
+ * Builds the worker request for the current build and open set.
  *
  * Only serializable topology crosses the boundary: ids, sizes and containment. The worker never
  * learns what any of it means.

@@ -1,141 +1,81 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowEvidenceDto } from '@isagi/contracts';
+import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { contentPresentation, previewCapBytes } from '../../../lib/workspace/workflow/evidence.js';
-import {
-  useWorkflowCheckpointFileContent,
-  useWorkflowEvidenceContent,
-} from '../../../lib/workspace/workflow/queries.js';
+import { useWorkflowCheckpointFileContent } from '../../../lib/workspace/workflow/queries.js';
 import {
   baseName,
   imageMediaTypeForPath,
   presentationForPath,
-  type FileEntry,
+  previewCapBytes,
+  type CheckpointPresentation,
 } from './checkpoint-view.js';
 import { inspectorCopy } from './copy.js';
 import { formatBytes } from './format.js';
 import { JsonTree, TextValue } from './WorkflowPayloadValue.js';
 
 /**
- * Saved bytes, and the several different things "you cannot see them" can mean.
+ * A saved checkpoint file's bytes, and the different things "you cannot see them" can mean.
  *
- * One viewer for both kinds of kept bytes: a capture's evidence and a checkpoint's saved files. Two
- * renderers would be two places for the rule that matters most here: that **"Isagi cannot read this"
- * and "this was never produced" must never collapse into each other.** Neither record exists unless
- * something committed, so the second is not even a state this surface has, which makes it all the
- * more important that the first says exactly what it means and leaves the record's own metadata
- * standing beside it.
+ * The rule that matters most here: **"Isagi cannot read this" and "this was never saved" must never
+ * collapse into each other.** A file listed in a checkpoint was saved, so the record's own metadata
+ * stays standing beside whatever this viewer says about the bytes.
  *
  * What is fetched, and when, is deliberate. A preview at or under the cap loads on selection; a
- * larger one waits for a click, exactly as a stored payload does one pane over. Arrow-keying down a
- * tree must not pull a megabyte per row. The routes serve whole objects and have no ranges, so the
- * 256 KB cap bounds what is *rendered*, never what is transferred.
+ * larger one waits for a click. Arrow-keying down a tree must not pull a megabyte per row. The route
+ * serves whole files and has no ranges, so the 256 KB cap bounds what is *rendered*, never what is
+ * transferred.
  *
- * The two kinds differ only in what they are handed: evidence carries a media type, while a
- * checkpoint file is always served as `application/octet-stream`, so its presentation comes from its
- * path. HTML therefore only ever reaches the sandboxed preview as evidence; a saved `.html` file is
- * a download, and a saved `.svg` is shown through `<img>`, where its scripts never run.
+ * The route always answers `application/octet-stream`, so the presentation comes from the path.
+ * HTML is shown as source, and rendered only on request inside a sandboxed frame; SVG is shown
+ * through `<img>`, where its scripts never run.
  */
 
-type ContentSource =
-  | { readonly kind: 'evidence'; readonly runId: number; readonly evidenceKey: string }
-  | {
-      readonly kind: 'checkpoint';
-      readonly runId: number;
-      readonly checkpointId: string;
-      readonly fileId: string;
-    };
-
-type Presentation = 'text' | 'json' | 'image' | 'html' | 'download';
-type UnavailableCause = 'missing' | 'corrupt';
-
 interface ContentSubject {
-  readonly source: ContentSource;
-  readonly presentation: Presentation;
+  readonly checkpointId: number;
+  readonly path: string;
+  readonly presentation: CheckpointPresentation;
   readonly byteSize: number;
   readonly fileName: string;
   /** Given to image bytes whose response did not say what they are. */
   readonly imageType: string | null;
   readonly imageAlt: string;
   readonly imageCaption: string;
-  readonly downloadOnly: string;
-  readonly unavailableHeading: string;
-  /** Only for a cause the runtime named. Any other failed read is not a claim about the bytes. */
-  readonly unavailableBody: (cause: UnavailableCause) => string;
-}
-
-/** A capture's bytes, for the Evidence tab's detail pane and the dock's `ev<n> · content` tab. */
-export function WorkflowEvidenceContent({
-  runId,
-  record,
-  compact = false,
-}: {
-  readonly runId: number;
-  readonly record: WorkflowEvidenceDto;
-  /** The dock's Data tab is narrow; the detail pane is not. Only sizing differs. */
-  readonly compact?: boolean;
-}) {
-  const { content } = record;
-  return (
-    <ContentViewer
-      key={record.evidenceKey}
-      compact={compact}
-      subject={{
-        source: { kind: 'evidence', runId, evidenceKey: record.evidenceKey },
-        presentation: contentPresentation(content.mediaType),
-        byteSize: content.byteSize,
-        fileName: evidenceFileName(record),
-        imageType: null,
-        imageAlt: record.title,
-        imageCaption: `${content.mediaType} · ${formatBytes(content.byteSize)}`,
-        downloadOnly: inspectorCopy.evidenceDownloadOnly(content.mediaType),
-        unavailableHeading: inspectorCopy.evidenceUnavailableHeading,
-        unavailableBody: (cause) =>
-          inspectorCopy.evidenceUnavailableBody(content.contentRef, cause),
-      }}
-    />
-  );
 }
 
 /** One saved checkpoint file's bytes, for the dock's `files` tab and the Checkpoints tab. */
 export function WorkflowCheckpointFileContent({
-  runId,
   checkpointId,
   file,
   compact = false,
 }: {
-  readonly runId: number;
-  readonly checkpointId: string;
-  readonly file: FileEntry;
+  readonly checkpointId: number;
+  readonly file: WorkflowCheckpointFileDto;
   readonly compact?: boolean;
 }) {
   const name = baseName(file.path);
   return (
     <ContentViewer
-      key={`${checkpointId}/${file.fileId}`}
+      key={`${checkpointId}/${file.path}`}
       compact={compact}
       subject={{
-        source: { kind: 'checkpoint', runId, checkpointId, fileId: file.fileId },
+        checkpointId,
+        path: file.path,
         presentation: presentationForPath(file.path),
         byteSize: file.sizeBytes,
         fileName: name,
         imageType: imageMediaTypeForPath(file.path),
         imageAlt: name,
         imageCaption: `${name} · ${formatBytes(file.sizeBytes)}`,
-        downloadOnly: inspectorCopy.checkpointDownloadOnly,
-        unavailableHeading: inspectorCopy.checkpointUnavailableHeading,
-        unavailableBody: (cause) => inspectorCopy.checkpointUnavailableBody(file.path, cause),
       }}
     />
   );
 }
 
 /**
- * The viewer both kinds share. Keyed by its caller on the record, because a new record is a new
- * question: the previous record's "shown" state must not carry over and auto-fetch something the
- * person never asked for.
+ * Keyed by its caller on the file, because a new file is a new question: the previous file's
+ * "shown" state must not carry over and auto-fetch something the person never asked for.
  */
 function ContentViewer({
   subject,
@@ -151,7 +91,9 @@ function ContentViewer({
   const [htmlMode, setHtmlMode] = useState<'source' | 'render'>('source');
 
   const wanted = downloading || requested || (previewable && withinCap);
-  const query = useContentBytes(subject.source, wanted);
+  const query = useWorkflowCheckpointFileContent(subject.checkpointId, subject.path, {
+    enabled: wanted,
+  });
   const blob = query.data ?? null;
 
   useDownloadWhenReady({
@@ -170,18 +112,17 @@ function ContentViewer({
   );
 
   if (query.error !== null) {
-    const cause = contentCause(query.error);
-    return cause === null ? (
-      <FailedRead onRetry={query.retry} />
+    return isContentUnavailable(query.error) ? (
+      <UnreadableContent subject={subject} />
     ) : (
-      <UnreadableContent subject={subject} cause={cause} />
+      <FailedRead onRetry={() => void query.refetch()} />
     );
   }
 
   if (!previewable) {
     return (
       <p className="flex flex-wrap items-center gap-2 py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {subject.downloadOnly}
+        {inspectorCopy.checkpointDownloadOnly}
         {download}
       </p>
     );
@@ -196,7 +137,7 @@ function ContentViewer({
           onClick={() => setRequested(true)}
           className="rounded-md border border-line/35 bg-canvas/60 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:border-line/70 hover:text-fg"
         >
-          {inspectorCopy.evidenceContentLoad}
+          {inspectorCopy.contentLoad}
           <span className="ml-2 text-fg-subtle">{formatBytes(subject.byteSize)}</span>
         </button>
         {download}
@@ -207,7 +148,7 @@ function ContentViewer({
   if (blob === null) {
     return (
       <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {inspectorCopy.evidenceContentLoading}
+        {inspectorCopy.contentLoading}
       </p>
     );
   }
@@ -227,35 +168,6 @@ function ContentViewer({
   );
 }
 
-/**
- * The bytes for whichever record this is.
- *
- * Both queries are called on every render, as hooks must be, and only the one matching the source
- * is ever enabled; the other stays idle with no key worth caching.
- */
-function useContentBytes(
-  source: ContentSource,
-  enabled: boolean,
-): {
-  readonly data: Blob | undefined;
-  readonly error: unknown;
-  readonly retry: () => void;
-} {
-  const evidence = useWorkflowEvidenceContent(
-    source.kind === 'evidence' ? source.runId : null,
-    source.kind === 'evidence' ? source.evidenceKey : null,
-    { enabled: enabled && source.kind === 'evidence' },
-  );
-  const checkpoint = useWorkflowCheckpointFileContent(
-    source.kind === 'checkpoint' ? source.runId : null,
-    source.kind === 'checkpoint' ? source.checkpointId : null,
-    source.kind === 'checkpoint' ? source.fileId : null,
-    { enabled: enabled && source.kind === 'checkpoint' },
-  );
-  const query = source.kind === 'evidence' ? evidence : checkpoint;
-  return { data: query.data, error: query.error ?? null, retry: () => void query.refetch() };
-}
-
 function ContentBody({
   presentation,
   blob,
@@ -264,7 +176,7 @@ function ContentBody({
   htmlMode,
   onHtmlMode,
 }: {
-  readonly presentation: Exclude<Presentation, 'download'>;
+  readonly presentation: Exclude<CheckpointPresentation, 'download'>;
   readonly blob: Blob;
   readonly subject: ContentSubject;
   readonly compact: boolean;
@@ -293,7 +205,7 @@ function ContentTextual({ blob, json }: { readonly blob: Blob; readonly json: bo
   if (text === null) {
     return (
       <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {inspectorCopy.evidenceContentLoading}
+        {inspectorCopy.contentLoading}
       </p>
     );
   }
@@ -303,7 +215,7 @@ function ContentTextual({ blob, json }: { readonly blob: Blob; readonly json: bo
     <>
       {parsed === null ? <TextValue text={text} /> : <JsonTree value={parsed.value} depth={0} />}
       {truncated && (
-        <p className="mt-2 font-mono text-[11px] text-amber">{inspectorCopy.evidenceTruncated}</p>
+        <p className="mt-2 font-mono text-[11px] text-amber">{inspectorCopy.contentTruncated}</p>
       )}
     </>
   );
@@ -347,8 +259,8 @@ function ContentImage({
  * hypothetical escape observes no `window.isagi` at all. Nothing the document links to resolves,
  * and the hint says so rather than leaving a person to wonder why a stylesheet did not apply.
  *
- * Source is the default because captured HTML is evidence about what a step produced, and rendering
- * it is a second, opt-in question.
+ * Source is the default because a saved page is a file the run produced, and rendering it is a
+ * second, opt-in question.
  */
 function ContentHtml({
   blob,
@@ -380,40 +292,36 @@ function ContentHtml({
                 mode === value ? 'bg-cyan/14 text-fg' : 'text-fg-subtle hover:text-fg'
               }`}
             >
-              {value === 'source'
-                ? inspectorCopy.evidenceHtmlSource
-                : inspectorCopy.evidenceHtmlRender}
+              {value === 'source' ? inspectorCopy.htmlSource : inspectorCopy.htmlRender}
             </button>
           ))}
         </div>
         <span className="font-mono text-[11px] text-fg-subtle">
-          {mode === 'source'
-            ? inspectorCopy.evidenceHtmlSourceHint
-            : inspectorCopy.evidenceHtmlRenderHint}
+          {mode === 'source' ? inspectorCopy.htmlSourceHint : inspectorCopy.htmlRenderHint}
         </span>
       </div>
       {mode === 'source' ? (
         source === null ? (
           <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-            {inspectorCopy.evidenceContentLoading}
+            {inspectorCopy.contentLoading}
           </p>
         ) : (
           <>
             <TextValue text={source} />
             {truncated && (
               <p className="mt-2 font-mono text-[11px] text-amber">
-                {inspectorCopy.evidenceTruncated}
+                {inspectorCopy.contentTruncated}
               </p>
             )}
           </>
         )
       ) : full === null ? (
         <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-          {inspectorCopy.evidenceContentLoading}
+          {inspectorCopy.contentLoading}
         </p>
       ) : (
         <iframe
-          title={inspectorCopy.evidenceHtmlRender}
+          title={inspectorCopy.htmlRender}
           sandbox=""
           referrerPolicy="no-referrer"
           srcDoc={full}
@@ -426,27 +334,21 @@ function ContentHtml({
 }
 
 /**
- * Bytes the record references and the content store cannot serve.
+ * Bytes the checkpoint lists and the content store cannot serve.
  *
- * Only ever rendered beside the record's own fields, never in place of them. A capture that
- * committed is a durable fact about the run; losing its bytes degrades what can be read back and
- * changes nothing about what happened.
+ * Only ever rendered beside the file's own fields, never in place of them. A checkpoint that saved
+ * is a durable fact about the run; losing its bytes degrades what can be read back and changes
+ * nothing about what happened.
  */
-function UnreadableContent({
-  subject,
-  cause,
-}: {
-  readonly subject: ContentSubject;
-  readonly cause: UnavailableCause;
-}) {
+function UnreadableContent({ subject }: { readonly subject: ContentSubject }) {
   return (
     <div
       data-content-unavailable
       className="max-w-xl rounded-lg border border-dashed border-error/45 bg-error/5 px-3 py-2.5"
     >
-      <p className="text-[13px] text-fg">{subject.unavailableHeading}</p>
+      <p className="text-[13px] text-fg">{inspectorCopy.checkpointUnavailableHeading}</p>
       <p className="mt-1 text-[12.5px] leading-relaxed text-fg-muted">
-        {subject.unavailableBody(cause)}
+        {inspectorCopy.checkpointUnavailableBody(subject.path)}
       </p>
     </div>
   );
@@ -473,21 +375,14 @@ function FailedRead({ onRetry }: { readonly onRetry: () => void }) {
 }
 
 /**
- * The runtime's own cause, when it gave one.
- *
- * Read from the structured rejection rather than from message text, for the reason the payload
- * viewer already states: `missing` and `corrupt` send a person to two different places. Anything
- * else — a dropped connection, a response that did not match the contract — is not a claim about
- * the content at all, and is shown as a failed read that can be retried.
+ * Whether the runtime said the saved bytes cannot be read. Anything else — a dropped connection, a
+ * response that did not match the contract — is not a claim about the bytes, and is shown as a
+ * failed read that can be retried.
  */
-function contentCause(error: unknown): UnavailableCause | null {
-  if (!(error instanceof RuntimeApiError)) return null;
+function isContentUnavailable(error: unknown): boolean {
+  if (!(error instanceof RuntimeApiError)) return false;
   const data = error.apiError.code === 'workflow_rejected' ? error.apiError.data : null;
-  if (data === null) return null;
-  return data.reason === 'workflow_evidence_content_unavailable' ||
-    data.reason === 'workflow_checkpoint_content_unavailable'
-    ? data.cause
-    : null;
+  return data !== null && data.reason === 'workflow_checkpoint_content_unavailable';
 }
 
 function DownloadButton({
@@ -507,7 +402,7 @@ function DownloadButton({
       onClick={onClick}
       className="rounded-md border border-line/35 bg-canvas/60 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:border-line/70 hover:text-fg disabled:opacity-60"
     >
-      {inspectorCopy.evidenceDownload}
+      {inspectorCopy.contentDownload}
       <span className="ml-2 text-fg-subtle">{formatBytes(byteSize)}</span>
     </button>
   );
@@ -569,27 +464,6 @@ function useDownloadWhenReady({
       URL.revokeObjectURL(url);
     };
   }, [armed, blob, fileName]);
-}
-
-/** A name a person can find again: the record's key, plus whatever the media type suggests. */
-function evidenceFileName(record: WorkflowEvidenceDto): string {
-  const path = record.content.sourcePath;
-  if (path !== null) {
-    const base = path.split('/').at(-1);
-    if (base !== undefined && base.length > 0) return base;
-  }
-  return `${record.evidenceKey}${extensionFor(record.content.mediaType)}`;
-}
-
-function extensionFor(mediaType: string): string {
-  const base = mediaType.split(';')[0]?.trim().toLowerCase() ?? '';
-  if (base === 'application/json' || base.endsWith('+json')) return '.json';
-  if (base === 'text/html') return '.html';
-  if (base === 'text/markdown') return '.md';
-  if (base === 'text/plain') return '.txt';
-  if (base === 'image/svg+xml') return '.svg';
-  if (base.startsWith('image/')) return `.${base.slice('image/'.length)}`;
-  return '';
 }
 
 /**

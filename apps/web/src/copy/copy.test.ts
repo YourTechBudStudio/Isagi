@@ -65,12 +65,12 @@ test('workflow API error reasons map to web-owned copy', () => {
   assert.equal(
     runtimeErrorCopy.fromApiError({
       code: 'workflow_rejected',
-      status: 400,
+      status: 409,
       message: 'diagnostic message from runtime',
       requestId: 'copy-test',
-      data: { reason: 'workflow_run_not_dismissible', workflowRunId: 10 },
+      data: { reason: 'workflow_control_unavailable', control: 'dismiss', workflowRunId: 10 },
     } satisfies ApiError),
-    'Cancel this workflow before dismissing it.',
+    "That doesn't apply to this run right now. It's moved on.",
   );
   assert.equal(
     runtimeErrorCopy.fromApiError({

@@ -1,174 +1,43 @@
 import type {
-  WorkflowCheckpointBase,
-  WorkflowCheckpointInventoryEntry,
+  WorkflowCheckpointDto,
+  WorkflowCheckpointFileDto,
+  WorkflowCheckpointScopeDto,
   WorkflowCheckpointSummaryDto,
-  WorkflowCheckpointWarningGroup,
-  WorkflowExecutionDto,
 } from '@isagi/contracts';
 
-import type { WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
+import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import { executionAddressKey, executionAncestry } from './ancestry.js';
 
 /**
  * What the checkpoint surfaces show, derived from the records they are handed.
  *
- * Pure, so the rules that decide what a person is told about a saved checkpoint are tested as rules:
- * when "everything was captured" is actually true, which visit a parent checkpoint belongs to, what
- * the final file tree looks like, and which bytes may be previewed at all.
+ * A checkpoint is self-contained: the Git commit it was taken on (none for a folder project or an
+ * unborn repository) plus an exact copy of each scope its plan named. Nothing is inherited from an
+ * earlier checkpoint, so each one is drawn on its own.
  */
 
-/* ── the visit's own capture ──────────────────────────────────────────────────────────────── */
-
-export type ScopeEntry = Extract<WorkflowCheckpointInventoryEntry, { readonly kind: 'scope' }>;
-export type FileEntry = Extract<WorkflowCheckpointInventoryEntry, { readonly kind: 'file' }>;
-export type AbsentEntry = Extract<WorkflowCheckpointInventoryEntry, { readonly kind: 'absent' }>;
-
-/**
- * Where a checkpoint visit stands, from its execution alone.
- *
- * A saved row always wins, cancelled or not. Without one, only an attempt that is still running is
- * capturing: a Cancel ends the attempt while the execution can still read `running`, and an
- * interrupted attempt is waiting on recovery, not on the filesystem. Everything else saved nothing.
- */
-export type CheckpointVisitState = 'saved' | 'capturing' | 'nothing_saved';
-
-export function checkpointVisitState(execution: WorkflowExecutionDto): CheckpointVisitState {
-  if (execution.checkpoint !== null) return 'saved';
-  if (execution.status === 'running') {
-    const attempt = execution.latestAttempt;
-    if (attempt === null || attempt.status === 'running') return 'capturing';
-  }
-  return 'nothing_saved';
-}
-
-/** `git · a41c9e2`, or the reason there is no base at all. */
-export function checkpointBaseLabel(base: WorkflowCheckpointBase): string {
-  if (base.kind === 'git') return `git · ${base.commitSha.slice(0, 7)}`;
-  return base.reason === 'folder_project' ? 'none · folder project' : 'none · unborn repository';
-}
-
-/** `wcp_7f3a…c21e`. The full id stays available wherever it can be copied. */
-export function shortCheckpointId(checkpointId: string): string {
-  const prefix = 'wcp_';
-  const body = checkpointId.startsWith(prefix) ? checkpointId.slice(prefix.length) : checkpointId;
-  if (body.length <= 10) return checkpointId;
-  return `${checkpointId.startsWith(prefix) ? prefix : ''}${body.slice(0, 4)}…${body.slice(-4)}`;
+/** `git · a41c9e2`, or that there is no commit. */
+export function checkpointCommitLabel(commitSha: string | null): string {
+  return commitSha === null
+    ? 'no commit · folder or unborn repository'
+    : `git · ${commitSha.slice(0, 7)}`;
 }
 
 /**
  * The `isagi checkpoints export` line for one checkpoint. The directory stays a placeholder so a
  * pasted line cannot write anywhere nobody chose.
  */
-export function checkpointExportCommand(checkpointId: string, runId: number): string {
-  return `isagi checkpoints export ${checkpointId} --run ${runId} --output <directory>`;
+export function checkpointExportCommand(checkpointId: number): string {
+  return `isagi checkpoints export ${checkpointId} --output <directory>`;
 }
 
-/* ── warnings ─────────────────────────────────────────────────────────────────────────────── */
-
-/**
- * Standing notes describe every checkpoint of a kind rather than something this capture ran into,
- * so they are dim and never amber.
- */
-export type CheckpointStandingNote = 'ignored_paths' | 'folder_project' | 'unborn_repository';
-
-export interface CheckpointWarningDisplay {
-  /** Never `warnings_truncated`: the sentinel's count is already folded into the dirty-path group. */
-  readonly reason: Exclude<WorkflowCheckpointWarningGroup['reason'], 'ignored_paths_not_surveyed'>;
-  readonly count: number;
-  readonly samples: readonly string[];
-  /** Paths counted but not sampled. Zero for reasons that carry no path. */
-  readonly more: number;
-}
-
-export type CheckpointWarningsView =
-  | { readonly kind: 'loading'; readonly standing: readonly CheckpointStandingNote[] }
-  | { readonly kind: 'failed'; readonly standing: readonly CheckpointStandingNote[] }
-  | {
-      readonly kind: 'ready';
-      readonly groups: readonly CheckpointWarningDisplay[];
-      readonly standing: readonly CheckpointStandingNote[];
-      /**
-       * True only when a change survey ran and found nothing left out. A folder project has no
-       * survey, so it never earns this line; neither does a capture whose warnings are unread.
-       */
-      readonly allClear: boolean;
-    };
-
-/**
- * The bottom half of the column, from the base (known at once) and the detail's warning groups
- * (known once read).
- *
- * `undefined` groups mean the detail is still being read; `null` means it could not be. Neither may
- * fall through to the all-clear line, which is a claim that needs the warnings to back it.
- */
-export function checkpointWarningsView(
-  base: WorkflowCheckpointBase,
-  groups: readonly WorkflowCheckpointWarningGroup[] | null | undefined,
-): CheckpointWarningsView {
-  const baseNotes: CheckpointStandingNote[] =
-    base.kind === 'none'
-      ? [base.reason === 'folder_project' ? 'folder_project' : 'unborn_repository']
-      : [];
-  if (groups === undefined) return { kind: 'loading', standing: baseNotes };
-  if (groups === null) return { kind: 'failed', standing: baseNotes };
-
-  const shown: CheckpointWarningDisplay[] = [];
-  let ignored = false;
-  for (const group of groups) {
-    if (group.reason === 'ignored_paths_not_surveyed') {
-      ignored = true;
-      continue;
-    }
-    shown.push({
-      reason: group.reason,
-      count: group.count,
-      samples: group.samples,
-      more: group.samples.length === 0 ? 0 : Math.max(0, group.count - group.samples.length),
-    });
-  }
-  const surveyed = !(base.kind === 'none' && base.reason === 'folder_project');
-  return {
-    kind: 'ready',
-    groups: shown,
-    standing: ignored ? ['ignored_paths', ...baseNotes] : baseNotes,
-    allClear: surveyed && shown.length === 0,
-  };
-}
-
-/* ── which visit saved a checkpoint ───────────────────────────────────────────────────────── */
-
-export interface CheckpointVisitRef {
-  readonly executionId: number;
-  /** `visit 2`, or `review ▸ save visit 1` for a different declared address. */
-  readonly label: string;
-}
-
-/**
- * The visit that saved `checkpointId`, labelled relative to the visit being looked at.
- *
- * "The same node" means the same declared address, subgraph ancestry included: a node id repeated
- * in two subgraphs is two nodes. Null when no execution in run state names the checkpoint, and the
- * caller falls back to the id alone.
- */
-export function checkpointVisitRef(
-  state: WorkflowRunState,
-  from: WorkflowExecutionDto,
-  checkpointId: string,
-): CheckpointVisitRef | null {
-  let owner: WorkflowExecutionDto | null = null;
-  for (const execution of state.executions.values()) {
-    if (execution.checkpoint?.checkpointId === checkpointId) {
-      owner = execution;
-      break;
-    }
-  }
-  if (owner === null) return null;
-  const visitLabel = `visit ${owner.visitIndex + 1}`;
-  if (executionAddressKey(state, owner) === executionAddressKey(state, from)) {
-    return { executionId: owner.executionId, label: visitLabel };
-  }
-  const path = [...executionAncestry(state, owner).path, owner.nodeId].join(' ▸ ');
-  return { executionId: owner.executionId, label: `${path} ${visitLabel}` };
+/** `plan, notes` — the scope names a checkpoint captured, with a missing one marked. */
+export function checkpointScopeNames(
+  scopes: readonly { readonly scope: string; readonly missing: boolean }[],
+): string {
+  return scopes
+    .map((scope) => (scope.missing ? `${scope.scope} (missing)` : scope.scope))
+    .join(', ');
 }
 
 /* ── the Checkpoints tab's list ───────────────────────────────────────────────────────────── */
@@ -186,21 +55,23 @@ export interface CheckpointListGroup {
  * saved one. Items keep the listing's own order, oldest first.
  */
 export function groupCheckpoints(
-  state: WorkflowRunState | null,
+  view: WorkflowRunView | null,
   items: readonly WorkflowCheckpointSummaryDto[],
 ): readonly CheckpointListGroup[] {
   const groups = new Map<string, { label: string; items: WorkflowCheckpointSummaryDto[] }>();
   for (const item of items) {
-    const execution = state?.executions.get(item.executionId);
+    const execution = view?.executions.get(item.executionId);
     const key =
-      state !== null && execution !== undefined
-        ? executionAddressKey(state, execution)
-        : `frame:${item.frameId}/${item.nodeId}`;
-    const path =
-      state !== null && execution !== undefined ? executionAncestry(state, execution).path : [];
+      view != null && execution !== undefined
+        ? executionAddressKey(view, execution)
+        : `execution:${item.executionId}`;
+    const label =
+      view != null && execution !== undefined
+        ? [...executionAncestry(view, execution).path, execution.nodeId].join(' ▸ ')
+        : `execution ${item.executionId}`;
     const existing = groups.get(key);
     if (existing) existing.items.push(item);
-    else groups.set(key, { label: [...path, item.nodeId].join(' ▸ '), items: [item] });
+    else groups.set(key, { label, items: [item] });
   }
   return [...groups].map(([key, group]) => ({ key, label: group.label, items: group.items }));
 }
@@ -209,13 +80,13 @@ export function groupCheckpoints(
  * The checkpoint the tab should show.
  *
  * A choice that still exists is kept, whatever the dock has moved to since. With none, the dock's
- * own checkpoint visit seeds it, and otherwise the most recent checkpoint.
+ * own checkpoint execution seeds it, and otherwise the most recent checkpoint.
  */
 export function resolveCheckpointSelection(
-  chosen: string | null,
+  chosen: number | null,
   items: readonly WorkflowCheckpointSummaryDto[],
-  dockCheckpointId: string | null,
-): string | null {
+  dockCheckpointId: number | null,
+): number | null {
   if (chosen !== null && items.some((item) => item.checkpointId === chosen)) return chosen;
   if (dockCheckpointId !== null && items.some((item) => item.checkpointId === dockCheckpointId)) {
     return dockCheckpointId;
@@ -223,14 +94,15 @@ export function resolveCheckpointSelection(
   return items.at(-1)?.checkpointId ?? null;
 }
 
-/* ── the final file tree ──────────────────────────────────────────────────────────────────── */
+/* ── the file tree ────────────────────────────────────────────────────────────────────────── */
 
 export interface CheckpointTreeDir {
   readonly kind: 'dir';
   readonly path: string;
-  /** One segment, or a chain of unlabelled single-child directories joined by `/`. */
+  /** One segment, or a chain of single-child directories joined by `/`. */
   readonly name: string;
-  readonly scopeIds: readonly string[];
+  /** The scope name, on a scope's own root. */
+  readonly scope: string | null;
   readonly children: readonly CheckpointTreeNode[];
   readonly fileCount: number;
 }
@@ -239,111 +111,106 @@ export interface CheckpointTreeFile {
   readonly kind: 'file';
   readonly path: string;
   readonly name: string;
-  readonly scopeIds: readonly string[];
-  readonly entry: FileEntry;
+  readonly scope: string | null;
+  readonly file: WorkflowCheckpointFileDto;
 }
 
-export interface CheckpointTreeAbsent {
-  readonly kind: 'absent';
+/** A scope whose path did not exist at capture. An export makes it absent. */
+export interface CheckpointTreeMissing {
+  readonly kind: 'missing';
   readonly path: string;
   readonly name: string;
-  readonly scopeIds: readonly string[];
+  readonly scope: string;
+  readonly scopeKind: WorkflowCheckpointScopeDto['kind'];
 }
 
-export type CheckpointTreeNode = CheckpointTreeDir | CheckpointTreeFile | CheckpointTreeAbsent;
+export type CheckpointTreeNode = CheckpointTreeDir | CheckpointTreeFile | CheckpointTreeMissing;
 
 export interface CheckpointTree {
+  /** One root per captured scope, in the plan's order. */
   readonly roots: readonly CheckpointTreeNode[];
-  readonly scopes: readonly ScopeEntry[];
   readonly files: number;
-  readonly absences: number;
 }
 
 /**
- * The final state an export would produce, as a tree.
+ * The checkpoint as an export would write it: each scope at its path, with its files beneath.
  *
- * Scope roots sit at the top under their full paths, because a scope is what an author named and
- * the path is how they named it. Inside one, paths nest; a chain of unlabelled directories with one
- * child each reads as one row rather than as a staircase. Warnings are not files and are not here.
- * Nothing is layered: this is the resolved inventory, whichever checkpoint saved each file.
+ * Scopes are drawn separately rather than merged, because each is an exact copy of what its plan
+ * named and an export mirrors each on its own.
  */
-export function buildCheckpointTree(
-  entries: readonly WorkflowCheckpointInventoryEntry[],
-): CheckpointTree {
-  const scopes = entries.filter((entry): entry is ScopeEntry => entry.kind === 'scope');
-  const leaves = entries.filter(
-    (entry): entry is FileEntry | AbsentEntry => entry.kind === 'file' || entry.kind === 'absent',
-  );
-
-  const dirLabels = new Map<string, string[]>();
-  const fileLabels = new Map<string, string[]>();
-  for (const scope of scopes) {
-    const target = scope.scopeKind === 'directory' ? dirLabels : fileLabels;
-    const labels = target.get(scope.path) ?? [];
-    if (!labels.includes(scope.scopeId)) labels.push(scope.scopeId);
-    target.set(scope.path, labels);
-  }
-
-  // The outermost directory roots. A scope nested inside another's directory is drawn inside it.
-  const dirPaths = [...dirLabels.keys()].sort(compareText);
-  const topRoots = dirPaths.filter(
-    (path) => !dirPaths.some((other) => other !== path && isBeneath(path, other)),
-  );
-
-  const builders = new Map<string, MutableDir>();
-  for (const root of topRoots) builders.set(root, newDir(root, root));
-  const loose: (CheckpointTreeFile | CheckpointTreeAbsent)[] = [];
-
-  const rootOf = (path: string): string | null =>
-    topRoots.find((root) => isBeneath(path, root)) ?? null;
-
-  // Nested scope roots exist in the tree even when they hold nothing: an empty scope is a fact.
-  for (const path of dirPaths) {
-    const root = rootOf(path);
-    if (root !== null) ensureDir(builders.get(root)!, root, path);
-  }
-
-  for (const entry of leaves) {
-    const root = rootOf(entry.path);
-    const leaf = leafNode(entry, fileLabels.get(entry.path) ?? []);
-    if (root === null) {
-      loose.push({ ...leaf, name: entry.path });
+export function buildCheckpointTree(checkpoint: WorkflowCheckpointDto): CheckpointTree {
+  const roots: CheckpointTreeNode[] = [];
+  let files = 0;
+  for (const scope of checkpoint.scopes) {
+    if (scope.missing) {
+      roots.push({
+        kind: 'missing',
+        path: scope.path,
+        name: scope.path,
+        scope: scope.scope,
+        scopeKind: scope.kind,
+      });
       continue;
     }
-    const parent = ensureDir(builders.get(root)!, root, parentOf(entry.path));
-    parent.leaves.push(leaf);
+    files += scope.files.length;
+    if (scope.kind === 'file') {
+      const file = scope.files[0];
+      if (file)
+        roots.push({ kind: 'file', path: file.path, name: file.path, scope: scope.scope, file });
+      continue;
+    }
+    roots.push(directoryRoot(scope));
   }
-
-  const roots: CheckpointTreeNode[] = [
-    ...topRoots.map((root) => finishDir(builders.get(root)!, dirLabels, true)),
-    ...loose.sort((left, right) => compareText(left.path, right.path)),
-  ];
-  return {
-    roots,
-    scopes,
-    files: leaves.filter((entry) => entry.kind === 'file').length,
-    absences: leaves.filter((entry) => entry.kind === 'absent').length,
-  };
+  return { roots, files };
 }
 
-/**
- * Every scope whose coverage contains a path: its root covers the path and none of its exclusions
- * do. Coverage may overlap across layers and no region owns a file, so this is a set, never "the"
- * scope. Ids appear once, in inventory order.
- */
-export function coveringScopes(scopes: readonly ScopeEntry[], path: string): readonly string[] {
-  const ids: string[] = [];
-  for (const scope of scopes) {
-    const covers =
-      scope.scopeKind === 'file'
-        ? scope.path === path
-        : isBeneath(path, scope.path) &&
-          !scope.exclusions.some((exclusion) =>
-            isBeneath(path.slice(scope.path.length + 1), exclusion),
-          );
-    if (covers && !ids.includes(scope.scopeId)) ids.push(scope.scopeId);
+interface MutableDir {
+  readonly path: string;
+  readonly name: string;
+  readonly dirs: Map<string, MutableDir>;
+  readonly files: CheckpointTreeFile[];
+}
+
+function directoryRoot(scope: WorkflowCheckpointScopeDto): CheckpointTreeDir {
+  const root: MutableDir = { path: scope.path, name: scope.path, dirs: new Map(), files: [] };
+  for (const file of scope.files) {
+    const relative = file.path.startsWith(`${scope.path}/`)
+      ? file.path.slice(scope.path.length + 1)
+      : file.path;
+    const segments = relative.split('/');
+    const name = segments.pop() ?? relative;
+    let current = root;
+    for (const segment of segments) {
+      let next = current.dirs.get(segment);
+      if (!next) {
+        next = { path: `${current.path}/${segment}`, name: segment, dirs: new Map(), files: [] };
+        current.dirs.set(segment, next);
+      }
+      current = next;
+    }
+    current.files.push({ kind: 'file', path: file.path, name, scope: null, file });
   }
-  return ids;
+  return finishDir(root, scope.scope);
+}
+
+function finishDir(dir: MutableDir, scope: string | null): CheckpointTreeDir {
+  const dirs = [...dir.dirs.values()]
+    .sort((left, right) => compareText(left.name, right.name))
+    .map((child) => finishDir(child, null));
+  const files = [...dir.files].sort((left, right) => compareText(left.name, right.name));
+
+  // A directory whose only content is one directory reads as one row with it.
+  if (scope === null && dirs.length === 1 && files.length === 0) {
+    const only = dirs[0]!;
+    return { ...only, name: `${dir.name}/${only.name}` };
+  }
+  const children: CheckpointTreeNode[] = [...dirs, ...files];
+  const fileCount = children.reduce(
+    (total, child) =>
+      total + (child.kind === 'dir' ? child.fileCount : child.kind === 'file' ? 1 : 0),
+    0,
+  );
+  return { kind: 'dir', path: dir.path, name: dir.name, scope, children, fileCount };
 }
 
 /** Every row of the tree in display order, with collapsed directories' contents left out. */
@@ -362,11 +229,12 @@ export function visibleTreeRows(
   return rows;
 }
 
+/** The file, or the missing scope, at a path. */
 export function findTreeNode(tree: CheckpointTree, path: string): CheckpointTreeNode | null {
   const search = (nodes: readonly CheckpointTreeNode[]): CheckpointTreeNode | null => {
     for (const node of nodes) {
-      if (node.path === path) return node;
-      if (node.kind === 'dir' && isBeneath(path, node.path)) {
+      if (node.path === path && node.kind !== 'dir') return node;
+      if (node.kind === 'dir') {
         const found = search(node.children);
         if (found) return found;
       }
@@ -376,84 +244,17 @@ export function findTreeNode(tree: CheckpointTree, path: string): CheckpointTree
   return search(tree.roots);
 }
 
-interface MutableDir {
-  readonly path: string;
-  readonly name: string;
-  readonly dirs: Map<string, MutableDir>;
-  readonly leaves: (CheckpointTreeFile | CheckpointTreeAbsent)[];
-}
-
-function newDir(path: string, name: string): MutableDir {
-  return { path, name, dirs: new Map(), leaves: [] };
-}
-
-function ensureDir(root: MutableDir, rootPath: string, path: string): MutableDir {
-  if (path === rootPath) return root;
-  let current = root;
-  for (const segment of path.slice(rootPath.length + 1).split('/')) {
-    let next = current.dirs.get(segment);
-    if (!next) {
-      next = newDir(`${current.path}/${segment}`, segment);
-      current.dirs.set(segment, next);
-    }
-    current = next;
-  }
-  return current;
-}
-
-function finishDir(
-  dir: MutableDir,
-  labels: ReadonlyMap<string, readonly string[]>,
-  isRoot: boolean,
-): CheckpointTreeDir {
-  const scopeIds = labels.get(dir.path) ?? [];
-  const dirs = [...dir.dirs.values()]
-    .sort((left, right) => compareText(left.name, right.name))
-    .map((child) => finishDir(child, labels, false));
-  const leaves = [...dir.leaves].sort((left, right) => compareText(left.name, right.name));
-
-  // An unlabelled directory whose only content is one directory reads as one row with it.
-  if (!isRoot && scopeIds.length === 0 && dirs.length === 1 && leaves.length === 0) {
-    const only = dirs[0]!;
-    return { ...only, name: `${dir.name}/${only.name}` };
-  }
-  const children: CheckpointTreeNode[] = [...dirs, ...leaves];
-  const fileCount = children.reduce(
-    (total, child) =>
-      total + (child.kind === 'dir' ? child.fileCount : child.kind === 'file' ? 1 : 0),
-    0,
-  );
-  return { kind: 'dir', path: dir.path, name: dir.name, scopeIds, children, fileCount };
-}
-
-function leafNode(
-  entry: FileEntry | AbsentEntry,
-  scopeIds: readonly string[],
-): CheckpointTreeFile | CheckpointTreeAbsent {
-  const name = entry.path.split('/').at(-1) ?? entry.path;
-  return entry.kind === 'file'
-    ? { kind: 'file', path: entry.path, name, scopeIds, entry }
-    : { kind: 'absent', path: entry.path, name, scopeIds };
-}
-
-function parentOf(path: string): string {
-  const index = path.lastIndexOf('/');
-  return index < 0 ? '' : path.slice(0, index);
-}
-
-/** `path` is `ancestor` or lies beneath it. */
-function isBeneath(path: string, ancestor: string): boolean {
-  return path === ancestor || path.startsWith(`${ancestor}/`);
-}
-
-/** Code-unit order, so the same inventory always draws the same tree whatever the locale. */
+/** Code-unit order, so the same checkpoint always draws the same tree whatever the locale. */
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /* ── file content ─────────────────────────────────────────────────────────────────────────── */
 
-export type CheckpointPresentation = 'text' | 'json' | 'image' | 'download';
+/** Previews render at most this many bytes. The route has no ranges, so it bounds rendering only. */
+export const previewCapBytes = 256 * 1024;
+
+export type CheckpointPresentation = 'text' | 'json' | 'image' | 'html' | 'download';
 
 const presentations: Readonly<Record<string, CheckpointPresentation>> = {
   md: 'text',
@@ -461,6 +262,8 @@ const presentations: Readonly<Record<string, CheckpointPresentation>> = {
   txt: 'text',
   log: 'text',
   json: 'json',
+  html: 'html',
+  htm: 'html',
   png: 'image',
   jpg: 'image',
   jpeg: 'image',
@@ -482,8 +285,8 @@ const imageTypes: Readonly<Record<string, string>> = {
  * How a saved file is shown, from its path alone.
  *
  * The content route always answers `application/octet-stream`, so the extension is the only hint
- * there is. HTML and everything unlisted are download-only: a saved page is not something to open
- * inside the inspector, and SVG is shown only through `<img>`, where its scripts never run.
+ * there is. HTML is shown as source and rendered only on request in a sandboxed frame; SVG is shown
+ * only through `<img>`, where its scripts never run; everything unlisted is download-only.
  */
 export function presentationForPath(path: string): CheckpointPresentation {
   return presentations[extensionOf(path)] ?? 'download';

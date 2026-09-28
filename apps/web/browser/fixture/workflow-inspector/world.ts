@@ -1,50 +1,53 @@
 import type {
-  WorkflowExecutionDto,
-  WorkflowFrameDto,
+  GetWorkflowRunOutput,
+  WorkflowEventDto,
+  WorkflowEventKind,
+  WorkflowExecutionDetailDto,
+  WorkflowExecutionSummaryDto,
+  WorkflowGraphInvocationDto,
   WorkflowOperationDto,
   WorkflowRunSummary,
-  WorkflowRunTransitionDelta,
   WorkflowStructureDescriptorDto,
+  WorkflowWaitDto,
 } from '@isagi/contracts';
 
 import {
+  workflowEventFixture,
   workflowExecutionFixture,
-  workflowFrameFixture,
+  workflowInvocationFixture,
   workflowOperationFixture,
   workflowSummaryFixture,
 } from '../../../src/lib/workspace/workflow/test-support.js';
 import {
+  CHECKPOINT_PIN,
   CHECKPOINT_ROOT_GRAPH,
   checkpointDescriptor,
   checkpointExecutions,
-  checkpointFrames,
+  checkpointInvocations,
 } from './checkpoints.js';
-import { withEvidenceCounts } from './evidence.js';
 
 /**
  * One run, as the runtime would actually describe it.
  *
  * Every record here is a real DTO built from the shared fixtures, so the page exercises the
- * production data layer end to end rather than a plausible-looking stand-in. Ids, hashes and
- * capability names are invented but structurally honest: nothing is a canned string the components
- * could not have received from the API.
+ * production data layer end to end rather than a plausible-looking stand-in. Ids, hashes and names
+ * are invented but structurally honest: the run detail, each execution's detail and the event log
+ * all describe the same history, and the events are what the runtime would have appended as it
+ * happened.
  */
 
-export const RUN_ID = 77;
+/** The build the run launched on. The `done` run's Retry moved it onto `PIN_ONE`. */
+export const PIN_ZERO = 'sha256:0c3e5d1fixturezero';
 export const PIN_ONE = 'sha256:9f2c1abfixtureone';
 export const PIN_TWO = 'sha256:4d81e07fixturetwo';
 
 export type ScenarioKey =
-  | 'ready'
   | 'running'
   | 'waiting_agent'
   | 'waiting_questions'
   | 'waiting_continue'
   | 'paused'
-  | 'blocked_operation'
-  | 'blocked_environment'
   | 'callback_failed'
-  | 'routing_failed'
   | 'done'
   | 'authored_failure'
   | 'cancelled'
@@ -53,41 +56,28 @@ export type ScenarioKey =
   | 'checkpoints';
 
 export const scenarioKeys: readonly ScenarioKey[] = [
-  'ready',
   'running',
   'waiting_agent',
   'waiting_questions',
   'waiting_continue',
   'paused',
-  'blocked_operation',
-  'blocked_environment',
   'callback_failed',
-  'routing_failed',
   'done',
   'authored_failure',
   'cancelled',
   'root_init_failed',
-  // A run parked after a runtime restart: its callback's owner is gone, so its end is unknown.
+  // Cut off by an app restart while its node function ran.
   'interrupted',
   // A different, smaller graph: a loop that saves checkpoints. See `checkpoints.ts`.
   'checkpoints',
 ];
 
-export interface PayloadFixture {
-  readonly mediaType: string;
-  readonly byteSize: number;
-  readonly value: unknown;
-}
-
 export interface FixtureWorld {
+  readonly runId: number;
   readonly summary: WorkflowRunSummary;
-  readonly descriptor: WorkflowStructureDescriptorDto;
-  readonly artifactHash: string;
-  readonly executions: readonly WorkflowExecutionDto[];
-  readonly frames: readonly WorkflowFrameDto[];
-  readonly operations: readonly WorkflowOperationDto[];
-  readonly events: readonly WorkflowRunTransitionDelta[];
-  readonly payloads: ReadonlyMap<string, PayloadFixture | 'missing' | 'corrupt'>;
+  readonly detail: GetWorkflowRunOutput;
+  readonly executionDetails: ReadonlyMap<number, WorkflowExecutionDetailDto>;
+  readonly events: readonly WorkflowEventDto[];
 }
 
 // Anchored to when the page loaded, so a live scenario reads as a run that started a few minutes
@@ -98,18 +88,19 @@ export const at = (seconds: number): string => new Date(base + seconds * 1000).t
 /* ── structure ─────────────────────────────────────────────────────────────────────────────── */
 
 /**
- * The reviewed-document shape: collect, triage a person, then two independent review passes over one
- * reusable `review` graph, whose own `deep-check` step nests a third level.
+ * The reviewed-document shape: collect, ask a person, then two independent review passes over one
+ * reusable `review` graph, whose own `deep-check` step nests two more levels.
  *
  * `review` being registered twice is the point. Two registrations of one definition must keep two
- * separate histories, and only a deeply nested fixture can show that a node three levels down is
+ * separate histories, and only a deeply nested fixture can show that a node four levels down is
  * still reachable and correctly addressed.
  */
-export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
-  const withRetryNode = pin === PIN_TWO;
+export function descriptorFor(artifactHash: string): WorkflowStructureDescriptorDto {
+  if (artifactHash === CHECKPOINT_PIN) return checkpointDescriptor;
+  const withSignOff = artifactHash === PIN_TWO;
   return {
     descriptorVersion: 1,
-    workflowContractVersion: 3,
+    workflowContractVersion: 4,
     rootGraphKey: 'release',
     graphs: [
       {
@@ -122,9 +113,9 @@ export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
           { id: 'triage', kind: 'operation', title: 'Ask for direction' },
           { id: 'first-pass', kind: 'subgraph', graphKey: 'review' },
           { id: 'second-pass', kind: 'subgraph', graphKey: 'review' },
-          // Adopted by the Retry in pin two. Before that it does not exist at all; after it, it is
-          // a node that has never run.
-          ...(withRetryNode ? [{ id: 'sign-off', kind: 'operation' as const }] : []),
+          // Added by the build a later Retry reloads. Before that it does not exist at all; after
+          // it, it is a node that has never run.
+          ...(withSignOff ? [{ id: 'sign-off', kind: 'operation' as const }] : []),
         ],
         edges: [
           { id: 'after-collect', from: 'collect', to: ['triage'] },
@@ -133,11 +124,11 @@ export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
           {
             id: 'after-second',
             from: 'second-pass',
-            // The second pin changes where this edge can go without changing its id, which is the
+            // The later build changes where this edge can go without changing its id, which is the
             // shape a layout identity derived from element keys alone could not tell apart.
-            to: withRetryNode ? ['sign-off', 'rejected'] : ['shipped', 'rejected'],
+            to: withSignOff ? ['sign-off', 'rejected'] : ['shipped', 'rejected'],
           },
-          ...(withRetryNode
+          ...(withSignOff
             ? [{ id: 'after-sign-off', from: 'sign-off' as const, to: ['shipped'] }]
             : []),
         ],
@@ -156,8 +147,8 @@ export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
           { id: 'deep-check', kind: 'subgraph', graphKey: 'rules' },
         ],
         edges: [
-          { id: 'after-read', from: 'read', to: ['deep-check'] },
-          { id: 'after-deep-check', from: 'deep-check', to: ['accepted', 'read'] },
+          { id: 'after-read', from: 'read', to: ['deep-check', 'accepted'] },
+          { id: 'after-deep-check', from: 'deep-check', to: ['read'] },
         ],
         outcomes: [{ id: 'accepted', kind: 'success' }],
       },
@@ -168,8 +159,6 @@ export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
         entry: 'scan',
         nodes: [
           { id: 'scan', kind: 'operation' },
-          // The fourth level. Nesting this deep is what proves addressing, expansion and keyboard
-          // reach do not quietly stop working a level or two down.
           { id: 'lint-pass', kind: 'subgraph', graphKey: 'lint' },
         ],
         edges: [
@@ -191,1085 +180,900 @@ export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
   };
 }
 
-/* ── payloads ──────────────────────────────────────────────────────────────────────────────── */
-
-const storedPayloads = new Map<string, PayloadFixture | 'missing' | 'corrupt'>([
-  [
-    'p:state-in',
-    {
-      mediaType: 'application/json',
-      byteSize: 412,
-      value: { draft: 'Bump the runtime to 0.0.4', verdict: null, notes: [] },
-    },
-  ],
-  [
-    'p:prompt',
-    {
-      mediaType: 'text/plain',
-      byteSize: 2_180,
-      value:
-        'Review the diff below and report anything that would break a clean checkout.\n\nFocus on:\n- unbounded queries\n- secrets in logs\n- unchecked JSON parsing\n',
-    },
-  ],
-  // Referenced by history, and the store cannot serve it. Distinct from a value never produced.
-  ['p:gone', 'missing'],
-  ['p:tampered', 'corrupt'],
-]);
-
 /* ── the run ───────────────────────────────────────────────────────────────────────────────── */
 
-const placement = (available: boolean) => ({
-  worktreeId: 12,
-  worktreePath: '/work/isagi/.worktrees/release',
-  surfaceId: 121,
-  paneId: 1211,
-  agentSessionId: 7,
-  available,
-});
+export const TRIAGE_PROMPT =
+  'Review the diff below and report anything that would break a clean checkout.\n\nFocus on:\n- unbounded queries\n- secrets in logs\n- unchecked JSON parsing\n';
+export const TRIAGE_REPLY = 'Two risky renames: the loader export and the CLI flag.';
+export const READ_REPLY = 'The first pass found one unbounded query.';
 
-interface BuildOptions {
+export interface BuildOptions {
+  readonly runId: number;
   readonly scenario: ScenarioKey;
+  /** The build the run is on now. `PIN_TWO` after the fixture's Retry adopts it. */
   readonly pin: string;
-  /** A long run, for the pagination and virtualization the waterfall has to survive. */
+  /** A long run, for the virtualization the waterfall has to survive. */
   readonly longHistory: boolean;
-  /** Extra operations on the triage visit, so the dock's paging is exercised. */
-  readonly manyOperations: boolean;
+  /** Whether the agent turn `read` waits on has ended and its reply was recorded. */
+  readonly replyArrived: boolean;
+  /** Events appended after the world was built, such as a live code reload. */
+  readonly extraEvents: readonly Omit<WorkflowEventDto, 'eventId' | 'runId'>[];
+}
+
+/** One execution as the builder collects it: its summary, its detail and what happened when. */
+interface Step {
+  readonly summary: WorkflowExecutionSummaryDto;
+  readonly result: unknown;
+  readonly event: unknown;
+  readonly decision: unknown;
+  readonly stateAfter: unknown;
+  readonly operations: readonly WorkflowOperationDto[];
+  readonly waitingAt: string | null;
+  readonly deliveredAt: string | null;
+}
+
+class RunBuilder {
+  readonly invocations: WorkflowGraphInvocationDto[] = [];
+  readonly steps: Step[] = [];
+  readonly events: Omit<WorkflowEventDto, 'eventId' | 'runId'>[] = [];
+
+  constructor(readonly runId: number) {}
+
+  invocation(overrides: Partial<WorkflowGraphInvocationDto>) {
+    const row = workflowInvocationFixture(overrides);
+    this.invocations.push(row);
+    this.event(
+      row.startedAt,
+      row.parentExecutionId,
+      'node',
+      'graph_entered',
+      `Entered ${row.graphKey}`,
+      {
+        invocationId: row.invocationId,
+        graphKey: row.graphKey,
+      },
+    );
+    if (row.outcome !== null && row.endedAt !== null) {
+      this.event(
+        row.endedAt,
+        row.parentExecutionId,
+        'node',
+        'graph_completed',
+        `${row.graphKey} finished`,
+        {
+          outcomeId: row.outcome.outcomeId,
+        },
+      );
+    }
+    return row;
+  }
+
+  step(input: {
+    readonly summary: Partial<WorkflowExecutionSummaryDto> & {
+      readonly executionId: number;
+      readonly invocationId: number;
+      readonly nodeId: string;
+      readonly startedAt: string;
+    };
+    readonly result?: unknown;
+    readonly event?: unknown;
+    readonly decision?: unknown;
+    readonly stateAfter?: unknown;
+    readonly operations?: readonly WorkflowOperationDto[];
+    readonly waitingAt?: string | null;
+    readonly deliveredAt?: string | null;
+  }) {
+    const summary = workflowExecutionFixture({ runId: this.runId, ...input.summary });
+    const step: Step = {
+      summary,
+      result: input.result ?? { type: 'complete', update: {} },
+      event: input.event ?? null,
+      decision:
+        input.decision ?? (summary.routedTo === null ? null : { to: summary.routedTo, update: {} }),
+      stateAfter:
+        input.stateAfter ??
+        (summary.routedTo === null ? null : { draft: 'Bump the runtime to 0.0.4' }),
+      operations: input.operations ?? [],
+      waitingAt: input.waitingAt ?? null,
+      deliveredAt: input.deliveredAt ?? null,
+    };
+    this.steps.push(step);
+
+    const id = summary.executionId;
+    const name = summary.label ?? summary.nodeId;
+    this.event(summary.startedAt, id, 'node', 'node_started', `Started ${name}`, {
+      nodeId: summary.nodeId,
+      nodeKind: summary.nodeKind,
+      ...(summary.retryOf === null ? {} : { retryOf: summary.retryOf }),
+    });
+    for (const operation of step.operations) {
+      this.event(operation.startedAt, id, 'node', 'operation_started', operation.kind, {
+        operationId: operation.operationId,
+        kind: operation.kind,
+      });
+      if (operation.endedAt !== null) {
+        this.event(operation.endedAt, id, 'node', 'operation_finished', operation.kind, {
+          operationId: operation.operationId,
+          kind: operation.kind,
+          status: operation.status,
+        });
+      }
+    }
+    if (step.waitingAt !== null) {
+      this.event(step.waitingAt, id, 'node', 'node_waiting', `${name} is waiting`, summary.wait);
+    }
+    if (step.deliveredAt !== null) {
+      this.event(
+        step.deliveredAt,
+        id,
+        'node',
+        'wait_delivered',
+        `${summary.nodeId}: answered`,
+        step.event,
+      );
+    }
+    if (summary.endedAt !== null) {
+      const kind: WorkflowEventKind =
+        summary.status === 'failed'
+          ? 'node_failed'
+          : summary.status === 'interrupted'
+            ? 'node_interrupted'
+            : 'node_completed';
+      this.event(summary.endedAt, id, 'node', kind, `${name} ${summary.status}`, {
+        to: summary.routedTo,
+      });
+    }
+    return summary;
+  }
+
+  event(
+    when: string,
+    executionId: number | null,
+    category: WorkflowEventDto['category'],
+    kind: WorkflowEventKind,
+    message: string,
+    data: unknown = null,
+  ) {
+    this.events.push({ executionId, at: when, category, kind, message, data });
+  }
+}
+
+function sendPrompt(
+  executionId: number,
+  seq: number,
+  input: {
+    readonly startedAt: string;
+    readonly prompt: string;
+    readonly responseText: string | null;
+  },
+): WorkflowOperationDto {
+  return workflowOperationFixture({
+    operationId: executionId * 10 + seq,
+    executionId,
+    seq,
+    kind: 'send_prompt',
+    agentSessionId: 7,
+    paneId: 1211,
+    harness: 'claude',
+    model: 'opus',
+    effort: 'high',
+    request: { prompt: input.prompt, harness: 'claude', model: 'opus', effort: 'high' },
+    status: 'completed',
+    responseText: input.responseText,
+    result: { agentSessionId: 7, paneId: 1211, sentAt: input.startedAt },
+    harnessSessionId: 'd02f91ee-fixture',
+    usage: {
+      inputTokens: 1200,
+      cacheReadInputTokens: 3000,
+      cacheCreationInputTokens: null,
+      outputTokens: 420,
+      costUsd: 0.0213,
+    },
+    startedAt: input.startedAt,
+    endedAt: input.startedAt,
+  });
+}
+
+function runHeadless(
+  executionId: number,
+  seq: number,
+  input: { readonly startedAt: string; readonly endedAt: string; readonly prompt: string },
+): WorkflowOperationDto {
+  return workflowOperationFixture({
+    operationId: executionId * 10 + seq,
+    executionId,
+    seq,
+    kind: 'run_headless',
+    agentSessionId: null,
+    paneId: null,
+    harness: 'codex',
+    model: null,
+    effort: null,
+    request: { prompt: input.prompt, harness: 'codex', timeoutMs: 600_000 },
+    status: 'completed',
+    responseText: 'loader.ts: export renamed\ncli.ts: flag renamed',
+    result: { exitCode: 0 },
+    startedAt: input.startedAt,
+    endedAt: input.endedAt,
+  });
 }
 
 export function buildWorld(options: BuildOptions): FixtureWorld {
-  const { scenario, pin } = options;
-  const repaired = pin === PIN_TWO;
+  const { scenario, pin, runId } = options;
 
   if (scenario === 'checkpoints') {
-    return {
-      summary: {
-        ...summaryFor(scenario, pin, false),
-        rootGraphKey: CHECKPOINT_ROOT_GRAPH,
-        title: 'implement-story',
+    const builder = new RunBuilder(runId);
+    for (const row of checkpointInvocations()) builder.invocation(row);
+    for (const step of checkpointExecutions()) builder.step(step);
+    const summary = workflowSummaryFixture({
+      runId,
+      title: 'implement-story',
+      workflowKey: 'isagi/implement-story',
+      artifactHash: CHECKPOINT_PIN,
+      surfaceId: 121,
+      worktreeId: 12,
+      worktreePath: '/work/isagi/.worktrees/release',
+      status: 'failed',
+      createdAt: at(0),
+      updatedAt: at(71),
+      error: {
+        stage: 'checkpoint_capture',
+        message: 'scope "reviews" passes through a symlink',
+        graphKey: CHECKPOINT_ROOT_GRAPH,
+        nodeId: 'savePhase',
       },
-      descriptor: checkpointDescriptor,
-      artifactHash: pin,
-      executions: checkpointExecutions(),
-      frames: checkpointFrames(),
-      operations: [],
-      events: [],
-      payloads: storedPayloads,
-    };
+      controls: { pause: false, resume: false, retry: true, cancel: false, dismiss: true },
+    });
+    return finish(builder, summary, options);
   }
 
-  // A graph whose setup threw has no executions at all: the only thing that happened is the frame's
-  // own entry segment, and the inspector has to be able to reach it.
-  if (scenario === 'root_init_failed') {
-    return {
-      summary: summaryFor(scenario, pin, false),
-      descriptor: descriptorFor(pin),
-      artifactHash: pin,
-      executions: [],
-      frames: [
-        workflowFrameFixture({
-          frameId: 1,
-          graphKey: 'release',
-          entryArtifactHash: pin,
-          depth: 0,
-          status: 'initializing',
-          enteredAt: at(0),
-          executionCount: 0,
-          parametersRef: { inline: { draft: null } },
-          entry: {
-            segmentKind: 'graph_entry',
-            segmentRef: null,
-            attemptCount: 1,
-            startedAt: at(0),
-            endedAt: at(0.4),
-            endCertainty: 'observed',
-            firstArtifactHash: pin,
-            latestArtifactHash: pin,
-            latestAttempt: {
-              attemptId: 1,
-              attemptIndex: 1,
-              artifactHash: pin,
-              status: 'failed',
-              invocationKind: 'initial',
-              failure: {
-                code: 'graph_init_failed',
-                message: "TypeError: cannot read property 'head' of undefined",
-                detail: null,
-              },
-              recoveryMode: 'rerun_producer',
-              producerArtifactHash: null,
-            },
-            priorFailures: [],
-          },
-        }),
-      ],
-      operations: [],
-      events: [],
-      payloads: storedPayloads,
-    };
-  }
+  const builder = new RunBuilder(runId);
+  const finished = scenario === 'done' || scenario === 'authored_failure';
+  const ended = finished || scenario === 'cancelled';
+  const retried = ended;
+  // Before the Retry, every execution ran on the launch build; the Retry and everything after it
+  // on the build it reloaded.
+  const launchBuild = retried ? PIN_ZERO : pin;
 
-  const frames: WorkflowFrameDto[] = [];
-  const executions: WorkflowExecutionDto[] = [];
-  const operations: WorkflowOperationDto[] = [];
-
-  const rootFrame = workflowFrameFixture({
-    frameId: 1,
-    graphKey: 'release',
-    entryArtifactHash: PIN_ONE,
-    depth: 0,
-    status: scenario === 'done' || scenario === 'authored_failure' ? 'completed' : 'active',
-    enteredAt: at(0),
-    stateRef: { payloadRef: 'p:state-in', byteSize: 412, mediaType: 'application/json' },
-    executionCount: 4,
-    ...(scenario === 'done' || scenario === 'authored_failure'
-      ? {
-          completedAt: at(180),
-          output: {
-            outcomeId: scenario === 'done' ? 'shipped' : 'rejected',
-            outcomeKind: scenario === 'done' ? ('success' as const) : ('failure' as const),
-            outcomeReason:
-              scenario === 'done' ? 'Every check passed.' : 'Two rules failed on the second pass.',
-            producedRef: { inline: { verdict: scenario === 'done' ? 'ship' : 'reject' } },
-            producerArtifactHash: pin,
-          },
-        }
-      : {}),
+  builder.event(at(0), null, 'run', 'run_launched', 'Launched release-check');
+  builder.event(at(0.2), null, 'environment', 'worktree_created', 'Created worktree release', {
+    worktreeId: 12,
   });
-  frames.push(rootFrame);
+
+  const root = builder.invocation({
+    invocationId: 1,
+    graphKey: 'release',
+    depth: 0,
+    label: 'release check',
+    status: finished ? 'completed' : scenario === 'cancelled' ? 'cancelled' : 'running',
+    parameters: null,
+    state: { draft: 'Bump the runtime to 0.0.4', verdict: finished ? 'ship' : null },
+    outcome: finished
+      ? {
+          outcomeId: scenario === 'done' ? 'shipped' : 'rejected',
+          kind: scenario === 'done' ? 'success' : 'failure',
+          reason:
+            scenario === 'done' ? 'Every check passed.' : 'Two rules failed on the second pass.',
+          output: { verdict: scenario === 'done' ? 'ship' : 'reject' },
+        }
+      : null,
+    startedAt: at(0.5),
+    endedAt: ended ? at(62) : null,
+  });
+
+  const summaryOverrides: { -readonly [K in keyof WorkflowRunSummary]?: WorkflowRunSummary[K] } =
+    {};
+
+  if (scenario === 'root_init_failed') {
+    summaryOverrides.status = 'failed';
+    summaryOverrides.error = {
+      stage: 'graph_init',
+      message: "TypeError: cannot read property 'head' of undefined",
+      graphKey: 'release',
+    };
+    summaryOverrides.controls = {
+      pause: false,
+      resume: false,
+      retry: true,
+      cancel: false,
+      dismiss: true,
+    };
+    builder.event(at(0.6), null, 'run', 'run_failed', "release's init threw", {
+      stage: 'graph_init',
+    });
+    return finish(builder, summaryFor(runId, pin, root, summaryOverrides), options);
+  }
 
   // 1 · collect
-  executions.push(
-    workflowExecutionFixture({
+  builder.step({
+    summary: {
       executionId: 101,
-      frameId: 1,
-      graphKey: 'release',
+      invocationId: 1,
       nodeId: 'collect',
-      displayName: '34 files across 6 packages',
+      label: '34 files across 6 packages',
+      artifactHash: launchBuild,
       status: 'completed',
+      routedTo: 'triage',
       startedAt: at(1),
       endedAt: at(3.4),
-      callbackStartedAt: at(1),
-      callbackEndedAt: at(3.4),
-      attemptCount: 1,
-      firstArtifactHash: PIN_ONE,
-      latestArtifactHash: PIN_ONE,
-      latestAttempt: attempt(1, PIN_ONE, 'succeeded'),
-      routing: {
-        edgeId: 'after-collect',
-        attemptIndex: 1,
-        chosen: 'triage',
-        updateRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
-        startedAt: at(3.4),
-        endedAt: at(3.5),
-        failure: null,
-      },
-      operationSummary: {
-        count: 0,
-        unresolved: 0,
-        evidenceCaptured: 0,
-        capabilities: [],
-      },
-      stateInRef: { payloadRef: 'p:state-in', byteSize: 412, mediaType: 'application/json' },
-      candidateRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
-      updateRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
-      // Produced, and the store cannot read it back. The step still ran.
-      stateOutRef: { payloadRef: 'p:gone', byteSize: 512, mediaType: 'application/json' },
-    }),
-  );
-
-  // 2 · triage — a human wait *and* real operations, which must coexist.
-  const triageWaiting =
-    scenario === 'waiting_questions' ||
-    scenario === 'waiting_continue' ||
-    scenario === 'paused' ||
-    scenario === 'ready';
-  const triageOperations = options.manyOperations ? 7 : 2;
-  executions.push(
-    workflowExecutionFixture({
-      executionId: 102,
-      frameId: 1,
-      graphKey: 'release',
-      nodeId: 'triage',
-      displayName: 'Ask about the risky rename',
-      status: scenario === 'interrupted' ? 'running' : triageWaiting ? 'awaiting' : 'completed',
-      startedAt: at(4),
-      endedAt: scenario === 'interrupted' ? null : triageWaiting ? null : at(14),
-      // A restart took the process that would have recorded this callback's end with it.
-      endCertainty: scenario === 'interrupted' ? 'unknown' : 'observed',
-      callbackStartedAt: at(4),
-      callbackEndedAt: scenario === 'interrupted' ? null : at(5.4),
-      waitArmedAt: at(5.4),
-      waitDeliveredAt: triageWaiting ? null : at(14),
-      attemptCount: 1,
-      firstArtifactHash: PIN_ONE,
-      latestArtifactHash: PIN_ONE,
-      latestAttempt: attempt(1, PIN_ONE, triageWaiting ? 'running' : 'succeeded'),
-      wait:
-        scenario === 'interrupted'
-          ? null
-          : {
-              waitId: 5,
-              kind: scenario === 'waiting_continue' ? 'user_continue' : 'user_input',
-              status: triageWaiting ? 'armed' : 'delivered',
-              label: 'The writer needs direction.',
-              questions:
-                scenario === 'waiting_continue'
-                  ? null
-                  : [
-                      { kind: 'text', key: 'verdict', label: 'What should change?' },
-                      {
-                        kind: 'select',
-                        key: 'severity',
-                        label: 'How risky is it?',
-                        options: [
-                          { value: 'low', label: 'Low' },
-                          { value: 'high', label: 'High' },
-                        ],
-                      },
-                    ],
-              answers: triageWaiting
-                ? null
-                : { verdict: 'Rename the loader export', severity: 'high' },
-              armedAt: at(5.4),
-              deliveredAt: triageWaiting ? null : at(14),
-            },
-      routing: triageWaiting
-        ? null
-        : {
-            edgeId: 'after-triage',
-            attemptIndex: 1,
-            chosen: 'first-pass',
-            updateRef: { inline: { verdict: 'revise' } },
-            startedAt: at(14),
-            endedAt: at(14.1),
-            failure: null,
-          },
-      operationSummary: {
-        count: triageOperations,
-        unresolved: scenario === 'blocked_operation' ? 1 : 0,
-        evidenceCaptured: 0,
-        capabilities: ['send_agent_prompt', 'run_headless_agent'],
-      },
-      stateInRef: { inline: { draft: 'Bump the runtime to 0.0.4', verdict: null } },
-      candidateRef: { inline: { verdict: 'revise' } },
-      updateRef: { inline: { verdict: 'revise' } },
-      stateOutRef: { inline: { draft: 'Bump the runtime to 0.0.4', verdict: 'revise' } },
-    }),
-  );
-
-  for (let index = 0; index < triageOperations; index += 1) {
-    const uncertain = scenario === 'blocked_operation' && index === triageOperations - 1;
-    operations.push(
-      workflowOperationFixture({
-        operationKey: `op-triage-${index}`,
-        frameId: 1,
-        executionId: 102,
-        attemptId: 1,
-        callIndex: index,
-        capability: index % 2 === 0 ? 'send_agent_prompt' : 'run_headless_agent',
-        state: uncertain ? 'uncertain' : 'completed',
-        stage: index % 2 === 0 ? null : uncertain ? 'starting' : 'started',
-        requestRef:
-          index === 2
-            ? { payloadRef: 'p:gone', byteSize: 1_024, mediaType: 'text/plain' }
-            : { payloadRef: 'p:prompt', byteSize: 2_180, mediaType: 'text/plain' },
-        requestHash: `sha256:req${index}fixture`,
-        receiptRef: uncertain ? null : { inline: { turnId: `t-${88 + index}`, accepted: true } },
-        // A produced JSON `null` on one call, so "the step produced nothing" and "the step produced
-        // null" are both on screen and distinguishable.
-        resultRef: uncertain ? null : index === 1 ? { inline: null } : { inline: { findings: 2 } },
-        target: {
-          agentSessionId: 7,
-          paneId: 1211,
-          ptyProcessId: index % 2 === 0 ? null : 29,
-          turnId: `t-${88 + index}`,
-        },
-        uncertaintyDetail: uncertain
-          ? 'The process that would have captured the result is gone.'
-          : null,
-        stop:
-          scenario === 'cancelled' && index === 0
-            ? {
-                state: 'unsupported',
-                detail: 'This capability cannot be stopped from here.',
-                requestedAt: at(160),
-                settledAt: at(160),
-              }
-            : { state: 'not_requested', detail: null, requestedAt: null, settledAt: null },
-        lateEvidenceRef:
-          scenario === 'cancelled' && index === 1 ? { inline: { turnId: 't-late' } } : null,
-        createdAt: at(4.2 + index * 0.1),
-        dispatchedAt: at(4.3 + index * 0.1),
-        settledAt: uncertain ? null : at(5.2 + index * 0.1),
-      }),
-    );
-  }
-
-  // 3 · first-pass → the reusable `review` graph, with a third level inside it.
-  addReviewPass({
-    frames,
-    executions,
-    operations,
-    nodeId: 'first-pass',
-    subgraphExecutionId: 103,
-    frameId: 2,
-    rulesFrameId: 3,
-    startSeconds: 15,
-    pin,
-    failing: scenario === 'callback_failed' || scenario === 'routing_failed',
-    failureKind: scenario === 'routing_failed' ? 'routing' : 'callback',
-    repaired,
-    running: scenario === 'running' || scenario === 'waiting_agent',
+    },
+    result: { type: 'complete', update: { draft: 'Bump the runtime to 0.0.4' } },
+    // No wait, so nothing came back: JSON `null`, a value in its own right.
+    event: null,
+    decision: { to: 'triage', update: {} },
+    stateAfter: { draft: 'Bump the runtime to 0.0.4', verdict: null, notes: [] },
   });
 
-  // 4 · second-pass — the same definition, an entirely separate history.
-  if (scenario === 'done' || scenario === 'authored_failure' || scenario === 'cancelled') {
-    addReviewPass({
-      frames,
-      executions,
-      operations,
-      nodeId: 'second-pass',
-      subgraphExecutionId: 120,
-      frameId: 4,
-      rulesFrameId: 5,
-      startSeconds: 60,
+  // 2 · triage — a user wait *and* real side effects, which must coexist.
+  const triageWaiting =
+    scenario === 'waiting_questions' || scenario === 'waiting_continue' || scenario === 'paused';
+  const triageInterrupted = scenario === 'interrupted';
+  const triageWait: WorkflowWaitDto =
+    scenario === 'waiting_continue'
+      ? { kind: 'user_continue', label: 'Fix the flag name in the pane, then Continue.' }
+      : {
+          kind: 'user_input',
+          questions: [
+            { kind: 'text', key: 'verdict', label: 'What should change?' },
+            {
+              kind: 'select',
+              key: 'severity',
+              label: 'How risky is it?',
+              options: [
+                { value: 'low', label: 'Low' },
+                { value: 'high', label: 'High' },
+              ],
+            },
+          ],
+        };
+  const triageAnswer = {
+    kind: 'user_input',
+    answers: { verdict: 'Rename the loader export', severity: 'high' },
+  };
+  builder.step({
+    summary: {
+      executionId: 102,
+      invocationId: 1,
+      nodeId: 'triage',
+      label: 'Ask about the risky rename',
+      artifactHash: launchBuild,
+      status: triageInterrupted ? 'interrupted' : triageWaiting ? 'waiting' : 'completed',
+      wait: triageInterrupted ? null : triageWait,
+      routedTo: triageWaiting || triageInterrupted ? null : 'first-pass',
+      error: triageInterrupted
+        ? {
+            stage: 'node_function',
+            message: 'Interrupted by an app restart.',
+            graphKey: 'release',
+            nodeId: 'triage',
+          }
+        : null,
+      startedAt: at(4),
+      endedAt: triageWaiting ? null : triageInterrupted ? at(6) : at(14),
+    },
+    result: triageInterrupted ? null : { type: 'suspend', update: {}, wait: triageWait },
+    event: triageWaiting || triageInterrupted ? null : triageAnswer,
+    decision:
+      triageWaiting || triageInterrupted
+        ? null
+        : { to: 'first-pass', update: { verdict: 'revise' } },
+    stateAfter:
+      triageWaiting || triageInterrupted
+        ? null
+        : { draft: 'Bump the runtime to 0.0.4', verdict: 'revise', notes: [] },
+    operations: [
+      sendPrompt(102, 0, { startedAt: at(4.2), prompt: TRIAGE_PROMPT, responseText: TRIAGE_REPLY }),
+      runHeadless(102, 1, {
+        startedAt: at(4.4),
+        endedAt: at(5.2),
+        prompt: 'List every exported symbol that changed.',
+      }),
+    ],
+    waitingAt: triageInterrupted ? null : at(5.4),
+    deliveredAt: triageWaiting || triageInterrupted ? null : at(14),
+  });
+
+  if (scenario === 'paused') {
+    builder.event(at(20), null, 'run', 'run_paused', 'Paused', { reason: 'control' });
+  }
+
+  if (triageInterrupted) {
+    builder.event(at(6), null, 'run', 'run_failed', 'Interrupted by an app restart');
+    summaryOverrides.status = 'failed';
+    summaryOverrides.error = {
+      stage: 'node_function',
+      message: 'Interrupted by an app restart.',
+      graphKey: 'release',
+      nodeId: 'triage',
+    };
+    summaryOverrides.controls = {
+      pause: false,
+      resume: false,
+      retry: true,
+      cancel: false,
+      dismiss: true,
+    };
+  }
+
+  const reachedReview = !triageWaiting && !triageInterrupted;
+  if (reachedReview) {
+    addReviewPass(builder, {
+      nodeId: 'first-pass',
+      subgraphExecutionId: 103,
+      invocationId: 2,
+      rulesInvocationId: 3,
+      start: 15,
+      launchBuild,
       pin,
-      failing: false,
-      failureKind: 'callback',
-      repaired: false,
-      running: false,
+      scenario,
+      replyArrived: options.replyArrived,
+      retried,
     });
   }
 
+  if (ended) {
+    // A pause, recorded only as the two events that bound it.
+    builder.event(at(35), null, 'run', 'run_paused', 'Paused', { reason: 'control' });
+    builder.event(at(40), null, 'run', 'run_resumed', 'Resumed');
+    addReviewPass(builder, {
+      nodeId: 'second-pass',
+      subgraphExecutionId: 120,
+      invocationId: 4,
+      rulesInvocationId: 5,
+      start: 45,
+      launchBuild: pin,
+      pin,
+      scenario: 'done',
+      replyArrived: true,
+      retried: false,
+      routedTo:
+        scenario === 'done' ? 'shipped' : scenario === 'authored_failure' ? 'rejected' : null,
+    });
+    builder.event(
+      at(62),
+      null,
+      'run',
+      finished ? 'run_completed' : 'run_cancelled',
+      finished ? 'Finished' : 'Cancelled',
+    );
+  }
+
+  builder.event(at(4.5), 102, 'log', 'log', 'Asked the agent about the diff', {
+    level: 'info',
+    message: 'Asked the agent about the diff',
+  });
+  builder.event(at(4.6), 102, 'ui', 'ui_feedback', 'Triage', { kind: 'info', phase: 'Triage' });
+
   if (options.longHistory) {
-    // Enough revisits to force more than one page and to make windowing matter.
+    // Enough revisits to make windowing matter.
     for (let index = 0; index < 60; index += 1) {
-      executions.push(
-        workflowExecutionFixture({
+      builder.step({
+        summary: {
           executionId: 400 + index,
-          frameId: 2,
-          graphKey: 'review',
-          parentExecutionId: 103,
-          depth: 1,
-          nodeId: 'read',
-          visitIndex: 2 + index,
+          invocationId: 1,
+          nodeId: 'collect',
+          visitIndex: 1 + index,
+          artifactHash: pin,
           status: 'completed',
+          routedTo: 'triage',
           startedAt: at(200 + index * 2),
           endedAt: at(201 + index * 2),
-          callbackStartedAt: at(200 + index * 2),
-          callbackEndedAt: at(201 + index * 2),
-          firstArtifactHash: pin,
-          latestArtifactHash: pin,
-          latestAttempt: attempt(1, pin, 'succeeded'),
-          operationSummary: {
-            count: 0,
-            unresolved: 0,
-            evidenceCaptured: 0,
-            capabilities: [],
-          },
-        }),
-      );
+        },
+      });
     }
   }
 
-  return {
-    summary: summaryFor(scenario, pin, options.longHistory),
-    descriptor: descriptorFor(pin),
-    artifactHash: pin,
-    // Counts derived from the records themselves, so the badge on a row and the length of the list
-    // it opens cannot drift apart for a reason that is only in the fixture.
-    executions: withEvidenceCounts(executions, frames),
-    frames,
-    operations,
-    events: eventsFor(scenario),
-    payloads: storedPayloads,
-  };
-}
-
-function attempt(index: number, pin: string, status: 'succeeded' | 'failed' | 'running') {
-  return {
-    attemptId: index,
-    attemptIndex: index,
-    artifactHash: pin,
-    status,
-    invocationKind: 'initial' as const,
-    failure: null,
-    recoveryMode: 'rerun_producer' as const,
-    producerArtifactHash: null,
-  };
-}
-
-/**
- * One invocation of the reusable `review` graph, with its own nested `rules` frame.
- *
- * Called twice with different registrations so the page can show that one definition reused is two
- * histories, at three levels of depth.
- */
-function addReviewPass(input: {
-  frames: WorkflowFrameDto[];
-  executions: WorkflowExecutionDto[];
-  operations: WorkflowOperationDto[];
-  nodeId: string;
-  subgraphExecutionId: number;
-  frameId: number;
-  rulesFrameId: number;
-  startSeconds: number;
-  pin: string;
-  failing: boolean;
-  failureKind: 'callback' | 'routing';
-  repaired: boolean;
-  running: boolean;
-}) {
-  const {
-    frames,
-    executions,
-    operations,
-    nodeId,
-    subgraphExecutionId,
-    frameId,
-    rulesFrameId,
-    startSeconds: start,
-    pin,
-    failing,
-    failureKind,
-    repaired,
-    running,
-  } = input;
-
-  const reviewFrame = workflowFrameFixture({
-    frameId,
-    parentExecutionId: subgraphExecutionId,
-    parentFrameId: 1,
-    graphKey: 'review',
-    entryArtifactHash: pin,
-    depth: 1,
-    // A frame is initializing, active or completed. A segment inside it is what failed, so a
-    // failing pass is an active frame whose node execution carries the failure.
-    status: failing || running ? 'active' : 'completed',
-    displayName: `${nodeId} · review`,
-    enteredAt: at(start),
-    completedAt: failing || running ? null : at(start + 30),
-    parametersRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
-    stateRef: { inline: { draft: 'Bump the runtime to 0.0.4', findings: [] } },
-    executionCount: 3,
-    ...(failing || running
-      ? {}
-      : {
-          output: {
-            outcomeId: 'accepted',
-            outcomeKind: 'success' as const,
-            outcomeReason: null,
-            producedRef: { inline: { findings: [] } },
-            producerArtifactHash: pin,
-          },
-        }),
-  });
-  frames.push(reviewFrame);
-
-  executions.push(
-    workflowExecutionFixture({
-      executionId: subgraphExecutionId,
-      frameId: 1,
-      graphKey: 'release',
-      nodeId,
-      nodeKind: 'subgraph',
-      childFrameId: frameId,
-      childFrame: reviewFrame,
-      displayName: null,
-      status: failing ? 'failed' : running ? 'running' : 'completed',
-      startedAt: at(start),
-      endedAt: failing || running ? null : at(start + 30),
-      callbackStartedAt: null,
-      callbackEndedAt: null,
-      attemptCount: 0,
-      firstArtifactHash: pin,
-      latestArtifactHash: pin,
-      latestAttempt: null,
-      operationSummary: {
-        count: 0,
-        unresolved: 0,
-        evidenceCaptured: 0,
-        capabilities: [],
-      },
-      stateInRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
-    }),
-  );
-
-  // Two visits to `read`, so pips and revisits are both real.
-  for (const visitIndex of [0, 1]) {
-    const isSecond = visitIndex === 1;
-    const failedHere = failing && failureKind === 'callback' && isSecond;
-    executions.push(
-      workflowExecutionFixture({
-        executionId: subgraphExecutionId + 1 + visitIndex,
-        frameId,
-        graphKey: 'review',
-        parentExecutionId: subgraphExecutionId,
-        depth: 1,
-        nodeId: 'read',
-        visitIndex,
-        displayName: isSecond ? 'second read' : 'first read',
-        // A capture that failed is a diagnostic about a name, never a failed step.
-        labelDiagnostic: isSecond ? null : 'label callback threw: TypeError',
-        status: failedHere ? 'failed' : 'completed',
-        startedAt: at(start + 1 + visitIndex * 10),
-        endedAt: at(start + 5 + visitIndex * 10),
-        callbackStartedAt: at(start + 1 + visitIndex * 10),
-        callbackEndedAt: at(start + 5 + visitIndex * 10),
-        attemptCount: repaired && isSecond ? 2 : 1,
-        firstArtifactHash: repaired && isSecond ? PIN_ONE : pin,
-        latestArtifactHash: pin,
-        latestAttempt: failedHere
-          ? {
-              ...attempt(1, pin, 'failed'),
-              failure: {
-                code: 'node_callback_failed',
-                message: 'TypeError: cannot read property findings of undefined',
-                detail: null,
-              },
-            }
-          : {
-              ...attempt(repaired && isSecond ? 2 : 1, pin, 'succeeded'),
-              ...(repaired && isSecond
-                ? {
-                    invocationKind: 'retry' as const,
-                    recoveryMode: 'reuse_producer_output' as const,
-                    producerArtifactHash: PIN_ONE,
-                  }
-                : {}),
-            },
-        priorFailures:
-          repaired && isSecond
-            ? [
-                {
-                  attemptId: 1,
-                  attemptIndex: 1,
-                  segmentKind: 'node_callback' as const,
-                  artifactHash: PIN_ONE,
-                  failure: {
-                    code: 'reduction_failed' as const,
-                    message: 'findings rejected an update it did not declare',
-                    detail: null,
-                  },
-                  repairedByAttemptIndex: 2,
-                  repairedByArtifactHash: PIN_TWO,
-                },
-              ]
-            : [],
-        routing:
-          failing && failureKind === 'routing' && isSecond
-            ? {
-                edgeId: 'after-read',
-                attemptIndex: 1,
-                chosen: null,
-                updateRef: null,
-                startedAt: at(start + 5 + visitIndex * 10),
-                endedAt: at(start + 5.2 + visitIndex * 10),
-                failure: {
-                  code: 'edge_choose_failed',
-                  message: 'RangeError: findings[0] is undefined',
-                  detail: null,
-                },
-              }
-            : failedHere
-              ? null
-              : {
-                  edgeId: 'after-read',
-                  attemptIndex: 1,
-                  chosen: 'deep-check',
-                  updateRef: { inline: { findings: [] } },
-                  startedAt: at(start + 5 + visitIndex * 10),
-                  endedAt: at(start + 5.1 + visitIndex * 10),
-                  failure: null,
-                },
-        operationSummary: {
-          count: 1,
-          unresolved: 0,
-          evidenceCaptured: 0,
-          capabilities: ['send_agent_prompt'],
-        },
-        stateInRef: { inline: { draft: 'Bump the runtime to 0.0.4', findings: [] } },
-        candidateRef: isSecond ? { inline: null } : { inline: { findings: ['unbounded query'] } },
-        // The second visit committed nothing, which is not the same as producing JSON null.
-        updateRef: isSecond ? null : { inline: { findings: ['unbounded query'] } },
-        stateOutRef: isSecond
-          ? { payloadRef: 'p:tampered', byteSize: 900, mediaType: 'application/json' }
-          : { inline: { draft: 'Bump the runtime to 0.0.4', findings: ['unbounded query'] } },
-      }),
-    );
-    operations.push(
-      workflowOperationFixture({
-        operationKey: `op-read-${subgraphExecutionId}-${visitIndex}`,
-        frameId,
-        executionId: subgraphExecutionId + 1 + visitIndex,
-        attemptId: 1,
-        callIndex: 0,
-        capability: 'send_agent_prompt',
-        state: 'completed',
-        requestRef: { payloadRef: 'p:prompt', byteSize: 2_180, mediaType: 'text/plain' },
-        requestHash: 'sha256:readfixture',
-        receiptRef: { inline: { turnId: 't-91' } },
-        resultRef: { inline: { findings: [] } },
-        target: { agentSessionId: 7, paneId: null, ptyProcessId: null, turnId: 't-91' },
-        createdAt: at(start + 1.2 + visitIndex * 10),
-        dispatchedAt: at(start + 1.3 + visitIndex * 10),
-        settledAt: at(start + 4.8 + visitIndex * 10),
-      }),
-    );
-  }
-
-  // Third level: a `rules` frame inside the review pass.
-  const rulesFrame = workflowFrameFixture({
-    frameId: rulesFrameId,
-    parentExecutionId: subgraphExecutionId + 3,
-    parentFrameId: frameId,
-    graphKey: 'rules',
-    entryArtifactHash: pin,
-    depth: 2,
-    status: 'completed',
-    enteredAt: at(start + 6),
-    completedAt: at(start + 9),
-    parametersRef: { inline: { findings: [] } },
-    executionCount: 1,
-    output: {
-      outcomeId: 'clean',
-      outcomeKind: 'success',
-      outcomeReason: null,
-      producedRef: { inline: { findings: [] } },
-      producerArtifactHash: pin,
-    },
-  });
-  frames.push(rulesFrame);
-
-  executions.push(
-    workflowExecutionFixture({
-      executionId: subgraphExecutionId + 3,
-      frameId,
-      graphKey: 'review',
-      parentExecutionId: subgraphExecutionId,
-      depth: 1,
-      nodeId: 'deep-check',
-      nodeKind: 'subgraph',
-      childFrameId: rulesFrameId,
-      childFrame: rulesFrame,
-      status: 'completed',
-      startedAt: at(start + 6),
-      endedAt: at(start + 9),
-      callbackStartedAt: null,
-      callbackEndedAt: null,
-      attemptCount: 0,
-      firstArtifactHash: pin,
-      latestArtifactHash: pin,
-      latestAttempt: null,
-      operationSummary: {
-        count: 0,
-        unresolved: 0,
-        evidenceCaptured: 0,
-        capabilities: [],
-      },
-    }),
-    workflowExecutionFixture({
-      executionId: subgraphExecutionId + 4,
-      frameId: rulesFrameId,
-      graphKey: 'rules',
-      parentExecutionId: subgraphExecutionId + 3,
-      depth: 2,
-      nodeId: 'scan',
-      status: 'completed',
-      startedAt: at(start + 6.2),
-      endedAt: at(start + 8.8),
-      callbackStartedAt: at(start + 6.2),
-      callbackEndedAt: at(start + 8.8),
-      firstArtifactHash: pin,
-      latestArtifactHash: pin,
-      latestAttempt: attempt(1, pin, 'succeeded'),
-      operationSummary: {
-        count: 1,
-        unresolved: 0,
-        evidenceCaptured: 0,
-        capabilities: ['run_headless_agent'],
-      },
-      stateInRef: { inline: { findings: [] } },
-      stateOutRef: { inline: { findings: [] } },
-      routing: {
-        edgeId: 'after-scan',
-        attemptIndex: 1,
-        chosen: 'lint-pass',
-        updateRef: null,
-        startedAt: at(start + 8.8),
-        endedAt: at(start + 8.9),
-        failure: null,
-      },
-    }),
-  );
-
-  // Fourth level: a `lint` frame inside the rule checks. Nesting this deep is what proves that
-  // addressing, expansion and keyboard reach do not quietly stop working a level or two down.
-  const lintFrame = workflowFrameFixture({
-    frameId: rulesFrameId + 100,
-    parentExecutionId: subgraphExecutionId + 5,
-    parentFrameId: rulesFrameId,
-    graphKey: 'lint',
-    entryArtifactHash: pin,
-    depth: 3,
-    status: 'completed',
-    enteredAt: at(start + 9.1),
-    completedAt: at(start + 10.6),
-    parametersRef: { inline: { findings: [] } },
-    executionCount: 1,
-    output: {
-      outcomeId: 'linted',
-      outcomeKind: 'success',
-      outcomeReason: null,
-      producedRef: { inline: { findings: [] } },
-      producerArtifactHash: pin,
-    },
-  });
-  frames.push(lintFrame);
-
-  executions.push(
-    workflowExecutionFixture({
-      executionId: subgraphExecutionId + 5,
-      frameId: rulesFrameId,
-      graphKey: 'rules',
-      // The subgraph visit that opened the frame this execution lives in — `deep-check`, not the
-      // sibling that routed to it.
-      parentExecutionId: subgraphExecutionId + 3,
-      depth: 2,
-      nodeId: 'lint-pass',
-      nodeKind: 'subgraph',
-      childFrameId: lintFrame.frameId,
-      childFrame: lintFrame,
-      status: 'completed',
-      startedAt: at(start + 9.1),
-      endedAt: at(start + 10.6),
-      callbackStartedAt: null,
-      callbackEndedAt: null,
-      attemptCount: 0,
-      firstArtifactHash: pin,
-      latestArtifactHash: pin,
-      latestAttempt: null,
-      operationSummary: {
-        count: 0,
-        unresolved: 0,
-        evidenceCaptured: 0,
-        capabilities: [],
-      },
-    }),
-    workflowExecutionFixture({
-      executionId: subgraphExecutionId + 6,
-      frameId: lintFrame.frameId,
-      graphKey: 'lint',
-      parentExecutionId: subgraphExecutionId + 5,
-      depth: 3,
-      nodeId: 'rules-run',
-      status: 'completed',
-      startedAt: at(start + 9.3),
-      endedAt: at(start + 10.4),
-      callbackStartedAt: at(start + 9.3),
-      callbackEndedAt: at(start + 10.4),
-      firstArtifactHash: pin,
-      latestArtifactHash: pin,
-      latestAttempt: attempt(1, pin, 'succeeded'),
-      operationSummary: {
-        count: 0,
-        unresolved: 0,
-        evidenceCaptured: 0,
-        capabilities: [],
-      },
-      stateInRef: { inline: { findings: [] } },
-      stateOutRef: { inline: { findings: [] } },
-      routing: {
-        edgeId: 'after-rules-run',
-        attemptIndex: 1,
-        chosen: 'linted',
-        updateRef: null,
-        startedAt: at(start + 10.4),
-        endedAt: at(start + 10.5),
-        failure: null,
-      },
-    }),
-  );
-  operations.push(
-    workflowOperationFixture({
-      operationKey: `op-scan-${rulesFrameId}`,
-      frameId: rulesFrameId,
-      executionId: subgraphExecutionId + 4,
-      attemptId: 1,
-      callIndex: 0,
-      capability: 'run_headless_agent',
-      state: 'completed',
-      stage: 'started',
-      requestRef: { inline: { rules: 5 } },
-      requestHash: 'sha256:scanfixture',
-      receiptRef: { inline: { exitCode: 0 } },
-      resultRef: { inline: { findings: [] } },
-      target: { agentSessionId: null, paneId: null, ptyProcessId: 29, turnId: null },
-      createdAt: at(start + 6.3),
-      dispatchedAt: at(start + 6.4),
-      settledAt: at(start + 8.7),
-    }),
-  );
-}
-
-function summaryFor(scenario: ScenarioKey, pin: string, longHistory: boolean): WorkflowRunSummary {
-  const common = {
-    runId: RUN_ID,
-    workflowKey: 'isagi/release-check',
-    title: 'release-check',
-    rootGraphKey: 'release',
-    artifactHash: pin,
-    pinOrdinal: pin === PIN_TWO ? 2 : 1,
-    attachment: { worktreeId: 12, surfaceId: 121 },
-    origin: placement(true),
-    destination: placement(scenario !== 'blocked_environment'),
-    createdAt: at(0),
-    updatedAt: at(180),
-    revision: longHistory ? 400 : 60,
-  } as const;
-
-  const controls = {
-    pause: true,
-    resume: false,
-    retry: false,
-    cancel: true,
-    dismiss: false,
-    advance: false,
-  };
-
   switch (scenario) {
-    case 'ready':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'ready',
-        position: { kind: 'node_callback', frameId: 1, executionId: 102 },
-        activeNode: {
-          frameId: 1,
-          graphKey: 'release',
-          nodeId: 'triage',
-          nodeKind: 'operation',
-          executionId: 102,
-          visitIndex: 0,
-          displayName: null,
-        },
-        controls,
-      });
     case 'running':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'running',
-        position: { kind: 'node_callback', frameId: 2, executionId: 104 },
-        activeNode: activeRead(104),
-        controls,
-      });
+      summaryOverrides.status = 'running';
+      summaryOverrides.current = current(104, 2, 'review', 'read', null);
+      break;
     case 'waiting_agent':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'waiting',
-        position: { kind: 'node_callback', frameId: 2, executionId: 104 },
-        activeNode: activeRead(104),
-        controls,
+      summaryOverrides.status = 'waiting';
+      summaryOverrides.current = current(104, 2, 'review', 'read', {
+        kind: 'agent_turn',
+        target: { agentSessionId: 7, sentAt: at(16.2) },
       });
+      break;
     case 'waiting_questions':
     case 'waiting_continue':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'waiting',
-        position: { kind: 'awaiting_wait', frameId: 1, executionId: 102, waitId: 5 },
-        activeNode: activeTriage(),
-        blockingWait: {
-          waitId: 5,
-          kind: scenario === 'waiting_continue' ? 'user_continue' : 'user_input',
-          label: 'The writer needs direction.',
-          frameId: 1,
-          executionId: 102,
-          questions:
-            scenario === 'waiting_continue'
-              ? null
-              : [{ kind: 'text', key: 'verdict', label: 'What should change?' }],
-          armedAt: at(5.4),
-        },
-        controls: { ...controls, advance: true },
-      });
+      summaryOverrides.status = 'waiting';
+      summaryOverrides.current = current(102, 1, 'release', 'triage', triageWait);
+      break;
     case 'paused':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'waiting',
-        paused: true,
-        position: { kind: 'awaiting_wait', frameId: 1, executionId: 102, waitId: 5 },
-        activeNode: activeTriage(),
-        controls: { ...controls, pause: false, resume: true },
-      });
-    case 'blocked_operation':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'blocked',
-        position: { kind: 'node_callback', frameId: 1, executionId: 102 },
-        activeNode: activeTriage(),
-        blockedOperation: { operationKey: 'op-triage-1', frameId: 1, executionId: 102 },
-        controls: { ...controls, retry: true },
-      });
-    case 'blocked_environment':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'blocked',
-        position: { kind: 'node_callback', frameId: 1, executionId: 102 },
-        activeNode: activeTriage(),
-        controls: { ...controls, retry: true },
-      });
+      summaryOverrides.status = 'paused';
+      summaryOverrides.current = current(102, 1, 'release', 'triage', triageWait);
+      summaryOverrides.controls = {
+        pause: false,
+        resume: true,
+        retry: false,
+        cancel: true,
+        dismiss: false,
+      };
+      break;
     case 'callback_failed':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'failed',
-        position: { kind: 'node_callback', frameId: 2, executionId: 105 },
-        activeNode: activeRead(105),
-        failure: {
-          code: 'node_callback_failed',
-          message: 'TypeError: cannot read property findings of undefined',
-          segmentKind: 'node_callback',
-          attemptId: 1,
-          frameId: 2,
-          executionId: 105,
-        },
-        controls: { ...controls, pause: false, cancel: false, retry: true, dismiss: true },
-      });
-    case 'routing_failed':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'failed',
-        position: { kind: 'routing', frameId: 2, executionId: 105, edgeId: 'after-read' },
-        activeNode: activeRead(105),
-        failure: {
-          code: 'edge_choose_failed',
-          message: 'RangeError: findings[0] is undefined',
-          segmentKind: 'routing',
-          attemptId: 1,
-          frameId: 2,
-          executionId: 105,
-        },
-        controls: { ...controls, pause: false, cancel: false, retry: true, dismiss: true },
-      });
+      summaryOverrides.status = 'failed';
+      summaryOverrides.current = current(105, 2, 'review', 'read', null);
+      summaryOverrides.error = {
+        stage: 'node_function',
+        message: 'TypeError: cannot read property findings of undefined',
+        graphKey: 'review',
+        nodeId: 'read',
+      };
+      summaryOverrides.controls = {
+        pause: false,
+        resume: false,
+        retry: true,
+        cancel: false,
+        dismiss: true,
+      };
+      break;
     case 'done':
-    case 'checkpoints':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'done',
-        endedAt: at(180),
-        position: { kind: 'terminal' },
-        outcome: {
-          outcomeId: 'shipped',
-          kind: 'success',
-          reason: 'Every check passed.',
-          producedRef: { inline: { verdict: 'ship' } },
-        },
-        controls: { ...controls, pause: false, cancel: false, dismiss: true },
-      });
     case 'authored_failure':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'done',
-        endedAt: at(180),
-        position: { kind: 'terminal' },
-        // A declared failure outcome finished on purpose. It has nothing to repair, which is the
-        // difference between this and a segment that threw.
-        outcome: {
-          outcomeId: 'rejected',
-          kind: 'failure',
-          reason: 'Two rules failed on the second pass.',
-          producedRef: { inline: { verdict: 'reject' } },
-        },
-        controls: { ...controls, pause: false, cancel: false, dismiss: true },
-      });
-    case 'interrupted':
-      return workflowSummaryFixture({
-        ...common,
-        // A parked root presents as paused with a reason; restart-specific vocabulary is deferred.
-        status: 'running',
-        paused: true,
-        position: { kind: 'node_callback', frameId: 1, executionId: 102 },
-        activeNode: activeTriage(),
-        controls: { ...controls, pause: false, resume: true },
-      });
-    case 'root_init_failed':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'failed',
-        position: { kind: 'graph_entry', frameId: 1 },
-        failure: {
-          code: 'graph_init_failed',
-          message: "TypeError: cannot read property 'head' of undefined",
-          segmentKind: 'graph_entry',
-          attemptId: 1,
-          frameId: 1,
-          executionId: null,
-        },
-        controls: { ...controls, pause: false, cancel: false, retry: true, dismiss: true },
-      });
+      summaryOverrides.status = 'completed';
+      summaryOverrides.endedAt = at(62);
+      summaryOverrides.outcome = root.outcome;
+      summaryOverrides.controls = {
+        pause: false,
+        resume: false,
+        retry: false,
+        cancel: false,
+        dismiss: true,
+      };
+      break;
     case 'cancelled':
-      return workflowSummaryFixture({
-        ...common,
-        status: 'cancelled',
-        endedAt: at(170),
-        position: { kind: 'terminal' },
-        stopSummary: { requested: 3, confirmed: 1, failed: 0, unsupported: 1, pending: 1 },
-        controls: { ...controls, pause: false, cancel: false, dismiss: true },
-      });
+      summaryOverrides.status = 'cancelled';
+      summaryOverrides.endedAt = at(62);
+      summaryOverrides.controls = {
+        pause: false,
+        resume: false,
+        retry: false,
+        cancel: false,
+        dismiss: true,
+      };
+      break;
+    default:
+      break;
   }
+
+  return finish(builder, summaryFor(runId, pin, root, summaryOverrides), options);
 }
 
-const activeTriage = () => ({
-  frameId: 1,
-  graphKey: 'release',
-  nodeId: 'triage',
-  nodeKind: 'operation' as const,
-  executionId: 102,
-  visitIndex: 0,
-  displayName: 'Ask about the risky rename',
-});
+function current(
+  executionId: number,
+  invocationId: number,
+  graphKey: string,
+  nodeId: string,
+  wait: WorkflowWaitDto | null,
+): NonNullable<WorkflowRunSummary['current']> {
+  return { executionId, invocationId, graphKey, nodeId, nodeKind: 'operation', label: null, wait };
+}
 
-const activeRead = (executionId: number) => ({
-  frameId: 2,
-  graphKey: 'review',
-  nodeId: 'read',
-  nodeKind: 'operation' as const,
-  executionId,
-  visitIndex: executionId === 105 ? 1 : 0,
-  displayName: 'second read',
-});
+function summaryFor(
+  runId: number,
+  pin: string,
+  root: WorkflowGraphInvocationDto,
+  overrides: Partial<WorkflowRunSummary>,
+): WorkflowRunSummary {
+  return workflowSummaryFixture({
+    runId,
+    workflowKey: 'isagi/release-check',
+    title: 'release-check',
+    artifactHash: pin,
+    status: 'waiting',
+    origin: {
+      worktreeId: 12,
+      worktreePath: '/work/isagi/.worktrees/release',
+      surfaceId: 121,
+      paneId: 1211,
+      agentSessionId: 7,
+    },
+    worktreeId: 12,
+    worktreePath: '/work/isagi/.worktrees/release',
+    surfaceId: 121,
+    createdAt: at(0),
+    updatedAt: root.endedAt ?? at(180),
+    ...overrides,
+  });
+}
+
+function finish(
+  builder: RunBuilder,
+  summary: WorkflowRunSummary,
+  options: BuildOptions,
+): FixtureWorld {
+  const ordered = [...builder.events, ...options.extraEvents].sort((left, right) =>
+    left.at < right.at ? -1 : left.at > right.at ? 1 : 0,
+  );
+  // Extra events always come last: they were appended after everything the build describes.
+  const extras = new Set(options.extraEvents);
+  const events = [...ordered.filter((event) => !extras.has(event)), ...options.extraEvents].map(
+    (event, index) => workflowEventFixture({ ...event, eventId: index + 1, runId: builder.runId }),
+  );
+  const executionDetails = new Map<number, WorkflowExecutionDetailDto>();
+  for (const step of builder.steps) {
+    executionDetails.set(step.summary.executionId, {
+      ...step.summary,
+      result: step.result,
+      event: step.event,
+      decision: step.decision,
+      stateAfter: step.stateAfter,
+      operations: step.operations,
+    });
+  }
+  return {
+    runId: builder.runId,
+    summary,
+    detail: {
+      run: summary,
+      inputs: { story: 'release 0.1.0' },
+      invocations: [...builder.invocations].sort(
+        (left, right) => left.invocationId - right.invocationId,
+      ),
+      executions: builder.steps
+        .map((step) => step.summary)
+        .sort((left, right) => left.executionId - right.executionId),
+    },
+    executionDetails,
+    events,
+  };
+}
 
 /**
- * History, as the complete deltas a reconnecting client would replay.
+ * One invocation of the reusable `review` graph, with `rules` and `lint` nested inside it.
  *
- * Pause boundaries and pin adoption live only here — no entity row carries them — so a page that
- * skipped this read would draw a run that was never paused.
+ * Called twice with different registrations so the page can show that one definition reused is two
+ * histories, four levels deep. On the first pass the second `read` fails and, when the run was
+ * retried, a Retry execution repeats it under the reloaded build.
  */
-function eventsFor(scenario: ScenarioKey): readonly WorkflowRunTransitionDelta[] {
-  const transition = (
-    revision: number,
-    kind: WorkflowRunTransitionDelta['transition']['kind'],
-    recordedAt: string,
-  ): WorkflowRunTransitionDelta => ({
-    runId: RUN_ID,
-    revision,
-    transition: {
-      revision,
-      recordedAt,
-      kind,
-      frameId: 1,
-      executionId: null,
-      attemptId: null,
-      operationKey: null,
-      waitId: null,
-      artifactHash: kind === 'retry_pin_adopted' ? PIN_TWO : null,
-      detailRef: null,
-      stateRef: null,
-    },
-    changes: { executions: [], frames: [], operations: [] },
+function addReviewPass(
+  builder: RunBuilder,
+  input: {
+    readonly nodeId: string;
+    readonly subgraphExecutionId: number;
+    readonly invocationId: number;
+    readonly rulesInvocationId: number;
+    readonly start: number;
+    readonly launchBuild: string;
+    readonly pin: string;
+    readonly scenario: ScenarioKey;
+    readonly replyArrived: boolean;
+    readonly retried: boolean;
+    readonly routedTo?: string | null;
+  },
+) {
+  const { subgraphExecutionId: sub, start, launchBuild, pin, scenario } = input;
+  const isFirst = input.nodeId === 'first-pass';
+  const live = isFirst && (scenario === 'running' || scenario === 'waiting_agent');
+  const failing = isFirst && scenario === 'callback_failed';
+  const secondFails = isFirst && (failing || input.retried);
+  const completed = !live && !failing;
+  const endAt = at(start + 18);
+
+  builder.invocation({
+    invocationId: input.invocationId,
+    parentExecutionId: sub,
+    graphKey: 'review',
+    depth: 1,
+    label: `${input.nodeId} · review`,
+    status: completed ? 'completed' : 'running',
+    parameters: { draft: 'Bump the runtime to 0.0.4' },
+    state: { draft: 'Bump the runtime to 0.0.4', findings: ['unbounded query'] },
+    outcome: completed
+      ? { outcomeId: 'accepted', kind: 'success', reason: null, output: { findings: [] } }
+      : null,
+    startedAt: at(start),
+    endedAt: completed ? endAt : null,
   });
 
-  if (scenario === 'paused') return [transition(40, 'pause_opened', at(20))];
-  if (scenario === 'done' || scenario === 'authored_failure') {
-    return [transition(40, 'pause_opened', at(20)), transition(41, 'pause_closed', at(45))];
+  builder.step({
+    summary: {
+      executionId: sub,
+      invocationId: 1,
+      nodeId: input.nodeId,
+      nodeKind: 'subgraph',
+      artifactHash: launchBuild,
+      // A cancelled run's last subgraph never routed: Cancel stopped it.
+      status: completed ? (input.routedTo === null ? 'cancelled' : 'completed') : 'waiting',
+      childInvocationId: input.invocationId,
+      routedTo: completed ? (input.routedTo === undefined ? 'second-pass' : input.routedTo) : null,
+      startedAt: at(start),
+      endedAt: completed ? endAt : null,
+    },
+    result: { type: 'suspend', update: {}, wait: null },
+  });
+
+  // `read`, first visit: an agent turn.
+  const readLive = live;
+  builder.step({
+    summary: {
+      executionId: sub + 1,
+      invocationId: input.invocationId,
+      nodeId: 'read',
+      visitIndex: 0,
+      label: 'first read',
+      artifactHash: launchBuild,
+      status: readLive ? (scenario === 'waiting_agent' ? 'waiting' : 'running') : 'completed',
+      wait:
+        scenario === 'waiting_agent' || !readLive
+          ? { kind: 'agent_turn', target: { agentSessionId: 7, sentAt: at(start + 1.2) } }
+          : null,
+      routedTo: readLive ? null : 'deep-check',
+      startedAt: at(start + 1),
+      endedAt: readLive ? null : at(start + 5),
+    },
+    result:
+      readLive && scenario === 'running'
+        ? null
+        : {
+            type: 'suspend',
+            update: {},
+            wait: { kind: 'agent_turn', target: { agentSessionId: 7, sentAt: at(start + 1.2) } },
+          },
+    event: readLive ? null : { kind: 'ended', agentSessionId: 7 },
+    decision: readLive ? null : { to: 'deep-check', update: { findings: ['unbounded query'] } },
+    stateAfter: readLive
+      ? null
+      : { draft: 'Bump the runtime to 0.0.4', findings: ['unbounded query'] },
+    operations: [
+      sendPrompt(sub + 1, 0, {
+        startedAt: at(start + 1.2),
+        prompt: 'Read the diff and list what could break.',
+        responseText: readLive && !input.replyArrived ? null : READ_REPLY,
+      }),
+    ],
+    waitingAt: readLive && scenario === 'running' ? null : at(start + 1.3),
+    deliveredAt: readLive ? null : at(start + 5),
+  });
+
+  if (live) return;
+
+  // `deep-check`, which enters `rules`, which enters `lint`.
+  const rulesId = input.rulesInvocationId;
+  const lintId = rulesId + 100;
+  builder.step({
+    summary: {
+      executionId: sub + 3,
+      invocationId: input.invocationId,
+      nodeId: 'deep-check',
+      nodeKind: 'subgraph',
+      artifactHash: launchBuild,
+      status: 'completed',
+      childInvocationId: rulesId,
+      routedTo: 'read',
+      startedAt: at(start + 6),
+      endedAt: at(start + 9.8),
+    },
+  });
+  builder.invocation({
+    invocationId: rulesId,
+    parentExecutionId: sub + 3,
+    graphKey: 'rules',
+    depth: 2,
+    status: 'completed',
+    parameters: { findings: [] },
+    state: { findings: [] },
+    outcome: { outcomeId: 'clean', kind: 'success', reason: null, output: { findings: [] } },
+    startedAt: at(start + 6),
+    endedAt: at(start + 9.7),
+  });
+  builder.step({
+    summary: {
+      executionId: sub + 4,
+      invocationId: rulesId,
+      nodeId: 'scan',
+      artifactHash: launchBuild,
+      status: 'completed',
+      routedTo: 'lint-pass',
+      startedAt: at(start + 6.2),
+      endedAt: at(start + 8.8),
+    },
+    operations: [
+      runHeadless(sub + 4, 0, {
+        startedAt: at(start + 6.3),
+        endedAt: at(start + 8.7),
+        prompt: 'Scan the diff against the five release rules.',
+      }),
+    ],
+    result: { type: 'suspend', update: {}, wait: { kind: 'headless_agent', operations: [] } },
+    waitingAt: at(start + 6.4),
+    deliveredAt: at(start + 8.7),
+  });
+  builder.step({
+    summary: {
+      executionId: sub + 5,
+      invocationId: rulesId,
+      nodeId: 'lint-pass',
+      nodeKind: 'subgraph',
+      artifactHash: launchBuild,
+      status: 'completed',
+      childInvocationId: lintId,
+      routedTo: 'clean',
+      startedAt: at(start + 9.1),
+      endedAt: at(start + 9.6),
+    },
+  });
+  builder.invocation({
+    invocationId: lintId,
+    parentExecutionId: sub + 5,
+    graphKey: 'lint',
+    depth: 3,
+    status: 'completed',
+    parameters: { findings: [] },
+    state: { findings: [] },
+    outcome: { outcomeId: 'linted', kind: 'success', reason: null, output: { findings: [] } },
+    startedAt: at(start + 9.1),
+    endedAt: at(start + 9.55),
+  });
+  builder.step({
+    summary: {
+      executionId: sub + 6,
+      invocationId: lintId,
+      nodeId: 'rules-run',
+      artifactHash: launchBuild,
+      status: 'completed',
+      routedTo: 'linted',
+      startedAt: at(start + 9.2),
+      endedAt: at(start + 9.5),
+    },
+  });
+
+  // `read`, second visit: fails on the first pass, and is retried when the run was.
+  builder.step({
+    summary: {
+      executionId: sub + 2,
+      invocationId: input.invocationId,
+      nodeId: 'read',
+      visitIndex: 1,
+      label: 'second read',
+      artifactHash: launchBuild,
+      status: secondFails ? 'failed' : 'completed',
+      routedTo: secondFails ? null : 'accepted',
+      error: secondFails
+        ? {
+            stage: 'node_function',
+            message: 'TypeError: cannot read property findings of undefined',
+            graphKey: 'review',
+            nodeId: 'read',
+          }
+        : null,
+      startedAt: at(start + 10),
+      endedAt: at(start + 11),
+    },
+    result: secondFails ? null : { type: 'complete', update: { findings: [] } },
+    decision: secondFails ? null : { to: 'accepted', update: {} },
+    stateAfter: secondFails ? null : { draft: 'Bump the runtime to 0.0.4', findings: [] },
+  });
+
+  if (secondFails && input.retried) {
+    builder.event(at(start + 12), null, 'run', 'run_failed', 'read threw', {
+      stage: 'node_function',
+    });
+    builder.event(at(start + 13), null, 'run', 'code_reloaded', 'Reloaded the latest build', {
+      from: PIN_ZERO,
+      to: pin,
+    });
+    builder.event(at(start + 13), sub + 7, 'run', 'run_retried', 'Retrying second read', {
+      retryOf: sub + 2,
+      reusesResult: false,
+    });
+    builder.step({
+      summary: {
+        executionId: sub + 7,
+        invocationId: input.invocationId,
+        nodeId: 'read',
+        visitIndex: 1,
+        label: 'second read',
+        artifactHash: pin,
+        status: 'completed',
+        retryOf: sub + 2,
+        routedTo: 'accepted',
+        startedAt: at(start + 13.1),
+        endedAt: at(start + 16),
+      },
+      result: { type: 'complete', update: { findings: [] } },
+      decision: { to: 'accepted', update: {} },
+      stateAfter: { draft: 'Bump the runtime to 0.0.4', findings: [] },
+    });
   }
-  return [];
 }

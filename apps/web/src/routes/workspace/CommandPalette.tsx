@@ -53,6 +53,7 @@ import { restoreWorkbenchFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { useSurfaceDetailQuery, useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { awaitPreparation } from '../../lib/workspace/workflow/preparation.js';
 import {
   useAttachedWorkflowRun,
   useStartWorkflowMutation,
@@ -199,7 +200,7 @@ export function CommandPalette() {
     (): WorkflowLaunchDeps => ({
       start: startWorkflow,
       retry: retryWorkflow,
-      readSummary: readWorkflowRun,
+      awaitPrepared: (runId) => awaitPreparation(runId, readWorkflowRun),
     }),
     [startWorkflow, retryWorkflow, readWorkflowRun],
   );

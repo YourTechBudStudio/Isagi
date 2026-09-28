@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import type { WorkflowEvidenceDto, WorkflowOperationDto } from '@isagi/contracts';
+import type { WorkflowExecutionDetailDto, WorkflowOperationDto } from '@isagi/contracts';
 
-import type { WorkflowOperationsView } from '../../../lib/workspace/workflow/queries.js';
 import { inspectorCopy } from './copy.js';
 import {
-  evidenceDataTabs,
-  evidenceTabKey,
-  operationDataTabs,
-  operationTabKey,
-  shortHash,
+  statusTone,
   toneClass,
   type DockChildExecution,
   type DockDataTab,
@@ -18,84 +13,55 @@ import {
   type FieldTone,
 } from './dock.js';
 import { Fields } from './DockFields.js';
-import { dockMaxHeight, dockMinHeight, formatBytes } from './format.js';
-import type { InspectorSelection, InspectorTab } from './selection.js';
+import { dockMaxHeight, dockMinHeight } from './format.js';
+import type { InspectorSelection } from './selection.js';
 import { formatClock } from './timing.js';
 import { WorkflowCheckpointColumn } from './WorkflowCheckpointColumn.js';
 import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
-import { WorkflowEvidenceContent } from './WorkflowContentViewer.js';
-import { WorkflowEvidenceCard } from './WorkflowEvidenceCard.js';
-import { WorkflowOperationProvenance } from './WorkflowOperationProvenance.js';
-import { WorkflowPayloadValue } from './WorkflowPayloadValue.js';
+import { TextValue, WorkflowPayloadValue } from './WorkflowPayloadValue.js';
 
-/**
- * What the selected visit captured, as the dock receives it.
- *
- * `no_visit` is a state, not an absence. A declared node nobody has visited and a frame's own setup
- * segment are both legitimate selections with a full dock view — and neither is a visit, so neither
- * has an evidence question. Substituting the run's listing there would put other nodes' records
- * under a heading reading "this visit and below", which is the one thing this column may never do.
- */
-export type DockEvidenceRows =
-  | { readonly kind: 'no_visit' }
-  | { readonly kind: 'loading' }
-  | { readonly kind: 'failed' }
-  | { readonly kind: 'ready'; readonly records: readonly WorkflowEvidenceDto[] };
-
-export interface DockEvidenceView {
-  readonly rows: DockEvidenceRows;
-  readonly selectedKey: string | null;
-  readonly onSelect: (record: WorkflowEvidenceDto) => void;
-  /** Opens the Evidence tab in visit scope. Null when there is no visit to open it on. */
-  readonly onOpenAll: (() => void) | null;
+/** The selected execution's full record, as the dock receives it. */
+export interface DockDetailState {
+  readonly detail: WorkflowExecutionDetailDto | null;
+  readonly isLoading: boolean;
+  readonly error: unknown;
+  readonly retry: () => void;
 }
 
 /**
  * The shared detail surface, filled by whatever is selected in any of the three tabs.
  *
- * Five dense columns that scroll horizontally rather than reflowing: this is reference material a
- * person scans, and a responsive stack would turn one glance into five. The resize is bounded and
+ * Dense columns that scroll horizontally rather than reflowing: this is reference material a person
+ * scans, and a responsive stack would turn one glance into four. The resize is bounded and
  * keyboard-operable, because a panel you can only drag is a panel some people cannot move.
  *
  * Read-only throughout. Nothing here dispatches, answers, retries or cancels — the workflow bar is
- * the only place a run is acted on, and putting even one action here would make that untrue.
+ * the only place a run is acted on.
  */
 export function WorkflowDock({
   view,
-  runId,
-  operations,
-  evidence,
-  tab,
+  execution,
   height,
   onHeightChange,
   onSelect,
 }: {
   readonly view: DockView | null;
-  readonly runId: number;
-  readonly operations: WorkflowOperationsView;
-  readonly evidence: DockEvidenceView;
-  /** Which inspector tab is above. Only the provenance disclosure's default depends on it. */
-  readonly tab: InspectorTab;
+  readonly execution: DockDetailState;
   readonly height: number;
   readonly onHeightChange: (height: number) => void;
   /** The inspector's own selection, so the dock can move it without owning it. */
   readonly onSelect: (selection: InspectorSelection) => void;
 }) {
   const [dataTab, setDataTab] = useState<string | null>(null);
-  // Data tabs and the `capture_evidence` card's back-link read the same set the column shows, so a
-  // selection with no visit contributes neither rather than borrowing another visit's records.
-  const records = evidence.rows.kind === 'ready' ? evidence.rows.records : empty;
+  const operations =
+    execution.detail !== null && execution.detail.executionId === view?.executionId
+      ? execution.detail.operations
+      : empty;
 
-  // The selection's own payloads, then whatever its operations recorded, then what it captured.
-  // Operations and evidence arrive after the view does, so their tabs are composed here rather than
-  // baked into it.
+  // The selection's own values, then each operation's request and result.
   const tabs = useMemo(
-    () => [
-      ...(view?.data ?? []),
-      ...operationDataTabs(operations.operations),
-      ...evidenceDataTabs(records),
-    ],
-    [view?.data, operations.operations, records],
+    () => [...(view?.data ?? []), ...operationDataTabs(operations)],
+    [view?.data, operations],
   );
   const activeTab = tabs.find((entry) => entry.key === dataTab) ?? tabs[0] ?? null;
 
@@ -106,12 +72,8 @@ export function WorkflowDock({
   return (
     <section
       /**
-       * Sized, but allowed to shrink.
-       *
-       * A fixed height wins a flex fight it should lose: in a short window — a tall bar with a
-       * question form open, a small screen — it took every pixel and left the graph none, which is
-       * the one thing the overlay exists to show. It keeps its height where there is room and gives
-       * way where there is not.
+       * Sized, but allowed to shrink: in a short window a fixed height took every pixel and left the
+       * graph none, which is the one thing the overlay exists to show.
        */
       className="relative flex min-h-0 flex-col border-t border-line/30 bg-elevated/96"
       style={{ height, flex: `0 1 ${height}px`, maxHeight: '62%' }}
@@ -120,7 +82,7 @@ export function WorkflowDock({
       <DockGrip height={height} onHeightChange={onHeightChange} />
       {view === null ? (
         <p className="px-4.5 py-4 font-mono text-[11.5px] text-fg-subtle">
-          Select a node, a visit or a row to see what it recorded.
+          {inspectorCopy.dockEmpty}
         </p>
       ) : (
         <>
@@ -154,54 +116,36 @@ export function WorkflowDock({
               <Fields rows={view.declared} onOpenTab={setDataTab} />
             </Column>
             <Column title={inspectorCopy.columnRecorded} rule="bg-blue/70" width="flex-[0_0_18rem]">
-              <Fields rows={view.recorded} onOpenTab={setDataTab} />
+              <Fields rows={view.recorded} onOpenTab={setDataTab} onSelect={onSelect} />
             </Column>
             {view.checkpoint !== null ? (
-              // A checkpoint never calls a capability or captures evidence, so the two columns that
-              // would always be empty give way to the one that says what it saved.
+              // A checkpoint never performs a side effect, so the column that would always be empty
+              // gives way to the one that says what it saved.
               <Column
                 title={inspectorCopy.columnCheckpoint}
-                subtitle={inspectorCopy.checkpointColumnSubtitle}
                 rule="bg-cyan/70"
                 width="flex-[0_0_24rem]"
               >
-                <WorkflowCheckpointColumn
-                  runId={runId}
-                  checkpoint={view.checkpoint}
+                <WorkflowCheckpointColumn checkpoint={view.checkpoint} onOpenTab={setDataTab} />
+              </Column>
+            ) : (
+              <Column
+                title={
+                  view.operations.kind === 'wait_and_operations'
+                    ? `${inspectorCopy.columnWait} · ${inspectorCopy.columnOperations}`
+                    : inspectorCopy.columnOperations
+                }
+                rule="bg-amber/70"
+                width="flex-[0_0_26rem]"
+              >
+                <OperationsColumn
+                  view={view}
+                  execution={execution}
+                  operations={operations}
                   onOpenTab={setDataTab}
                   onSelect={onSelect}
                 />
               </Column>
-            ) : (
-              <>
-                <Column
-                  title={
-                    view.operations.kind === 'wait_and_operations'
-                      ? `${inspectorCopy.columnWait} · ${inspectorCopy.columnOperations}`
-                      : inspectorCopy.columnOperations
-                  }
-                  rule="bg-amber/70"
-                  width="flex-[0_0_24rem]"
-                >
-                  <OperationsColumn
-                    view={view}
-                    operations={operations}
-                    tab={tab}
-                    records={records}
-                    onSelectEvidence={evidence.onSelect}
-                    onOpenTab={setDataTab}
-                    onSelect={onSelect}
-                  />
-                </Column>
-                <Column
-                  title={inspectorCopy.columnEvidence}
-                  subtitle={records.length === 0 ? null : inspectorCopy.evidenceColumnSubtitle}
-                  rule="bg-cyan/70"
-                  width="flex-[0_0_22rem]"
-                >
-                  <EvidenceColumn evidence={evidence} onOpenTab={setDataTab} />
-                </Column>
-              </>
             )}
             <Column title={inspectorCopy.columnData} rule="bg-cyan/70" width="flex-1 min-w-[26rem]">
               {tabs.length === 0 ? (
@@ -211,52 +155,44 @@ export function WorkflowDock({
               ) : (
                 <>
                   <div className="mb-1.5 flex flex-wrap gap-0.5">
-                    {tabs.map((entry) => {
-                      const absent = entry.kind === 'payload' && entry.slot === null;
-                      const size = tabSize(entry);
-                      return (
-                        <button
-                          key={entry.key}
-                          type="button"
-                          aria-pressed={entry === activeTab}
-                          data-tab={entry.key}
-                          onClick={() => setDataTab(entry.key)}
-                          className={`rounded-md border px-2 py-0.5 font-mono text-[11px] transition duration-micro ease-expo ${
-                            entry === activeTab
-                              ? 'border-cyan/50 bg-cyan/8 text-fg'
-                              : 'border-line/30 bg-canvas/60 text-fg-subtle hover:text-fg'
-                          } ${absent ? 'opacity-50' : ''}`}
-                        >
-                          {entry.name}
-                          {size !== null && <span className="ml-1.5 opacity-55">{size}</span>}
-                        </button>
-                      );
-                    })}
+                    {tabs.map((entry) => (
+                      <button
+                        key={entry.key}
+                        type="button"
+                        aria-pressed={entry === activeTab}
+                        data-tab={entry.key}
+                        onClick={() => setDataTab(entry.key)}
+                        className={`rounded-md border px-2 py-0.5 font-mono text-[11px] transition duration-micro ease-expo ${
+                          entry === activeTab
+                            ? 'border-cyan/50 bg-cyan/8 text-fg'
+                            : 'border-line/30 bg-canvas/60 text-fg-subtle hover:text-fg'
+                        } ${entry.kind === 'value' && entry.value === undefined ? 'opacity-50' : ''}`}
+                      >
+                        {entry.name}
+                      </button>
+                    ))}
                   </div>
                   {activeTab &&
-                    (activeTab.kind === 'payload' ? (
-                      <WorkflowPayloadValue
-                        key={`${view.executionId}-${activeTab.key}`}
-                        runId={runId}
-                        slot={activeTab.slot}
-                      />
-                    ) : activeTab.kind === 'evidence' ? (
-                      <EvidenceTabBody
-                        key={activeTab.key}
-                        runId={runId}
-                        evidenceKey={activeTab.evidenceKey}
-                        records={records}
-                      />
-                    ) : view.checkpoint?.summary ? (
+                    (activeTab.kind === 'value' ? (
+                      activeTab.value === undefined && view.executionId !== null ? (
+                        <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
+                          {execution.error
+                            ? inspectorCopy.detailFailed
+                            : inspectorCopy.detailLoading}
+                        </p>
+                      ) : (
+                        <WorkflowPayloadValue
+                          key={`${view.executionId}-${activeTab.key}`}
+                          value={activeTab.value}
+                        />
+                      )
+                    ) : (
                       <WorkflowCheckpointFiles
                         key={activeTab.checkpointId}
-                        runId={runId}
                         checkpointId={activeTab.checkpointId}
-                        base={view.checkpoint.summary.base}
-                        counts={view.checkpoint.summary.counts}
                         layout="compact"
                       />
-                    ) : null)}
+                    ))}
                 </>
               )}
             </Column>
@@ -331,14 +267,11 @@ function DockGrip({
 
 function Column({
   title,
-  subtitle = null,
   rule,
   width,
   children,
 }: {
   readonly title: string;
-  /** A qualifier on the heading, lower-case and unshouted, for a column whose scope is not obvious. */
-  readonly subtitle?: string | null;
   readonly rule: string;
   readonly width: string;
   readonly children: React.ReactNode;
@@ -351,9 +284,6 @@ function Column({
       <h3 className="flex flex-none items-center gap-2 px-4 pt-2 pb-1.5 text-[10.5px] font-semibold tracking-[0.09em] text-fg-subtle uppercase">
         <span aria-hidden className={`h-0.5 w-3.5 rounded-full ${rule}`} />
         {title}
-        {subtitle !== null && (
-          <span className="font-normal tracking-normal normal-case opacity-70">· {subtitle}</span>
-        )}
       </h3>
       <div data-dock-column-scroll className="min-h-0 flex-1 overflow-auto px-4 pt-0.5 pb-3.5">
         {children}
@@ -362,133 +292,45 @@ function Column({
   );
 }
 
-const empty: readonly WorkflowEvidenceDto[] = [];
+const empty: readonly WorkflowOperationDto[] = [];
 
-/** What a tab's chip says beside its name: a payload's size, or how many files a checkpoint kept. */
-function tabSize(tab: DockDataTab): string | null {
-  if (tab.kind === 'checkpoint_files') return String(tab.fileCount);
-  if (tab.kind === 'evidence') return formatBytes(tab.byteSize);
-  return tab.slot !== null && 'byteSize' in tab.slot ? formatBytes(tab.slot.byteSize) : null;
+/** Each operation's request and, once it has one, its structured result. */
+function operationDataTabs(operations: readonly WorkflowOperationDto[]): readonly DockDataTab[] {
+  const tabs: DockDataTab[] = [];
+  for (const operation of operations) {
+    const ordinal = operation.seq + 1;
+    tabs.push({
+      kind: 'value',
+      key: operationTabKey(operation.operationId, 'request'),
+      name: `op${ordinal}.request`,
+      value: operation.request,
+    });
+    if (operation.result !== null && operation.result !== undefined) {
+      tabs.push({
+        kind: 'value',
+        key: operationTabKey(operation.operationId, 'result'),
+        name: `op${ordinal}.result`,
+        value: operation.result,
+      });
+    }
+  }
+  return tabs;
 }
 
-/**
- * What the selected visit kept, and everything beneath it.
- *
- * The column is here rather than only on the Evidence tab because a person inspecting a node or a
- * trace row wants its evidence where they already are; a count alone would send them to another
- * surface for every look. It lists the same set `evidenceCaptured` counts, through the same query
- * the Evidence tab makes in visit scope, so the two cannot disagree about what a visit captured.
- */
-function EvidenceColumn({
-  evidence,
-  onOpenTab,
-}: {
-  readonly evidence: DockEvidenceView;
-  readonly onOpenTab: (tab: string) => void;
-}) {
-  const { rows } = evidence;
-  if (rows.kind === 'no_visit') {
-    return (
-      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {inspectorCopy.evidenceColumnNoVisit}
-      </p>
-    );
-  }
-  if (rows.kind === 'failed') {
-    return (
-      <p className="py-1.5 font-mono text-[11.5px] text-amber">
-        {inspectorCopy.evidenceListFailed}
-      </p>
-    );
-  }
-  if (rows.kind === 'loading') {
-    return (
-      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {inspectorCopy.evidenceListLoading}
-      </p>
-    );
-  }
-  if (rows.records.length === 0) {
-    return (
-      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {inspectorCopy.evidenceColumnEmpty}
-      </p>
-    );
-  }
-  return (
-    <>
-      {rows.records.map((record) => (
-        <WorkflowEvidenceCard
-          key={record.evidenceKey}
-          record={record}
-          selected={record.evidenceKey === evidence.selectedKey}
-          onSelect={() => {
-            evidence.onSelect(record);
-            onOpenTab(evidenceTabKey(record.evidenceKey));
-          }}
-        />
-      ))}
-      {evidence.onOpenAll !== null && (
-        <button
-          type="button"
-          data-evidence-open-all
-          onClick={evidence.onOpenAll}
-          className="font-mono text-[11.5px] text-cyan underline decoration-dotted underline-offset-[3px] transition duration-micro ease-expo hover:text-fg"
-        >
-          {inspectorCopy.evidenceOpenAll}
-        </button>
-      )}
-    </>
-  );
-}
-
-/**
- * A capture's bytes in the Data column, through the same component the detail pane uses.
- *
- * Keyed off the record rather than the tab so the viewer is handed the metadata it needs to be
- * honest — a media type, a size and a reference to name if the bytes turn out to be gone. A card
- * that looked perfectly ordinary in the column beside this one is exactly where that happens.
- */
-function EvidenceTabBody({
-  runId,
-  evidenceKey,
-  records,
-}: {
-  readonly runId: number;
-  readonly evidenceKey: string;
-  readonly records: readonly WorkflowEvidenceDto[];
-}) {
-  const record = records.find((item) => item.evidenceKey === evidenceKey) ?? null;
-  if (record === null) return null;
-  return (
-    <>
-      <Fields
-        rows={[
-          { label: 'role', value: record.role },
-          { label: 'title', value: record.title },
-        ]}
-      />
-      <div className="mt-2">
-        <WorkflowEvidenceContent runId={runId} record={record} compact />
-      </div>
-    </>
-  );
+function operationTabKey(operationId: number, slot: string): string {
+  return `op-${operationId}::${slot}`;
 }
 
 function OperationsColumn({
   view,
+  execution,
   operations,
-  tab,
-  records,
-  onSelectEvidence,
   onOpenTab,
   onSelect,
 }: {
   readonly view: DockView;
-  readonly operations: WorkflowOperationsView;
-  readonly tab: InspectorTab;
-  readonly records: readonly WorkflowEvidenceDto[];
-  readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
+  readonly execution: DockDetailState;
+  readonly operations: readonly WorkflowOperationDto[];
   readonly onOpenTab: (tab: string) => void;
   readonly onSelect: (selection: InspectorSelection) => void;
 }) {
@@ -508,23 +350,14 @@ function OperationsColumn({
           <Fields rows={view.operations.waitFields} onOpenTab={onOpenTab} />
         </div>
       )}
-      <OperationCards
-        operations={operations}
-        tab={tab}
-        records={records}
-        onSelectEvidence={onSelectEvidence}
-        onOpenTab={onOpenTab}
-      />
+      <OperationCards execution={execution} operations={operations} onOpenTab={onOpenTab} />
     </>
   );
 }
 
 /**
- * A subgraph's children, as a way in rather than a count.
- *
- * Direct children only, each selecting that visit — a nested subgraph among them opens its own list
- * in turn. Flattening every descendant here would present a subgraph as one step that did a great
- * deal, which is the conflation the whole inspector is built to avoid.
+ * A subgraph's or a graph's executions, as a way in rather than a count. Direct children only, each
+ * selecting that execution — a nested subgraph among them opens its own list in turn.
  */
 function NestedChildren({
   nested,
@@ -534,25 +367,18 @@ function NestedChildren({
   readonly onSelect: (selection: InspectorSelection) => void;
 }) {
   if (!nested.entered) {
-    // Not the same as a frame that ran and did nothing, and an empty list would claim the second.
     return (
       <p className="font-mono text-[11.5px] text-fg-subtle">{inspectorCopy.subgraphNotEntered}</p>
     );
   }
-
   return (
-    <>
-      <p className="font-mono text-[11.5px] text-fg-subtle">
-        {inspectorCopy.nestedOperations(nested.operations, nested.executions)}
-      </p>
-      <ul className="mt-2 flex flex-col gap-1" aria-label={inspectorCopy.childExecutions}>
-        {nested.children.map((child) => (
-          <li key={child.executionId}>
-            <ChildExecutionButton child={child} onSelect={onSelect} />
-          </li>
-        ))}
-      </ul>
-    </>
+    <ul className="mt-2 flex flex-col gap-1" aria-label={inspectorCopy.childExecutions}>
+      {nested.children.map((child) => (
+        <li key={child.executionId}>
+          <ChildExecutionButton child={child} onSelect={onSelect} />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -576,8 +402,8 @@ function ChildExecutionButton({
       >
         {child.nodeId}
       </span>
-      {child.displayName && (
-        <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{child.displayName}</span>
+      {child.label && (
+        <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{child.label}</span>
       )}
       <span
         className={`ml-auto flex-none font-mono text-[10.5px] ${toneClass(statusTone(child.status))}`}
@@ -588,44 +414,23 @@ function ChildExecutionButton({
   );
 }
 
-function statusTone(status: DockChildExecution['status']): FieldTone {
-  switch (status) {
-    case 'failed':
-      return 'bad';
-    case 'completed':
-      return 'ok';
-    default:
-      return 'warn';
-  }
-}
-
-/**
- * Every operation this visit made, across every attempt.
- *
- * Completeness is stated, never implied. Until the read has finished it says so, and a failed read
- * says that rather than showing a short list that looks whole — the count on the execution is a fact
- * about the step, not evidence that the cards beside it are all of them.
- */
+/** Every side effect this execution performed, in order: the prompts it sent and what came back. */
 function OperationCards({
+  execution,
   operations,
-  tab,
-  records,
-  onSelectEvidence,
   onOpenTab,
 }: {
-  readonly operations: WorkflowOperationsView;
-  readonly tab: InspectorTab;
-  readonly records: readonly WorkflowEvidenceDto[];
-  readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
+  readonly execution: DockDetailState;
+  readonly operations: readonly WorkflowOperationDto[];
   readonly onOpenTab: (tab: string) => void;
 }) {
-  if (operations.error) {
+  if (execution.error) {
     return (
       <div className="rounded-lg border border-error/40 bg-error/5 px-2.5 py-2">
         <p className="text-[12.5px] text-fg-muted">{inspectorCopy.operationsFailed}</p>
         <button
           type="button"
-          onClick={operations.retry}
+          onClick={execution.retry}
           className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
         >
           {inspectorCopy.operationsRetry}
@@ -633,215 +438,192 @@ function OperationCards({
       </div>
     );
   }
-
-  if (operations.isLoading && operations.operations.length === 0) {
+  if (execution.detail === null) {
     return (
       <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
         {inspectorCopy.operationsLoading}
       </p>
     );
   }
-
-  if (operations.operations.length === 0) {
+  if (operations.length === 0) {
     return (
-      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
-        {operations.complete ? inspectorCopy.noOperations : inspectorCopy.operationsLoading}
-      </p>
+      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">{inspectorCopy.noOperations}</p>
     );
   }
-
   return (
     <>
-      {operations.operations.map((operation, index) => (
+      {operations.map((operation) => (
         <OperationCard
-          key={operation.operationKey}
+          key={operation.operationId}
           operation={operation}
-          index={index}
-          tab={tab}
-          captured={
-            records.find((record) => record.operationKey === operation.operationKey) ?? null
+          // A prompt completes when it is sent; its reply is recorded when the agent's turn ends,
+          // so while the execution is still going a missing reply is not back yet.
+          executionLive={
+            execution.detail?.status === 'running' || execution.detail?.status === 'waiting'
           }
-          onSelectEvidence={onSelectEvidence}
           onOpenTab={onOpenTab}
         />
       ))}
-      {!operations.complete && (
-        <p className="pt-1 font-mono text-[11px] text-waiting">{inspectorCopy.operationsPartial}</p>
-      )}
     </>
   );
 }
 
 function OperationCard({
   operation,
-  index,
-  tab,
-  captured,
-  onSelectEvidence,
+  executionLive,
   onOpenTab,
 }: {
   readonly operation: WorkflowOperationDto;
-  readonly index: number;
-  readonly tab: InspectorTab;
-  /** The record this call produced, when it was a capture and the listing has reached it. */
-  readonly captured: WorkflowEvidenceDto | null;
-  readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
+  readonly executionLive: boolean;
   readonly onOpenTab: (tab: string) => void;
 }) {
-  const rows: DockRow[] = [
-    { label: 'key', value: operation.operationKey },
-    { label: 'call', value: `#${operation.callIndex}` },
-    { label: 'state', value: operation.state, tone: operationTone(operation.state) },
-  ];
-  if (operation.stage) rows.push({ label: 'stage', value: operation.stage, tone: 'warn' });
-  rows.push({ label: 'target', value: formatTarget(operation) });
+  const prompt = promptOf(operation.request);
+  const rows: DockRow[] = [];
+  const agent = [operation.harness, operation.model, operation.effort].filter(Boolean).join(' · ');
+  if (agent) rows.push({ label: 'agent', value: agent });
+  if (operation.agentSessionId !== null) {
+    rows.push({ label: 'session', value: String(operation.agentSessionId) });
+  }
+  if (operation.paneId !== null) rows.push({ label: 'pane', value: String(operation.paneId) });
+  if (operation.harnessSessionId !== null) {
+    rows.push({ label: 'harness id', value: operation.harnessSessionId, tone: 'dim' });
+  }
   rows.push({
     label: 'request',
-    value: shortHash(operation.requestHash),
-    dataTab: operationTabKey(operation.operationKey, 'request'),
+    value: inspectorCopy.operationRecorded,
+    dataTab: operationTabKey(operation.operationId, 'request'),
   });
-  rows.push(
-    operation.receiptRef === null
-      ? { label: 'receipt', value: 'none', tone: operation.state === 'completed' ? 'warn' : 'dim' }
-      : {
-          label: 'receipt',
-          value: 'recorded',
-          tone: 'ok',
-          dataTab: operationTabKey(operation.operationKey, 'receipt'),
-        },
-  );
-  if (operation.resultRef !== null) {
+  if (operation.result !== null && operation.result !== undefined) {
     rows.push({
       label: 'result',
-      value: 'recorded',
-      tone: 'ok',
-      dataTab: operationTabKey(operation.operationKey, 'result'),
+      value: inspectorCopy.operationRecorded,
+      dataTab: operationTabKey(operation.operationId, 'result'),
     });
   }
-  if (operation.uncertaintyDetail) {
-    rows.push({ label: 'uncertain', value: operation.uncertaintyDetail, tone: 'warn' });
-  }
-  if (operation.stop.state !== 'not_requested') {
-    rows.push({
-      label: 'stop',
-      value: `${operation.stop.state}${operation.stop.detail ? ` · ${operation.stop.detail}` : ''}`,
-      tone: operation.stop.state === 'confirmed' ? 'ok' : 'warn',
-    });
-  }
-  if (operation.lateEvidenceRef !== null) {
-    // Retained, never applied. A receipt that landed after settlement is evidence about the past,
-    // not a reason to revive a settled operation.
-    rows.push({
-      label: 'late evidence',
-      value: 'recorded after settlement',
-      tone: 'warn',
-      dataTab: operationTabKey(operation.operationKey, 'lateEvidence'),
-    });
-  }
-  if (captured !== null) {
-    // The record itself, not a second rendering of it: the row is a way back to the card in the
-    // column beside this one, which is where a capture actually reads.
-    rows.push({
-      label: 'evidence',
-      value: captured.evidenceKey,
-      tone: 'ok',
-      dataTab: evidenceTabKey(captured.evidenceKey),
-    });
-  }
-  rows.push({ label: 'created', value: formatClock(operation.createdAt) });
-  if (operation.dispatchedAt) {
-    rows.push({ label: 'dispatched', value: formatClock(operation.dispatchedAt) });
-  }
-  if (operation.settledAt) rows.push({ label: 'settled', value: formatClock(operation.settledAt) });
+  if (operation.usage !== null) rows.push({ label: 'usage', value: usageLine(operation.usage) });
+  rows.push({ label: 'started', value: formatClock(operation.startedAt) });
+  if (operation.endedAt !== null)
+    rows.push({ label: 'ended', value: formatClock(operation.endedAt) });
 
   return (
     <article
+      data-operation={operation.operationId}
       className={`mb-2 rounded-lg border border-l-[3px] border-line/30 bg-canvas/50 px-2.5 py-2 ${operationAccent(
-        operation.state,
+        operation.status,
       )}`}
     >
       <header className="mb-1.5 flex items-baseline gap-2 font-mono text-[12px]">
-        <span className="text-fg-subtle">{index + 1}</span>
-        <span className="text-fg">{operation.capability}</span>
+        <span className="text-fg-subtle">{operation.seq + 1}</span>
+        <span className="text-fg">{operation.kind}</span>
         <span
           className={`ml-auto text-[10px] font-semibold tracking-[0.06em] uppercase ${toneClass(
-            operationTone(operation.state),
+            operationTone(operation.status),
           )}`}
         >
-          {operation.state}
+          {operation.status}
         </span>
       </header>
-      <Fields
-        rows={rows}
-        onOpenTab={(target) => {
-          if (captured !== null && target === evidenceTabKey(captured.evidenceKey)) {
-            onSelectEvidence(captured);
+      <Fields rows={rows} onOpenTab={onOpenTab} />
+      {prompt !== null && (
+        <Exchange label={inspectorCopy.operationPrompt} text={prompt} testId="operation-prompt" />
+      )}
+      {operation.kind === 'send_prompt' || operation.kind === 'spawn_agent' ? (
+        <Exchange
+          label={inspectorCopy.operationReply}
+          text={operation.responseText}
+          empty={
+            executionLive || operation.status === 'running' || operation.endedAt === null
+              ? inspectorCopy.replyPending
+              : inspectorCopy.replyNotRecorded
           }
-          onOpenTab(target);
-        }}
-      />
-      {/*
-        On every card, in every tab. Only whether it starts open varies.
-
-        It is ten rows, so opening it on each card of a visit that made three calls is thirty rows in
-        a twenty-four-character column — unreadable, which defeats the point of showing provenance at
-        all. The first card starts open because the common case is a single call, where a disclosure
-        would be pure ceremony.
-
-        Under Evidence it starts closed, because the detail pane above is already showing this block
-        for the record in question. It is *not* removed there: the pane shows provenance for that
-        record's **source** operation alone, so withholding the disclosure would leave every other
-        operation of the visit with no provenance anywhere in the product.
-      */}
-      <details
-        open={index === 0 && tab !== 'evidence'}
-        className="mt-1.5 border-t border-dashed border-line/25 pt-1.5"
-      >
-        <summary className="cursor-pointer font-mono text-[11px] text-fg-subtle marker:content-none">
-          {inspectorCopy.provenanceLabel}
-        </summary>
-        <div className="mt-1.5">
-          <WorkflowOperationProvenance operation={operation} />
-        </div>
-      </details>
+          testId="operation-reply"
+        />
+      ) : operation.kind === 'run_headless' ? (
+        <Exchange
+          label={inspectorCopy.operationOutput}
+          text={operation.responseText}
+          empty={
+            operation.status === 'running'
+              ? inspectorCopy.replyPending
+              : inspectorCopy.outputNotRecorded
+          }
+          testId="operation-reply"
+        />
+      ) : null}
     </article>
   );
 }
 
-/** The identifiers the operation actually recorded. Friendly composed targets are a later story. */
-function formatTarget(operation: WorkflowOperationDto): string {
-  const parts: string[] = [];
-  const { agentSessionId, paneId, ptyProcessId, turnId } = operation.target;
-  if (agentSessionId !== null) parts.push(`agent_session ${agentSessionId}`);
-  if (paneId !== null) parts.push(`pane ${paneId}`);
-  if (ptyProcessId !== null) parts.push(`pty_process ${ptyProcessId}`);
-  if (turnId !== null) parts.push(`turn ${turnId}`);
-  return parts.length === 0 ? '—' : parts.join(' · ');
+/** One side of the dialogue: the prompt as sent, or what came back. */
+function Exchange({
+  label,
+  text,
+  empty: emptyText = null,
+  testId,
+}: {
+  readonly label: string;
+  readonly text: string | null;
+  readonly empty?: string | null;
+  readonly testId: string;
+}) {
+  return (
+    <details
+      open
+      className="mt-1.5 border-t border-dashed border-line/25 pt-1.5"
+      data-testid={testId}
+    >
+      <summary className="cursor-pointer font-mono text-[11px] text-fg-subtle marker:content-none">
+        {label}
+      </summary>
+      <div className="mt-1 max-h-56 overflow-auto">
+        {text === null ? (
+          <p className="font-mono text-[11.5px] text-fg-subtle">{emptyText}</p>
+        ) : (
+          <TextValue text={text} />
+        )}
+      </div>
+    </details>
+  );
 }
 
-function operationTone(state: WorkflowOperationDto['state']): FieldTone {
-  switch (state) {
+function promptOf(request: unknown): string | null {
+  if (typeof request !== 'object' || request === null) return null;
+  const prompt = (request as Record<string, unknown>)['prompt'];
+  return typeof prompt === 'string' ? prompt : null;
+}
+
+/** The provider's own numbers, verbatim. No total is computed, because none was reported. */
+function usageLine(usage: NonNullable<WorkflowOperationDto['usage']>): string {
+  const parts: string[] = [];
+  if (usage.inputTokens !== null) parts.push(`in ${usage.inputTokens}`);
+  if (usage.cacheReadInputTokens !== null) parts.push(`cache read ${usage.cacheReadInputTokens}`);
+  if (usage.cacheCreationInputTokens !== null) {
+    parts.push(`cache write ${usage.cacheCreationInputTokens}`);
+  }
+  if (usage.outputTokens !== null) parts.push(`out ${usage.outputTokens}`);
+  if (usage.costUsd !== null) parts.push(`$${usage.costUsd.toFixed(4)}`);
+  return parts.length === 0 ? inspectorCopy.usageUnknown : parts.join(' · ');
+}
+
+function operationTone(status: WorkflowOperationDto['status']): FieldTone {
+  switch (status) {
     case 'completed':
       return 'ok';
     case 'failed':
       return 'bad';
-    case 'uncertain':
     case 'interrupted':
       return 'warn';
-    case 'abandoned':
-      return 'dim';
     default:
       return 'default';
   }
 }
 
-function operationAccent(state: WorkflowOperationDto['state']): string {
-  switch (state) {
+function operationAccent(status: WorkflowOperationDto['status']): string {
+  switch (status) {
     case 'completed':
       return 'border-l-green';
     case 'failed':
       return 'border-l-error';
-    case 'uncertain':
     case 'interrupted':
       return 'border-l-amber bg-amber/6';
     default:

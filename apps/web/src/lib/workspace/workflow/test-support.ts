@@ -1,17 +1,17 @@
 import type {
-  ListRunExecutionsOutput,
-  ListWorkflowEventsOutput,
-  WorkflowEvidenceDto,
-  WorkflowExecutionDto,
-  WorkflowFrameDto,
+  GetWorkflowRunOutput,
+  WorkflowCheckpointDto,
+  WorkflowCheckpointSummaryDto,
+  WorkflowEventDto,
+  WorkflowExecutionDetailDto,
+  WorkflowExecutionSummaryDto,
+  WorkflowGraphInvocationDto,
   WorkflowOperationDto,
   WorkflowRunSummary,
-  WorkflowRunTransitionDelta,
-  WorkflowTransitionDto,
 } from '@isagi/contracts';
 
 /**
- * Shared v2 wire fixtures.
+ * Shared wire fixtures.
  *
  * Complete records rather than partials cast into shape: the point of these tests is the client's
  * behaviour against the real contract, and a fixture that quietly omits a field would let a reader
@@ -25,46 +25,32 @@ export function workflowSummaryFixture(
 ): WorkflowRunSummary {
   return {
     runId: 1,
-    workflowKey: 'review',
     projectId: 1,
+    workflowKey: 'review',
     title: 'Review',
-    rootGraphKey: 'root',
+    artifactHash: 'sha256:build-1',
     status: 'running',
-    paused: false,
-    revision: 1,
-    artifactHash: 'sha256:pin-1',
-    pinOrdinal: 1,
-    outcome: null,
-    position: { kind: 'graph_entry', frameId: 1 },
-    activeNode: null,
-    blockingWait: null,
-    blockedOperation: null,
-    failure: null,
-    stopSummary: null,
-    uiFeedback: null,
-    attachment: { worktreeId: 10, surfaceId: 101 },
-    origin: placement(),
-    destination: placement(),
-    // The common case, so tests that care about placement override it: nobody chose anything, the
-    // run went where it was launched from, and preparing that allocated nothing worth a receipt.
-    preparation: {
+    origin: {
+      worktreeId: 10,
+      worktreePath: '/work/repo',
+      surfaceId: 101,
+      paneId: null,
+      agentSessionId: null,
+    },
+    placement: {
       source: 'default',
       request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
       baseCommit: null,
-      status: 'prepared',
-      worktree: null,
-      setup: null,
-      surface: null,
-      failure: null,
     },
-    controls: {
-      pause: true,
-      resume: false,
-      retry: false,
-      cancel: true,
-      dismiss: false,
-      advance: false,
-    },
+    worktreeId: 10,
+    worktreePath: '/work/repo',
+    setupDone: false,
+    surfaceId: 101,
+    current: null,
+    uiFeedback: null,
+    error: null,
+    outcome: null,
+    controls: { pause: true, resume: false, retry: false, cancel: true, dismiss: false },
     createdAt: at,
     updatedAt: at,
     endedAt: null,
@@ -72,98 +58,60 @@ export function workflowSummaryFixture(
   };
 }
 
-export function workflowExecutionFixture(
-  overrides: Partial<WorkflowExecutionDto> = {},
-): WorkflowExecutionDto {
+export function workflowInvocationFixture(
+  overrides: Partial<WorkflowGraphInvocationDto> = {},
+): WorkflowGraphInvocationDto {
   return {
-    executionId: 1,
-    frameId: 1,
+    invocationId: 1,
     parentExecutionId: null,
     graphKey: 'root',
     depth: 0,
-    nodeId: 'writer',
-    nodeKind: 'operation',
-    visitIndex: 0,
+    label: null,
     status: 'running',
-    displayName: null,
-    labelDiagnostic: null,
-    childFrameId: null,
-    childFrame: null,
+    parameters: null,
+    state: {},
+    outcome: null,
     startedAt: at,
     endedAt: null,
-    endCertainty: 'observed',
-    callbackStartedAt: at,
-    callbackEndedAt: null,
-    waitArmedAt: null,
-    waitDeliveredAt: null,
-    attemptCount: 1,
-    firstArtifactHash: 'sha256:pin-1',
-    latestArtifactHash: 'sha256:pin-1',
-    latestAttempt: null,
-    priorFailures: [],
-    routing: null,
-    wait: null,
-    operationSummary: { count: 0, unresolved: 0, evidenceCaptured: 0, capabilities: [] },
-    checkpoint: null,
-    stateInRef: null,
-    candidateRef: null,
-    updateRef: null,
-    stateOutRef: null,
     ...overrides,
   };
 }
 
-/**
- * One captured record.
- *
- * Defaults to the plainest thing a capture can be — a text record with no source — so a test that
- * cares about attribution, labels or a media type states only the part it is about.
- */
-export function workflowEvidenceFixture(
-  overrides: Partial<WorkflowEvidenceDto> = {},
-): WorkflowEvidenceDto {
+export function workflowExecutionFixture(
+  overrides: Partial<WorkflowExecutionSummaryDto> = {},
+): WorkflowExecutionSummaryDto {
   return {
-    evidenceKey: 'wev_1',
-    frameId: 1,
     executionId: 1,
-    attemptId: 1,
-    operationKey: 'wop_1',
-    title: 'A captured thing',
-    role: 'note',
-    labels: {},
-    content: {
-      kind: 'text',
-      mediaType: 'text/markdown',
-      byteSize: 120,
-      contentRef: 'sha256:aaaa',
-      sourcePath: null,
-    },
-    source: { kind: 'none' },
-    artifactHash: 'sha256:pin-1',
-    capturedAt: at,
+    runId: 1,
+    invocationId: 1,
+    nodeId: 'plan',
+    nodeKind: 'operation',
+    visitIndex: 0,
+    label: null,
+    artifactHash: 'sha256:build-1',
+    status: 'completed',
+    retryOf: null,
+    wait: null,
+    routedTo: null,
+    childInvocationId: null,
+    checkpointId: null,
+    error: null,
+    startedAt: at,
+    endedAt: at,
     ...overrides,
   };
 }
 
-export function workflowFrameFixture(overrides: Partial<WorkflowFrameDto> = {}): WorkflowFrameDto {
+export function workflowExecutionDetailFixture(
+  overrides: Partial<WorkflowExecutionDetailDto> = {},
+): WorkflowExecutionDetailDto {
   return {
-    frameId: 1,
-    parentExecutionId: null,
-    parentFrameId: null,
-    graphKey: 'root',
-    entryArtifactHash: 'sha256:pin-1',
-    depth: 0,
-    status: 'active',
-    displayName: null,
-    labelDiagnostic: null,
-    entry: null,
-    outputEvaluation: null,
-    output: null,
-    enteredAt: at,
-    completedAt: null,
-    parametersRef: null,
-    stateRef: null,
-    executionCount: 1,
+    ...workflowExecutionFixture(),
+    result: { type: 'complete', update: {} },
+    event: null,
+    decision: null,
+    stateAfter: null,
+    operations: [],
     ...overrides,
   };
 }
@@ -172,136 +120,91 @@ export function workflowOperationFixture(
   overrides: Partial<WorkflowOperationDto> = {},
 ): WorkflowOperationDto {
   return {
-    operationKey: 'op-1',
-    frameId: 1,
+    operationId: 1,
+    runId: 1,
     executionId: 1,
-    attemptId: 1,
-    capability: 'send_agent_prompt',
-    callIndex: 0,
-    state: 'dispatched',
-    stage: null,
-    requestRef: { inline: { prompt: 'hello' } },
-    requestHash: 'sha256:req-1',
-    receiptRef: null,
-    resultRef: null,
-    target: { agentSessionId: 7, paneId: null, ptyProcessId: null, turnId: null },
-    provenance: {
-      harness: 'claude',
-      model: null,
-      effort: null,
-      harnessSessionId: null,
-      attribution: 'not_applicable',
-      cwd: '/tmp/worktree',
-      runtime: { runtimeId: 'runtime-1', incarnationId: 'incarnation-1' },
-      usage: null,
-      artifactHash: 'sha256:pin-1',
-    },
-    stop: { state: 'not_requested', detail: null, requestedAt: null, settledAt: null },
-    uncertaintyDetail: null,
-    lateEvidenceRef: null,
+    seq: 0,
+    kind: 'send_prompt',
+    agentSessionId: 7,
+    paneId: 3,
+    harness: 'claude',
+    model: null,
+    effort: null,
+    request: { prompt: 'Write the plan.' },
+    status: 'completed',
+    responseText: null,
+    result: null,
+    harnessSessionId: null,
+    usage: null,
+    startedAt: at,
+    endedAt: at,
+    ...overrides,
+  };
+}
+
+export function workflowEventFixture(overrides: Partial<WorkflowEventDto> = {}): WorkflowEventDto {
+  return {
+    eventId: 1,
+    runId: 1,
+    executionId: null,
+    at,
+    category: 'run',
+    kind: 'run_launched',
+    message: 'Launched Review',
+    data: null,
+    ...overrides,
+  };
+}
+
+export function workflowRunDetailFixture(
+  overrides: Partial<GetWorkflowRunOutput> = {},
+): GetWorkflowRunOutput {
+  return {
+    run: workflowSummaryFixture(),
+    inputs: {},
+    invocations: [workflowInvocationFixture()],
+    executions: [],
+    ...overrides,
+  };
+}
+
+export function workflowCheckpointSummaryFixture(
+  overrides: Partial<WorkflowCheckpointSummaryDto> = {},
+): WorkflowCheckpointSummaryDto {
+  return {
+    checkpointId: 1,
+    runId: 1,
+    executionId: 1,
+    title: 'Plan saved',
+    commitSha: 'a'.repeat(40),
     createdAt: at,
-    dispatchedAt: at,
-    settledAt: null,
+    scopes: [
+      { scope: 'plan', kind: 'file', path: 'PLAN.md', exclude: [], missing: false, fileCount: 1 },
+    ],
     ...overrides,
   };
 }
 
-export function workflowTransitionFixture(
-  overrides: Partial<WorkflowTransitionDto> = {},
-): WorkflowTransitionDto {
+export function workflowCheckpointFixture(
+  overrides: Partial<WorkflowCheckpointDto> = {},
+): WorkflowCheckpointDto {
   return {
-    revision: 1,
-    recordedAt: at,
-    kind: 'node_dispatched',
-    frameId: 1,
+    checkpointId: 1,
+    runId: 1,
     executionId: 1,
-    attemptId: null,
-    operationKey: null,
-    waitId: null,
-    artifactHash: null,
-    detailRef: null,
-    stateRef: null,
+    title: 'Plan saved',
+    commitSha: 'a'.repeat(40),
+    createdAt: at,
+    scopes: [
+      {
+        scope: 'plan',
+        kind: 'file',
+        path: 'PLAN.md',
+        exclude: [],
+        missing: false,
+        files: [{ path: 'PLAN.md', sha256: 'b'.repeat(64), sizeBytes: 12, executable: false }],
+      },
+    ],
     ...overrides,
-  };
-}
-
-export function workflowDeltaFixture(input: {
-  readonly runId?: number;
-  readonly revision: number;
-  readonly transition?: Partial<WorkflowTransitionDto>;
-  readonly executions?: readonly WorkflowExecutionDto[];
-  readonly frames?: readonly WorkflowFrameDto[];
-  readonly operations?: readonly WorkflowOperationDto[];
-  readonly summary?: WorkflowRunSummary;
-}): WorkflowRunTransitionDelta {
-  return {
-    runId: input.runId ?? 1,
-    revision: input.revision,
-    transition: workflowTransitionFixture({ ...input.transition, revision: input.revision }),
-    changes: {
-      executions: input.executions ?? [],
-      frames: input.frames ?? [],
-      operations: input.operations ?? [],
-      ...(input.summary === undefined ? {} : { summary: input.summary }),
-    },
-  };
-}
-
-export function executionsPageFixture(input: {
-  readonly items?: readonly WorkflowExecutionDto[];
-  readonly nextCursor?: string | null;
-  readonly highWaterRevision: number;
-  readonly coverageRevision?: number;
-  readonly complete?: boolean;
-  readonly frames?: readonly WorkflowFrameDto[];
-  readonly operations?: readonly WorkflowOperationDto[];
-  readonly summary?: WorkflowRunSummary;
-}): ListRunExecutionsOutput {
-  const coverageRevision = input.coverageRevision ?? input.highWaterRevision;
-  return {
-    items: input.items ?? [],
-    nextCursor: input.nextCursor ?? null,
-    boundary: {
-      highWaterRevision: input.highWaterRevision,
-      coverageRevision,
-      snapshotToken: `token-${input.highWaterRevision}`,
-      complete: input.complete ?? coverageRevision === input.highWaterRevision,
-    },
-    changes: {
-      frames: input.frames ?? [],
-      operations: input.operations ?? [],
-      ...(input.summary === undefined ? {} : { summary: input.summary }),
-    },
-  };
-}
-
-export function eventsPageFixture(input: {
-  readonly items?: readonly WorkflowRunTransitionDelta[];
-  readonly nextCursor?: string | null;
-  readonly highWaterRevision: number;
-  readonly coverageRevision?: number;
-  readonly complete?: boolean;
-}): ListWorkflowEventsOutput {
-  const coverageRevision = input.coverageRevision ?? input.highWaterRevision;
-  return {
-    items: input.items ?? [],
-    nextCursor: input.nextCursor ?? null,
-    boundary: {
-      highWaterRevision: input.highWaterRevision,
-      coverageRevision,
-      snapshotToken: `token-${input.highWaterRevision}`,
-      complete: input.complete ?? coverageRevision === input.highWaterRevision,
-    },
-  };
-}
-
-function placement() {
-  return {
-    worktreeId: 10,
-    worktreePath: '/repo/isagi',
-    surfaceId: 101,
-    paneId: null,
-    agentSessionId: null,
-    available: true,
   };
 }

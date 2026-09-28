@@ -1,12 +1,17 @@
-import type { WorkspaceSnapshot, SurfaceDetail, ControlPlaneSnapshot } from '@isagi/contracts';
+import type {
+  ControlPlaneSnapshot,
+  SurfaceDetail,
+  WorkflowEventDto,
+  WorkspaceSnapshot,
+} from '@isagi/contracts';
 
-import { answerCheckpointRoute } from './checkpoints.js';
-import { evidenceBytes, evidenceRecords, listEvidence } from './evidence.js';
+import { answerCheckpointRoute, CHECKPOINT_PIN } from './checkpoints.js';
 import {
+  at,
   buildWorld,
+  descriptorFor,
   PIN_ONE,
   PIN_TWO,
-  RUN_ID,
   type FixtureWorld,
   type ScenarioKey,
 } from './world.js';
@@ -15,27 +20,36 @@ import {
  * The runtime boundary the inspector page talks to.
  *
  * A `fetch` stand-in rather than stubbed hooks, for the same reason the workflow-bar page uses one:
- * the coordinator's paging, contiguity and recovery rules are the machinery under test, and stubbing
- * the client would test everything except them.
+ * the event paging, the refetch on a pushed event and the per-execution reads are the machinery
+ * under test, and stubbing the client would test everything except them.
  *
- * Pages are deliberately small. A real route caps its own limit regardless of what a client asks
- * for, and a fixture that always answered in one page would let "more than one page" go untested
- * forever.
+ * The event route answers in small pages. A real route may cap its own limit below what a client
+ * asks for, and a fixture that always answered in one page would let "more than one page" go
+ * untested forever.
  */
 
 export const RUNTIME_ORIGIN = 'http://workflow-inspector.fixture';
 export const FIXTURE_PLACEMENT = { projectId: 1, worktreeId: 12, surfaceId: 121, paneId: 1211 };
 
-const EXECUTIONS_PER_PAGE = 25;
-const OPERATIONS_PER_PAGE = 3;
+const EVENTS_PER_PAGE = 20;
+/** The first run's id. Every scenario switch is a new run on the same surface, with the next id. */
+export const FIRST_RUN_ID = 77;
 
 export interface InspectorRuntimeControls {
+  /** A new run with this scenario takes the surface. Returns the run it replaced. */
   readonly setScenario: (scenario: ScenarioKey) => void;
-  readonly adoptSecondPin: () => void;
+  /** A new run of the current scenario with a long history takes the surface. */
   readonly setLongHistory: (long: boolean) => void;
-  readonly setManyOperations: (many: boolean) => void;
-  /** The next operations read fails, once, so the dock's honest incompleteness is observable. */
-  readonly failNextOperationsRead: () => void;
+  /**
+   * A Retry moved the run onto the next build. Returns the event the runtime would have appended,
+   * so the page can push it exactly as the runtime does.
+   */
+  readonly reloadNextBuild: () => WorkflowEventDto;
+  /** The agent turn `read` waits on has ended; its reply is recorded. Returns the pushed event. */
+  readonly arriveReply: () => WorkflowEventDto;
+  /** The next execution detail read fails, once. */
+  readonly failNextExecutionRead: () => void;
+  readonly failNextEventsRead: () => void;
   readonly world: () => FixtureWorld;
   readonly requestPaths: () => readonly string[];
   readonly resetRequests: () => void;
@@ -43,16 +57,29 @@ export interface InspectorRuntimeControls {
 
 export function installFakeRuntime(): InspectorRuntimeControls {
   let scenario: ScenarioKey = 'waiting_questions';
+  let runId = FIRST_RUN_ID;
   let pin = PIN_ONE;
   let longHistory = false;
-  let manyOperations = false;
-  let failOperations = false;
+  let replyArrived = false;
+  let extraEvents: Omit<WorkflowEventDto, 'eventId' | 'runId'>[] = [];
+  let failExecution = false;
+  let failEvents = false;
   let requestPaths: string[] = [];
   let nextRequestId = 1;
 
-  let world = buildWorld({ scenario, pin, longHistory, manyOperations });
-  const rebuild = () => {
-    world = buildWorld({ scenario, pin, longHistory, manyOperations });
+  const build = () => buildWorld({ runId, scenario, pin, longHistory, replyArrived, extraEvents });
+  let world = build();
+  const newRun = () => {
+    runId += 1;
+    pin = PIN_ONE;
+    replyArrived = false;
+    extraEvents = [];
+    world = build();
+  };
+  const append = (event: Omit<WorkflowEventDto, 'eventId' | 'runId'>) => {
+    extraEvents = [...extraEvents, event];
+    world = build();
+    return world.events.at(-1)!;
   };
 
   window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
@@ -62,6 +89,7 @@ export function installFakeRuntime(): InspectorRuntimeControls {
     const path = url.pathname.replace(/^\/api\/v1/, '');
     const method = init?.method ?? 'GET';
     requestPaths.push(`${method} ${path}${url.search}`);
+    const runPath = `/workflows/runs/${world.runId}`;
 
     if (method === 'GET' && path === '/workspace') return success(workspace);
     if (method === 'GET' && path === '/control-plane') return success(controlPlane);
@@ -70,96 +98,57 @@ export function installFakeRuntime(): InspectorRuntimeControls {
       return success({ worktreeId: 12, status: 'configured', commands: [], removedCommands: [] });
     }
 
-    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}`) {
-      // The whole contract shape, as for structure below: the client decodes it, and a missing
-      // root frame fails the read and leaves the inspector with nothing to show.
-      const rootFrame = world.frames.find((frame) => frame.parentFrameId === null);
-      if (rootFrame === undefined) throw new Error('fixture world has no root frame');
-      return success({ run: world.summary, rootFrame });
-    }
+    if (method === 'GET' && path === runPath) return success(world.detail);
 
-    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/structure`) {
+    if (method === 'GET' && path === `${runPath}/structure`) {
       // The whole contract shape, because the client decodes it. A fixture that answered with a
       // convenient subset would let a missing field pass here and fail in the product.
+      const artifactHash = url.searchParams.get('artifactHash') ?? world.summary.artifactHash;
       return success({
-        artifactHash: world.artifactHash,
+        artifactHash,
         workflowKey: world.summary.workflowKey,
         sdkVersion: '0.1.0',
         verifierVersion: '0.1.0',
-        pinOrdinal: world.summary.pinOrdinal,
-        adoptedAt: world.summary.createdAt,
-        descriptor: world.descriptor,
+        contractVersion: 4,
+        firstSeenAt: at(0),
+        descriptor: descriptorFor(artifactHash),
       });
     }
 
-    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/executions`) {
-      const offset = Number(url.searchParams.get('cursor') ?? 0);
-      const items = world.executions.slice(offset, offset + EXECUTIONS_PER_PAGE);
-      const nextOffset = offset + items.length;
-      const complete = nextOffset >= world.executions.length;
-      return success({
-        items,
-        nextCursor: complete ? null : String(nextOffset),
-        boundary: {
-          highWaterRevision: world.summary.revision,
-          // Only the last page may acknowledge coverage: a client that acknowledged a revision it
-          // was never given would skip the real deltas forever.
-          coverageRevision: complete ? world.summary.revision : 0,
-          snapshotToken: `fixture-${world.summary.revision}`,
-          complete,
-        },
-        changes: {
-          frames: offset === 0 ? world.frames : [],
-          // Deliberately empty, exactly as the real hydration route answers: an execution carries
-          // its own operation summary, and the cards are read for the one visit somebody selected.
-          operations: [],
-          ...(offset === 0 ? { summary: world.summary } : {}),
-        },
-      });
-    }
-
-    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/events`) {
-      return success({
-        items: world.events,
-        nextCursor: null,
-        boundary: {
-          highWaterRevision: world.summary.revision,
-          coverageRevision: world.summary.revision,
-          snapshotToken: `fixture-${world.summary.revision}`,
-          complete: true,
-        },
-      });
-    }
-
-    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/operations`) {
-      if (failOperations) {
-        failOperations = false;
+    if (method === 'GET' && path === `${runPath}/events`) {
+      if (failEvents) {
+        failEvents = false;
         return failure(500, 'workflow_run_not_found');
       }
-      const executionId = Number(url.searchParams.get('executionId') ?? 0);
-      const all = world.operations.filter((row) => row.executionId === executionId);
-      const offset = Number(url.searchParams.get('cursor') ?? 0);
-      const items = all.slice(offset, offset + OPERATIONS_PER_PAGE);
-      const nextOffset = offset + items.length;
+      const cursor = Number(url.searchParams.get('cursor') ?? 0);
+      const after = world.events.filter((event) => event.eventId > cursor);
+      const page = after.slice(0, EVENTS_PER_PAGE);
       return success({
-        items,
-        nextCursor: nextOffset >= all.length ? null : String(nextOffset),
+        items: page,
+        nextCursor: after.length > page.length ? page.at(-1)!.eventId : null,
       });
     }
 
-    const payload = /^\/workflows\/runs\/\d+\/payloads\/(.+)$/.exec(path);
-    if (method === 'GET' && payload) {
-      const ref = decodeURIComponent(payload[1]!);
-      const record = world.payloads.get(ref);
-      // 409 with the contract's own rejection shape. A status the contract does not allow would
-      // decode-fail instead, and the page would be testing a transport error rather than an
-      // unreadable payload.
-      if (record === undefined || record === 'missing') return unreadable(ref, 'missing');
-      if (record === 'corrupt') return unreadable(ref, 'corrupt');
-      return success({ payloadRef: ref, ...record });
+    const execution = /^\/workflows\/executions\/(\d+)$/.exec(path);
+    if (method === 'GET' && execution) {
+      if (failExecution) {
+        failExecution = false;
+        return failure(500, 'workflow_execution_not_found');
+      }
+      const found = world.executionDetails.get(Number(execution[1]));
+      if (found === undefined) return failure(404, 'workflow_execution_not_found');
+      return success({ execution: found });
     }
 
-    const checkpoint = method === 'GET' ? answerCheckpointRoute(path, url.searchParams) : null;
+    const checkpoint =
+      method === 'GET'
+        ? answerCheckpointRoute(
+            world.runId,
+            path,
+            url.searchParams,
+            world.summary.artifactHash === CHECKPOINT_PIN,
+          )
+        : null;
     if (checkpoint !== null) {
       switch (checkpoint.kind) {
         case 'json':
@@ -167,14 +156,12 @@ export function installFakeRuntime(): InspectorRuntimeControls {
         case 'not_found':
           return failure(404, checkpoint.reason);
         case 'network_error':
-          // No response at all, so no cause: the client must not read this as lost bytes.
+          // No response at all: the client must not read this as lost bytes.
           return Promise.reject(new TypeError('Failed to fetch'));
         case 'content_unavailable':
-          return rejection(409, {
-            reason: 'workflow_checkpoint_content_unavailable',
+          return failure(409, 'workflow_checkpoint_content_unavailable', {
             checkpointId: checkpoint.checkpointId,
-            fileId: checkpoint.fileId,
-            cause: checkpoint.cause,
+            path: checkpoint.path,
           });
         case 'bytes':
           return Promise.resolve(
@@ -186,76 +173,10 @@ export function installFakeRuntime(): InspectorRuntimeControls {
       }
     }
 
-    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/evidence`) {
-      // Unpaged on purpose: the client pages every page into one array regardless, and the
-      // scoping — visit, and visit-and-below — is the part a UI test can actually get wrong.
-      return success({ ...listEvidence(url.searchParams), nextCursor: null });
-    }
-
-    const evidence = /^\/workflows\/runs\/\d+\/evidence\/([^/]+)$/.exec(path);
-    if (method === 'GET' && evidence) {
-      const key = decodeURIComponent(evidence[1]!);
-      const found = evidenceRecords.find((item) => item.evidenceKey === key);
-      if (found === undefined) return failure(404, 'workflow_evidence_not_found');
-      return success({ evidence: found });
-    }
-
-    const content = /^\/workflows\/runs\/\d+\/evidence\/([^/]+)\/content$/.exec(path);
-    if (method === 'GET' && content) {
-      const key = decodeURIComponent(content[1]!);
-      const record = evidenceRecords.find((item) => item.evidenceKey === key);
-      const bytes = evidenceBytes.get(key);
-      if (record === undefined || bytes === undefined) {
-        return failure(404, 'workflow_evidence_not_found');
-      }
-      if (bytes.kind === 'unavailable') return contentUnavailable(key, bytes.cause);
-      const body =
-        bytes.kind === 'text'
-          ? new Blob([bytes.text], { type: record.content.mediaType })
-          : new Blob([Uint8Array.from(atob(bytes.base64), (c) => c.charCodeAt(0))], {
-              type: record.content.mediaType,
-            });
-      return Promise.resolve(
-        new Response(body, {
-          status: 200,
-          headers: { 'content-type': record.content.mediaType },
-        }),
-      );
-    }
-
-    const operation = /^\/workflows\/runs\/\d+\/operations\/([^/]+)$/.exec(path);
-    if (method === 'GET' && operation) {
-      const key = decodeURIComponent(operation[1]!);
-      const found = world.operations.find((row) => row.operationKey === key);
-      if (found === undefined) return failure(404, 'workflow_operation_not_found');
-      // `getOperation` is the one read permitted to touch the filesystem, so it is also the only
-      // one that answers the transcript question at all. The listing leaves it absent.
-      return success({
-        operation: {
-          ...found,
-          provenance: {
-            ...found.provenance,
-            transcript:
-              found.capability === 'run_headless_agent'
-                ? { locator: '~/.claude/projects/fixture/d02f91ee.jsonl', available: false }
-                : null,
-          },
-        },
-      });
-    }
-
     const control = /^\/workflows\/runs\/\d+\/(pause|resume|retry|cancel|dismiss|advance)$/.exec(
       path,
     );
-    if (method === 'POST' && control) {
-      return success({
-        runId: RUN_ID,
-        accepted: true,
-        status: world.summary.status,
-        revision: world.summary.revision + 1,
-        diagnostics: [],
-      });
-    }
+    if (method === 'POST' && control) return success({ run: world.summary });
 
     return failure(404, 'workflow_run_not_found');
   }) as typeof fetch;
@@ -263,22 +184,40 @@ export function installFakeRuntime(): InspectorRuntimeControls {
   return {
     setScenario: (next) => {
       scenario = next;
-      rebuild();
-    },
-    adoptSecondPin: () => {
-      pin = pin === PIN_ONE ? PIN_TWO : PIN_ONE;
-      rebuild();
+      newRun();
     },
     setLongHistory: (long) => {
       longHistory = long;
-      rebuild();
+      newRun();
     },
-    setManyOperations: (many) => {
-      manyOperations = many;
-      rebuild();
+    reloadNextBuild: () => {
+      const from = pin;
+      pin = pin === PIN_TWO ? PIN_ONE : PIN_TWO;
+      return append({
+        executionId: null,
+        at: new Date().toISOString(),
+        category: 'run',
+        kind: 'code_reloaded',
+        message: 'Reloaded the latest build',
+        data: { from, to: pin },
+      });
     },
-    failNextOperationsRead: () => {
-      failOperations = true;
+    arriveReply: () => {
+      replyArrived = true;
+      return append({
+        executionId: 104,
+        at: new Date().toISOString(),
+        category: 'log',
+        kind: 'log',
+        message: 'Recorded the agent reply',
+        data: { level: 'info', message: 'Recorded the agent reply' },
+      });
+    },
+    failNextExecutionRead: () => {
+      failExecution = true;
+    },
+    failNextEventsRead: () => {
+      failEvents = true;
     },
     world: () => world,
     requestPaths: () => requestPaths,
@@ -296,32 +235,7 @@ export function installFakeRuntime(): InspectorRuntimeControls {
     );
   }
 
-  /** The runtime's own rejection for captured bytes the content store cannot serve. */
-  function contentUnavailable(evidenceKey: string, cause: 'missing' | 'corrupt') {
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: 'workflow_rejected',
-            status: 409,
-            message: 'raw runtime diagnostic text that must not be voiced',
-            requestId: `req-${nextRequestId++}`,
-            data: {
-              reason: 'workflow_evidence_content_unavailable',
-              evidenceKey,
-              cause,
-              workflowRunId: RUN_ID,
-            },
-          },
-          meta: { requestId: `req-${nextRequestId++}` },
-        }),
-        { status: 409, headers: { 'content-type': 'application/json' } },
-      ),
-    );
-  }
-
-  /** A contextual rejection, in the contract's own shape. */
-  function rejection(status: number, data: Record<string, unknown>) {
+  function failure(status: number, reason: string, extra: Record<string, unknown> = {}) {
     return Promise.resolve(
       new Response(
         JSON.stringify({
@@ -330,49 +244,7 @@ export function installFakeRuntime(): InspectorRuntimeControls {
             status,
             message: 'raw runtime diagnostic text that must not be voiced',
             requestId: `req-${nextRequestId++}`,
-            data: { ...data, workflowRunId: RUN_ID },
-          },
-          meta: { requestId: `req-${nextRequestId++}` },
-        }),
-        { status, headers: { 'content-type': 'application/json' } },
-      ),
-    );
-  }
-
-  /** The runtime's own rejection for a recorded value its store cannot serve. */
-  function unreadable(payloadRef: string, cause: 'missing' | 'corrupt') {
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: 'workflow_rejected',
-            status: 409,
-            message: 'raw runtime diagnostic text that must not be voiced',
-            requestId: `req-${nextRequestId++}`,
-            data: {
-              reason: 'workflow_payload_unavailable',
-              payloadRef,
-              cause,
-              workflowRunId: RUN_ID,
-            },
-          },
-          meta: { requestId: `req-${nextRequestId++}` },
-        }),
-        { status: 409, headers: { 'content-type': 'application/json' } },
-      ),
-    );
-  }
-
-  function failure(status: number, reason: string, cause?: string) {
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: 'workflow_rejected',
-            status,
-            message: 'raw runtime diagnostic text that must not be voiced',
-            requestId: `req-${nextRequestId++}`,
-            data: { reason, workflowRunId: RUN_ID, ...(cause === undefined ? {} : { cause }) },
+            data: { reason, workflowRunId: world.runId, ...extra },
           },
           meta: { requestId: `req-${nextRequestId++}` },
         }),

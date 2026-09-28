@@ -1,21 +1,11 @@
-import type { WorkflowExecutionDto } from '@isagi/contracts';
+import type { WorkflowExecutionSummaryDto } from '@isagi/contracts';
 
-/**
- * Intervals, and the difference between "still running" and "nobody knows when it ended".
- *
- * An interval whose owner was interrupted has `endCertainty: 'unknown'`. Stretching it to the
- * current clock would invent an observed duration for something nobody observed, so an unknown end
- * yields no duration at all — the caller renders it as unknown rather than as a number.
- */
+import type { WaitTiming } from '../../../lib/workspace/workflow/history.js';
 
-export type IntervalEnd =
-  | { readonly kind: 'ended'; readonly at: number }
-  | { readonly kind: 'open' }
-  | { readonly kind: 'unknown' };
-
+/** An interval between two recorded instants. `end` is null while it is still open. */
 export interface Interval {
   readonly start: number;
-  readonly end: IntervalEnd;
+  readonly end: number | null;
 }
 
 export function parseInstant(value: string | null): number | null {
@@ -24,75 +14,48 @@ export function parseInstant(value: string | null): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-export function makeInterval(
-  start: string | null,
-  end: string | null,
-  certainty: 'observed' | 'unknown' = 'observed',
-): Interval | null {
+export function makeInterval(start: string | null, end: string | null): Interval | null {
   const from = parseInstant(start);
   if (from === null) return null;
-  const to = parseInstant(end);
-  if (to !== null) return { start: from, end: { kind: 'ended', at: to } };
-  return { start: from, end: { kind: certainty === 'unknown' ? 'unknown' : 'open' } };
+  return { start: from, end: parseInstant(end) };
 }
 
-/**
- * How long an interval lasted, given the clock.
- *
- * `null` means no honest number exists: an unknown end has none, and the caller must say so rather
- * than print an elapsed time that would look like a measurement.
- */
+/** How long an interval lasted, given the clock for one still open. */
 export function intervalDuration(interval: Interval | null, now: number): number | null {
   if (interval === null) return null;
-  switch (interval.end.kind) {
-    case 'ended':
-      return Math.max(0, interval.end.at - interval.start);
-    case 'open':
-      return Math.max(0, now - interval.start);
-    case 'unknown':
-      return null;
-  }
+  return Math.max(0, (interval.end ?? now) - interval.start);
 }
 
 export function isOpen(interval: Interval | null): boolean {
-  return interval?.end.kind === 'open';
+  return interval !== null && interval.end === null;
 }
 
 export interface ExecutionTiming {
-  /** The whole visit, start to end. */
+  /** The whole execution, start to end. */
   readonly total: Interval | null;
-  /** Time inside the author's callback. */
-  readonly callback: Interval | null;
-  /** Time the visit spent armed on a wait. Overlaps nothing; it follows the callback. */
+  /** Time until the node function returned, or the whole execution when it never waited. */
+  readonly run: Interval | null;
+  /** Time the execution spent parked on its wait. */
   readonly wait: Interval | null;
 }
 
 /**
- * A visit's intervals, each carrying the certainty that actually applies to it.
+ * An execution's intervals.
  *
- * `endCertainty` is a fact about the attempt's *owner*: unknown means the process that would have
- * recorded the end is gone. An unterminated callback under that certainty therefore has an unknown
- * end, not an open one — treating it as open would grow an invented duration for as long as the
- * inspector stayed open, on the very run where nobody knows what happened.
- *
- * A wait is the exception, and only because it is durable. `wait.status === 'armed'` is a recorded
- * fact that survives a restart, so a wait the run says is armed is genuinely still open however its
- * execution ended. Without that record, the execution's certainty governs.
+ * The row records only its start and end; when it started and stopped waiting comes from its
+ * `node_waiting` and `wait_delivered` events. A wait with no delivery ends when the execution does
+ * (a Cancel, say), and stays open while the execution is still waiting.
  */
-export function executionTiming(execution: WorkflowExecutionDto): ExecutionTiming {
-  const waitStillArmed = execution.wait?.status === 'armed';
+export function executionTiming(
+  execution: WorkflowExecutionSummaryDto,
+  wait: WaitTiming | undefined,
+): ExecutionTiming {
+  const total = makeInterval(execution.startedAt, execution.endedAt);
+  if (wait === undefined) return { total, run: total, wait: null };
   return {
-    total: makeInterval(execution.startedAt, execution.endedAt, execution.endCertainty),
-    callback: makeInterval(
-      execution.callbackStartedAt,
-      execution.callbackEndedAt,
-      execution.endCertainty,
-    ),
-    wait: makeInterval(
-      execution.waitArmedAt,
-      execution.waitDeliveredAt,
-      waitStillArmed ? 'observed' : execution.endCertainty,
-    ),
+    total,
+    run: makeInterval(execution.startedAt, wait.waitingAt),
+    wait: makeInterval(wait.waitingAt, wait.deliveredAt ?? execution.endedAt),
   };
 }
 

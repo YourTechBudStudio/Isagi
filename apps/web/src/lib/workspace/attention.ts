@@ -68,7 +68,7 @@ export function applyAttentionToProjects(
   // the palette read, folded into the shape this traversal needs.
   const runBySurfaceId = new Map<number, WorkflowRunSummary>();
   for (const run of attachedRuns) {
-    if (run.attachment?.surfaceId != null) runBySurfaceId.set(run.attachment.surfaceId, run);
+    if (run.surfaceId !== null) runBySurfaceId.set(run.surfaceId, run);
   }
   return projects.map((project) => ({
     ...project,

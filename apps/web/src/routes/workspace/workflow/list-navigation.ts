@@ -2,7 +2,7 @@
  * Keyboard steps for the inspector's lists and its tab strip.
  *
  * Only the vertical step is shared. Left and Right mean something different in every widget —
- * expand and collapse in Trace, nothing in Evidence or Checkpoints, the next tab in the tab strip —
+ * expand and collapse in Trace, nothing in Checkpoints, the next tab in the tab strip —
  * so each widget keeps its own, and `null` for a key a step does not own lets the caller fall
  * through to it.
  */

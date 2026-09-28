@@ -15,8 +15,7 @@ import { WorkflowBar, type WorkflowBarProps } from './WorkflowBar.js';
  * What the bar shows, given facts.
  *
  * Interaction lives in the browser suite; this covers the part that is a pure function of the
- * summary — which controls exist, what a failure says, and whether the copy tells the truth about
- * what a stop actually did.
+ * summary — which controls exist, what a failure says, and when the bar asks the person something.
  */
 
 test('the controls offered are exactly the ones the runtime says it will accept', () => {
@@ -28,7 +27,6 @@ test('the controls offered are exactly the ones the runtime says it will accept'
         retry: true,
         cancel: false,
         dismiss: true,
-        advance: false,
       },
     }),
   });
@@ -52,7 +50,7 @@ test('Cancel and Dismiss are separate controls with separate meanings', () => {
 
   const finished = render({
     summary: workflowSummaryFixture({
-      status: 'done',
+      status: 'completed',
       controls: { ...controls(), pause: false, cancel: false, dismiss: true },
     }),
   });
@@ -64,8 +62,8 @@ test('the cancel confirmation never claims the workflow is cleared', () => {
   // The mock's old sentence said the workflow is "cleared", which is two untruths: nothing is
   // deleted, and external work is not guaranteed to stop.
   assert.doesNotMatch(workflowCopy.cancelConfirmDetail, /clear/i);
-  assert.match(workflowCopy.cancelConfirmDetail, /records everything so far/);
-  assert.match(workflowCopy.cancelConfirmDetail, /may keep running, or stop part-way/);
+  assert.match(workflowCopy.cancelConfirmDetail, /keeps everything recorded so far/);
+  assert.match(workflowCopy.cancelConfirmDetail, /agent panes stay open/);
   assert.match(workflowCopy.dismissDetail, /history stay/);
 });
 
@@ -77,7 +75,7 @@ test('an authored failure outcome is not presented as something to repair', () =
         outcomeId: 'rejected',
         kind: 'failure',
         reason: 'The reviewer rejected the draft.',
-        producedRef: null,
+        output: null,
       },
       controls: { ...controls(), pause: false, cancel: false, dismiss: true },
     }),
@@ -87,66 +85,32 @@ test('an authored failure outcome is not presented as something to repair', () =
   assert.doesNotMatch(markup, /aria-label="Retry"/);
 });
 
-test('a segment failure shows Isagi’s sentence and keeps the runtime’s own text as diagnostic', () => {
+test('a step failure shows Isagi’s sentence and keeps the runtime’s own text as diagnostic', () => {
   const markup = render({
     summary: workflowSummaryFixture({
       status: 'failed',
-      failure: {
-        code: 'node_callback_failed',
+      error: {
+        stage: 'node_function',
         message: 'TypeError: cannot read property draft of undefined',
-        segmentKind: 'node_callback',
-        attemptId: 3,
-        frameId: 1,
-        executionId: 2,
+        graphKey: 'root',
+        nodeId: 'plan',
       },
       controls: { ...controls(), pause: false, cancel: false, retry: true, dismiss: true },
     }),
   });
 
   assert.match(markup, /A step in this workflow threw\./);
-  assert.match(markup, /node_callback_failed/);
+  assert.match(markup, /node_function root\/plan/);
   assert.match(markup, /cannot read property draft of undefined/);
   assert.match(markup, /aria-label="Retry"/);
-});
-
-test('a blocked run says what is holding it, and reads as needing attention rather than an answer', () => {
-  const markup = render({
-    summary: workflowSummaryFixture({
-      status: 'blocked',
-      blockedOperation: { operationKey: 'op-1', frameId: 1, executionId: 2 },
-    }),
-  });
-  assert.match(markup, /Blocked/);
-  assert.match(markup, new RegExp(escape(workflowCopy.blockedOperation)));
-});
-
-test('an incomplete stop stays visible instead of reading as a clean cancel', () => {
-  const markup = render({
-    summary: workflowSummaryFixture({
-      status: 'cancelled',
-      stopSummary: { requested: 2, confirmed: 1, failed: 0, unsupported: 1, pending: 0 },
-      controls: { ...controls(), pause: false, cancel: false, dismiss: true },
-    }),
-  });
-  assert.match(markup, /Cancelled/);
-  assert.match(markup, new RegExp(escape(workflowCopy.stopUnsupported)));
 });
 
 test('a paused run with a pending question says the answer will not restart it', () => {
   const markup = render({
     summary: workflowSummaryFixture({
-      paused: true,
-      status: 'waiting',
-      blockingWait: {
-        waitId: 5,
-        kind: 'user_continue',
-        label: 'Ready for review?',
-        frameId: 1,
-        executionId: 2,
-        questions: null,
-        armedAt: '2026-09-15T10:00:00.000Z',
-      },
-      controls: { ...controls(), pause: false, resume: true, advance: true },
+      status: 'paused',
+      current: parked({ kind: 'user_continue', label: 'Ready for review?' }),
+      controls: { ...controls(), pause: false, resume: true },
     }),
   });
 
@@ -155,48 +119,44 @@ test('a paused run with a pending question says the answer will not restart it',
   assert.match(markup, new RegExp(escape(workflowCopy.pausedAnswerNote)));
 });
 
-test('a wait the runtime will not accept an answer for shows no form', () => {
+test('a run that is not waiting or paused takes no answer, even with a user wait recorded', () => {
   const markup = render({
     summary: workflowSummaryFixture({
-      status: 'waiting',
-      blockingWait: {
-        waitId: 5,
-        kind: 'user_input',
-        label: null,
-        frameId: 1,
-        executionId: 2,
-        questions: null,
-        armedAt: '2026-09-15T10:00:00.000Z',
-      },
-      controls: { ...controls(), advance: false },
+      status: 'failed',
+      current: parked({ kind: 'user_continue' }),
     }),
   });
   assert.doesNotMatch(markup, new RegExp(escape(workflowCopy.continuePrompt)));
 });
 
-test('the log states that it is a window, rather than implying it holds everything', () => {
+test('an agent turn is the run waiting on a machine, so the bar asks nothing', () => {
+  const markup = render({
+    summary: workflowSummaryFixture({
+      status: 'waiting',
+      current: parked({ kind: 'agent_turn', target: { agentSessionId: 1, sentAt: 'x' } }),
+    }),
+  });
+  assert.doesNotMatch(markup, new RegExp(escape(workflowCopy.continuePrompt)));
+  assert.match(markup, /Driving/);
+});
+
+test('the log shows the run’s log lines', () => {
   const markup = render({
     logExpanded: true,
     log: {
       ...emptyLog(),
       lines: [
         {
-          revision: 12,
-          recordedAt: '2026-09-15T10:00:12.000Z',
+          eventId: 12,
+          at: '2026-09-15T10:00:12.000Z',
           tone: 'info',
           label: 'log',
           body: 'Drafting the summary.',
-          diagnostic: null,
-          storedDetail: null,
         },
       ],
-      hasOlder: true,
     },
   });
-
   assert.match(markup, /Drafting the summary\./);
-  assert.match(markup, new RegExp(escape(workflowCopy.logOlderAvailable)));
-  assert.match(markup, new RegExp(escape(workflowCopy.logLoadEarlier)));
 });
 
 test('an empty log on a dropped connection does not read as a quiet run', () => {
@@ -220,34 +180,10 @@ test('a log that could not be read says so, and offers a retry', () => {
   assert.doesNotMatch(markup, /refused the read/);
 });
 
-test('a stored detail offers to be loaded rather than stating only that it is large', () => {
-  const markup = render({
-    logExpanded: true,
-    log: {
-      ...emptyLog(),
-      lines: [
-        {
-          revision: 4,
-          recordedAt: '2026-09-15T10:00:04.000Z',
-          tone: 'info',
-          label: 'log',
-          body: workflowCopy.logDetailStored,
-          diagnostic: null,
-          storedDetail: { payloadRef: 'sha256:big', byteSize: 20_000 },
-        },
-      ],
-    },
-  });
-
-  assert.match(markup, new RegExp(escape(workflowCopy.logDetailStored)));
-  assert.match(markup, new RegExp(escape(workflowCopy.logDetailLoad)));
-});
-
 test('while an action is in flight every control waits, not only the one that was pressed', () => {
   const markup = render({ actionsLocked: true });
-  // Issuing two run-level controls at once means nothing — the runtime fences them on control
-  // revision — and leaving the rest live let a fast action clear the indicator while a slower one
-  // was still outstanding, so every button looked idle with work still in flight.
+  // Issuing two run-level controls at once means nothing, and leaving the rest live let a fast
+  // action clear the indicator while a slower one was still outstanding.
   const buttons = markup.match(/<button[^>]*aria-label="(Pause|Cancel)"[^>]*>/g) ?? [];
   assert.equal(buttons.length, 2);
   assert.ok(
@@ -273,8 +209,6 @@ function emptyLog(): WorkflowLogView {
     lines: [],
     isLoading: false,
     error: null,
-    hasOlder: false,
-    loadEarlier: () => {},
     retry: () => {},
   };
 }
@@ -298,13 +232,26 @@ function render(overrides: Partial<WorkflowBarProps> = {}): string {
     onAdvance: () => {},
     ...overrides,
   };
-  // A log line may ask for a stored detail, which is a query. The provider is the component's real
-  // environment, not a concession to the test.
+  // The provider is the component's real environment, not a concession to the test.
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
       <WorkflowBar {...props} />
     </QueryClientProvider>,
   );
+}
+
+function parked(
+  wait: NonNullable<WorkflowRunSummary['current']>['wait'],
+): WorkflowRunSummary['current'] {
+  return {
+    executionId: 2,
+    invocationId: 1,
+    graphKey: 'root',
+    nodeId: 'ask',
+    nodeKind: 'operation',
+    label: null,
+    wait,
+  };
 }
 
 function escape(value: string): string {

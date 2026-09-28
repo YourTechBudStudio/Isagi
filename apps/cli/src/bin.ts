@@ -4,7 +4,7 @@ import process from 'node:process';
 import { runCli } from './main.js';
 
 // The process boundary: set the exit status and let Node exit on its own, so everything written to
-// stdout — including streamed evidence bytes — is flushed first. Never `process.exit()`.
+// stdout — including streamed checkpoint file bytes — is flushed first. Never `process.exit()`.
 runCli(process.argv.slice(2), {
   stdout: process.stdout,
   stderr: process.stderr,

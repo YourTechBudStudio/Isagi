@@ -195,8 +195,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     byReason: byReason<WorkflowRejectionReason>({
       unknown_workflow_key: "Isagi doesn't recognize that workflow.",
       workflow_discovery_failed: "Couldn't read a workflow source path.",
-      workflow_load_failed: "Couldn't load that workflow's code.",
-      no_active_worktree: 'Pick a worktree before starting a workflow.',
+      workflow_load_failed: "Couldn't load that workflow's verified build.",
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
       surface_worktree_mismatch: 'That surface belongs to a different worktree.',
@@ -205,56 +204,21 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_launch_context_mismatch: "That pane and agent session don't match.",
       workflow_command_failed: "That workflow couldn't describe itself, so Isagi can't start it.",
       workflow_inputs_rejected: "Those answers didn't pass the workflow's checks.",
-      workflow_root_surface_required: 'A workflow needs a surface to run on.',
-      // Destination wording: the busy surface is the one the run was aimed at, which
-      // is not necessarily the one the person is looking at.
-      workflow_surface_attached: 'That surface already has a workflow on it.',
+      // Destination wording: the busy surface is the one the run was aimed at, which is not
+      // necessarily the one the person is looking at.
+      workflow_surface_busy: 'That surface already has a workflow on it. Dismiss that one first.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
-      workflow_run_not_retryable: "There's nothing to retry on this run right now.",
-      workflow_run_not_cancellable:
-        "That workflow has already stopped, so there's nothing to cancel.",
-      workflow_run_not_dismissible: 'Cancel this workflow before dismissing it.',
+      workflow_execution_not_found: "That step isn't part of this run.",
+      workflow_operation_not_found: "That recorded call isn't part of this run.",
+      workflow_checkpoint_not_found: "That checkpoint isn't here anymore.",
+      workflow_checkpoint_file_not_found: "That file isn't in this checkpoint.",
+      // The run moved on between the bar drawing the button and the click landing.
+      workflow_control_unavailable: "That doesn't apply to this run right now. It's moved on.",
       workflow_wait_not_found: "That question isn't waiting for an answer anymore.",
-      workflow_wait_already_resolved: 'That question was already answered.',
-      workflow_cursor_invalid: 'That view moved on. Reopen it to pick up the latest.',
       workflow_user_input_invalid:
         "Those answers didn't go through. Check the fields and try again.",
-      workflow_structure_validation_failed: "That workflow's graph didn't pass verification.",
-      workflow_version_not_adopted: 'This run never ran that version of the workflow.',
-      workflow_payload_unavailable: "Isagi couldn't read that recorded value.",
-      workflow_operation_not_found: "That recorded step isn't part of this run.",
-      workflow_evidence_not_found: "That capture isn't part of this run.",
-      // The metadata is still on screen when this shows, so it says the content is unreadable
-      // rather than that the record is gone — the record is right there.
-      workflow_evidence_content_unavailable: "Isagi couldn't read what that capture saved.",
-      workflow_checkpoint_not_found: "That checkpoint isn't part of this run.",
-      workflow_checkpoint_file_not_found: "That file isn't in this checkpoint.",
-      // Same posture as evidence: the file's path, size and digest stay on screen, so this names
-      // the saved bytes rather than the record.
-      workflow_checkpoint_content_unavailable:
-        "Isagi couldn't read the bytes this checkpoint saved for that file.",
-      workflow_execution_not_found: "That step isn't part of this run.",
-      workflow_checkpoint_base_not_git:
-        "That checkpoint wasn't taken in a Git repository, so there's no commit to start from.",
-      workflow_checkpoint_repository_unavailable:
-        "The repository that checkpoint came from isn't available anymore.",
-      // Base commits are recorded, not kept; Git may have discarded this one.
-      workflow_checkpoint_commit_unavailable:
-        "The commit that checkpoint started from isn't in its repository anymore.",
-      workflow_checkpoint_destination_rejected: "That folder can't hold a new worktree.",
-      workflow_checkpoint_worktree_failed: "Isagi couldn't finish creating that worktree.",
-      // Deliberately not "it failed": nobody knows whether the work landed, and saying either way
-      // would be the one thing the runtime refuses to guess.
-      workflow_operation_uncertain:
-        "Isagi can't tell whether that external step went through, so the run is holding.",
       workflow_agent_observation_unavailable:
         "Isagi couldn't refresh that agent session, so the retry didn't change the run.",
-      workflow_stale_control: 'This workflow moved on. Try that again.',
-      workflow_environment_unavailable:
-        "This workflow's worktree isn't available, so it can't carry on.",
-      // Selection, then validation, then the two Git facts, then the collision, then the refusal
-      // to act on a run that is still setting itself up. Each says what stopped the launch and
-      // leaves the raw Git or hook output to the diagnostic panel below it.
       workflow_environment_selection_failed:
         "This workflow couldn't decide where to run, so nothing was started.",
       workflow_placement_invalid: "That isn't a place this workflow can run.",
@@ -263,7 +227,20 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_base_ref_not_found: baseRefMissing,
       workflow_environment_collision:
         'Something already sits where this workflow wanted to set up.',
-      workflow_run_preparing: "This run is still setting up where it'll work. Give it a moment.",
+      workflow_preparation_failed: "Couldn't set up this workflow's worktree or surface.",
+      // Commits are recorded, not kept; Git may have discarded this one. The message says which.
+      workflow_checkpoint_commit_unavailable:
+        "The commit that checkpoint was taken on isn't available anymore.",
+      // The file's path, size and digest stay on screen, so this names the saved bytes.
+      workflow_checkpoint_content_unavailable:
+        "Isagi couldn't read the bytes this checkpoint saved for that file.",
+      workflow_checkpoint_export_failed:
+        'The export stopped part-way. Whatever it already created is still there.',
+      workflow_structure_validation_failed: "That workflow's graph didn't pass verification.",
+      // Resume and Retry reload the latest build; this one no longer fits where the run is parked.
+      workflow_code_incompatible:
+        "The latest build doesn't fit where this run is parked, so nothing changed. Put the graph back, rebuild, and try again.",
+      workflow_checkpoint_destination_rejected: "That folder can't hold the export.",
     }),
   },
   worktree_commands_rejected: {
@@ -423,6 +400,18 @@ export function apiErrorDiagnostic(apiError: ApiError): string {
     }
     for (const shadowed of data.shadowedWorkflowPackageDirectories ?? []) {
       lines.push(`Shadowed package: ${shadowed}`);
+    }
+    // Which registrations no longer fit, as the verifier reported them.
+    if ('diagnostics' in data) {
+      for (const diagnostic of data.diagnostics) {
+        const at = [diagnostic.at.graphKey, diagnostic.at.nodeId ?? diagnostic.at.edgeId]
+          .filter(Boolean)
+          .join('/');
+        lines.push(`${diagnostic.code}${at ? ` (${at})` : ''}: ${diagnostic.message}`);
+      }
+    }
+    if ('destinationPath' in data) {
+      lines.push(`Destination: ${data.destinationPath} (${data.destinationIssue})`);
     }
   }
   const trailing = runtimeErrorCopy.diagnostic(apiError);

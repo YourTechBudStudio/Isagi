@@ -36,14 +36,9 @@ export { updateCopy } from './updates.js';
 export { workbenchCopy } from './workbench.js';
 export {
   workflowCopy,
-  workflowDiagnosticCodeCopy,
   workflowEnvironmentCopy,
   workflowEnvironmentCreatedLine,
-  workflowEnvironmentFailureLine,
-  workflowEnvironmentFailureRetryable,
-  workflowEnvironmentRetryLine,
-  workflowFailureHeadline,
+  workflowErrorStageHeadline,
   workflowLoadFailureReasonCopy,
   workflowLoadFailureReasonCopyOrFallback,
-  type WorkflowEnvironmentFailureFacts,
 } from './workflows.js';

@@ -16,12 +16,12 @@ import { useGraphLayout, type LayoutEngineFactory } from './useGraphLayout.js';
 import { CheckpointKindTag, CheckpointSubline } from './WorkflowCheckpointNode.js';
 
 /**
- * The graph of the pin the run is on right now, with where it is now drawn on it.
+ * The graph of the build the run is on right now, with where it is now drawn on it.
  *
  * Declared answers one question — what does this workflow look like, and where has it got to — and
- * it always answers it about the *current* pin. After a Retry adopts new code it draws the new
+ * it always answers it about the *current* build. After a Resume or Retry reloads newer code it draws the new
  * graph: nodes the new definition added are unvisited, nodes it dropped are simply not here, and
- * their history lives in Trace under the pin that actually ran it. There is no version picker, and
+ * their history lives in Trace under the build that actually ran it. There is no version picker, and
  * old work is never redrawn as though it had run under the definition on screen.
  */
 export function WorkflowDeclaredCanvas({
@@ -37,14 +37,14 @@ export function WorkflowDeclaredCanvas({
 }: {
   readonly topology: DeclaredTopology;
   /**
-   * The pin this topology came from, as the descriptor itself reported it.
+   * The build this topology came from, as the descriptor itself reported it.
    *
    * The identity a layout is keyed on, so a Retry that changes an edge or a node kind without
    * renaming anything still redraws.
    */
   readonly artifactHash: string;
   readonly aggregation: VisitAggregation;
-  /** The element the run is positioned at, if the current pin still declares it. */
+  /** The element the run is positioned at, if the current build still declares it. */
   readonly liveKey: string | null;
   readonly selection: InspectorSelection | null;
   readonly onSelect: (selection: InspectorSelection) => void;
@@ -485,12 +485,9 @@ function isSelected(
 ): boolean {
   if (selection === null) return false;
   if (selection.kind === 'element') return selection.key === key;
-  if (selection.kind === 'execution' || selection.kind === 'routing') {
-    return (
-      aggregation.byElement
-        .get(key)
-        ?.visits.some((visit) => visit.executionId === selection.executionId) === true
-    );
+  if (selection.kind === 'execution') {
+    const aggregate = aggregation.byElement.get(key);
+    return aggregate?.visits.some((visit) => visit.executionId === selection.executionId) === true;
   }
   return false;
 }
@@ -578,8 +575,8 @@ function GraphNode({
           className="flex h-10.5 flex-none items-center gap-2 border-b border-line/22 px-3.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue"
         >
           <span className="truncate font-mono text-[13.5px] text-fg">{element.address.id}</span>
-          {latest?.displayName && (
-            <span className="min-w-0 truncate text-[12px] text-fg-muted">{latest.displayName}</span>
+          {latest?.label && (
+            <span className="min-w-0 truncate text-[12px] text-fg-muted">{latest.label}</span>
           )}
           <span className="ml-auto flex-none font-mono text-[10px] tracking-[0.07em] text-violet uppercase opacity-85">
             {element.kind === 'node' && element.descriptor.kind === 'subgraph'
@@ -707,10 +704,8 @@ function GraphNode({
           className="flex h-8 flex-none items-center gap-2 border-b border-violet/22 px-3 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue"
         >
           <span className="truncate font-mono text-[12.5px] text-fg">{element.address.id}</span>
-          {latest?.displayName && (
-            <span className="min-w-0 truncate text-[11.5px] text-fg-muted">
-              {latest.displayName}
-            </span>
+          {latest?.label && (
+            <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{latest.label}</span>
           )}
           <span className="ml-auto flex-none font-mono text-[10px] tracking-[0.07em] text-violet uppercase opacity-85">
             {element.descriptor.kind === 'subgraph'
@@ -739,7 +734,6 @@ function GraphNode({
                 unresolvedGraphKey={unresolved?.graphKey ?? null}
               />
             </span>
-            <EvidenceCount element={element} aggregate={aggregate} />
             <TimeBadge aggregate={aggregate} now={now} />
           </span>
           <VisitPips aggregate={aggregate} selection={selection} onSelect={onSelect} />
@@ -791,7 +785,6 @@ function GraphNode({
               unresolvedGraphKey={unresolved?.graphKey ?? null}
             />
           </span>
-          <EvidenceCount element={element} aggregate={aggregate} />
         </span>
       </button>
       <VisitPips aggregate={aggregate} selection={selection} onSelect={onSelect} />
@@ -820,14 +813,15 @@ function VisitPips({
     <span className="mt-2 flex gap-1 overflow-x-auto">
       {aggregate.visits.map((visit) => {
         const active =
-          (selection?.kind === 'execution' || selection?.kind === 'routing') &&
-          selection.executionId === visit.executionId;
+          selection?.kind === 'execution' && selection.executionId === visit.executionId;
         return (
           <button
             key={visit.executionId}
             type="button"
             title={`execution ${visit.executionId}`}
-            aria-label={`Visit ${visit.visitIndex + 1}, execution ${visit.executionId}`}
+            aria-label={`Visit ${visit.visitIndex + 1}, execution ${visit.executionId}${
+              visit.retryOf === null ? '' : `, retry of ${visit.retryOf}`
+            }`}
             onClick={(event) => {
               event.stopPropagation();
               onSelect({ kind: 'execution', executionId: visit.executionId });
@@ -841,38 +835,6 @@ function VisitPips({
           </button>
         );
       })}
-    </span>
-  );
-}
-
-/**
- * How much this element's visits kept, as a count rather than a control.
- *
- * Its own component because a collapsed subgraph card and an operation card are two renderers in
- * this file, and a badge added to one of them is a badge a subgraph silently never shows.
- *
- * The number is `ElementAggregate.evidenceCaptured`: the sum over this element's visits, which is
- * safe only because visits of one element are disjoint executions whose subtrees do not overlap.
- * Summing the same field across *elements* is forbidden — a nested capture would be counted once
- * for its own node and again for every subgraph containing it. A subgraph therefore spells it
- * `n inside`, matching its trace row, so nobody adds two figures that already contain each other.
- *
- * Clicking the node still selects its latest visit; this changes nothing.
- */
-function EvidenceCount({
-  element,
-  aggregate,
-}: {
-  readonly element: DeclaredElement;
-  readonly aggregate: ElementAggregate;
-}) {
-  if (aggregate.evidenceCaptured === 0) return null;
-  const inside = element.kind === 'node' && element.descriptor.kind === 'subgraph';
-  return (
-    <span className="ml-auto flex-none rounded-full border border-cyan/35 px-1.5 font-mono text-[10px] leading-4 text-cyan">
-      {inside
-        ? inspectorCopy.evidenceInside(aggregate.evidenceCaptured)
-        : aggregate.evidenceCaptured}
     </span>
   );
 }
@@ -907,15 +869,19 @@ function NodeSubline({
   if (latest?.wait) {
     return (
       <>
-        {latest.wait.status === 'armed' ? inspectorCopy.waitOpen : 'answered'} ·{' '}
-        {latest.wait.kind === 'user_continue'
-          ? 'continue'
-          : `${latest.wait.questions?.length ?? 0} questions`}
+        {latest.status === 'waiting' ? inspectorCopy.waitOpen : 'answered'} ·{' '}
+        {latest.wait.kind === 'user_input'
+          ? `${latest.wait.questions.length} questions`
+          : latest.wait.kind.replace('_', ' ')}
       </>
     );
   }
   return (
-    <>{aggregate.capabilities.length > 0 ? aggregate.capabilities.join(' · ') : 'no operations'}</>
+    <>
+      {aggregate.operationKinds.length > 0
+        ? aggregate.operationKinds.join(' · ')
+        : inspectorCopy.noOperationsShort}
+    </>
   );
 }
 
@@ -926,19 +892,17 @@ function TimeBadge({
   readonly aggregate: ElementAggregate;
   readonly now: number;
 }) {
-  if (aggregate.visits.length === 0 && aggregate.callbackMs === 0) {
+  if (aggregate.visits.length === 0) {
     return (
       <span className="ml-auto flex-none font-mono text-[12px] text-fg-subtle opacity-45">—</span>
     );
   }
-  const total = aggregate.callbackMs + aggregate.waitMs;
-  const open = aggregate.callbackOpen || aggregate.waitOpen;
+  const open = aggregate.open;
   return (
     <span
       className={`ml-auto flex-none font-mono text-[12px] ${open ? 'text-amber' : 'text-fg-muted'}`}
     >
-      {aggregate.hasUnknownEnd && !open ? '≥ ' : ''}
-      {formatDuration(total)}
+      {formatDuration(aggregate.durationMs)}
       {open ? ' · open' : ''}
     </span>
   );
@@ -971,9 +935,10 @@ function latestVisitSelection(aggregate: ElementAggregate, key: string): Inspect
   return latest ? { kind: 'execution', executionId: latest.executionId } : { kind: 'element', key };
 }
 
+/** An edge selects the latest execution that routed through it, whose dock shows the decision. */
 function latestRoutingSelection(aggregate: ElementAggregate): InspectorSelection | null {
-  const latest = aggregate.visits.at(-1);
-  return latest ? { kind: 'routing', executionId: latest.executionId } : null;
+  const latest = aggregate.routedBy.at(-1);
+  return latest ? { kind: 'execution', executionId: latest.executionId } : null;
 }
 
 function ZoomButton({
@@ -1007,8 +972,10 @@ function statusBorder(status: ElementAggregate['status']): string {
       return 'border-error/45 bg-error/7';
     case 'completed':
       return 'border-green/26';
-    case 'awaiting':
+    case 'waiting':
       return 'border-waiting/45';
+    case 'interrupted':
+      return 'border-amber/45';
     default:
       return 'border-line/45';
   }
@@ -1020,11 +987,11 @@ function statusDot(status: ElementAggregate['status'] | 'unvisited'): string {
       return 'bg-error';
     case 'completed':
       return 'bg-green';
-    case 'awaiting':
+    case 'waiting':
       return 'bg-waiting';
+    case 'interrupted':
+      return 'bg-amber';
     case 'running':
-    case 'routing':
-    case 'mapping':
       return 'bg-working';
     default:
       return 'bg-fg-subtle';
@@ -1037,8 +1004,10 @@ function pipTone(status: string): string {
       return 'border-error/50 text-error';
     case 'completed':
       return 'border-green/35 text-green';
-    case 'awaiting':
+    case 'waiting':
       return 'border-waiting bg-waiting/14 text-waiting';
+    case 'interrupted':
+      return 'border-amber/50 text-amber';
     default:
       return 'border-line/40 bg-canvas/70 text-fg-subtle';
   }

@@ -2,11 +2,10 @@ import { X } from 'lucide-react';
 
 import type { WorkflowRunSummary } from '@isagi/contracts';
 
-import { workflowCopy, workflowFailureHeadline } from '../../../copy/index.js';
+import { workflowCopy, workflowErrorStageHeadline } from '../../../copy/index.js';
 import {
   workflowPresentationStatus,
   workflowReasonLine,
-  workflowStopNotice,
 } from '../../../lib/workspace/workflow/derive.js';
 import { inspectorCopy } from './copy.js';
 import { shortHash } from './dock.js';
@@ -20,7 +19,7 @@ import { formatClock, formatDuration, parseInstant } from './timing.js';
  * button is Close, which is navigation.
  *
  * The reason line is composed from recorded facts in the order that decides what a person would do
- * next, and it never softens a stop: a cancel that could not confirm everything says so.
+ * next.
  */
 export function WorkflowInspectorHeader({
   summary,
@@ -40,7 +39,7 @@ export function WorkflowInspectorHeader({
 
   const facts = [
     `run #${summary.runId}`,
-    `definition v${summary.pinOrdinal} · ${shortHash(summary.artifactHash)}`,
+    `build ${shortHash(summary.artifactHash)}`,
     surfaceFact(summary),
     `started ${formatClock(summary.createdAt)}`,
     ended === null
@@ -85,9 +84,9 @@ export function WorkflowInspectorHeader({
  * line wraps rather than truncating: it is the least important line in the header and the one most
  * likely to be long, and truncating it would drop the created branch first.
  *
- * Every phrase comes from the run's own retained record — the placement request, the receipts and
- * the destination the commit wrote. Nothing here re-reads a worktree or surface row, so a deleted
- * resource leaves the sentence intact rather than blanking it.
+ * Every phrase comes from the run's own record — the placement request and where preparation put
+ * it. Nothing here re-reads a worktree or surface row, so a deleted resource leaves the sentence
+ * intact rather than blanking it.
  */
 function PlacementLine({ summary }: { readonly summary: WorkflowRunSummary }) {
   const line = placementFact(summary);
@@ -107,13 +106,13 @@ function PlacementLine({ summary }: { readonly summary: WorkflowRunSummary }) {
 function placementFact(
   summary: WorkflowRunSummary,
 ): { readonly provenance: string; readonly choices: readonly string[] } | null {
-  const { preparation } = summary;
-  if (preparation.source === 'default') {
+  const { placement } = summary;
+  if (placement.source === 'default') {
     return null;
   }
   return {
     provenance:
-      preparation.source === 'selector'
+      placement.source === 'selector'
         ? inspectorCopy.placementBySelector
         : inspectorCopy.placementByOverride,
     choices: [worktreeChoiceFact(summary), surfaceChoiceFact(summary)],
@@ -121,17 +120,16 @@ function placementFact(
 }
 
 function worktreeChoiceFact(summary: WorkflowRunSummary): string {
-  const choice = summary.preparation.request.worktree;
+  const choice = summary.placement.request.worktree;
   if (choice.kind === 'current') {
     return 'current worktree';
   }
   if (choice.kind === 'existing') {
-    // The path is what the commit wrote, so it is there for every run that reaches the inspector;
-    // the id is a last resort that names something rather than rendering a blank phrase.
-    const path = summary.destination.worktreePath;
+    // The id is a last resort that names something rather than rendering a blank phrase.
+    const path = summary.worktreePath;
     return `existing worktree ${path === null ? `#${choice.worktreeId}` : folderName(path)}`;
   }
-  const baseCommit = summary.preparation.baseCommit;
+  const baseCommit = summary.placement.baseCommit;
   const from = `from ${choice.fromRef}${baseCommit === null ? '' : ` @ ${shortHash(baseCommit)}`}`;
   return `new worktree ${choice.branch} ${from}`;
 }
@@ -145,16 +143,14 @@ function worktreeChoiceFact(summary: WorkflowRunSummary): string {
  * true and complete statement of what was asked for.
  */
 function surfaceChoiceFact(summary: WorkflowRunSummary): string {
-  const choice = summary.preparation.request.surface;
+  const choice = summary.placement.request.surface;
   if (choice.kind === 'current') {
     return 'current surface';
   }
   if (choice.kind === 'existing') {
     return 'existing surface';
   }
-  // The receipt's title is what the surface is actually called: the owner may trim or disambiguate
-  // what was asked for, and the header should say what exists.
-  return `new surface "${summary.preparation.surface?.title ?? choice.title}"`;
+  return `new surface "${choice.title}"`;
 }
 
 function folderName(path: string): string {
@@ -164,22 +160,22 @@ function folderName(path: string): string {
 /**
  * Why the run is where it is, in one sentence.
  *
- * Reuses the bar's own derivation so the two surfaces cannot disagree about what is blocking a run,
- * and adds only what the inspector has room to say: the failed segment a Retry would act on, and the
- * honest account of a stop that could not be completed.
+ * Reuses the bar's own derivation so the two surfaces cannot disagree, and adds only what the
+ * inspector has room to say: the stage that failed, which a Retry would act on.
  */
 function ReasonLine({ summary }: { readonly summary: WorkflowRunSummary }) {
   const reason = workflowReasonLine(summary);
-  const stop = workflowStopNotice(summary);
-  const failure = summary.failure;
+  const error = summary.error;
 
-  if (failure) {
+  if (error) {
+    const where = [error.graphKey, error.nodeId].filter(Boolean).join('/');
     return (
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">
         <Tag tone="text-error">failed</Tag>
-        {workflowFailureHeadline(failure.code)}{' '}
+        {workflowErrorStageHeadline(error.stage)}{' '}
         <span className="font-mono text-[11px] text-fg-subtle">
-          {failure.segmentKind} · {failure.code} · {failure.message}
+          {error.stage}
+          {where ? ` · ${where}` : ''} · {error.message}
         </span>
       </p>
     );
@@ -187,9 +183,7 @@ function ReasonLine({ summary }: { readonly summary: WorkflowRunSummary }) {
   if (reason) {
     return (
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">
-        <Tag tone={stop ? 'text-amber' : 'text-waiting'}>
-          {summary.status === 'cancelled' ? 'cancelled' : 'holding'}
-        </Tag>
+        <Tag tone="text-working">{summary.status}</Tag>
         {reason}
       </p>
     );
@@ -229,11 +223,11 @@ function StatusChip({
   const tone =
     status === 'done'
       ? 'border-green/30 bg-green/14 text-green'
-      : status === 'failed' || status === 'blocked'
+      : status === 'failed'
         ? 'border-error/30 bg-error/14 text-error'
         : status === 'waiting_user'
           ? 'border-waiting/32 bg-waiting/14 text-waiting'
-          : status === 'driving'
+          : status === 'driving' || status === 'preparing'
             ? 'border-working/32 bg-working/14 text-working'
             : 'border-line/35 bg-line/16 text-fg-subtle';
   return (
@@ -245,14 +239,8 @@ function StatusChip({
   );
 }
 
-/**
- * Where the run's work is placed, kept distinct from where it was launched from.
- *
- * Both are retained descriptive facts and either may name a worktree somebody has since deleted,
- * which is why this states availability rather than assuming it.
- */
+/** Where the run's work is placed, kept distinct from where it was launched from. */
 function surfaceFact(summary: WorkflowRunSummary): string {
-  const path = summary.destination.worktreePath;
-  const name = path === null ? 'no worktree' : folderName(path);
-  return summary.destination.available ? `surface ${name}` : `surface ${name} · unavailable`;
+  const path = summary.worktreePath;
+  return path === null ? 'no worktree yet' : `worktree ${folderName(path)}`;
 }

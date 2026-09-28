@@ -52,7 +52,7 @@ Run history survives deletion of its surface or worktree. Every run belongs to t
 
 ## Inspection and the client boundary
 
-The workflow bar presents controls and human input and opens the read-only inspector. Declared shows the graph structure of the run's current build and its position. Trace shows recorded executions across visits and code versions. Definition structure and actual execution history remain distinct.
+The workflow bar presents controls and human input and opens the read-only inspector. Declared shows the graph structure of the run's current build and its position. Trace shows recorded executions across visits, retries, pauses and code reloads. Checkpoints lists what each checkpoint saved and how to export it. A shared dock shows the selected execution's result, event, decision, state after the step, error, and its operations with the prompts sent and the replies recorded. Definition structure and actual execution history remain distinct.
 
 Every change a run goes through appends to its event log, and each appended event is pushed live to clients together with the run's new summary. A client appends the event to its trace and refetches the run or execution the event names; the read routes are the source of truth and page by id. Inspection reads never run author code.
 

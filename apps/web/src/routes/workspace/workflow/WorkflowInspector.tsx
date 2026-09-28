@@ -1,26 +1,18 @@
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
-import type {
-  WorkflowCheckpointSummaryDto,
-  WorkflowEvidenceDto,
-  WorkflowRunSummary,
-} from '@isagi/contracts';
+import type { WorkflowCheckpointSummaryDto, WorkflowRunSummary } from '@isagi/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
-import type { EvidenceScope } from '../../../lib/workspace/workflow/evidence.js';
 import {
-  useWorkflowEvidenceList,
-  useWorkflowExecutionOperations,
-  useWorkflowRunState,
+  useWorkflowExecutionQuery,
+  useWorkflowRunView,
   useWorkflowStructureQuery,
 } from '../../../lib/workspace/workflow/queries.js';
-import { WorkflowStructureStaleError } from '../../../lib/workspace/workflow/structure.js';
-import { aggregateVisits, emptyAggregation, type VisitAggregation } from './aggregate.js';
+import { aggregateVisits, emptyAggregation } from './aggregate.js';
 import { executionAddressKey } from './ancestry.js';
 import { inspectorCopy } from './copy.js';
 import { buildDockView } from './dock.js';
-import { noEvidenceFilters, type EvidenceSelectedFilters } from './evidence-view.js';
 import { dockMaxHeight, dockMinHeight } from './format.js';
 import { tabStep } from './list-navigation.js';
 import {
@@ -35,22 +27,20 @@ import type { LayoutEngineFactory } from './useGraphLayout.js';
 import { useRunClock } from './useRunClock.js';
 import { WorkflowCheckpointsPanel } from './WorkflowCheckpointsPanel.js';
 import { WorkflowDeclaredCanvas } from './WorkflowDeclaredCanvas.js';
-import { WorkflowDock, type DockEvidenceRows } from './WorkflowDock.js';
-import { WorkflowEvidencePanel } from './WorkflowEvidencePanel.js';
+import { WorkflowDock } from './WorkflowDock.js';
 import { WorkflowInspectorHeader } from './WorkflowInspectorHeader.js';
 import { WorkflowTraceWaterfall } from './WorkflowTraceWaterfall.js';
 
 /**
  * The read-only inspector, opened from the workflow bar and closed with Escape.
  *
- * Four tabs answering four different questions — Declared is a snapshot of the pin the run is on
- * now, Trace is the record of what actually ran, Evidence is what the run deliberately kept, and
- * Checkpoints is what an export of each saved checkpoint would contain — over one shared dock. Mounting this is what starts the run's coordinator, so the expensive half
- * of inspection costs nothing until somebody looks.
+ * Three tabs answering three different questions — Declared is the build the run is on now, Trace
+ * is the record of what actually ran, and Checkpoints is what an export of each saved checkpoint
+ * would contain — over one shared dock. Mounting this is what reads the run's tree and event log,
+ * so inspection costs nothing until somebody looks.
  *
- * It drives nothing. There is no Pause, Resume, Retry, Cancel, Dismiss or Advance here, no gate form
- * and no per-node action; the bar stays reachable behind the overlay and remains the only place a
- * person acts on a run.
+ * It drives nothing. There is no Pause, Resume, Retry, Cancel, Dismiss or Advance here; the bar
+ * stays reachable behind the overlay and remains the only place a person acts on a run.
  */
 export function WorkflowInspector({
   summary,
@@ -60,11 +50,8 @@ export function WorkflowInspector({
 }: {
   readonly summary: WorkflowRunSummary;
   /**
-   * How much room to leave at the bottom for the workflow bar.
-   *
-   * The overlay stops above the bar instead of covering it. That is what keeps the bar the only
-   * action surface *and* a reachable one: a person can answer a question, pause or cancel while
-   * looking at the graph, and a keyboard user is never shut away from the controls they need.
+   * How much room to leave at the bottom for the workflow bar, so a person can answer a question,
+   * pause or cancel while looking at the graph.
    */
   readonly bottomInset: number;
   readonly onClose: () => void;
@@ -72,22 +59,11 @@ export function WorkflowInspector({
   readonly engineFactory?: LayoutEngineFactory | undefined;
 }) {
   const runId = summary.runId;
-  const state = useWorkflowRunState(runId);
+  const runRead = useWorkflowRunView(runId);
+  const view = runRead.view;
   const [tab, setTab] = useState<InspectorTab>('declared');
-  /**
-   * The Evidence tab's own state, held here rather than in the panel.
-   *
-   * The panel unmounts whenever another tab is shown, and a record chosen from the dock's Evidence
-   * column — which is on every tab — has to still be the chosen one when the Evidence tab is opened
-   * next. Owning it here is what makes "the selection survives" true across the tab strip as well
-   * as across dock selection changes.
-   */
-  const [evidenceScope, setEvidenceScope] = useState<EvidenceScope>({ kind: 'run' });
-  const [evidenceFilters, setEvidenceFilters] =
-    useState<EvidenceSelectedFilters>(noEvidenceFilters);
-  const [selectedEvidenceKey, setSelectedEvidenceKey] = useState<string | null>(null);
-  /** The Checkpoints tab's choice, held here for the same reason as the Evidence tab's. */
-  const [chosenCheckpointId, setChosenCheckpointId] = useState<string | null>(null);
+  /** The Checkpoints tab's choice, held here so it survives the tab being closed. */
+  const [chosenCheckpointId, setChosenCheckpointId] = useState<number | null>(null);
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedTraceRows, setCollapsedTraceRows] = useState<ReadonlySet<number>>(
@@ -95,170 +71,85 @@ export function WorkflowInspector({
   );
   const [dockHeight, setDockHeight] = useState(340);
   const closeRef = useRef<HTMLButtonElement | null>(null);
-  const aggregationRef = useRef<VisitAggregation | null>(null);
 
   /**
-   * The run's own facts, preferred over the bar's copy of them.
-   *
-   * Two summaries reach this component: the attached-run cache the bar reads, kept up to date by
-   * surface-level bookkeeping, and the projection's own, applied from revision-ordered deltas. They
-   * are the same run and can be momentarily out of step — a `retry_pin_adopted` delta moves the
-   * projection's pin immediately, and nothing obliges the surface cache to have heard yet.
-   *
-   * Revision decides, exactly as it does inside the projection itself: whichever summary describes
-   * the later committed state is the one on screen, so the header and the graph cannot disagree
-   * about which definition they are showing. A tie goes to the bar's copy, because a run that has
-   * just re-attached has a freshly delivered snapshot and a projection still being rebuilt.
+   * The bar's summary and the run detail's describe the same run and are both written by the latest
+   * push or refetch, so either may be a moment ahead. The detail's is used once it is here, so the
+   * header and the graph name the same build.
    */
-  const projected = state?.summary ?? null;
-  const runSummary =
-    projected !== null && projected.revision > summary.revision ? projected : summary;
+  const runSummary = view?.run ?? summary;
   const live = runSummary.endedAt === null;
   const now = useRunClock(live);
 
-  // The pin the run is on now: the hash on whichever summary won above, so the graph is drawn under
-  // the same definition the header names. Reading it from the projection independently would put the
-  // two back in disagreement the moment they were briefly out of step. The response is validated
-  // against it and stored under the hash it reports about itself; a mismatch is a signal to re-key,
-  // not a failure to retry.
   const structure = useWorkflowStructureQuery(runId, runSummary.artifactHash);
-  const stale = structure.error instanceof WorkflowStructureStaleError;
-
   const topology = useMemo(
     () => (structure.data ? buildTopology(structure.data.descriptor) : null),
     [structure.data],
   );
 
-  const aggregation = useMemo(() => {
-    if (state === null) return emptyAggregation(now);
-    const next = aggregateVisits({ state, topology, now, previous: aggregationRef.current });
-    aggregationRef.current = next;
-    return next;
-  }, [state, topology, now]);
-
-  const traceModel = useMemo(
-    // Deliberately not keyed on the clock: the model is recorded history, and applying the clock to
-    // it every second would rebuild every row of a run's whole past once a second.
-    () => (state === null ? null : buildTraceModel({ state, collapsed: collapsedTraceRows })),
-    [state, collapsedTraceRows],
+  const aggregation = useMemo(
+    () => (view === null ? emptyAggregation(now) : aggregateVisits({ view, topology, now })),
+    [view, topology, now],
   );
 
-  const liveKey = useMemo(() => {
-    if (!state || !runSummary.activeNode) return null;
-    const execution = state.executions.get(runSummary.activeNode.executionId);
-    return execution ? executionAddressKey(state, execution) : null;
-  }, [state, runSummary.activeNode]);
+  const traceModel = useMemo(
+    // Not keyed on the clock: the model is recorded history.
+    () => (view === null ? null : buildTraceModel({ view, collapsed: collapsedTraceRows })),
+    [view, collapsedTraceRows],
+  );
 
-  // A selection that no longer resolves would describe one state's visit under another's heading.
+  const liveExecutionId = runSummary.current?.executionId ?? null;
+  const liveKey = useMemo(() => {
+    if (!view || liveExecutionId === null) return null;
+    const execution = view.executions.get(liveExecutionId);
+    return execution ? executionAddressKey(view, execution) : null;
+  }, [view, liveExecutionId]);
+
+  // A selection that no longer resolves would describe one run's execution under another's heading.
   useEffect(() => {
-    if (!selectionResolves(selection, state)) setSelection(null);
-  }, [selection, state]);
+    if (!selectionResolves(selection, view)) setSelection(null);
+  }, [selection, view]);
 
   /**
-   * The inspector opens on something rather than on an empty dock.
-   *
-   * Where the run is now is what a person came to look at, so that is the seed: the live visit if
-   * there is one, and otherwise the last thing that ran. A third of the overlay saying "select
-   * something" is a third of the overlay saying nothing.
-   *
-   * A run with no executions at all — one whose graph setup threw — falls back to the root frame,
-   * which is the only thing that happened and the only thing worth showing.
+   * The inspector opens on something rather than on an empty dock: the live execution if there is
+   * one, otherwise the last thing that ran, otherwise the root graph.
    */
   useEffect(() => {
-    if (selection !== null || state === null || !state.hydrated) return;
-    const liveExecution = runSummary.activeNode?.executionId ?? null;
+    if (selection !== null || view === null) return;
     const seed =
-      liveExecution !== null && state.executions.has(liveExecution)
-        ? liveExecution
-        : state.executionOrder.at(-1);
+      liveExecutionId !== null && view.executions.has(liveExecutionId)
+        ? liveExecutionId
+        : view.executionOrder.at(-1);
     if (seed !== undefined) {
       setSelection({ kind: 'execution', executionId: seed });
       return;
     }
-    const root = [...state.frames.values()].find((frame) => frame.parentExecutionId === null);
-    if (root) setSelection({ kind: 'frame_segment', frameId: root.frameId, segment: 'entry' });
-  }, [selection, state, runSummary.activeNode]);
+    if (view.rootInvocationId !== null) {
+      setSelection({ kind: 'invocation', invocationId: view.rootInvocationId });
+    }
+  }, [selection, view, liveExecutionId]);
 
   // Transient inspector state belongs to the run it was made against.
   useEffect(() => {
     setSelection(null);
     setExpanded(new Set());
     setCollapsedTraceRows(new Set());
-    setEvidenceScope({ kind: 'run' });
-    setEvidenceFilters(noEvidenceFilters);
-    setSelectedEvidenceKey(null);
     setChosenCheckpointId(null);
   }, [runId]);
 
+  const execution = useWorkflowExecutionQuery(selectedExecutionId(selection, view));
+  const detail = execution.data ?? null;
+
   const dockView = useMemo(
-    () => (state === null ? null : buildDockView({ selection, state, topology, now })),
-    [selection, state, topology, now],
+    () => (view === null ? null : buildDockView({ selection, view, topology, detail, now })),
+    [selection, view, topology, detail, now],
   );
-  const operations = useWorkflowExecutionOperations(state, selectedExecutionId(selection, state));
-
-  /**
-   * What the selected visit captured — one query, serving two surfaces.
-   *
-   * The dock's Evidence column and the Evidence tab's visit scope are the *same* listing, and they
-   * get it from the same call shape so React Query resolves them to one cache entry. Neither
-   * derives its rows from the other, so there is no arrangement in which the column and the list it
-   * opens can disagree about what a visit kept.
-   */
-  const dockExecutionId = selectedExecutionId(selection, state);
-  // A checkpoint visit shows its Checkpoint column in place of Evidence, and never captures any.
-  const dockIsCheckpoint = dockView?.checkpoint != null;
-  // `null`, not a fallback to run scope. A declared node nobody has visited and a frame's own setup
-  // segment both produce a full dock view and no execution, and answering them with the run's
-  // listing would put other nodes' records under a heading that says "this visit and below".
-  const dockEvidence = useWorkflowEvidenceList(
-    state,
-    dockExecutionId === null || dockIsCheckpoint
-      ? null
-      : { kind: 'visit', executionId: dockExecutionId, subtree: true },
-  );
-
-  const dockEvidenceRows: DockEvidenceRows =
-    dockExecutionId === null || dockIsCheckpoint
-      ? { kind: 'no_visit' }
-      : dockEvidence.error !== null
-        ? { kind: 'failed' }
-        : dockEvidence.data === undefined
-          ? { kind: 'loading' }
-          : { kind: 'ready', records: dockEvidence.data };
-
-  const selectEvidence = useCallback((record: WorkflowEvidenceDto) => {
-    setSelectedEvidenceKey(record.evidenceKey);
-    // The dock follows the record to the visit that captured it, so everything below the panel is
-    // describing the same step the record came from.
-    setSelection({ kind: 'execution', executionId: record.executionId });
-  }, []);
 
   const selectCheckpoint = useCallback((checkpoint: WorkflowCheckpointSummaryDto) => {
     setChosenCheckpointId(checkpoint.checkpointId);
-    // As with evidence, the dock follows the checkpoint to the visit that saved it.
+    // The dock follows the checkpoint to the execution that saved it.
     setSelection({ kind: 'execution', executionId: checkpoint.executionId });
   }, []);
-
-  /**
-   * Entering the Evidence tab from the dock's link.
-   *
-   * Always a question about one visit, so the scope is that visit with the subtree switch on:
-   * exactly the column's contents, and exactly what `evidenceCaptured` counts. Entering from the
-   * tab strip asks about the run instead, and seeds run scope there.
-   *
-   * Null when there is no visit, which is also when the link is not rendered — so the tab and the
-   * column can never be opened into disagreement.
-   */
-  const openEvidenceTab = useMemo(
-    () =>
-      dockExecutionId === null
-        ? null
-        : () => {
-            setEvidenceScope({ kind: 'visit', executionId: dockExecutionId, subtree: true });
-            setTab('evidence');
-          },
-    [dockExecutionId],
-  );
 
   /**
    * Focus moves into the overlay on open and back where it came from on close.
@@ -300,14 +191,8 @@ export function WorkflowInspector({
     });
   }, []);
 
-  /**
-   * A tab chosen from the strip, by click or by key: the two are one activation.
-   *
-   * From the tab strip the Evidence question is about the run, not about whatever happens to be
-   * selected below. The dock's link is the way into one visit.
-   */
+  /** A tab chosen from the strip, by click or by key: the two are one activation. */
   const activateTab = useCallback((next: InspectorTab) => {
-    if (next === 'evidence') setEvidenceScope({ kind: 'run' });
     setTab(next);
   }, []);
 
@@ -359,9 +244,7 @@ export function WorkflowInspector({
               ? inspectorCopy.declaredHint
               : tab === 'trace'
                 ? inspectorCopy.traceHint
-                : tab === 'evidence'
-                  ? inspectorCopy.evidenceHint
-                  : inspectorCopy.checkpointsHint}
+                : inspectorCopy.checkpointsHint}
           </p>
         </div>
 
@@ -373,87 +256,84 @@ export function WorkflowInspector({
           aria-labelledby={tabId(tab)}
           className="flex min-h-0 flex-1 flex-col"
         >
-          {tab === 'declared' ? (
-            stale || structure.isPending ? (
-              // Nothing renders under the old pin, not even for a frame. The run has been asked to
-              // catch up and this re-keys when it does; it is not an error and offers no retry.
-              <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
-                <p className="font-mono text-[12px] text-fg-subtle">{inspectorCopy.catchingUp}</p>
-              </div>
-            ) : structure.error ? (
-              <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
-                <div className="max-w-sm rounded-lg border border-error/40 bg-error/5 px-3 py-2.5 text-center">
-                  <p className="text-[12.5px] text-fg-muted">{inspectorCopy.structureFailed}</p>
-                  <button
-                    type="button"
-                    onClick={() => void structure.refetch()}
-                    className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
-                  >
-                    {inspectorCopy.structureRetry}
-                  </button>
-                </div>
-              </div>
-            ) : topology ? (
-              <WorkflowDeclaredCanvas
-                topology={topology}
-                artifactHash={structure.data.artifactHash}
-                aggregation={aggregation}
-                liveKey={liveKey}
-                selection={selection}
-                onSelect={setSelection}
-                expanded={expanded}
-                onToggleExpanded={toggleExpanded}
-                engineFactory={engineFactory}
+          {view === null ? (
+            // Nothing to draw until the run itself is read. A failed read says so rather than
+            // leaving the tabs to present an empty run as a complete record.
+            <RunReadState failed={runRead.runError != null} onRetry={runRead.retry} />
+          ) : (
+            <>
+              <ReadWarnings
+                runStale={runRead.runError != null}
+                eventsMissing={runRead.eventsError != null}
+                onRetry={runRead.retry}
               />
-            ) : null
-          ) : tab === 'evidence' ? (
-            <WorkflowEvidencePanel
-              runId={runId}
-              state={state}
-              scope={evidenceScope}
-              onScopeChange={setEvidenceScope}
-              filters={evidenceFilters}
-              onFiltersChange={setEvidenceFilters}
-              selectedKey={selectedEvidenceKey}
-              onSelect={selectEvidence}
-              dockExecutionId={dockExecutionId}
-              liveExecutionId={runSummary.activeNode?.executionId ?? null}
-            />
-          ) : tab === 'checkpoints' ? (
-            <WorkflowCheckpointsPanel
-              runId={runId}
-              state={state}
-              chosenId={chosenCheckpointId}
-              dockCheckpointId={dockView?.checkpoint?.summary?.checkpointId ?? null}
-              onSeed={setChosenCheckpointId}
-              onSelect={selectCheckpoint}
-            />
-          ) : traceModel ? (
-            <WorkflowTraceWaterfall
-              model={traceModel}
-              now={now}
-              selection={selection}
-              liveExecutionId={runSummary.activeNode?.executionId ?? null}
-              onSelect={setSelection}
-              onToggleExpanded={toggleTraceRow}
-            />
-          ) : null}
+              {tab === 'declared' ? (
+                structure.isPending ? (
+                  <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
+                    <p className="font-mono text-[12px] text-fg-subtle">
+                      {inspectorCopy.readingStructure}
+                    </p>
+                  </div>
+                ) : structure.error ? (
+                  <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
+                    <div className="max-w-sm rounded-lg border border-error/40 bg-error/5 px-3 py-2.5 text-center">
+                      <p className="text-[12.5px] text-fg-muted">{inspectorCopy.structureFailed}</p>
+                      <button
+                        type="button"
+                        onClick={() => void structure.refetch()}
+                        className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
+                      >
+                        {inspectorCopy.structureRetry}
+                      </button>
+                    </div>
+                  </div>
+                ) : topology ? (
+                  <WorkflowDeclaredCanvas
+                    topology={topology}
+                    artifactHash={structure.data.artifactHash}
+                    aggregation={aggregation}
+                    liveKey={liveKey}
+                    selection={selection}
+                    onSelect={setSelection}
+                    expanded={expanded}
+                    onToggleExpanded={toggleExpanded}
+                    engineFactory={engineFactory}
+                  />
+                ) : null
+              ) : tab === 'checkpoints' ? (
+                <WorkflowCheckpointsPanel
+                  runId={runId}
+                  view={view}
+                  chosenId={chosenCheckpointId}
+                  dockCheckpointId={dockView?.checkpoint?.checkpointId ?? null}
+                  onSeed={setChosenCheckpointId}
+                  onSelect={selectCheckpoint}
+                />
+              ) : traceModel ? (
+                <WorkflowTraceWaterfall
+                  model={traceModel}
+                  now={now}
+                  selection={selection}
+                  liveExecutionId={liveExecutionId}
+                  onSelect={setSelection}
+                  onToggleExpanded={toggleTraceRow}
+                />
+              ) : null}
 
-          <WorkflowDock
-            view={dockView}
-            runId={runId}
-            operations={operations}
-            tab={tab}
-            evidence={{
-              rows: dockEvidenceRows,
-              selectedKey: selectedEvidenceKey,
-              onSelect: selectEvidence,
-              onOpenAll: openEvidenceTab,
-            }}
-            height={dockHeight}
-            onHeightChange={clampDock}
-            onSelect={setSelection}
-          />
+              <WorkflowDock
+                view={dockView}
+                execution={{
+                  detail,
+                  isLoading: execution.isLoading,
+                  error: execution.error,
+                  retry: () => void execution.refetch(),
+                }}
+                height={dockHeight}
+                onHeightChange={clampDock}
+                onSelect={setSelection}
+              />
+            </>
+          )}
         </div>
       </motion.div>
     </>
@@ -463,7 +343,6 @@ export function WorkflowInspector({
 const tabOrder: readonly { readonly value: InspectorTab; readonly label: string }[] = [
   { value: 'declared', label: inspectorCopy.declaredTab },
   { value: 'trace', label: inspectorCopy.traceTab },
-  { value: 'evidence', label: inspectorCopy.evidenceTab },
   { value: 'checkpoints', label: inspectorCopy.checkpointsTab },
 ];
 
@@ -550,6 +429,81 @@ function TabButton({
       }`}
     >
       {children}
+    </button>
+  );
+}
+
+/** The run could not be read, or has not been yet. */
+function RunReadState({
+  failed,
+  onRetry,
+}: {
+  readonly failed: boolean;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
+      {failed ? (
+        <div
+          role="alert"
+          data-run-read="failed"
+          className="max-w-sm rounded-lg border border-error/40 bg-error/5 px-3 py-2.5 text-center"
+        >
+          <p className="text-[12.5px] text-fg-muted">{inspectorCopy.runReadFailed}</p>
+          <RetryButton onClick={onRetry} />
+        </div>
+      ) : (
+        <p data-run-read="loading" className="font-mono text-[12px] text-fg-subtle">
+          {inspectorCopy.readingRun}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A partial or possibly stale record, said out loud above whatever tab is showing it.
+ *
+ * Without the event log Trace has no pauses, reloads, wait timing or environment steps, and a run
+ * whose refresh failed may have moved on. Either one drawn silently would read as a complete record.
+ */
+function ReadWarnings({
+  runStale,
+  eventsMissing,
+  onRetry,
+}: {
+  readonly runStale: boolean;
+  readonly eventsMissing: boolean;
+  readonly onRetry: () => void;
+}) {
+  if (!runStale && !eventsMissing) return null;
+  return (
+    <div
+      role="status"
+      data-run-read="partial"
+      className="flex flex-none flex-wrap items-center gap-2 border-b border-amber/25 bg-amber/6 px-4.5 py-1.5"
+    >
+      <p className="m-0 text-[12px] text-amber">
+        {[
+          runStale ? inspectorCopy.runRefreshFailed : null,
+          eventsMissing ? inspectorCopy.eventsReadFailed : null,
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      </p>
+      <RetryButton onClick={onRetry} />
+    </div>
+  );
+}
+
+function RetryButton({ onClick }: { readonly onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
+    >
+      {inspectorCopy.readRetry}
     </button>
   );
 }

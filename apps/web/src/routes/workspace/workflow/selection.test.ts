@@ -2,52 +2,51 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { selectedExecutionId, selectionEquals, selectionResolves, visitsOf } from './selection.js';
-import { instant, rootFrame, runStateFixture, visit } from './test-support.js';
+import { instant, runViewFixture, visit } from './test-support.js';
 import { addressKey } from './topology.js';
-
-/**
- * Selection survives a pin change and does not survive a run change — two different questions.
- */
 
 const draftKey = addressKey({ path: [], kind: 'node', id: 'draft' });
 
-test('selecting a node selects its latest visit, which is what clicking it means', () => {
-  const state = runStateFixture({
+test('selecting a node selects its latest execution, which is what clicking it means', () => {
+  const view = runViewFixture({
     executions: [
       visit({ executionId: 1, nodeId: 'draft', visitIndex: 0, startedAt: instant(1) }),
       visit({ executionId: 2, nodeId: 'draft', visitIndex: 1, startedAt: instant(5) }),
     ],
   });
-  assert.equal(selectedExecutionId({ kind: 'element', key: draftKey }, state), 2);
+  assert.equal(selectedExecutionId({ kind: 'element', key: draftKey }, view), 2);
   assert.deepEqual(
-    visitsOf(state, draftKey).map((row) => row.executionId),
+    visitsOf(view, draftKey).map((row) => row.executionId),
     [1, 2],
   );
 });
 
-/**
- * A Retry that adopts new code changes the *definition*, not the history. A selected visit is a
- * durable identity and stays selected, because the run still recorded it.
- */
-test('a selected visit survives a pin change', () => {
-  const state = runStateFixture({
-    executions: [visit({ executionId: 1, nodeId: 'draft', latestArtifactHash: 'sha256:new' })],
+test('a retry is another execution at the same address', () => {
+  const view = runViewFixture({
+    executions: [
+      visit({ executionId: 1, nodeId: 'draft', status: 'failed', startedAt: instant(1) }),
+      visit({ executionId: 2, nodeId: 'draft', retryOf: 1, startedAt: instant(3) }),
+    ],
   });
-  assert.equal(selectionResolves({ kind: 'execution', executionId: 1 }, state), true);
+  assert.deepEqual(
+    visitsOf(view, draftKey).map((row) => row.executionId),
+    [1, 2],
+  );
 });
 
-test('a selection that names nothing this projection has is dropped', () => {
-  const state = runStateFixture({ executions: [] });
-  assert.equal(selectionResolves({ kind: 'execution', executionId: 99 }, state), false);
-  assert.equal(selectionResolves({ kind: 'frame_output', frameId: 99 }, state), false);
+test('a selection that names nothing this run has is dropped', () => {
+  const view = runViewFixture({ executions: [] });
+  assert.equal(selectionResolves({ kind: 'execution', executionId: 99 }, view), false);
+  assert.equal(selectionResolves({ kind: 'invocation', invocationId: 99 }, view), false);
   assert.equal(selectionResolves({ kind: 'execution', executionId: 1 }, null), false);
-  // A declared address is a position in a definition, not a durable row, so it always resolves.
-  assert.equal(selectionResolves({ kind: 'element', key: draftKey }, state), true);
+  // A declared address is a position in a build, not a row, so it always resolves.
+  assert.equal(selectionResolves({ kind: 'element', key: draftKey }, view), true);
+  assert.equal(selectionResolves({ kind: 'invocation', invocationId: 1 }, view), true);
 });
 
-test('a routing selection and an execution selection on the same visit are not the same selection', () => {
+test('selections compare by kind and identity', () => {
   assert.equal(
-    selectionEquals({ kind: 'execution', executionId: 1 }, { kind: 'routing', executionId: 1 }),
+    selectionEquals({ kind: 'execution', executionId: 1 }, { kind: 'invocation', invocationId: 1 }),
     false,
   );
   assert.equal(
@@ -55,19 +54,7 @@ test('a routing selection and an execution selection on the same visit are not t
     true,
   );
   assert.equal(
-    selectionEquals(
-      { kind: 'frame_segment', frameId: 1, segment: 'entry' },
-      { kind: 'frame_segment', frameId: 1, segment: 'output' },
-    ),
-    false,
+    selectedExecutionId({ kind: 'invocation', invocationId: 1 }, runViewFixture({})),
+    null,
   );
-});
-
-test('a frame selection resolves against the frames the projection holds', () => {
-  const state = runStateFixture({ frames: [rootFrame()], executions: [] });
-  assert.equal(
-    selectionResolves({ kind: 'frame_segment', frameId: 1, segment: 'entry' }, state),
-    true,
-  );
-  assert.equal(selectedExecutionId({ kind: 'frame_output', frameId: 1 }, state), null);
 });

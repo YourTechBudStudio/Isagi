@@ -1,72 +1,50 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { WorkflowRunSummary } from '@isagi/contracts';
+
 import { workflowCopy } from '../../../copy/index.js';
-import { workflowReasonLine, workflowStopNotice } from './derive.js';
+import { canAnswer, userWait, workflowReasonLine } from './derive.js';
 import { workflowSummaryFixture } from './test-support.js';
 
-test('a clean stop reports nothing; an incomplete one reports what is actually true', () => {
-  assert.equal(workflowStopNotice(workflowSummaryFixture()), null);
-  assert.equal(
-    workflowStopNotice(
-      workflowSummaryFixture({
-        stopSummary: { requested: 2, confirmed: 2, failed: 0, unsupported: 0, pending: 0 },
-      }),
-    ),
-    null,
-  );
-  // Still in flight outranks everything: the stop has not finished, so nothing final can be said.
-  assert.equal(
-    workflowStopNotice(
-      workflowSummaryFixture({
-        stopSummary: { requested: 3, confirmed: 1, failed: 1, unsupported: 1, pending: 1 },
-      }),
-    ),
-    workflowCopy.stopPending,
-  );
-  assert.equal(
-    workflowStopNotice(
-      workflowSummaryFixture({
-        stopSummary: { requested: 2, confirmed: 1, failed: 1, unsupported: 0, pending: 0 },
-      }),
-    ),
-    workflowCopy.stopFailed,
-  );
-  // Work Isagi has no way to stop stays visible as a limitation rather than a confirmed stop.
-  assert.equal(
-    workflowStopNotice(
-      workflowSummaryFixture({
-        stopSummary: { requested: 2, confirmed: 1, failed: 0, unsupported: 1, pending: 0 },
-      }),
-    ),
-    workflowCopy.stopUnsupported,
-  );
+const current = (
+  wait: NonNullable<WorkflowRunSummary['current']>['wait'],
+): WorkflowRunSummary['current'] => ({
+  executionId: 3,
+  invocationId: 1,
+  graphKey: 'root',
+  nodeId: 'ask',
+  nodeKind: 'operation',
+  label: null,
+  wait,
 });
 
-test('the reason line explains what is holding the run, in the order a person can act on', () => {
+test('only a user wait asks the person something', () => {
+  const agent = workflowSummaryFixture({
+    status: 'waiting',
+    current: current({ kind: 'agent_turn', target: { agentSessionId: 1, sentAt: 'x' } }),
+  });
+  assert.equal(userWait(agent), null);
+  assert.equal(canAnswer(agent), false);
+  const asked = workflowSummaryFixture({
+    status: 'waiting',
+    current: current({ kind: 'user_continue', label: 'Fix it' }),
+  });
+  assert.equal(userWait(asked)?.kind, 'user_continue');
+  assert.equal(canAnswer(asked), true);
+});
+
+test('a paused run still takes an answer; a failed or cancelled one does not', () => {
+  const wait = current({ kind: 'user_input', questions: [] });
+  assert.equal(canAnswer(workflowSummaryFixture({ status: 'paused', current: wait })), true);
+  assert.equal(canAnswer(workflowSummaryFixture({ status: 'failed', current: wait })), false);
+  assert.equal(canAnswer(workflowSummaryFixture({ status: 'cancelled', current: wait })), false);
+});
+
+test('the reason line speaks only while the environment is being prepared', () => {
   assert.equal(workflowReasonLine(workflowSummaryFixture()), null);
-
-  const blocked = workflowSummaryFixture({
-    status: 'blocked',
-    blockedOperation: { operationKey: 'op-1', frameId: 1, executionId: 1 },
-  });
-  assert.equal(workflowReasonLine(blocked), workflowCopy.blockedOperation);
-
-  // An unavailable environment outranks it: nothing can proceed until the worktree is back, so
-  // pointing at the uncertain operation first would send someone to the wrong problem.
-  const parked = workflowSummaryFixture({
-    status: 'blocked',
-    blockedOperation: { operationKey: 'op-1', frameId: 1, executionId: 1 },
-    destination: { ...workflowSummaryFixture().destination, available: false },
-  });
-  assert.equal(workflowReasonLine(parked), workflowCopy.environmentUnavailable);
-});
-
-test('a finished run does not complain about an environment it no longer needs', () => {
-  const ended = workflowSummaryFixture({
-    status: 'done',
-    endedAt: '2026-09-15T10:05:00.000Z',
-    destination: { ...workflowSummaryFixture().destination, available: false },
-  });
-  assert.equal(workflowReasonLine(ended), null);
+  assert.equal(
+    workflowReasonLine(workflowSummaryFixture({ status: 'preparing' })),
+    workflowCopy.preparing,
+  );
 });

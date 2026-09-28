@@ -77,8 +77,7 @@ export function WorkflowBarContainer({
   /**
    * One control at a time.
    *
-   * These are run-level controls and issuing two at once means nothing: the runtime fences them on
-   * control revision, so the second is refused anyway. Leaving the others enabled let a fast Cancel
+   * These are run-level controls and issuing two at once means nothing. Leaving the others enabled let a fast Cancel
    * clear the indicator while a Pause was still in flight, and every button then looked idle while
    * work was outstanding. Locking the cluster is the honest reading of "Isagi is doing what you
    * asked", and it removes the overlap rather than trying to represent it.
@@ -100,10 +99,10 @@ export function WorkflowBarContainer({
       // A separate control and a separate failure line. Cancel stops work; Dismiss lets go of the
       // surface. Sharing either would put one action's outcome under the other's name.
       dismiss: () => runAction(workflowCopy.dismissActionFailed, () => dismiss.mutateAsync()),
-      advance: (waitId: number, answers?: WorkflowInputAnswers) => {
+      advance: (executionId: number, answers?: WorkflowInputAnswers) => {
         if (runId === null) return;
         return runAction(workflowCopy.advanceActionFailed, () =>
-          advance.mutateAsync({ runId, waitId, answers }),
+          advance.mutateAsync({ runId, executionId, answers }),
         );
       },
     }),

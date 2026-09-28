@@ -13,7 +13,7 @@ import {
 import { handleRuntimeEvent } from '../runtime-events.js';
 import { useWorkspaceStore } from '../store.js';
 import { subscribeToWorkflowSignals, type WorkflowSignal } from '../workflow/signals.js';
-import { workflowDeltaFixture, workflowSummaryFixture } from '../workflow/test-support.js';
+import { workflowEventFixture, workflowSummaryFixture } from '../workflow/test-support.js';
 
 test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();
@@ -176,31 +176,24 @@ test('workflow runtime events reach the workflow layer as signals, not a second 
     id: 'evt_workflow_changed',
     type: 'workflow_run_changed',
     occurredAt: '2026-06-12T00:00:01.000Z',
-    payload: workflowSummaryFixture({ runId: 42, revision: 2, status: 'waiting' }),
+    payload: workflowSummaryFixture({ runId: 42, status: 'waiting' }),
   });
   handleRuntimeEvent({
-    id: 'evt_workflow_transition',
-    type: 'workflow_run_transition',
+    id: 'evt_workflow_event',
+    type: 'workflow_run_event',
     occurredAt: '2026-06-12T00:00:02.000Z',
-    payload: workflowDeltaFixture({ runId: 42, revision: 3 }),
-  });
-  handleRuntimeEvent({
-    id: 'evt_workflow_detached',
-    type: 'workflow_run_detached',
-    occurredAt: '2026-06-12T00:00:03.000Z',
-    payload: { runId: 42, surfaceId: 101 },
+    payload: workflowEventFixture({ runId: 42, eventId: 3 }),
   });
   unsubscribe();
 
   assert.deepEqual(
     seen.map((signal) => signal.type),
-    ['snapshot', 'run_changed', 'transition', 'run_detached'],
+    ['snapshot', 'run_changed', 'run_event'],
   );
-  // The handler forwards facts and holds none of its own: everything a consumer needs is on the
-  // signal, so there is no second place a run's state can be remembered or go stale.
+  // The handler forwards facts and holds none of its own.
   assert.deepEqual(seen[0]?.type === 'snapshot' ? seen[0].summaries : null, [attached]);
-  assert.equal(seen[1]?.type === 'run_changed' ? seen[1].summary.revision : null, 2);
-  assert.equal(seen[2]?.type === 'transition' ? seen[2].delta.revision : null, 3);
+  assert.equal(seen[1]?.type === 'run_changed' ? seen[1].summary.status : null, 'waiting');
+  assert.equal(seen[2]?.type === 'run_event' ? seen[2].event.eventId : null, 3);
 });
 
 function editorContextChangedEvent() {

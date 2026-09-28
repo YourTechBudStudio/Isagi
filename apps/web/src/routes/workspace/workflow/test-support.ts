@@ -1,20 +1,21 @@
 import type {
-  WorkflowExecutionDto,
-  WorkflowFrameDto,
+  WorkflowEventDto,
+  WorkflowExecutionSummaryDto,
   WorkflowGraphDescriptorDto,
-  WorkflowOperationDto,
+  WorkflowGraphInvocationDto,
+  WorkflowRunSummary,
   WorkflowStructureDescriptorDto,
 } from '@isagi/contracts';
 
-import { emptyRunState, type WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
+import { buildRunView, type WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import {
   workflowExecutionFixture,
-  workflowFrameFixture,
+  workflowInvocationFixture,
   workflowSummaryFixture,
 } from '../../../lib/workspace/workflow/test-support.js';
 
 /**
- * Inspector fixtures: a descriptor, and a projection assembled from real DTOs.
+ * Inspector fixtures: a descriptor, and a run view assembled from real DTOs.
  *
  * Built with the same shapes the runtime sends rather than hand-shaped objects, so a test that
  * passes here is a test against the contract the product actually receives.
@@ -38,63 +39,55 @@ export function descriptorFixture(
   graphs: readonly WorkflowGraphDescriptorDto[],
   rootGraphKey = graphs[0]?.key ?? 'root',
 ): WorkflowStructureDescriptorDto {
-  return { descriptorVersion: 1, workflowContractVersion: 3, rootGraphKey, graphs };
+  return { descriptorVersion: 1, workflowContractVersion: 4, rootGraphKey, graphs };
 }
 
-export function runStateFixture(input: {
+/** A run view assembled from real DTOs, exactly as `useWorkflowRunView` builds one. */
+export function runViewFixture(input: {
   readonly runId?: number;
-  readonly executions?: readonly WorkflowExecutionDto[];
-  readonly frames?: readonly WorkflowFrameDto[];
-  readonly operations?: readonly WorkflowOperationDto[];
-  readonly summary?: ReturnType<typeof workflowSummaryFixture> | undefined;
-  readonly hydrationEpoch?: number;
-}): WorkflowRunState {
+  readonly executions?: readonly WorkflowExecutionSummaryDto[];
+  readonly invocations?: readonly WorkflowGraphInvocationDto[];
+  readonly events?: readonly WorkflowEventDto[];
+  readonly summary?: WorkflowRunSummary | undefined;
+}): WorkflowRunView {
   const runId = input.runId ?? 1;
-  const executions = new Map((input.executions ?? []).map((row) => [row.executionId, row]));
-  const ordered = [...executions.values()].sort((left, right) =>
-    left.startedAt === right.startedAt
-      ? left.executionId - right.executionId
-      : left.startedAt < right.startedAt
-        ? -1
-        : 1,
+  return buildRunView(
+    {
+      run: input.summary ?? workflowSummaryFixture({ runId }),
+      inputs: {},
+      invocations: input.invocations ?? [rootInvocation()],
+      executions: input.executions ?? [],
+    },
+    input.events ?? [],
   );
-  return {
-    ...emptyRunState(runId),
-    summary: input.summary ?? workflowSummaryFixture({ runId }),
-    executions,
-    executionOrder: ordered.map((row) => row.executionId),
-    frames: new Map((input.frames ?? [rootFrame()]).map((row) => [row.frameId, row])),
-    operations: new Map((input.operations ?? []).map((row) => [row.operationKey, row])),
-    hydrated: true,
-    coverageRevision: 1,
-    hydrationEpoch: input.hydrationEpoch ?? 1,
-  };
 }
 
-export function rootFrame(overrides: Partial<WorkflowFrameDto> = {}): WorkflowFrameDto {
-  return workflowFrameFixture({ frameId: 1, graphKey: 'root', ...overrides });
+export function rootInvocation(
+  overrides: Partial<WorkflowGraphInvocationDto> = {},
+): WorkflowGraphInvocationDto {
+  return workflowInvocationFixture({ invocationId: 1, graphKey: 'root', ...overrides });
 }
 
-/** A child frame plus the subgraph visit that opened it, which is how nesting is actually recorded. */
+/** A child invocation, entered by the subgraph execution that opened it. */
 export function nested(input: {
   readonly parentExecutionId: number;
-  readonly frameId: number;
+  readonly invocationId: number;
   readonly graphKey: string;
-  readonly parentFrameId: number;
   readonly depth: number;
-  readonly frame?: Partial<WorkflowFrameDto>;
-}): WorkflowFrameDto {
-  return workflowFrameFixture({
-    frameId: input.frameId,
+  readonly invocation?: Partial<WorkflowGraphInvocationDto>;
+}): WorkflowGraphInvocationDto {
+  return workflowInvocationFixture({
+    invocationId: input.invocationId,
     parentExecutionId: input.parentExecutionId,
-    parentFrameId: input.parentFrameId,
     graphKey: input.graphKey,
     depth: input.depth,
-    ...input.frame,
+    ...input.invocation,
   });
 }
 
-export function visit(overrides: Partial<WorkflowExecutionDto>): WorkflowExecutionDto {
+export function visit(
+  overrides: Partial<WorkflowExecutionSummaryDto>,
+): WorkflowExecutionSummaryDto {
   return workflowExecutionFixture(overrides);
 }
 

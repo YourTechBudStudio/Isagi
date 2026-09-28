@@ -185,8 +185,8 @@ test('workflow entries are disabled while the active surface is occupied', () =>
         runId: 99,
         workflowKey: 'current',
         title: 'Current workflow',
-        status: 'done',
-        attachment: { worktreeId: 10, surfaceId: 42 },
+        status: 'completed',
+        surfaceId: 42,
       }),
     }),
   );

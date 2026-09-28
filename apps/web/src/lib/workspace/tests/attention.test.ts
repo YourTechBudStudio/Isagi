@@ -130,7 +130,7 @@ test('surface attention aggregates workflow and pane signals through the shared 
       workflowSummaryFixture({
         runId: 77,
         status: 'waiting',
-        blockingWait: userInputWait(),
+        current: parkedOn('user_input'),
       }),
     ],
   );
@@ -162,8 +162,8 @@ test('a workflow on a terminal-only surface still reaches worktree attention', (
       workflowSummaryFixture({
         runId: 78,
         status: 'waiting',
-        blockingWait: userInputWait(),
-        attachment: { worktreeId: 10, surfaceId: 102 },
+        current: parkedOn('user_input'),
+        surfaceId: 102,
       }),
       'waiting',
     ],
@@ -171,7 +171,7 @@ test('a workflow on a terminal-only surface still reaches worktree attention', (
       workflowSummaryFixture({
         runId: 78,
         status: 'failed',
-        attachment: { worktreeId: 10, surfaceId: 102 },
+        surfaceId: 102,
       }),
       'error',
     ],
@@ -179,7 +179,7 @@ test('a workflow on a terminal-only surface still reaches worktree attention', (
       workflowSummaryFixture({
         runId: 78,
         status: 'running',
-        attachment: { worktreeId: 10, surfaceId: 102 },
+        surfaceId: 102,
       }),
       'working',
     ],
@@ -221,8 +221,8 @@ test('a finished workflow on a terminal-only surface leaves the worktree idle', 
     [
       workflowSummaryFixture({
         runId: 78,
-        status: 'done',
-        attachment: { worktreeId: 10, surfaceId: 102 },
+        status: 'completed',
+        surfaceId: 102,
       }),
     ],
   );
@@ -235,15 +235,14 @@ test('workflow derivations map status to attention signals', () => {
   assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'running' })), 'working');
   assert.equal(
     workflowRunAttention(
-      workflowSummaryFixture({ status: 'waiting', blockingWait: userInputWait() }),
+      workflowSummaryFixture({ status: 'waiting', current: parkedOn('user_input') }),
     ),
     'waiting',
   );
-  assert.equal(workflowRunAttention(workflowSummaryFixture({ paused: true })), 'idle');
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'paused' })), 'idle');
   assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'failed' })), 'error');
-  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'done' })), null);
-  // A blocked run needs someone to look, not to answer, so it signals error rather than waiting.
-  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'blocked' })), 'error');
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'completed' })), null);
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'preparing' })), 'working');
   // Cancelled is terminal and deliberate: it draws no attention, exactly like a finished run.
   assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'cancelled' })), null);
 });
@@ -254,7 +253,7 @@ test('workflow presentation derives user waits and paused state from summary fie
     workflowPresentationStatus(
       workflowSummaryFixture({
         status: 'waiting',
-        blockingWait: userInputWait({ kind: 'agent_turn' }),
+        current: parkedOn('agent_turn'),
       }),
     ),
     'driving',
@@ -263,30 +262,16 @@ test('workflow presentation derives user waits and paused state from summary fie
     workflowPresentationStatus(
       workflowSummaryFixture({
         status: 'waiting',
-        blockingWait: userInputWait({ kind: 'user_continue' }),
+        current: parkedOn('user_continue'),
       }),
     ),
     'waiting_user',
   );
   assert.equal(
     workflowPresentationStatus(
-      workflowSummaryFixture({ status: 'running', blockingWait: userInputWait() }),
-    ),
-    'waiting_user',
-  );
-  assert.equal(
-    workflowPresentationStatus(
-      workflowSummaryFixture({
-        status: 'waiting',
-        blockingWait: userInputWait(),
-        paused: true,
-      }),
+      workflowSummaryFixture({ status: 'paused', current: parkedOn('user_input') }),
     ),
     'paused',
-  );
-  assert.equal(
-    workflowPresentationStatus(workflowSummaryFixture({ status: 'blocked' })),
-    'blocked',
   );
   assert.equal(
     workflowPresentationStatus(workflowSummaryFixture({ status: 'cancelled' })),
@@ -294,18 +279,23 @@ test('workflow presentation derives user waits and paused state from summary fie
   );
 });
 
-function userInputWait(
-  overrides: Partial<NonNullable<WorkflowRunSummary['blockingWait']>> = {},
-): NonNullable<WorkflowRunSummary['blockingWait']> {
+function parkedOn(
+  kind: 'user_input' | 'user_continue' | 'agent_turn',
+): NonNullable<WorkflowRunSummary['current']> {
+  const wait: NonNullable<WorkflowRunSummary['current']>['wait'] =
+    kind === 'user_input'
+      ? { kind, questions: [] }
+      : kind === 'user_continue'
+        ? { kind }
+        : { kind, target: { agentSessionId: 1, sentAt: '2026-09-15T10:00:00.000Z' } };
   return {
-    waitId: 5,
-    kind: 'user_input',
-    label: null,
-    frameId: 1,
     executionId: 1,
-    questions: null,
-    armedAt: '2026-09-15T10:00:00.000Z',
-    ...overrides,
+    invocationId: 1,
+    graphKey: 'root',
+    nodeId: 'ask',
+    nodeKind: 'operation',
+    label: null,
+    wait,
   };
 }
 

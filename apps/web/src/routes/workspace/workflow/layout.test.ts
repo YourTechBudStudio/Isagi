@@ -44,18 +44,18 @@ const topology = buildTopology(
 const writerKey = addressKey({ path: [], kind: 'node', id: 'writer' });
 const reviewerKey = addressKey({ path: [], kind: 'node', id: 'reviewer' });
 
-const identity = (input: { pin?: string; expanded?: readonly string[] }) =>
+const identity = (input: { build?: string; expanded?: readonly string[] }) =>
   layoutIdentity({
-    artifactHash: input.pin ?? 'sha256:pin-a',
+    artifactHash: input.build ?? 'sha256:build-a',
     expanded: new Set(input.expanded ?? []),
   });
 
-test('the identity is the pin and the open set, and nothing else', () => {
+test('the identity is the build and the open set, and nothing else', () => {
   const base = identity({});
   assert.equal(identity({}), base, 'the same shape is the same request');
-  // The pin's own hash, so a Retry that changed an edge or a node kind without renaming anything
+  // The build's own hash, so a Retry that changed an edge or a node kind without renaming anything
   // still re-lays out. A summary of the element keys would have been identical.
-  assert.notEqual(identity({ pin: 'sha256:pin-b' }), base);
+  assert.notEqual(identity({ build: 'sha256:build-b' }), base);
   assert.notEqual(identity({ expanded: [reviewerKey] }), base, 'opening a box re-lays out');
 });
 

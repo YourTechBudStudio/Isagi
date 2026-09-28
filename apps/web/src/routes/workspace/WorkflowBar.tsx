@@ -10,31 +10,26 @@ import {
   Pause,
   Play,
   RotateCw,
-  ShieldAlert,
   X,
   type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary, WorkflowWaitDto } from '@isagi/contracts';
 
 import { Tooltip } from '../../components/Tooltip.js';
-import { workflowCopy, workflowFailureHeadline } from '../../copy/index.js';
+import { workflowCopy, workflowErrorStageHeadline } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import {
+  canAnswer,
+  userWait,
   workflowPresentationStatus,
   workflowReasonLine,
   type WorkflowPresentationStatus,
 } from '../../lib/workspace/workflow/derive.js';
-import {
-  workflowLogLineFromPayload,
-  type WorkflowLogLine,
-} from '../../lib/workspace/workflow/log.js';
-import {
-  useWorkflowPayloadQuery,
-  type WorkflowLogView,
-} from '../../lib/workspace/workflow/queries.js';
+import type { WorkflowLogLine } from '../../lib/workspace/workflow/log.js';
+import type { WorkflowLogView } from '../../lib/workspace/workflow/queries.js';
 import type { RuntimeConnectionPhase } from '../../lib/workspace/workflow/signals.js';
 import { inspectorCopy } from './workflow/copy.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
@@ -58,8 +53,8 @@ export interface WorkflowBarProps {
    * True while any control mutation is in flight.
    *
    * The whole cluster waits, not just the button that was pressed. These are run-level controls and
-   * issuing two at once means nothing — the runtime fences them on control revision — while leaving
-   * the others live let a fast action clear the indicator with a slower one still outstanding.
+   * issuing two at once means nothing, while leaving the others live let a fast action clear the
+   * indicator with a slower one still outstanding.
    */
   readonly actionsLocked: boolean;
   readonly actionError: string | null;
@@ -70,7 +65,8 @@ export interface WorkflowBarProps {
   readonly onCancel: () => void;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
-  readonly onAdvance: (waitId: number, answers?: WorkflowInputAnswers) => void;
+  /** Answers the user wait of the named waiting execution. */
+  readonly onAdvance: (executionId: number, answers?: WorkflowInputAnswers) => void;
 }
 
 const statusMeta: Record<
@@ -82,6 +78,7 @@ const statusMeta: Record<
     readonly signal: string;
   }
 > = {
+  preparing: { icon: Activity, label: 'Preparing', tone: 'text-working', signal: 'bg-working' },
   driving: { icon: Activity, label: 'Driving', tone: 'text-working', signal: 'bg-working' },
   waiting_user: {
     icon: MessageCircle,
@@ -89,9 +86,6 @@ const statusMeta: Record<
     tone: 'text-waiting',
     signal: 'bg-waiting',
   },
-  // Not "waiting": nobody is being asked anything. The run is stuck on something Isagi could not
-  // settle, and it needs a person to look rather than to answer.
-  blocked: { icon: ShieldAlert, label: 'Blocked', tone: 'text-error', signal: 'bg-error' },
   paused: { icon: Pause, label: 'Paused', tone: 'text-fg-subtle', signal: 'bg-idle' },
   failed: { icon: CircleAlert, label: 'Failed', tone: 'text-error', signal: 'bg-error' },
   cancelled: {
@@ -136,15 +130,12 @@ export function WorkflowBar({
   const heading = summary.uiFeedback?.phase ?? summary.title;
   const body = summary.uiFeedback?.message;
   const reason = workflowReasonLine(summary);
-  const wait = summary.blockingWait;
-  // The prompt follows the runtime's own permission, not the presentation status: a paused run may
-  // still accept an answer, and showing the form then is honest as long as it does not imply the
-  // graph resumed.
+  // A paused run still accepts an answer, and showing the form then is honest as long as it does
+  // not imply the graph resumed.
+  const wait = userWait(summary);
   const prompt =
-    summary.controls.advance &&
-    wait &&
-    (wait.kind === 'user_continue' || wait.kind === 'user_input')
-      ? wait
+    canAnswer(summary) && wait !== null && summary.current !== null
+      ? { wait, executionId: summary.current.executionId }
       : null;
 
   const confirmingCancel = confirmingCancelRunId === summary.runId;
@@ -232,8 +223,9 @@ export function WorkflowBar({
             // a form a person can still type into for a question the run has already left. The
             // draft's own identity (`draftKey`) is what resets the fields when the wait changes.
             key="prompt"
-            wait={prompt}
-            paused={summary.paused}
+            wait={prompt.wait}
+            executionId={prompt.executionId}
+            paused={summary.status === 'paused'}
             busy={actionsLocked}
             onAdvance={onAdvance}
           />
@@ -251,7 +243,7 @@ export function WorkflowBar({
  * The two different things "failed" can mean, kept apart.
  *
  * A workflow that declared a failure outcome finished on purpose and has nothing to repair; a
- * segment that threw stopped mid-run and is what a Retry would act on. Presenting them the same way
+ * step that threw stopped mid-run and is what a Retry would act on. Presenting them the same way
  * would tell a person to retry something that already ran to completion.
  */
 function WorkflowOutcomeLine({ summary }: { readonly summary: WorkflowRunSummary }) {
@@ -262,19 +254,22 @@ function WorkflowOutcomeLine({ summary }: { readonly summary: WorkflowRunSummary
       </p>
     );
   }
-  if (!summary.failure) return null;
+  const error = summary.error;
+  if (!error) return null;
+  const where = [error.graphKey, error.nodeId].filter(Boolean).join('/');
   return (
     <>
       <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">
-        {workflowFailureHeadline(summary.failure.code)}
+        {workflowErrorStageHeadline(error.stage)}
       </p>
-      {/* The runtime's own text and stable code: diagnostic facts to quote in a bug report, framed
+      {/* The runtime's own text and stable stage: diagnostic facts to quote in a bug report, framed
           as such and never voiced as product copy. */}
       <p
         className="mt-0.5 min-w-0 truncate font-mono text-[10.5px] text-fg-subtle"
-        title={`${summary.failure.code}: ${summary.failure.message}`}
+        title={`${error.stage}${where ? ` ${where}` : ''}: ${error.message}`}
       >
-        {summary.failure.code} · {summary.failure.message}
+        {error.stage}
+        {where ? ` ${where}` : ''} · {error.message}
       </p>
     </>
   );
@@ -458,14 +453,16 @@ function ActionError({ message }: { readonly message: string }) {
 
 function WorkflowPrompt({
   wait,
+  executionId,
   paused,
   busy,
   onAdvance,
 }: {
-  readonly wait: NonNullable<WorkflowRunSummary['blockingWait']>;
+  readonly wait: Extract<WorkflowWaitDto, { readonly kind: 'user_continue' | 'user_input' }>;
+  readonly executionId: number;
   readonly paused: boolean;
   readonly busy: boolean;
-  readonly onAdvance: (waitId: number, answers?: WorkflowInputAnswers) => void;
+  readonly onAdvance: (executionId: number, answers?: WorkflowInputAnswers) => void;
 }) {
   return (
     <motion.div
@@ -476,19 +473,21 @@ function WorkflowPrompt({
       className="overflow-hidden border-t border-line/12"
     >
       <div className="px-3.5 py-3">
-        {wait.label && <p className="mb-2 text-[13px] leading-snug text-fg">{wait.label}</p>}
+        {wait.kind === 'user_continue' && wait.label && (
+          <p className="mb-2 text-[13px] leading-snug text-fg">{wait.label}</p>
+        )}
         {paused && (
           // Answering while paused records the answer; it does not start the graph moving again.
           <p className="mb-2 font-mono text-[10.5px] text-fg-subtle">
             {workflowCopy.pausedAnswerNote}
           </p>
         )}
-        {wait.questions === null || wait.questions.length === 0 ? (
+        {wait.kind === 'user_continue' || wait.questions.length === 0 ? (
           <div className="flex justify-end">
             <button
               type="button"
               disabled={busy}
-              onClick={() => onAdvance(wait.waitId)}
+              onClick={() => onAdvance(executionId)}
               className="rounded-md bg-blue/16 px-3 py-1.5 font-mono text-[11.5px] text-blue transition duration-micro ease-expo hover:bg-blue/22 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {workflowCopy.continuePrompt}
@@ -500,10 +499,10 @@ function WorkflowPrompt({
             // The draft belongs to one wait. Keying it means a question that changes under a person
             // mid-sentence resets the form instead of submitting yesterday's answer to today's
             // question.
-            draftKey={wait.waitId}
+            draftKey={executionId}
             disabled={busy}
             autoFocus
-            onSubmit={(answers) => onAdvance(wait.waitId, answers)}
+            onSubmit={(answers) => onAdvance(executionId, answers)}
           />
         )}
       </div>
@@ -535,22 +534,6 @@ function WorkflowLogPanel({
       className="overflow-hidden border-t border-line/12"
     >
       <div ref={scrollRef} className="max-h-56 overflow-y-auto px-3.5 py-2">
-        {log.hasOlder && (
-          // The window is bounded at both ends and says so. The old panel silently capped itself
-          // and implied it was showing everything.
-          <div className="flex items-center gap-2 pb-1">
-            <span className="font-mono text-[10.5px] text-fg-subtle">
-              {workflowCopy.logOlderAvailable}
-            </span>
-            <button
-              type="button"
-              onClick={log.loadEarlier}
-              className="rounded-md px-1.5 py-0.5 font-mono text-[10.5px] text-blue transition duration-micro ease-expo hover:bg-blue/12"
-            >
-              {workflowCopy.logLoadEarlier}
-            </button>
-          </div>
-        )}
         {log.error !== null && log.error !== undefined ? (
           // A read that failed is not an empty history. Saying "nothing recorded yet" here would be
           // the panel inventing a fact about the run out of its own inability to read one.
@@ -578,7 +561,7 @@ function WorkflowLogPanel({
         ) : (
           <div className="space-y-1">
             {log.lines.map((line) => (
-              <WorkflowLogLineView key={line.revision} line={line} runId={log.runId} />
+              <WorkflowLogLineView key={line.eventId} line={line} />
             ))}
           </div>
         )}
@@ -594,49 +577,12 @@ const logToneClass: Record<WorkflowLogLine['tone'], string> = {
   error: 'text-error',
 };
 
-/**
- * One line, and — when its detail was too large to travel inline — a way to ask for it.
- *
- * The fetch is the person's explicit act: opening the log must not drag a run's stored payloads
- * across the wire. A failed read stays a failure rather than collapsing into an empty line.
- */
-function WorkflowLogLineView({
-  line,
-  runId,
-}: {
-  readonly line: WorkflowLogLine;
-  readonly runId: number | null;
-}) {
-  const [requested, setRequested] = useState(false);
-  const payload = useWorkflowPayloadQuery(runId, line.storedDetail?.payloadRef ?? null, {
-    enabled: requested && line.storedDetail !== null,
-  });
-  const resolved =
-    payload.data === undefined ? line : workflowLogLineFromPayload(line, payload.data.value);
-
+function WorkflowLogLineView({ line }: { readonly line: WorkflowLogLine }) {
   return (
     <p className="grid grid-cols-[4.25rem_4.5rem_1fr] gap-2 font-mono text-[10.5px] leading-relaxed">
-      <span className="text-fg-subtle">{formatLogTime(resolved.recordedAt)}</span>
-      <span className={logToneClass[resolved.tone]}>{resolved.label}</span>
-      <span className="min-w-0 wrap-break-word text-fg-muted">
-        {payload.error ? workflowCopy.logDetailFailed : resolved.body}
-        {resolved.diagnostic && (
-          <span className="block text-fg-subtle opacity-80">{resolved.diagnostic}</span>
-        )}
-        {line.storedDetail && (payload.data === undefined || payload.error) && (
-          <button
-            type="button"
-            onClick={() => {
-              if (payload.error) void payload.refetch();
-              else setRequested(true);
-            }}
-            disabled={payload.isFetching}
-            className="ml-1 rounded-md px-1 text-blue transition duration-micro ease-expo hover:bg-blue/12 disabled:opacity-55"
-          >
-            {payload.error ? workflowCopy.logRetry : workflowCopy.logDetailLoad}
-          </button>
-        )}
-      </span>
+      <span className="text-fg-subtle">{formatLogTime(line.at)}</span>
+      <span className={logToneClass[line.tone]}>{line.label}</span>
+      <span className="min-w-0 wrap-break-word text-fg-muted">{line.body}</span>
     </p>
   );
 }

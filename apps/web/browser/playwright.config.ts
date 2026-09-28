@@ -94,14 +94,8 @@ export default defineConfig({
       testMatch: /workflow-inspector\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/workflow-inspector/` },
     },
-    // Shares the inspector page: captured evidence is a third tab and a fifth dock column on the
-    // same production inspector. Its own project so each spec file is matched by exactly one.
-    {
-      name: 'workflow-evidence',
-      testMatch: /workflow-evidence\.spec\.ts/,
-      use: { baseURL: `http://127.0.0.1:${fixturePort}/workflow-inspector/` },
-    },
-    // Shares the inspector page too: the dock's Checkpoint column, its files tab and the fourth tab.
+    // Shares the inspector page: the dock's Checkpoint column, its files tab and the Checkpoints tab.
+    // Its own project so each spec file is matched by exactly one.
     {
       name: 'workflow-checkpoints',
       testMatch: /workflow-checkpoints\.spec\.ts/,

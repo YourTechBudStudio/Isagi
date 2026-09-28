@@ -2,16 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  workflowFrameFixture,
-  workflowOperationFixture,
+  workflowExecutionDetailFixture,
+  workflowSummaryFixture,
 } from '../../../lib/workspace/workflow/test-support.js';
-import { inspectorCopy } from './copy.js';
 import {
   buildDockView,
-  operationDataTabs,
-  operationTabKey,
+  checkpointFilesTabKey,
   shortHash,
-  type DockDataTab,
+  type DockField,
   type DockRow,
 } from './dock.js';
 import {
@@ -20,592 +18,244 @@ import {
   graphFixture,
   instant,
   nested,
-  rootFrame,
-  runStateFixture,
+  rootInvocation,
+  runViewFixture,
   visit,
 } from './test-support.js';
-import { buildTopology } from './topology.js';
+import { addressKey, buildTopology } from './topology.js';
 
-/**
- * The dock's honesty rules, as tests rather than as intentions.
- */
+const root = graphFixture({
+  key: 'root',
+  entry: 'plan',
+  nodes: [
+    { id: 'plan', kind: 'operation' },
+    { id: 'ask', kind: 'operation' },
+    { id: 'phase', kind: 'subgraph', graphKey: 'phase' },
+  ],
+  edges: [
+    { id: 'after-plan', from: 'plan', to: ['ask'] },
+    { id: 'after-ask', from: 'ask', to: ['phase'] },
+    { id: 'after-phase', from: 'phase', to: ['done'] },
+  ],
+  outcomes: [{ id: 'done', kind: 'success' }],
+});
+const phase = graphFixture({
+  key: 'phase',
+  entry: 'work',
+  nodes: [{ id: 'work', kind: 'operation' }],
+  edges: [{ id: 'after-work', from: 'work', to: ['ok'] }],
+  outcomes: [{ id: 'ok', kind: 'success' }],
+});
+const topology = buildTopology(descriptorFixture([root, phase], 'root'));
+const now = clockAt(100);
 
-const now = clockAt(120);
+const fields = (rows: readonly DockRow[]): readonly DockField[] =>
+  rows.filter((row): row is DockField => !('gap' in row));
+const field = (rows: readonly DockRow[], label: string) =>
+  fields(rows).find((row) => row.label === label);
 
-const currentPin = buildTopology(
-  descriptorFixture(
-    [
-      graphFixture({
-        key: 'root',
-        entry: 'writer',
-        nodes: [
-          { id: 'writer', kind: 'operation' },
-          { id: 'reviewer', kind: 'subgraph', graphKey: 'review' },
-        ],
-        edges: [
-          { id: 'after-writer', from: 'writer', to: ['reviewer'] },
-          { id: 'after-reviewer', from: 'reviewer', to: ['shipped'] },
-        ],
-        outcomes: [{ id: 'shipped', kind: 'success' }],
-      }),
-      graphFixture({
-        key: 'review',
-        entry: 'read',
-        nodes: [{ id: 'read', kind: 'operation' }],
-        edges: [{ id: 'done', from: 'read', to: ['ok'] }],
-        outcomes: [{ id: 'ok', kind: 'success' }],
-      }),
-    ],
-    'root',
-  ),
-);
-
-const fields = (rows: readonly DockRow[]) =>
-  rows.filter((row): row is Exclude<DockRow, { gap: true }> => !('gap' in row));
-
-const valueOf = (rows: readonly DockRow[], label: string) =>
-  fields(rows).find((row) => row.label === label)?.value;
-
-test('a node the current pin no longer declares says so, and never borrows a declaration', () => {
-  const state = runStateFixture({
-    executions: [visit({ executionId: 1, nodeId: 'retired-node', status: 'completed' })],
-  });
-
-  const view = buildDockView({
+test('a node the current build no longer declares says so, and never borrows a declaration', () => {
+  const view = runViewFixture({ executions: [visit({ executionId: 1, nodeId: 'gone' })] });
+  const dock = buildDockView({
     selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
+    view,
+    topology,
+    detail: null,
     now,
-  });
-
-  assert.equal(valueOf(view!.declared, 'declared'), inspectorCopy.absentFromCurrentPin);
-  // Recorded stays fully usable: the visit happened, and history is what Trace is for.
-  assert.equal(valueOf(view!.recorded, 'execution'), '1');
-  assert.equal(
-    fields(view!.declared).some((row) => row.label === 'id' && row.value === 'writer'),
-    false,
-    "another node's declaration must never stand in for the missing one",
-  );
+  })!;
+  assert.equal(field(dock.declared, 'declared')?.tone, 'warn');
 });
 
-test('a human wait keeps the operation cards instead of replacing them', () => {
-  const state = runStateFixture({
+test('an execution shows its recorded values once its detail is read, and only its own', () => {
+  const view = runViewFixture({
+    executions: [visit({ executionId: 1, nodeId: 'plan', routedTo: 'ask' })],
+  });
+  const detail = workflowExecutionDetailFixture({
+    executionId: 1,
+    nodeId: 'plan',
+    result: { type: 'complete', update: { draft: 'x' } },
+    decision: { to: 'ask', update: {} },
+    stateAfter: { draft: 'x' },
+  });
+  const withDetail = buildDockView({
+    selection: { kind: 'execution', executionId: 1 },
+    view,
+    topology,
+    detail,
+    now,
+  })!;
+  assert.deepEqual(
+    withDetail.data.map((tab) => tab.name),
+    ['result', 'event', 'decision', 'state_after'],
+  );
+  const result = withDetail.data[0]!;
+  assert.deepEqual(result.kind === 'value' ? result.value : null, detail.result);
+  assert.equal(field(withDetail.recorded, 'routed to')?.dataTab, 'decision');
+
+  // Detail for a different execution — a slow read for the previous selection — is ignored.
+  const stale = buildDockView({
+    selection: { kind: 'execution', executionId: 1 },
+    view,
+    topology,
+    detail: { ...detail, executionId: 9 },
+    now,
+  })!;
+  const staleResult = stale.data[0]!;
+  assert.equal(staleResult.kind === 'value' ? staleResult.value : 'x', undefined);
+});
+
+test('a retry names the execution it retries and links to it; an older build says so', () => {
+  const view = runViewFixture({
+    summary: workflowSummaryFixture({ artifactHash: 'sha256:new0000' }),
+    executions: [
+      visit({ executionId: 1, nodeId: 'plan', status: 'failed', artifactHash: 'sha256:old0000' }),
+      visit({ executionId: 2, nodeId: 'plan', retryOf: 1, artifactHash: 'sha256:new0000' }),
+    ],
+  });
+  const retry = buildDockView({
+    selection: { kind: 'execution', executionId: 2 },
+    view,
+    topology,
+    detail: null,
+    now,
+  })!;
+  assert.deepEqual(field(retry.recorded, 'retry of')?.selection, {
+    kind: 'execution',
+    executionId: 1,
+  });
+  assert.equal(field(retry.recorded, 'build')?.value, 'new0000');
+  const original = buildDockView({
+    selection: { kind: 'execution', executionId: 1 },
+    view,
+    topology,
+    detail: null,
+    now,
+  })!;
+  assert.equal(field(original.recorded, 'build')?.tone, 'warn');
+});
+
+test('a failure names its stage, whose code threw, and that Retry is the repair', () => {
+  const view = runViewFixture({
     executions: [
       visit({
         executionId: 1,
-        nodeId: 'writer',
-        status: 'awaiting',
-        operationSummary: {
-          count: 2,
-          unresolved: 0,
-          evidenceCaptured: 0,
-          capabilities: ['send_agent_prompt'],
-        },
-        wait: {
-          waitId: 9,
-          kind: 'user_input',
-          status: 'armed',
-          label: null,
-          questions: [{ kind: 'text', key: 'why', label: 'Why?' }],
-          answers: null,
-          armedAt: instant(5),
-          deliveredAt: null,
-        },
+        nodeId: 'plan',
+        status: 'failed',
+        error: { stage: 'edge', message: 'bad route', graphKey: 'root', nodeId: 'plan' },
       }),
     ],
   });
-
-  const view = buildDockView({
+  const dock = buildDockView({
     selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
+    view,
+    topology,
+    detail: null,
     now,
-  });
+  })!;
+  assert.equal(field(dock.recorded, 'stage')?.value, 'edge');
+  assert.equal(field(dock.recorded, 'in')?.value, 'root/plan');
+  assert.equal(field(dock.recorded, 'message')?.value, 'bad route');
+  assert.ok(field(dock.recorded, 'repair'));
+});
 
-  assert.equal(view!.operations.kind, 'wait_and_operations');
-  assert.equal(view!.executionId, 1, 'the operations column still has an execution to read for');
-  if (view!.operations.kind === 'wait_and_operations') {
-    assert.equal(valueOf(view!.operations.waitFields, 'wait id'), '#9');
-    assert.equal(valueOf(view!.operations.waitFields, 'answered'), inspectorCopy.waitOpen);
-    assert.equal(valueOf(view!.operations.waitFields, 'answer in'), inspectorCopy.answerInTheBar);
+test('a user wait keeps the operations beside it', () => {
+  const view = runViewFixture({
+    executions: [
+      visit({
+        executionId: 1,
+        nodeId: 'ask',
+        status: 'waiting',
+        endedAt: null,
+        wait: { kind: 'user_continue', label: 'Fix it, then Continue' },
+      }),
+    ],
+  });
+  const dock = buildDockView({
+    selection: { kind: 'execution', executionId: 1 },
+    view,
+    topology,
+    detail: null,
+    now,
+  })!;
+  assert.equal(dock.operations.kind, 'wait_and_operations');
+  if (dock.operations.kind === 'wait_and_operations') {
+    assert.equal(field(dock.operations.waitFields, 'label')?.value, 'Fix it, then Continue');
+    assert.equal(field(dock.operations.waitFields, 'answer in')?.tone, 'dim');
   }
 });
 
-test('an edge and an outcome say they cannot call capabilities', () => {
-  const state = runStateFixture({
-    executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'writer',
-        routing: {
-          edgeId: 'after-writer',
-          attemptIndex: 1,
-          chosen: 'reviewer',
-          updateRef: null,
-          startedAt: instant(2),
-          endedAt: instant(2),
-          failure: null,
+test('a subgraph lists its child invocation’s direct executions and its outcome', () => {
+  const view = runViewFixture({
+    invocations: [
+      rootInvocation(),
+      nested({
+        invocationId: 2,
+        parentExecutionId: 1,
+        graphKey: 'phase',
+        depth: 1,
+        invocation: {
+          status: 'completed',
+          outcome: { outcomeId: 'ok', kind: 'success', reason: null, output: { n: 1 } },
         },
       }),
     ],
-  });
-
-  const routing = buildDockView({
-    selection: { kind: 'routing', executionId: 1 },
-    state,
-    topology: currentPin,
-    now,
-  });
-  assert.equal(routing!.operations.kind, 'none');
-  if (routing!.operations.kind === 'none') {
-    assert.equal(routing!.operations.reason, inspectorCopy.edgesCannotCall);
-  }
-  // The segment is addressed by the execution that ran it — no synthesized node-execution id.
-  assert.equal(valueOf(routing!.recorded, 'segment'), 'routing · execution 1');
-  assert.equal(valueOf(routing!.recorded, 'chose'), 'reviewer');
-});
-
-test('attempts are summarized, and a repaired step still explains what went wrong', () => {
-  const state = runStateFixture({
     executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'writer',
-        status: 'completed',
-        attemptCount: 2,
-        firstArtifactHash: 'sha256:aaaaaaa1',
-        latestArtifactHash: 'sha256:bbbbbbb2',
-        latestAttempt: {
-          attemptId: 2,
-          attemptIndex: 2,
-          artifactHash: 'sha256:bbbbbbb2',
-          status: 'succeeded',
-          invocationKind: 'retry',
-          failure: null,
-          recoveryMode: 'reuse_producer_output',
-          producerArtifactHash: 'sha256:aaaaaaa1',
-        },
-        priorFailures: [
-          {
-            attemptId: 1,
-            attemptIndex: 1,
-            segmentKind: 'node_callback',
-            artifactHash: 'sha256:aaaaaaa1',
-            failure: { code: 'reduction_failed', message: 'field refused', detail: null },
-            repairedByAttemptIndex: 2,
-            repairedByArtifactHash: 'sha256:bbbbbbb2',
-          },
-        ],
-      }),
+      visit({ executionId: 1, nodeId: 'phase', nodeKind: 'subgraph', childInvocationId: 2 }),
+      visit({ executionId: 2, invocationId: 2, nodeId: 'work', startedAt: instant(1) }),
     ],
   });
-
-  const view = buildDockView({
-    selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
+  const dock = buildDockView({
+    selection: { kind: 'element', key: addressKey({ path: [], kind: 'node', id: 'phase' }) },
+    view,
+    topology,
+    detail: null,
     now,
-  });
-
-  assert.equal(valueOf(view!.recorded, 'attempt'), '2 of 2');
-  assert.equal(view!.statusChip, 'repaired');
-  // A visit that started under one pin and was repaired under another reads as first → latest.
-  assert.equal(
-    valueOf(view!.recorded, 'pin'),
-    'aaaaaaa → bbbbbbb',
-    'the digest identifies the pin; the algorithm prefix every hash shares does not',
-  );
-  assert.match(valueOf(view!.recorded, 'attempt 1') ?? '', /field refused/);
-  assert.match(valueOf(view!.recorded, 'repaired by') ?? '', /attempt 2/);
-  assert.match(valueOf(view!.recorded, 'recovery') ?? '', /replayed/);
-});
-
-test('a visit retried twice reads 3 of 3 in warn, and never claims an attempt is hidden', () => {
-  const state = runStateFixture({
-    executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'writer',
-        status: 'completed',
-        attemptCount: 3,
-        latestAttempt: {
-          attemptId: 3,
-          attemptIndex: 3,
-          artifactHash: 'sha256:ccccccc3',
-          status: 'succeeded',
-          invocationKind: 'retry',
-          failure: null,
-          recoveryMode: 'rerun_producer',
-          producerArtifactHash: null,
-        },
-      }),
-    ],
-  });
-
-  const view = buildDockView({
-    selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
-    now,
-  });
-
-  const attempt = fields(view!.recorded).find((row) => row.label === 'attempt');
-  assert.equal(attempt?.value, '3 of 3');
-  assert.equal(attempt?.tone, 'warn');
-  // The rows beneath list every earlier failure, so the attempt row must not suggest a hidden one.
-  assert.ok(fields(view!.recorded).every((row) => !row.value.includes('latest shown')));
-});
-
-test('a retried frame segment uses the same attempt wording as a visit', () => {
-  const state = runStateFixture({
-    frames: [
-      workflowFrameFixture({
-        frameId: 1,
-        status: 'active',
-        entry: {
-          segmentKind: 'graph_entry',
-          segmentRef: null,
-          attemptCount: 2,
-          startedAt: instant(0),
-          endedAt: instant(1),
-          endCertainty: 'observed',
-          firstArtifactHash: 'sha256:pin-1',
-          latestArtifactHash: 'sha256:pin-2',
-          latestAttempt: {
-            attemptId: 2,
-            attemptIndex: 2,
-            artifactHash: 'sha256:pin-2',
-            status: 'succeeded',
-            invocationKind: 'retry',
-            failure: null,
-            recoveryMode: 'rerun_producer',
-            producerArtifactHash: null,
-          },
-          priorFailures: [],
-        },
-      }),
-    ],
-    executions: [],
-  });
-
-  const view = buildDockView({
-    selection: { kind: 'frame_segment', frameId: 1, segment: 'entry' },
-    state,
-    topology: currentPin,
-    now,
-  });
-
-  const attempt = fields(view!.recorded).find((row) => row.label === 'attempt');
-  assert.equal(attempt?.value, '2 of 2');
-  assert.equal(attempt?.tone, 'warn');
-  assert.ok(fields(view!.recorded).every((row) => !row.value.includes('latest shown')));
-});
-
-test('a frame whose entry threw is inspectable through the frame, with no execution to hang from', () => {
-  const state = runStateFixture({
-    frames: [
-      workflowFrameFixture({
-        frameId: 1,
-        // A frame whose setup threw never became active; there is no `failed` frame status, and
-        // the failure lives on the entry segment where it actually happened.
-        status: 'initializing',
-        entry: {
-          segmentKind: 'graph_entry',
-          segmentRef: null,
-          attemptCount: 1,
-          startedAt: instant(0),
-          endedAt: instant(1),
-          endCertainty: 'observed',
-          firstArtifactHash: 'sha256:pin-1',
-          latestArtifactHash: 'sha256:pin-1',
-          latestAttempt: {
-            attemptId: 1,
-            attemptIndex: 1,
-            artifactHash: 'sha256:pin-1',
-            status: 'failed',
-            invocationKind: 'initial',
-            failure: { code: 'graph_init_failed', message: 'init threw', detail: null },
-            recoveryMode: 'rerun_producer',
-            producerArtifactHash: null,
-          },
-          priorFailures: [],
-        },
-      }),
-    ],
-    executions: [],
-  });
-
-  const view = buildDockView({
-    selection: { kind: 'frame_segment', frameId: 1, segment: 'entry' },
-    state,
-    topology: currentPin,
-    now,
-  });
-
-  assert.equal(view!.kindChip, 'graph entry');
-  assert.equal(valueOf(view!.recorded, 'message'), 'init threw');
-  assert.equal(valueOf(view!.recorded, 'status'), 'failed');
-});
-
-test('a frame segment that was never attempted is distinguishable from one that failed', () => {
-  const state = runStateFixture({ frames: [rootFrame()], executions: [] });
-  const view = buildDockView({
-    selection: { kind: 'frame_segment', frameId: 1, segment: 'output' },
-    state,
-    topology: currentPin,
-    now,
-  });
-  assert.equal(view!.statusChip, inspectorCopy.notAttempted);
-});
-
-test('a produced value, an absent one and a JSON null are three different tabs', () => {
-  const state = runStateFixture({
-    executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'writer',
-        status: 'completed',
-        stateInRef: { payloadRef: 'p:1', byteSize: 120, mediaType: 'application/json' },
-        // The step produced JSON `null`, which is a value it produced.
-        candidateRef: { inline: null },
-        // The step never produced an update at all.
-        updateRef: null,
-        stateOutRef: { inline: { draft: '' } },
-      }),
-    ],
-  });
-
-  const view = buildDockView({
-    selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
-    now,
-  });
-
-  const tabs = new Map(
-    view!.data.map((tab) => [tab.name, tab.kind === 'payload' ? tab.slot : undefined]),
-  );
-  assert.deepEqual(tabs.get('candidate'), { inline: null });
-  assert.equal(tabs.get('update'), null);
-  assert.deepEqual(tabs.get('state.in'), {
-    payloadRef: 'p:1',
-    byteSize: 120,
-    mediaType: 'application/json',
-  });
-});
-
-test('a subgraph reports its nested totals rather than inventing operations of its own', () => {
-  const state = runStateFixture({
-    frames: [
-      rootFrame(),
-      nested({ frameId: 2, parentExecutionId: 1, parentFrameId: 1, graphKey: 'review', depth: 1 }),
-    ],
-    executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'reviewer',
-        nodeKind: 'subgraph',
-        childFrameId: 2,
-        childFrame: workflowFrameFixture({
-          frameId: 2,
-          parentExecutionId: 1,
-          parentFrameId: 1,
-          graphKey: 'review',
-          depth: 1,
-          executionCount: 3,
-        }),
-      }),
-      visit({
-        executionId: 2,
-        frameId: 2,
-        graphKey: 'review',
-        nodeId: 'read',
-        operationSummary: {
-          count: 4,
-          unresolved: 1,
-          evidenceCaptured: 0,
-          capabilities: ['send_agent_prompt'],
-        },
-      }),
-    ],
-  });
-
-  const view = buildDockView({
-    selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
-    now,
-  });
-
-  assert.equal(view!.operations.kind, 'none');
-  assert.equal(view!.nested?.entered, true);
-  assert.equal(view!.nested?.executions, 3);
-  assert.equal(view!.nested?.operations, 4);
-  // Declared names the mapping callbacks as roles and does not claim to know their fields.
-  assert.equal(valueOf(view!.declared, 'parameters'), inspectorCopy.parametersRole);
-  assert.equal(valueOf(view!.declared, 'output'), inspectorCopy.outputMappingRole);
-});
-
-test('a label capture failure is a diagnostic about a name, not a failed step', () => {
-  const state = runStateFixture({
-    executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'writer',
-        status: 'completed',
-        displayName: null,
-        labelDiagnostic: 'label callback threw',
-      }),
-    ],
-  });
-  const view = buildDockView({
-    selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
-    now,
-  });
-  assert.match(valueOf(view!.recorded, 'label') ?? '', /the step still ran/);
-  assert.equal(view!.statusChip, 'completed');
-});
-
-test('a shortened pin drops the algorithm prefix rather than the digest', () => {
-  assert.equal(shortHash('sha256:0f2c1abdeadbeef'), '0f2c1ab');
-  assert.equal(shortHash('0f2c1abdeadbeef'), '0f2c1ab');
-});
-
-/**
- * Operation payloads, and the subgraph's way in.
- */
-
-test('an operation contributes a tab for every payload it actually produced, and no others', () => {
-  const tabs = operationDataTabs([
-    workflowOperationFixture({
-      operationKey: 'op-a',
-      callIndex: 0,
-      requestRef: { payloadRef: 'p:req', byteSize: 2_180, mediaType: 'text/plain' },
-      receiptRef: { inline: { turnId: 't-88' } },
-      // Produced JSON `null` — a value the operation produced, not an absent one.
-      resultRef: { inline: null },
-      lateEvidenceRef: null,
-    }),
-    workflowOperationFixture({
-      operationKey: 'op-b',
-      callIndex: 1,
-      receiptRef: null,
-      resultRef: null,
-      lateEvidenceRef: { inline: { turnId: 't-late' } },
-    }),
-  ]);
-
+  })!;
+  assert.equal(dock.operations.kind, 'none');
   assert.deepEqual(
-    tabs.map((tab) => tab.name),
-    ['op1.request', 'op1.receipt', 'op1.result', 'op2.request', 'op2.lateEvidence'],
-    'a never-produced slot gets no tab at all',
+    dock.nested?.children.map((child) => child.executionId),
+    [2],
   );
-  // Named by call position, keyed by the operation that made the call.
-  assert.deepEqual(
-    tabs.map((tab) => tab.key),
-    [
-      operationTabKey('op-a', 'request'),
-      operationTabKey('op-a', 'receipt'),
-      operationTabKey('op-a', 'result'),
-      operationTabKey('op-b', 'request'),
-      operationTabKey('op-b', 'lateEvidence'),
-    ],
-  );
-  // A recorded null is still selectable and still a value.
-  assert.deepEqual(slotOf(tabs[2]), { inline: null });
-  // A stored request keeps its reference and size, so nothing is fetched to show a tab.
-  assert.deepEqual(slotOf(tabs[0]), {
-    payloadRef: 'p:req',
-    byteSize: 2_180,
-    mediaType: 'text/plain',
-  });
+  assert.equal(field(dock.recorded, 'outcome')?.value, 'ok · success');
+  assert.ok(dock.data.some((tab) => tab.name === 'output'));
 });
 
-test('a subgraph lists the child frame’s direct executions, not its descendants', () => {
-  const state = runStateFixture({
-    frames: [
-      rootFrame(),
-      nested({ frameId: 2, parentExecutionId: 1, parentFrameId: 1, graphKey: 'review', depth: 1 }),
-      nested({ frameId: 3, parentExecutionId: 3, parentFrameId: 2, graphKey: 'rules', depth: 2 }),
-    ],
-    executions: [
-      visit({
-        executionId: 1,
-        nodeId: 'reviewer',
-        nodeKind: 'subgraph',
-        childFrameId: 2,
-        childFrame: workflowFrameFixture({
-          frameId: 2,
-          parentExecutionId: 1,
-          parentFrameId: 1,
-          graphKey: 'review',
-          depth: 1,
-          executionCount: 2,
-        }),
-      }),
-      visit({
-        executionId: 2,
-        frameId: 2,
-        nodeId: 'read',
-        startedAt: instant(1),
-        status: 'completed',
-      }),
-      visit({
-        executionId: 3,
-        frameId: 2,
-        nodeId: 'deep-check',
-        nodeKind: 'subgraph',
-        childFrameId: 3,
-        startedAt: instant(2),
-      }),
-      // A grandchild: reachable by selecting `deep-check`, never listed here.
-      visit({ executionId: 4, frameId: 3, nodeId: 'scan', startedAt: instant(3) }),
-    ],
+test('a graph invocation shows its parameters, state and outcome', () => {
+  const view = runViewFixture({
+    invocations: [rootInvocation({ parameters: { a: 1 }, state: { draft: '' } })],
   });
-
-  const view = buildDockView({
-    selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
+  const dock = buildDockView({
+    selection: { kind: 'invocation', invocationId: 1 },
+    view,
+    topology,
+    detail: null,
     now,
-  });
-
-  assert.equal(view!.nested?.entered, true);
+  })!;
   assert.deepEqual(
-    view!.nested?.children.map((child) => child.executionId),
-    [2, 3],
-    'direct children only; a nested subgraph is selected in turn rather than flattened',
+    dock.data.map((tab) => tab.name),
+    ['parameters', 'state'],
   );
-  assert.deepEqual(
-    view!.nested?.children.map((child) => child.selection),
-    [
-      { kind: 'execution', executionId: 2 },
-      { kind: 'execution', executionId: 3 },
-    ],
-  );
-  assert.equal(view!.nested?.children[1]?.isSubgraph, true);
+  assert.equal(dock.kindChip, 'graph');
 });
 
-test('a subgraph that has not opened its graph says so rather than showing an empty one', () => {
-  const state = runStateFixture({
+test('a checkpoint execution gets the checkpoint column and a files tab', () => {
+  const view = runViewFixture({
     executions: [
-      visit({ executionId: 1, nodeId: 'reviewer', nodeKind: 'subgraph', childFrameId: null }),
+      visit({ executionId: 1, nodeId: 'save', nodeKind: 'checkpoint', checkpointId: 7 }),
     ],
   });
-  const view = buildDockView({
+  const dock = buildDockView({
     selection: { kind: 'execution', executionId: 1 },
-    state,
-    topology: currentPin,
+    view,
+    topology,
+    detail: null,
     now,
-  });
-  assert.equal(view!.nested?.entered, false);
-  assert.deepEqual(view!.nested?.children, []);
-  assert.equal(view!.nested?.executions, 0);
+  })!;
+  assert.deepEqual(dock.checkpoint, { checkpointId: 7, state: 'saved' });
+  assert.ok(dock.data.some((tab) => tab.key === checkpointFilesTabKey));
 });
 
-/** Operation tabs are always payload tabs; this narrows the union without asserting it twice. */
-function slotOf(tab: DockDataTab | undefined) {
-  return tab !== undefined && tab.kind === 'payload' ? tab.slot : undefined;
-}
+test('a shortened hash drops the algorithm prefix rather than the digest', () => {
+  assert.equal(shortHash('sha256:abcdef0123'), 'abcdef0');
+  assert.equal(shortHash('abcdef0123'), 'abcdef0');
+});

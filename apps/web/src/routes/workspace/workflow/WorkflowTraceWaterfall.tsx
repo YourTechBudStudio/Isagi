@@ -4,7 +4,7 @@ import { inspectorCopy } from './copy.js';
 import { verticalIndex } from './list-navigation.js';
 import { selectionEquals, type InspectorSelection } from './selection.js';
 import { formatDuration } from './timing.js';
-import type { TraceExecutionRow, TraceFrameRow, TraceModel } from './trace.js';
+import type { TraceExecutionRow, TraceInvocationRow, TraceModel } from './trace.js';
 
 type Fraction = (at: number) => number;
 type BandOf = (interval: { readonly start: number; readonly end: number | null }) => {
@@ -19,14 +19,9 @@ type BandOf = (interval: { readonly start: number; readonly end: number | null }
  * would turn something nobody observed into a measurement.
  */
 function elapsedOf(
-  row: {
-    readonly startedAt: number;
-    readonly endedAt: number | null;
-    readonly endUnknown: boolean;
-  },
+  row: { readonly startedAt: number; readonly endedAt: number | null },
   now: number,
-): number | null {
-  if (row.endUnknown) return null;
+): number {
   return Math.max(0, (row.endedAt ?? now) - row.startedAt);
 }
 
@@ -38,10 +33,9 @@ const overscan = 8;
  * What actually ran, in order, on one run clock.
  *
  * Every visit is a row, including every revisit of the same node and every visit of a node the
- * current definition no longer declares. A repaired execution stays *one* row with its attempts
- * summarized, because it is one visit that was tried twice — not two visits.
+ * current build no longer declares. A Retry is its own row, marked with the execution it retries.
  *
- * Callback time and wait time are drawn as separate bars rather than summed. A node that thought for
+ * Run time and wait time are drawn as separate bars rather than summed. A node that thought for
  * two seconds and then waited nine minutes for a person is not a nine-minute-two-second step, and
  * one bar would say that it was.
  *
@@ -127,7 +121,9 @@ export function WorkflowTraceWaterfall({
     }
   }, [selectedIndex]);
 
-  if (model.rows.length === 0) {
+  // A run still being prepared has no executions yet, but its environment events are the whole
+  // story so far, so the lane is drawn as soon as there is anything in it.
+  if (model.rows.length === 0 && model.runEvents.length === 0) {
     return (
       <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
         <p className="font-mono text-[12px] text-fg-subtle">{inspectorCopy.traceEmpty}</p>
@@ -157,6 +153,19 @@ export function WorkflowTraceWaterfall({
               />
             );
           })}
+          {model.reloads.map((reload, index) => (
+            <span
+              key={`reload-${index}`}
+              data-marker="code-reloaded"
+              title={inspectorCopy.traceReloaded(reload.to)}
+              className="absolute top-0 bottom-0 border-l border-dashed border-violet/60"
+              style={{ left: `${fraction(reload.at) * 100}%` }}
+            >
+              <span className="absolute top-2 left-1 font-mono text-[10px] text-violet">
+                {inspectorCopy.traceReloadLabel}
+              </span>
+            </span>
+          ))}
           <span
             className="absolute top-0 bottom-0 border-l border-amber/55"
             style={{ left: `${fraction(clockEnd) * 100}%` }}
@@ -168,64 +177,70 @@ export function WorkflowTraceWaterfall({
         </span>
       </div>
 
-      <div
-        ref={scrollRef}
-        className="relative min-h-0 flex-1 overflow-y-auto"
-        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        role="tree"
-        aria-label="Executions"
-        tabIndex={0}
-        onKeyDown={(event) => {
-          const next = verticalIndex(event.key, selectedIndex, rows.length);
-          if (next !== null) {
-            onSelect(rows[next]!.selection);
-          } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-            const row = rows[selectedIndex];
-            if (
-              row?.kind === 'execution' &&
-              row.expandable &&
-              row.expanded === (event.key === 'ArrowLeft')
-            ) {
-              onToggleExpanded(row.executionId);
+      <RunEventLane events={model.runEvents} fraction={fraction} />
+
+      {model.rows.length === 0 ? (
+        <p className="px-4 py-3 font-mono text-[12px] text-fg-subtle">{inspectorCopy.traceEmpty}</p>
+      ) : (
+        <div
+          ref={scrollRef}
+          className="relative min-h-0 flex-1 overflow-y-auto"
+          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+          role="tree"
+          aria-label="Executions"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            const next = verticalIndex(event.key, selectedIndex, rows.length);
+            if (next !== null) {
+              onSelect(rows[next]!.selection);
+            } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+              const row = rows[selectedIndex];
+              if (
+                row?.kind === 'execution' &&
+                row.expandable &&
+                row.expanded === (event.key === 'ArrowLeft')
+              ) {
+                onToggleExpanded(row.executionId);
+              }
+            } else {
+              return;
             }
-          } else {
-            return;
-          }
-          event.preventDefault();
-        }}
-      >
-        <div style={{ height: rows.length * rowHeight }} className="relative">
-          {windowed.map((row, offset) =>
-            row.kind === 'frame' ? (
-              <FrameRow
-                key={`frame-${row.frameId}`}
-                row={row}
-                top={(first + offset) * rowHeight}
-                selected={selectionEquals(row.selection, selection)}
-                pauses={model.pauses}
-                now={now}
-                fraction={fraction}
-                bandOf={bandOf}
-                onSelect={onSelect}
-              />
-            ) : (
-              <Row
-                key={`execution-${row.executionId}`}
-                row={row}
-                top={(first + offset) * rowHeight}
-                selected={selectionEquals(row.selection, selection)}
-                live={row.executionId === liveExecutionId}
-                pauses={model.pauses}
-                now={now}
-                fraction={fraction}
-                bandOf={bandOf}
-                onSelect={onSelect}
-                onToggleExpanded={onToggleExpanded}
-              />
-            ),
-          )}
+            event.preventDefault();
+          }}
+        >
+          <div style={{ height: rows.length * rowHeight }} className="relative">
+            {windowed.map((row, offset) =>
+              row.kind === 'invocation' ? (
+                <InvocationRow
+                  key={`invocation-${row.invocationId}`}
+                  row={row}
+                  top={(first + offset) * rowHeight}
+                  selected={selectionEquals(row.selection, selection)}
+                  pauses={model.pauses}
+                  now={now}
+                  fraction={fraction}
+                  bandOf={bandOf}
+                  onSelect={onSelect}
+                />
+              ) : (
+                <Row
+                  key={`execution-${row.executionId}`}
+                  row={row}
+                  top={(first + offset) * rowHeight}
+                  selected={selectionEquals(row.selection, selection)}
+                  live={row.executionId === liveExecutionId}
+                  pauses={model.pauses}
+                  now={now}
+                  fraction={fraction}
+                  bandOf={bandOf}
+                  onSelect={onSelect}
+                  onToggleExpanded={onToggleExpanded}
+                />
+              ),
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -290,28 +305,19 @@ function Row({
             #{row.visitIndex + 1}
           </span>
         )}
-        {row.displayName && (
-          <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.displayName}</span>
+        {row.label && (
+          <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.label}</span>
         )}
-        {row.evidenceCaptured > 0 && (
-          <EvidenceCount count={row.evidenceCaptured} inside={row.isSubgraph} />
-        )}
-        {row.labelDiagnostic && (
+        {row.retryOf !== null && (
           <span
-            className="flex-none font-mono text-[10.5px] text-amber"
-            title={row.labelDiagnostic}
+            data-retry-of={row.retryOf}
+            className="flex-none rounded-full border border-amber/35 px-1.5 font-mono text-[10px] leading-4 text-amber"
           >
-            label?
+            {inspectorCopy.retryOf(row.retryOf)}
           </span>
         )}
-        <span
-          className={`ml-auto flex-none font-mono text-[11.5px] ${
-            elapsedOf(row, now) === null ? 'text-amber' : 'text-fg-muted'
-          }`}
-        >
-          {elapsedOf(row, now) === null
-            ? inspectorCopy.durationUnknown
-            : formatDuration(elapsedOf(row, now)!)}
+        <span className="ml-auto flex-none font-mono text-[11.5px] text-fg-muted">
+          {formatDuration(elapsedOf(row, now))}
         </span>
       </span>
 
@@ -342,16 +348,11 @@ function Row({
           );
         })}
         {row.routing && (
-          <button
-            type="button"
-            aria-label={`Routing for ${row.nodeId}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(row.routing!.selection);
-            }}
-            className={`absolute top-2.75 size-2.5 rotate-45 rounded-[1px] border ${
-              row.routing.failed ? 'border-error bg-error/40' : 'border-blue bg-blue/28'
-            }`}
+          <span
+            aria-hidden
+            title={inspectorCopy.routedTo(row.routing.chosen)}
+            data-marker="routing"
+            className="absolute top-2.75 size-2.5 rotate-45 rounded-[1px] border border-blue bg-blue/28"
             style={{ left: `calc(${fraction(row.routing.at) * 100}% - 5px)` }}
           />
         )}
@@ -373,6 +374,54 @@ function Row({
             {row.outcome.outcomeId}
           </button>
         )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The run's own and its environment's events on the run clock: launched, worktree created, setup
+ * finished or failed, surface created, retried, failed, completed. Each marker names itself, and the
+ * list is also read out in order for anyone not looking at the clock.
+ */
+function RunEventLane({
+  events,
+  fraction,
+}: {
+  readonly events: TraceModel['runEvents'];
+  readonly fraction: Fraction;
+}) {
+  if (events.length === 0) return null;
+  return (
+    <div
+      role="list"
+      aria-label={inspectorCopy.traceRunEventsLabel}
+      data-trace-lane="run-events"
+      className="relative flex h-7 flex-none items-center border-b border-line/20"
+    >
+      <span className="flex w-85 flex-none items-center pl-3 font-mono text-[10.5px] tracking-[0.06em] text-fg-subtle uppercase">
+        {inspectorCopy.traceRunEvents}
+      </span>
+      <span className="relative h-full flex-1 border-l border-line/18">
+        {events.map((event) => (
+          <span
+            key={event.eventId}
+            role="listitem"
+            aria-label={event.message}
+            title={event.message}
+            data-run-event={event.kind}
+            className={`absolute top-2.25 size-2.5 rounded-full border ${
+              event.tone === 'bad'
+                ? 'border-error bg-error/40'
+                : event.tone === 'ok'
+                  ? 'border-green bg-green/35'
+                  : event.category === 'environment'
+                    ? 'border-cyan bg-cyan/30'
+                    : 'border-line bg-line/40'
+            }`}
+            style={{ left: `calc(${fraction(event.at) * 100}% - 5px)` }}
+          />
+        ))}
       </span>
     </div>
   );
@@ -400,7 +449,7 @@ function Legend({
  * read as the same kind of thing. Its markers are the only way to reach a graph's setup and result
  * code, which is what a run whose init threw has instead of executions.
  */
-function FrameRow({
+function InvocationRow({
   row,
   top,
   selected,
@@ -410,7 +459,7 @@ function FrameRow({
   bandOf,
   onSelect,
 }: {
-  readonly row: TraceFrameRow;
+  readonly row: TraceInvocationRow;
   readonly top: number;
   readonly selected: boolean;
   readonly pauses: TraceModel['pauses'];
@@ -424,7 +473,7 @@ function FrameRow({
       role="treeitem"
       aria-selected={selected}
       aria-level={row.depth + 1}
-      data-frame={row.frameId}
+      data-invocation={row.invocationId}
       className={`absolute right-0 left-0 flex cursor-pointer items-center border-l-2 ${
         selected ? 'border-l-blue bg-blue/12' : 'border-l-transparent hover:bg-line/12'
       }`}
@@ -439,7 +488,7 @@ function FrameRow({
         <span
           aria-hidden
           className={`size-1.5 flex-none rotate-45 ${
-            row.status === 'failed'
+            row.outcome?.kind === 'failure'
               ? 'bg-error'
               : row.status === 'completed'
                 ? 'bg-green'
@@ -450,17 +499,11 @@ function FrameRow({
         <span className="flex-none font-mono text-[10.5px] tracking-[0.06em] text-fg-subtle uppercase">
           graph
         </span>
-        {row.displayName && (
-          <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.displayName}</span>
+        {row.label && (
+          <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.label}</span>
         )}
-        <span
-          className={`ml-auto flex-none font-mono text-[11.5px] ${
-            elapsedOf(row, now) === null ? 'text-amber' : 'text-fg-muted'
-          }`}
-        >
-          {elapsedOf(row, now) === null
-            ? inspectorCopy.durationUnknown
-            : formatDuration(elapsedOf(row, now)!)}
+        <span className="ml-auto flex-none font-mono text-[11.5px] text-fg-muted">
+          {formatDuration(elapsedOf(row, now))}
         </span>
       </span>
 
@@ -484,65 +527,27 @@ function FrameRow({
               aria-hidden
               data-bar={bar.kind}
               className={`absolute top-3.5 h-1 rounded-xs ${
-                row.status === 'failed' ? 'bg-error/40' : 'bg-violet/35'
+                row.outcome?.kind === 'failure' ? 'bg-error/40' : 'bg-violet/35'
               }`}
               style={{ left: `${band.left * 100}%`, width: `${Math.max(band.width * 100, 0.25)}%` }}
             />
           );
         })}
-        {row.entry && (
-          <button
-            type="button"
-            aria-label={`Graph entry for ${row.graphKey}`}
-            data-marker="entry"
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(row.entry!.selection);
-            }}
-            className={`absolute top-2.75 size-2.5 rounded-xs border ${
-              row.entry.failed ? 'border-error bg-error/40' : 'border-violet bg-violet/28'
-            }`}
-            style={{ left: `calc(${fraction(row.entry.at) * 100}% - 5px)` }}
-          />
-        )}
-        {row.output && (
-          <button
-            type="button"
-            aria-label={`Graph output for ${row.graphKey}`}
+        {row.outcome && (
+          <span
             data-marker="output"
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect(row.output!.selection);
-            }}
             className={`absolute top-2.5 rounded-full border px-1.5 font-mono text-[9.5px] leading-3 ${
-              row.output.kind === 'failure'
+              row.outcome.kind === 'failure'
                 ? 'border-error/50 bg-error/12 text-error'
-                : row.output.kind === 'unresolved'
-                  ? 'border-amber/50 bg-amber/12 text-amber'
-                  : 'border-green/50 bg-green/12 text-green'
+                : 'border-green/50 bg-green/12 text-green'
             }`}
-            style={{ left: `calc(${fraction(row.output.at) * 100}% + 6px)` }}
+            style={{ left: `calc(${fraction(row.outcome.at) * 100}% + 6px)` }}
           >
-            {row.output.label}
-          </button>
+            {row.outcome.label}
+          </span>
         )}
       </span>
     </div>
-  );
-}
-
-/**
- * How much this row kept, as a count rather than a control.
- *
- * Clicking the row still selects the visit; the badge changes nothing. A subgraph spells it
- * `n inside` because the number covers the whole child frame, and a bare number beside a nested
- * row's own bare number would invite a reader to add two figures that already contain each other.
- */
-function EvidenceCount({ count, inside }: { readonly count: number; readonly inside: boolean }) {
-  return (
-    <span className="flex-none rounded-full border border-cyan/35 px-1.5 font-mono text-[10px] leading-4 text-cyan">
-      {inside ? inspectorCopy.evidenceInside(count) : count}
-    </span>
   );
 }
 
@@ -552,15 +557,19 @@ function dotTone(status: TraceExecutionRow['status']): string {
       return 'bg-error';
     case 'completed':
       return 'bg-green';
-    case 'awaiting':
+    case 'waiting':
       return 'bg-waiting';
+    case 'interrupted':
+      return 'bg-amber';
+    case 'cancelled':
+      return 'bg-idle';
     default:
       return 'bg-working';
   }
 }
 
 function barTone(
-  kind: 'callback' | 'wait' | 'span',
+  kind: 'run' | 'wait' | 'span',
   status: TraceExecutionRow['status'],
   open: boolean,
 ): string {
@@ -569,6 +578,7 @@ function barTone(
     return open ? 'bg-gradient-to-r from-amber/55 to-amber/10' : 'bg-green/28';
   }
   if (status === 'failed') return 'bg-error/85';
+  if (status === 'interrupted') return 'bg-amber/70';
   return open ? 'bg-working/80' : 'bg-green/80';
 }
 

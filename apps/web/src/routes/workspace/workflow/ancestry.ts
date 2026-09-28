@@ -1,85 +1,73 @@
-import type { WorkflowExecutionDto } from '@isagi/contracts';
+import type { WorkflowExecutionSummaryDto } from '@isagi/contracts';
 
-import type { WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
-import { addressKey, type DeclaredAddress } from './topology.js';
+import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
+import { addressKey, type DeclaredAddress, type DeclaredTopology } from './topology.js';
 
 /**
- * Where a recorded visit sits in the structure, derived from frames rather than from graph keys.
+ * Where a recorded execution sits in the structure, derived from graph invocations rather than
+ * from graph keys.
  *
- * An execution names its frame; a frame names the subgraph execution that opened it; that execution
- * names a node. Walking that chain gives the registration path — the same identity `topology.ts`
- * builds from the descriptor — so a reused graph's two invocations land on two different addresses
- * instead of merging.
- *
- * The walk is over recorded facts only. Nothing here consults the current pin, which is what lets a
- * visit of a node the current definition no longer declares keep an honest address in Trace.
+ * An execution names its invocation; an invocation names the subgraph execution that entered it;
+ * that execution names a node. Walking that chain gives the registration path — the same identity
+ * `topology.ts` builds from the descriptor — so a reused graph's two invocations land on two
+ * different addresses instead of merging.
  */
-
 export interface ExecutionAncestry {
   /** Subgraph node ids from the root inwards. */
   readonly path: readonly string[];
-  /** Execution ids of the enclosing subgraph visits, outermost first. */
+  /** Execution ids of the enclosing subgraph executions, outermost first. */
   readonly ancestorExecutionIds: readonly number[];
-  /** False when a frame in the chain is not in the projection, so the path is a best effort. */
-  readonly complete: boolean;
 }
 
 export function executionAncestry(
-  state: WorkflowRunState,
-  execution: WorkflowExecutionDto,
+  view: WorkflowRunView,
+  execution: WorkflowExecutionSummaryDto,
 ): ExecutionAncestry {
   const path: string[] = [];
   const ancestors: number[] = [];
-  let frameId: number | null = execution.frameId;
-  let complete = true;
-  // Bounded by containment depth, which the verifier caps; the guard is against a malformed
-  // projection, not against a legitimately deep graph.
-  for (let hops = 0; frameId !== null && hops < 64; hops += 1) {
-    const frame = state.frames.get(frameId);
-    if (!frame) {
-      complete = false;
-      break;
-    }
-    if (frame.parentExecutionId === null) break;
-    const parent = state.executions.get(frame.parentExecutionId);
-    if (!parent) {
-      complete = false;
-      break;
-    }
+  let invocationId: number | null = execution.invocationId;
+  // Bounded by containment depth, which the verifier caps; the guard is against a malformed tree.
+  for (let hops = 0; invocationId !== null && hops < 64; hops += 1) {
+    const invocation = view.invocations.get(invocationId);
+    if (!invocation || invocation.parentExecutionId === null) break;
+    const parent = view.executions.get(invocation.parentExecutionId);
+    if (!parent) break;
     path.unshift(parent.nodeId);
     ancestors.unshift(parent.executionId);
-    frameId = parent.frameId;
+    invocationId = parent.invocationId;
   }
-  return { path, ancestorExecutionIds: ancestors, complete };
+  return { path, ancestorExecutionIds: ancestors };
 }
 
-/** The declared address a visit was a visit *to*. */
+/** The declared address an execution was a visit *to*. */
 export function executionAddress(
-  state: WorkflowRunState,
-  execution: WorkflowExecutionDto,
+  view: WorkflowRunView,
+  execution: WorkflowExecutionSummaryDto,
 ): DeclaredAddress {
-  return { path: executionAncestry(state, execution).path, kind: 'node', id: execution.nodeId };
+  return { path: executionAncestry(view, execution).path, kind: 'node', id: execution.nodeId };
 }
 
 export function executionAddressKey(
-  state: WorkflowRunState,
-  execution: WorkflowExecutionDto,
+  view: WorkflowRunView,
+  execution: WorkflowExecutionSummaryDto,
 ): string {
-  return addressKey(executionAddress(state, execution));
+  return addressKey(executionAddress(view, execution));
 }
 
 /**
- * The edge element a visit's routing segment ran.
- *
- * Routing belongs to the source node's execution, so the edge's address is that execution's own
- * registration path with the recorded edge id. A visit whose routing never started has no edge
- * address at all — an edge the run has not reached is not an edge it ran.
+ * The edge element an execution's routing ran: the one edge declared out of its node, at the same
+ * registration path. Null when the execution has not routed yet or the current build does not
+ * declare that edge.
  */
-export function routingAddress(
-  state: WorkflowRunState,
-  execution: WorkflowExecutionDto,
-): DeclaredAddress | null {
-  const edgeId = execution.routing?.edgeId ?? null;
-  if (edgeId === null) return null;
-  return { path: executionAncestry(state, execution).path, kind: 'edge', id: edgeId };
+export function routingEdgeKey(
+  view: WorkflowRunView,
+  topology: DeclaredTopology | null,
+  execution: WorkflowExecutionSummaryDto,
+): string | null {
+  if (execution.routedTo === null || topology === null) return null;
+  const nodeKey = executionAddressKey(view, execution);
+  const link = topology.links.find(
+    (candidate) => candidate.fromKey === nodeKey && candidate.destinationId === null,
+  );
+  return link?.edgeKey ?? null;
 }

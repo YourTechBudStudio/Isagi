@@ -54,26 +54,15 @@ import type {
   WorkspaceSnapshot,
   AdvanceWorkflowInput,
   GetWorkflowCheckpointOutput,
-  GetWorkflowEvidenceOutput,
-  GetWorkflowOperationOutput,
-  GetWorkflowPayloadOutput,
+  GetWorkflowExecutionOutput,
   GetWorkflowRunOutput,
   GetWorkflowStructureOutput,
-  ListRunExecutionsQuery,
-  ListRunExecutionsOutput,
   ListWorkflowDescriptorsInput,
   ListWorkflowDescriptorsOutput,
   ListWorkflowEventsQuery,
   ListWorkflowEventsOutput,
-  ListWorkflowCheckpointInventoryOutput,
-  ListWorkflowCheckpointManifestOutput,
   ListWorkflowCheckpointsOutput,
   ListWorkflowCheckpointsQuery,
-  ListWorkflowEvidenceOutput,
-  ListWorkflowEvidenceQuery,
-  PaginationQuery,
-  ListWorkflowOperationsQuery,
-  ListWorkflowOperationsOutput,
   ListWorkflowRunsQuery,
   ListWorkflowRunsOutput,
   StartWorkflowInput,
@@ -180,22 +169,11 @@ export function listWorkflowRuns(
 
 export function getWorkflowStructure(
   runId: number,
+  artifactHash: string,
 ): Effect.Effect<GetWorkflowStructureOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowStructure(runId)));
-}
-
-export function listWorkflowExecutions(
-  runId: number,
-  query: ListRunExecutionsQuery,
-): Effect.Effect<ListRunExecutionsOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowExecutions(runId, query)));
-}
-
-export function listWorkflowOperations(
-  runId: number,
-  query: ListWorkflowOperationsQuery,
-): Effect.Effect<ListWorkflowOperationsOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowOperations(runId, query)));
+  return getClient().pipe(
+    Effect.flatMap((client) => client.getWorkflowStructure(runId, artifactHash)),
+  );
 }
 
 export function listWorkflowEvents(
@@ -205,45 +183,10 @@ export function listWorkflowEvents(
   return getClient().pipe(Effect.flatMap((client) => client.listWorkflowEvents(runId, query)));
 }
 
-export function getWorkflowPayload(
-  runId: number,
-  payloadRef: string,
-): Effect.Effect<GetWorkflowPayloadOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowPayload(runId, payloadRef)));
-}
-
-export function listWorkflowEvidence(
-  runId: number,
-  query: ListWorkflowEvidenceQuery,
-): Effect.Effect<ListWorkflowEvidenceOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowEvidence(runId, query)));
-}
-
-export function getWorkflowEvidence(
-  runId: number,
-  evidenceKey: string,
-): Effect.Effect<GetWorkflowEvidenceOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.getWorkflowEvidence(runId, evidenceKey)),
-  );
-}
-
-export function getWorkflowOperation(
-  runId: number,
-  operationKey: string,
-): Effect.Effect<GetWorkflowOperationOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.getWorkflowOperation(runId, operationKey)),
-  );
-}
-
-export function fetchWorkflowEvidenceContent(
-  runId: number,
-  evidenceKey: string,
-): Effect.Effect<Blob, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.fetchWorkflowEvidenceContent(runId, evidenceKey)),
-  );
+export function getWorkflowExecution(
+  executionId: number,
+): Effect.Effect<GetWorkflowExecutionOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowExecution(executionId)));
 }
 
 export function listWorkflowCheckpoints(
@@ -254,43 +197,17 @@ export function listWorkflowCheckpoints(
 }
 
 export function getWorkflowCheckpoint(
-  runId: number,
-  checkpointId: string,
+  checkpointId: number,
 ): Effect.Effect<GetWorkflowCheckpointOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.getWorkflowCheckpoint(runId, checkpointId)),
-  );
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowCheckpoint(checkpointId)));
 }
 
-export function listWorkflowCheckpointInventory(
-  runId: number,
-  checkpointId: string,
-  query: PaginationQuery,
-): Effect.Effect<ListWorkflowCheckpointInventoryOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.listWorkflowCheckpointInventory(runId, checkpointId, query)),
-  );
-}
-
-export function listWorkflowCheckpointManifest(
-  runId: number,
-  checkpointId: string,
-  query: PaginationQuery,
-): Effect.Effect<ListWorkflowCheckpointManifestOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.listWorkflowCheckpointManifest(runId, checkpointId, query)),
-  );
-}
-
-export function fetchWorkflowCheckpointFileContent(
-  runId: number,
-  checkpointId: string,
-  fileId: string,
+export function fetchWorkflowCheckpointFile(
+  checkpointId: number,
+  path: string,
 ): Effect.Effect<Blob, Error> {
   return getClient().pipe(
-    Effect.flatMap((client) =>
-      client.fetchWorkflowCheckpointFileContent(runId, checkpointId, fileId),
-    ),
+    Effect.flatMap((client) => client.fetchWorkflowCheckpointFile(checkpointId, path)),
   );
 }
 

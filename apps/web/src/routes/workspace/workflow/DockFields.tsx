@@ -4,11 +4,10 @@ import type { InspectorSelection } from './selection.js';
 /**
  * The inspector's label/value grid, and the tone it paints values in.
  *
- * Its own module rather than a private helper inside `WorkflowDock.tsx` because three surfaces now
- * render the same grid — the dock's four original columns, the Evidence tab's detail pane, and the
- * provenance block that appears in both — and the dock cannot export it to them without importing
- * them back. One grid means a provenance row and a recorded row line up, wrap and dim identically,
- * which is the whole reason they read as one surface.
+ * Its own module rather than a private helper inside `WorkflowDock.tsx` because several surfaces
+ * render the same grid — the dock's columns, its operation cards, and the checkpoint column and
+ * file details — and the dock cannot export it to them without importing them back. One grid means
+ * every row lines up, wraps and dims identically.
  */
 export function Fields({
   rows,

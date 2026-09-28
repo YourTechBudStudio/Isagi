@@ -7,7 +7,7 @@ import type {
 } from '@isagi/contracts';
 
 /**
- * The current pin's structure, addressed by where each element is *registered* rather than by which
+ * The current build's structure, addressed by where each element is *registered* rather than by which
  * graph defines it.
  *
  * This is the distinction story #43 exists to protect at the structural end. A graph is reusable:
@@ -240,7 +240,7 @@ export function ancestorKeys(topology: DeclaredTopology, key: string): readonly 
   return chain;
 }
 
-/** The element a declared address points at under this pin, if the pin still declares it. */
+/** The element a declared address points at under this build, if the build still declares it. */
 export function elementAt(
   topology: DeclaredTopology,
   address: DeclaredAddress,

@@ -11,10 +11,7 @@ import {
   workflowCopy,
   workflowEnvironmentCopy,
   workflowEnvironmentCreatedLine,
-  workflowEnvironmentFailureLine,
-  workflowEnvironmentFailureRetryable,
-  workflowEnvironmentRetryLine,
-  type WorkflowEnvironmentFailureFacts,
+  workflowErrorStageHeadline,
 } from '../../copy/index.js';
 import { classifyRuntimeFailure } from '../runtime/classify.js';
 import { compactHomePath } from '../workspace/selectors.js';
@@ -146,26 +143,23 @@ function runtimeFailureContent(error: unknown, title: string): CommandErrorConte
 /**
  * What the palette needs from the runtime to launch a workflow and report what happened.
  *
- * Both calls block for the whole preparation, which is why they return the summary rather than an
- * acknowledgement: the answer to "did this work" is only knowable once preparation has finished,
- * and reading it once here is what lets every sentence below be about facts rather than hopes.
+ * Launch and Retry return as soon as the run exists; its environment is prepared in the
+ * background. `awaitPrepared` waits for that to finish, which is what lets every sentence below be
+ * about facts rather than hopes.
  */
 export interface WorkflowLaunchDeps {
-  /** Blocks until preparation is decided, and answers only which run was created. */
+  /** Answers only which run was created. */
   readonly start: (input: StartWorkflowInput) => Promise<{ readonly runId: number }>;
-  /** Blocks the same way. Its own small result says nothing this adapter reports. */
+  /** Its own small result says nothing this adapter reports. */
   readonly retry: (runId: number) => Promise<unknown>;
   /**
-   * What the run says happened. Deliberately a separate call from the two above: only they decide
-   * whether a run exists, so a failure here is a different fact and must read as one.
+   * The run once it has left `preparing`. Deliberately a separate call from the two above: only
+   * they decide whether a run exists, so a failure here is a different fact and must read as one.
    */
-  readonly readSummary: (runId: number) => Promise<WorkflowRunSummary>;
+  readonly awaitPrepared: (runId: number) => Promise<WorkflowRunSummary>;
   /**
-   * Called only when the environment was actually prepared.
-   *
-   * A launch that failed is still a launch the person attempted, but it is not one they would want
-   * offered back to them at the top of the palette, and today's behaviour records the entry on
-   * success only. Keeping that decision here rather than in the run effect is what preserves it.
+   * Called only when the environment was actually prepared, so a failed launch is not offered back
+   * at the top of the palette.
    */
   readonly onPrepared?: ((runId: number) => void) | undefined;
 }
@@ -173,9 +167,8 @@ export interface WorkflowLaunchDeps {
 /**
  * Start a workflow and say what preparing its environment did.
  *
- * The launch request blocks until preparation commits or fails, so by the time this returns there
- * is a decided answer to report. A throw is a launch-time rejection, a transport failure or a
- * decode failure — the person has to change something, so that outcome offers no Retry.
+ * A throw is a launch-time rejection, a transport failure or a decode failure — the person has to
+ * change something, so that outcome offers no Retry.
  */
 export async function workflowLaunchOutcome(
   input: StartWorkflowInput,
@@ -191,11 +184,10 @@ export async function workflowLaunchOutcome(
 }
 
 /**
- * Retry a run whose preparation never finished, and report the same way.
+ * Retry a run whose preparation failed, and report the same way.
  *
- * A refusal — the run moved on, another Retry won first, the control is stale — is reported with
- * Close only. Offering Retry again after the runtime has said this run cannot be retried would be
- * a button that is guaranteed not to work.
+ * A refusal is reported with Close only. Offering Retry again after the runtime has said this run
+ * cannot be retried would be a button that is guaranteed not to work.
  */
 export async function workflowRetryOutcome(
   runId: number,
@@ -213,16 +205,15 @@ export async function workflowRetryOutcome(
 }
 
 /**
- * Read the run and report what it says — or, if it cannot be read, say exactly that.
+ * Wait for the run's preparation and report it — or, if it cannot be read, say exactly that.
  *
- * The run exists by the time this is called: the launch or the retry has already returned. So a
- * failure here is never "it didn't start", and it is the one failure in this file whose action is
- * simply to ask again, because nothing about the run needs to change first.
+ * The run exists by the time this is called, so a failure here is never "it didn't start", and its
+ * action is simply to ask again.
  */
 async function runOutcome(runId: number, deps: WorkflowLaunchDeps): Promise<CommandOutcome> {
   let summary: WorkflowRunSummary;
   try {
-    summary = await deps.readSummary(runId);
+    summary = await deps.awaitPrepared(runId);
   } catch (error) {
     const classified = runtimeFailureContent(error, workflowEnvironmentCopy.summaryUnreadableTitle);
     return {
@@ -247,21 +238,24 @@ async function runOutcome(runId: number, deps: WorkflowLaunchDeps): Promise<Comm
 }
 
 /**
- * One mapping from a run's preparation record to what the palette shows, used by both the launch
- * and every Retry after it — which is what lets a retry that fails again offer Retry again.
+ * One mapping from a prepared (or not) run to what the palette shows, used by both the launch and
+ * every Retry after it — which is what lets a retry that fails again offer Retry again.
  */
 function preparationOutcome(summary: WorkflowRunSummary, deps: WorkflowLaunchDeps): CommandOutcome {
-  const { preparation } = summary;
+  const failedPreparing = summary.status === 'failed' && summary.error?.stage === 'environment';
+  // The first status after `preparing` is what `awaitPrepared` returns, so `cancelled` here means
+  // the run was cancelled while its environment was still being prepared.
+  const cancelledPreparing = summary.status === 'cancelled';
 
-  if (preparation.status === 'prepared') {
+  if (!failedPreparing && !cancelledPreparing) {
     deps.onPrepared?.(summary.runId);
     return { kind: 'close' };
   }
 
-  const created = createdLine(preparation);
-  const somethingExists = preparation.worktree !== null || preparation.surface !== null;
+  const created = createdLine(summary);
+  const somethingExists = created !== workflowEnvironmentCopy.nothingCreated;
 
-  if (preparation.status === 'cancelled') {
+  if (cancelledPreparing) {
     return {
       kind: 'result',
       content: {
@@ -277,55 +271,32 @@ function preparationOutcome(summary: WorkflowRunSummary, deps: WorkflowLaunchDep
     };
   }
 
-  if (preparation.status === 'pending') {
-    return {
-      kind: 'result',
-      content: {
-        tone: 'info',
-        title: workflowEnvironmentCopy.preparationPendingTitle,
-        body: workflowEnvironmentCopy.preparationPendingBody,
-      },
-    };
-  }
-
-  const failure = preparation.failure;
-  /**
-   * A failure the summary could not describe is still retryable — one of its three causes is the
-   * recovered state, which is exactly what Retry exists for. Only a reason that names a row which
-   * is gone withholds it, because Retry replays the recorded request and would fail identically.
-   */
-  const retryable = failure === null || workflowEnvironmentFailureRetryable(failure.reason);
-  const retry = workflowEnvironmentRetryLine({
-    worktree: preparation.worktree,
-    failedAtSetup: failure?.step === 'setup',
-    retryable,
-  });
+  const retryable = summary.controls.retry;
   return {
     kind: 'error',
     content: {
       title: workflowEnvironmentCopy.preparationFailedTitle,
       body: paragraphs([
-        failure
-          ? workflowEnvironmentFailureLine(failure.reason, failureFacts(summary))
-          : workflowEnvironmentCopy.preparationReasonUnknown,
+        workflowErrorStageHeadline('environment'),
         created,
         somethingExists
-          ? [retry, workflowEnvironmentCopy.nothingDeleted].filter(Boolean).join(' ')
+          ? [
+              retryable ? workflowEnvironmentCopy.retryKeepsWhatExists : null,
+              workflowEnvironmentCopy.nothingDeleted,
+            ]
+              .filter(Boolean)
+              .join(' ')
           : null,
       ]),
-      ...(failure?.diagnostic
+      // The runtime's own message: Git's or the setup hook's words, framed as a diagnostic.
+      ...(summary.error
         ? {
             diagnostic: {
-              label:
-                failure.step === 'setup'
-                  ? workflowEnvironmentCopy.setupOutputLabel
-                  : workflowEnvironmentCopy.diagnosticLabel,
-              detail: failure.diagnostic,
+              label: workflowEnvironmentCopy.diagnosticLabel,
+              detail: summary.error.message,
             },
           }
         : {}),
-      // Close alone when Retry cannot work: the reason line names the real next move instead, and
-      // an outcome with no actions already offers Close.
       ...(retryable
         ? {
             actions: [
@@ -344,31 +315,13 @@ function preparationOutcome(summary: WorkflowRunSummary, deps: WorkflowLaunchDep
   };
 }
 
-/**
- * The identities the failing step recorded, gathered for the sentence that names them.
- *
- * The hook comes from the setup receipt rather than the failure detail: the detail says which step
- * and why, and the receipt is where a failing hook's own index and type are kept.
- */
-function failureFacts(summary: WorkflowRunSummary): WorkflowEnvironmentFailureFacts {
-  const { failure, setup } = summary.preparation;
-  const hookFailure = setup?.failure ?? null;
-  return {
-    ...(failure?.branch === undefined ? {} : { branch: failure.branch }),
-    ...(failure?.occupyingRunId === undefined ? {} : { occupyingRunId: failure.occupyingRunId }),
-    ...(hookFailure === null
-      ? {}
-      : { hook: { index: hookFailure.hookIndex, type: hookFailure.hookType } }),
-  };
-}
-
-function createdLine(preparation: WorkflowRunSummary['preparation']): string {
+/** What the run created for itself: a `create` worktree or surface that preparation saved. */
+function createdLine(summary: WorkflowRunSummary): string {
+  const request = summary.placement.request;
+  const worktreeCreated = request.worktree.kind === 'create' && summary.worktreePath !== null;
   return workflowEnvironmentCreatedLine({
-    worktree: preparation.worktree,
-    surface: preparation.surface,
-    ...(preparation.worktree === null
-      ? {}
-      : { worktreePath: compactHomePath(preparation.worktree.worktreePath) }),
+    worktreePath: worktreeCreated ? compactHomePath(summary.worktreePath!) : null,
+    surface: request.surface.kind === 'create' && summary.surfaceId !== null,
   });
 }
 

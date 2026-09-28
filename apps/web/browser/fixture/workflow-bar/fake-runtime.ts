@@ -1,13 +1,17 @@
 import type {
   ControlPlaneSnapshot,
   SurfaceDetail,
+  WorkflowEventDto,
   WorkflowRunControlOutput,
   WorkflowRunSummary,
   WorktreeCommandsOutput,
   WorkspaceSnapshot,
 } from '@isagi/contracts';
 
-import { workflowSummaryFixture } from '../../../src/lib/workspace/workflow/test-support.js';
+import {
+  workflowEventFixture,
+  workflowSummaryFixture,
+} from '../../../src/lib/workspace/workflow/test-support.js';
 
 /**
  * The runtime boundary the workflow-bar page talks to.
@@ -15,7 +19,7 @@ import { workflowSummaryFixture } from '../../../src/lib/workspace/workflow/test
  * Deliberately a `fetch` stand-in rather than stubbed hooks: the point of this page is the wiring
  * between the container, its mutations and the caches they read, and stubbing the client would test
  * everything except that. Requests are recorded so a spec can assert *which* route a control hit and
- * with what body — an advance that forgot its wait id is a real bug that renders identically.
+ * with what body — an advance that forgot its execution is a real bug that renders identically.
  *
  * All names, paths and branches are invented. Nothing here is real workspace data.
  */
@@ -31,6 +35,12 @@ export const FIXTURE_PLACEMENT = {
 /** The one workflow the palette can offer, so "offered" and "withheld" are both observable. */
 export const FIXTURE_WORKFLOW_KEY = 'fixture/release';
 
+/**
+ * The event route's page size. Smaller than the client's request, as a real route may be, so a
+ * long log has to be followed across pages to be read at all.
+ */
+export const EVENT_PAGE_SIZE = 250;
+
 export interface RecordedRequest {
   readonly method: string;
   readonly path: string;
@@ -44,17 +54,15 @@ export interface WorkflowBarRuntimeControls {
   readonly subscribe: (listener: () => void) => () => void;
   /** The next control POST is refused with this reason, once. */
   readonly rejectNextControl: (reason: string) => void;
+  /** How many log events the run's event log holds. */
   readonly setLogLines: (count: number) => void;
-  /** The next recent-activity read fails, once. */
+  /** A log event appended to the run's log, so a later read and a live push agree on it. */
+  readonly appendLogLine: () => WorkflowEventDto;
+  /** The next event read fails, once. */
   readonly failNextLogRead: () => void;
-  /** The log carries one entry whose detail is too large to have travelled inline. */
-  readonly setStoredLogDetail: (stored: boolean) => void;
   /** Holds the next control response open, so a spec can act while one is genuinely in flight. */
   readonly holdNextControl: () => void;
   readonly releaseHeldControl: () => void;
-  /** The same, for the recent-activity read: a spec can close and reopen mid-request. */
-  readonly holdNextLogRead: () => void;
-  readonly releaseHeldLogRead: () => void;
 }
 
 const snapshot: WorkspaceSnapshot = {
@@ -100,10 +108,8 @@ const surfaceDetail: SurfaceDetail = {
     collapsed: false,
   },
   activePaneId: FIXTURE_PLACEMENT.paneId,
-  // Deliberately no panes. This page is about which readers see the attached run, and a pane would
-  // drag terminal presentation in behind it — real machinery, but not the machinery under test, and
-  // `browser/AGENTS.md` asks for the smallest faithful environment. The launch context the palette
-  // needs comes from the surface and its active pane id, both of which are still here.
+  // Deliberately no panes. This page is about which readers see the attached run; the launch context
+  // the palette needs comes from the surface and its active pane id, both of which are still here.
   panes: [],
 };
 
@@ -140,11 +146,8 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
   let rejectReason: string | null = null;
   let logLines = 0;
   let failLogRead = false;
-  let storedLogDetail = false;
   let holdControl = false;
   let releaseControl: (() => void) | null = null;
-  let holdLogRead = false;
-  let releaseLogRead: (() => void) | null = null;
   let nextRequestId = 1;
 
   window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
@@ -178,18 +181,17 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
       path,
     );
     if (method === 'POST' && control) {
+      const runId = Number(control[1]);
       const respond = () => {
         if (rejectReason !== null) {
           const reason = rejectReason;
           rejectReason = null;
-          return failure(409, reason, Number(control[1]));
+          return failure(409, reason, runId, { control: control[2] });
         }
+        // The run as it stands after the control. The bar writes nothing from it: the runtime pushes
+        // what actually happened.
         return success({
-          runId: Number(control[1]),
-          accepted: true,
-          status: 'running',
-          revision: 4,
-          diagnostics: [],
+          run: fixtureSummary('waiting_input', { runId }),
         } satisfies WorkflowRunControlOutput);
       };
       if (!holdControl) return respond();
@@ -204,41 +206,20 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
       });
     }
 
-    if (method === 'GET' && /^\/workflows\/runs\/\d+\/payloads\//.test(path)) {
-      return success({
-        payloadRef: 'sha256:big',
-        mediaType: 'application/json',
-        byteSize: 20_000,
-        value: { source: 'author_log', level: 'info', message: 'the whole recorded line' },
-      });
-    }
-
-    if (method === 'GET' && /^\/workflows\/runs\/\d+\/events$/.test(path)) {
+    const events = /^\/workflows\/runs\/(\d+)\/events$/.exec(path);
+    if (method === 'GET' && events) {
       if (failLogRead) {
         failLogRead = false;
-        return failure(500, 'workflow_run_not_found', 77);
+        return failure(500, 'workflow_run_not_found', Number(events[1]));
       }
-      const sinceRevision = Number(url.searchParams.get('sinceRevision') ?? 0);
-      const answer = () =>
-        success({
-          items: Array.from({ length: logLines }, (_, index) =>
-            logDelta(sinceRevision + index + 1, storedLogDetail),
-          ),
-          nextCursor: null,
-          boundary: {
-            highWaterRevision: sinceRevision + logLines,
-            coverageRevision: sinceRevision + logLines,
-            snapshotToken: 'fixture-token',
-            complete: true,
-          },
-        });
-      if (!holdLogRead) return answer();
-      holdLogRead = false;
-      return new Promise<Response>((resolve) => {
-        releaseLogRead = () => {
-          releaseLogRead = null;
-          void answer().then(resolve);
-        };
+      const runId = Number(events[1]);
+      const cursor = Number(url.searchParams.get('cursor') ?? 0);
+      const limit = Math.min(Number(url.searchParams.get('limit') ?? 100), EVENT_PAGE_SIZE);
+      const items = logEvents(runId, logLines).filter((event) => event.eventId > cursor);
+      const page = items.slice(0, limit);
+      return success({
+        items: page,
+        nextCursor: items.length > limit ? page.at(-1)!.eventId : null,
       });
     }
 
@@ -257,23 +238,18 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
     setLogLines: (count) => {
       logLines = count;
     },
+    appendLogLine: () => {
+      logLines += 1;
+      return logEvent(77, logLines);
+    },
     failNextLogRead: () => {
       failLogRead = true;
-    },
-    setStoredLogDetail: (stored) => {
-      storedLogDetail = stored;
     },
     holdNextControl: () => {
       holdControl = true;
     },
     releaseHeldControl: () => {
       releaseControl?.();
-    },
-    holdNextLogRead: () => {
-      holdLogRead = true;
-    },
-    releaseHeldLogRead: () => {
-      releaseLogRead?.();
     },
   };
 
@@ -286,7 +262,12 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
     );
   }
 
-  function failure(status: number, reason: string, workflowRunId: number) {
+  function failure(
+    status: number,
+    reason: string,
+    workflowRunId: number,
+    extra: Record<string, unknown> = {},
+  ) {
     return Promise.resolve(
       new Response(
         JSON.stringify({
@@ -297,7 +278,7 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
             // the screen: the bar's line is Isagi's own.
             message: 'raw runtime diagnostic text that must not be voiced',
             requestId: `req-${nextRequestId++}`,
-            data: { reason, workflowRunId },
+            data: { reason, ...(workflowRunId > 0 ? { workflowRunId } : {}), ...extra },
           },
           meta: { requestId: `req-${nextRequestId++}` },
         }),
@@ -307,93 +288,83 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
   }
 }
 
-function logDelta(revision: number, stored = false) {
-  return {
-    runId: 77,
-    revision,
-    transition: {
-      revision,
-      recordedAt: '2026-09-15T10:00:00.000Z',
-      kind: 'log' as const,
-      frameId: 1,
-      executionId: 1,
-      attemptId: null,
-      operationKey: null,
-      waitId: null,
-      artifactHash: null,
-      detailRef: stored
-        ? { payloadRef: 'sha256:big', byteSize: 20_000, mediaType: 'application/json' }
-        : { inline: { source: 'author_log', level: 'info', message: `recorded line ${revision}` } },
-      stateRef: null,
-    },
-    changes: { executions: [], frames: [], operations: [] },
-  };
+function logEvents(runId: number, count: number): readonly WorkflowEventDto[] {
+  return Array.from({ length: count }, (_, index) => logEvent(runId, index + 1));
+}
+
+export function logEvent(runId: number, eventId: number): WorkflowEventDto {
+  return workflowEventFixture({
+    eventId,
+    runId,
+    executionId: 1,
+    category: 'log',
+    kind: 'log',
+    message: `recorded line ${eventId}`,
+    data: { level: 'info', message: `recorded line ${eventId}` },
+  });
 }
 
 /** The run the page starts attached to, and the shapes its scenarios publish. */
 export function fixtureSummary(
   scenario: 'waiting_input' | 'paused_continue' | 'failed' | 'done',
-  input: { readonly runId?: number; readonly waitId?: number; readonly revision?: number } = {},
+  input: {
+    readonly runId?: number;
+    readonly executionId?: number;
+    readonly attached?: boolean;
+  } = {},
 ): WorkflowRunSummary {
   const runId = input.runId ?? 77;
-  const waitId = input.waitId ?? 5;
+  const executionId = input.executionId ?? 5;
   const base = workflowSummaryFixture({ runId });
-  const attachment = {
+  const common = {
+    runId,
     worktreeId: FIXTURE_PLACEMENT.worktreeId,
-    surfaceId: FIXTURE_PLACEMENT.surfaceId,
-  };
-  const common = { runId, attachment, revision: input.revision ?? 1 } as const;
+    surfaceId: input.attached === false ? null : FIXTURE_PLACEMENT.surfaceId,
+  } as const;
+  const current = (wait: NonNullable<WorkflowRunSummary['current']>['wait']) => ({
+    executionId,
+    invocationId: 1,
+    graphKey: 'release',
+    nodeId: 'triage',
+    nodeKind: 'operation' as const,
+    label: null,
+    wait,
+  });
 
   switch (scenario) {
     case 'waiting_input':
       return workflowSummaryFixture({
         ...common,
         status: 'waiting',
-        blockingWait: {
-          waitId,
+        current: current({
           kind: 'user_input',
-          label: 'The writer needs direction.',
-          frameId: 1,
-          executionId: 2,
           questions: [{ kind: 'text', key: 'verdict', label: 'What should the writer change?' }],
-          armedAt: '2026-09-15T10:00:00.000Z',
-        },
-        controls: { ...base.controls, advance: true },
+        }),
       });
     case 'paused_continue':
       return workflowSummaryFixture({
         ...common,
-        status: 'waiting',
-        paused: true,
-        blockingWait: {
-          waitId,
-          kind: 'user_continue',
-          label: 'Ready to carry on?',
-          frameId: 1,
-          executionId: 2,
-          questions: null,
-          armedAt: '2026-09-15T10:00:00.000Z',
-        },
-        controls: { ...base.controls, pause: false, resume: true, advance: true },
+        status: 'paused',
+        current: current({ kind: 'user_continue', label: 'Ready to carry on?' }),
+        controls: { ...base.controls, pause: false, resume: true },
       });
     case 'failed':
       return workflowSummaryFixture({
         ...common,
         status: 'failed',
-        failure: {
-          code: 'node_callback_failed',
+        current: current(null),
+        error: {
+          stage: 'node_function',
           message: 'TypeError: cannot read property draft of undefined',
-          segmentKind: 'node_callback',
-          attemptId: 3,
-          frameId: 1,
-          executionId: 2,
+          graphKey: 'release',
+          nodeId: 'triage',
         },
         controls: { ...base.controls, pause: false, cancel: false, retry: true, dismiss: true },
       });
     case 'done':
       return workflowSummaryFixture({
         ...common,
-        status: 'done',
+        status: 'completed',
         endedAt: '2026-09-15T10:05:00.000Z',
         controls: { ...base.controls, pause: false, cancel: false, dismiss: true },
       });

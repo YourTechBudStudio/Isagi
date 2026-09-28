@@ -58,27 +58,16 @@ import {
   type CommandLogMetadataOutput,
   type ClientSettingsOutput,
   type AdvanceWorkflowInput,
-  type GetWorkflowPayloadOutput,
+  type GetWorkflowExecutionOutput,
   type GetWorkflowRunOutput,
   type GetWorkflowStructureOutput,
-  type ListRunExecutionsQuery,
-  type ListRunExecutionsOutput,
   type ListWorkflowDescriptorsInput,
   type ListWorkflowDescriptorsOutput,
   type ListWorkflowEventsQuery,
   type ListWorkflowEventsOutput,
-  type ListWorkflowOperationsQuery,
-  type ListWorkflowOperationsOutput,
   type GetWorkflowCheckpointOutput,
-  type GetWorkflowEvidenceOutput,
-  type ListWorkflowCheckpointInventoryOutput,
-  type ListWorkflowCheckpointManifestOutput,
   type ListWorkflowCheckpointsOutput,
   type ListWorkflowCheckpointsQuery,
-  type PaginationQuery,
-  type GetWorkflowOperationOutput,
-  type ListWorkflowEvidenceOutput,
-  type ListWorkflowEvidenceQuery,
   type ListWorkflowRunsQuery,
   type ListWorkflowRunsOutput,
   type StartWorkflowInput,
@@ -94,6 +83,7 @@ import {
   requestContent,
   RuntimeDecodeError,
   type AnyApiContentEndpoint,
+  type ContentQuery,
   type RuntimeContentEndpointError,
   type RuntimeEndpointError,
 } from '@isagi/runtime-client';
@@ -370,29 +360,13 @@ export interface RuntimeClient {
     ListWorkflowRunsOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.listRuns>
   >;
-  /**
-   * Always called without `artifactHash`: the client draws the run's current pin and nothing else.
-   * The parameter stays in the contract for API consumers.
-   */
+  /** The structure of one verified build the run has used. */
   readonly getWorkflowStructure: (
     runId: number,
+    artifactHash: string,
   ) => Effect.Effect<
     GetWorkflowStructureOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.getStructure>
-  >;
-  readonly listWorkflowExecutions: (
-    runId: number,
-    query: ListRunExecutionsQuery,
-  ) => Effect.Effect<
-    ListRunExecutionsOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.listExecutions>
-  >;
-  readonly listWorkflowOperations: (
-    runId: number,
-    query: ListWorkflowOperationsQuery,
-  ) => Effect.Effect<
-    ListWorkflowOperationsOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.listOperations>
   >;
   readonly listWorkflowEvents: (
     runId: number,
@@ -401,54 +375,13 @@ export interface RuntimeClient {
     ListWorkflowEventsOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.listEvents>
   >;
-  readonly getWorkflowPayload: (
-    runId: number,
-    payloadRef: string,
+  /** One execution in full, with every operation it performed. */
+  readonly getWorkflowExecution: (
+    executionId: number,
   ) => Effect.Effect<
-    GetWorkflowPayloadOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.getPayload>
+    GetWorkflowExecutionOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getExecution>
   >;
-  readonly listWorkflowEvidence: (
-    runId: number,
-    query: ListWorkflowEvidenceQuery,
-  ) => Effect.Effect<
-    ListWorkflowEvidenceOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.listEvidence>
-  >;
-  readonly getWorkflowEvidence: (
-    runId: number,
-    evidenceKey: string,
-  ) => Effect.Effect<
-    GetWorkflowEvidenceOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.getEvidence>
-  >;
-  readonly getWorkflowOperation: (
-    runId: number,
-    operationKey: string,
-  ) => Effect.Effect<
-    GetWorkflowOperationOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.getOperation>
-  >;
-  /**
-   * The bytes of one captured record.
-   *
-   * A raw `fetch` rather than the typed requester, because the success body is not the JSON
-   * envelope every other route returns. A failure still is, so a non-OK response is decoded exactly
-   * as the typed requester decodes one and the caller sees the same error shape.
-   */
-  readonly fetchWorkflowEvidenceContent: (
-    runId: number,
-    evidenceKey: string,
-  ) => Effect.Effect<
-    Blob,
-    RuntimeContentEndpointError<typeof workflowContentEndpoints.getEvidenceContent>
-  >;
-  /** The URL a download action points at. No request is made; anchors and previews use it. */
-  readonly workflowEvidenceContentUrl: (
-    runId: number,
-    evidenceKey: string,
-    options?: { readonly download?: boolean },
-  ) => string;
   readonly listWorkflowCheckpoints: (
     runId: number,
     query: ListWorkflowCheckpointsQuery,
@@ -457,41 +390,29 @@ export interface RuntimeClient {
     RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpoints>
   >;
   readonly getWorkflowCheckpoint: (
-    runId: number,
-    checkpointId: string,
+    checkpointId: number,
   ) => Effect.Effect<
     GetWorkflowCheckpointOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.getCheckpoint>
   >;
-  readonly listWorkflowCheckpointInventory: (
-    runId: number,
-    checkpointId: string,
-    query: PaginationQuery,
-  ) => Effect.Effect<
-    ListWorkflowCheckpointInventoryOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpointInventory>
-  >;
-  readonly listWorkflowCheckpointManifest: (
-    runId: number,
-    checkpointId: string,
-    query: PaginationQuery,
-  ) => Effect.Effect<
-    ListWorkflowCheckpointManifestOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpointManifest>
-  >;
-  /** The verified bytes of one saved checkpoint file; a raw `fetch`, as for evidence. */
-  readonly fetchWorkflowCheckpointFileContent: (
-    runId: number,
-    checkpointId: string,
-    fileId: string,
+  /**
+   * The bytes of one saved checkpoint file.
+   *
+   * A raw `fetch` rather than the typed requester, because the success body is not the JSON
+   * envelope every other route returns. A failure still is, so a non-OK response is decoded exactly
+   * as the typed requester decodes one and the caller sees the same error shape.
+   */
+  readonly fetchWorkflowCheckpointFile: (
+    checkpointId: number,
+    path: string,
   ) => Effect.Effect<
     Blob,
-    RuntimeContentEndpointError<typeof workflowContentEndpoints.getCheckpointFileContent>
+    RuntimeContentEndpointError<typeof workflowContentEndpoints.getCheckpointFile>
   >;
-  readonly workflowCheckpointFileContentUrl: (
-    runId: number,
-    checkpointId: string,
-    fileId: string,
+  /** The URL a download action points at. No request is made; anchors and previews use it. */
+  readonly workflowCheckpointFileUrl: (
+    checkpointId: number,
+    path: string,
     options?: { readonly download?: boolean },
   ) => string;
   readonly listWorkflowDescriptors: (
@@ -643,54 +564,30 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     advanceWorkflow: (runId, input) => request(apiEndpoints.workflows.advance, { runId }, input),
     getWorkflowRun: (runId) => request(apiEndpoints.workflows.getRun, { runId }),
     listWorkflowRuns: (query) => request(apiEndpoints.workflows.listRuns, query),
-    getWorkflowStructure: (runId) => request(apiEndpoints.workflows.getStructure, { runId }, {}),
-    listWorkflowExecutions: (runId, query) =>
-      request(apiEndpoints.workflows.listExecutions, { runId }, query),
-    listWorkflowOperations: (runId, query) =>
-      request(apiEndpoints.workflows.listOperations, { runId }, query),
+    getWorkflowStructure: (runId, artifactHash) =>
+      request(apiEndpoints.workflows.getStructure, { runId }, { artifactHash }),
     listWorkflowEvents: (runId, query) =>
       request(apiEndpoints.workflows.listEvents, { runId }, query),
-    getWorkflowPayload: (runId, payloadRef) =>
-      request(apiEndpoints.workflows.getPayload, { runId, payloadRef }),
-    listWorkflowEvidence: (runId, query) =>
-      request(apiEndpoints.workflows.listEvidence, { runId }, query),
-    getWorkflowEvidence: (runId, evidenceKey) =>
-      request(apiEndpoints.workflows.getEvidence, { runId, evidenceKey }),
-    getWorkflowOperation: (runId, operationKey) =>
-      request(apiEndpoints.workflows.getOperation, { runId, operationKey }),
-    workflowEvidenceContentUrl: (runId, evidenceKey, options) =>
-      contentEndpointUrl(
-        runtimeUrl,
-        workflowContentEndpoints.getEvidenceContent,
-        { runId, evidenceKey },
-        options,
-      ),
-    fetchWorkflowEvidenceContent: (runId, evidenceKey) =>
-      fetchContent(runtimeUrl, workflowContentEndpoints.getEvidenceContent, {
-        runId,
-        evidenceKey,
-      }),
+    getWorkflowExecution: (executionId) =>
+      request(apiEndpoints.workflows.getExecution, { executionId }),
     listWorkflowCheckpoints: (runId, query) =>
       request(apiEndpoints.workflows.listCheckpoints, { runId }, query),
-    getWorkflowCheckpoint: (runId, checkpointId) =>
-      request(apiEndpoints.workflows.getCheckpoint, { runId, checkpointId }),
-    listWorkflowCheckpointInventory: (runId, checkpointId, query) =>
-      request(apiEndpoints.workflows.listCheckpointInventory, { runId, checkpointId }, query),
-    listWorkflowCheckpointManifest: (runId, checkpointId, query) =>
-      request(apiEndpoints.workflows.listCheckpointManifest, { runId, checkpointId }, query),
-    workflowCheckpointFileContentUrl: (runId, checkpointId, fileId, options) =>
+    getWorkflowCheckpoint: (checkpointId) =>
+      request(apiEndpoints.workflows.getCheckpoint, { checkpointId }),
+    workflowCheckpointFileUrl: (checkpointId, path, options) =>
       contentEndpointUrl(
         runtimeUrl,
-        workflowContentEndpoints.getCheckpointFileContent,
-        { runId, checkpointId, fileId },
-        options,
+        workflowContentEndpoints.getCheckpointFile,
+        { checkpointId },
+        { path, ...(options?.download ? { download: true } : {}) },
       ),
-    fetchWorkflowCheckpointFileContent: (runId, checkpointId, fileId) =>
-      fetchContent(runtimeUrl, workflowContentEndpoints.getCheckpointFileContent, {
-        runId,
-        checkpointId,
-        fileId,
-      }),
+    fetchWorkflowCheckpointFile: (checkpointId, path) =>
+      fetchContent(
+        runtimeUrl,
+        workflowContentEndpoints.getCheckpointFile,
+        { checkpointId },
+        { path },
+      ),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
@@ -716,8 +613,9 @@ function fetchContent<Endpoint extends AnyApiContentEndpoint>(
   runtimeUrl: string,
   endpoint: Endpoint,
   params: Record<string, string | number>,
+  query?: ContentQuery,
 ): Effect.Effect<Blob, RuntimeContentEndpointError<Endpoint>> {
-  return requestContent(runtimeUrl, endpoint, params).pipe(
+  return requestContent(runtimeUrl, endpoint, params, query).pipe(
     Effect.flatMap((response) =>
       Effect.tryPromise({
         try: () => response.blob(),

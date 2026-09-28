@@ -1,29 +1,19 @@
-import type { WorkflowExecutionDto } from '@isagi/contracts';
+import type { WorkflowExecutionSummaryDto } from '@isagi/contracts';
 
-import type { WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
+import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import { executionAddressKey } from './ancestry.js';
 
-/** The inspector's four tabs, over one shared dock. */
-export type InspectorTab = 'declared' | 'trace' | 'evidence' | 'checkpoints';
+/** The inspector's three tabs, over one shared dock. */
+export type InspectorTab = 'declared' | 'trace' | 'checkpoints';
 
 /**
- * What the dock is currently describing.
- *
- * Every variant names a durable identity the runtime issued, or a declared address under the current
- * pin — never a synthesized composite. A routing segment is addressed by the execution that ran it
- * and a frame-owned segment by its frame, because that is where those facts actually live; inventing
- * a node-execution id for them would put a fabricated identity on screen beside real ones.
+ * What the dock is currently describing: a declared element of the current build, one execution,
+ * or one graph invocation. Each names a real identity the runtime issued, or a declared address.
  */
 export type InspectorSelection =
   | { readonly kind: 'element'; readonly key: string }
   | { readonly kind: 'execution'; readonly executionId: number }
-  | { readonly kind: 'routing'; readonly executionId: number }
-  | {
-      readonly kind: 'frame_segment';
-      readonly frameId: number;
-      readonly segment: 'entry' | 'output';
-    }
-  | { readonly kind: 'frame_output'; readonly frameId: number };
+  | { readonly kind: 'invocation'; readonly invocationId: number };
 
 export function selectionEquals(
   left: InspectorSelection | null,
@@ -35,76 +25,59 @@ export function selectionEquals(
     case 'element':
       return left.key === (right as { key: string }).key;
     case 'execution':
-    case 'routing':
       return left.executionId === (right as { executionId: number }).executionId;
-    case 'frame_output':
-      return left.frameId === (right as { frameId: number }).frameId;
-    case 'frame_segment':
-      return (
-        left.frameId === (right as { frameId: number }).frameId &&
-        left.segment === (right as { segment: string }).segment
-      );
+    case 'invocation':
+      return left.invocationId === (right as { invocationId: number }).invocationId;
   }
 }
 
-/** The execution a selection is about, when it has one. Drives the operations hydration. */
+/** The execution a selection is about, when it has one. Drives the execution detail read. */
 export function selectedExecutionId(
   selection: InspectorSelection | null,
-  state: WorkflowRunState | null,
+  view: WorkflowRunView | null,
 ): number | null {
-  if (selection === null || state === null) return null;
+  if (selection === null || view === null) return null;
   switch (selection.kind) {
     case 'execution':
-    case 'routing':
       return selection.executionId;
-    case 'element': {
+    case 'element':
       // A declared element with visits selects its latest one, which is what a person means by
       // clicking a node that has run more than once without choosing a pip.
-      const visits = visitsOf(state, selection.key);
-      return visits.at(-1)?.executionId ?? null;
-    }
-    default:
+      return visitsOf(view, selection.key).at(-1)?.executionId ?? null;
+    case 'invocation':
       return null;
   }
 }
 
+/** Every execution at one declared address, in start order. Retries are visits too. */
 export function visitsOf(
-  state: WorkflowRunState,
+  view: WorkflowRunView,
   elementKey: string,
-): readonly WorkflowExecutionDto[] {
-  const visits: WorkflowExecutionDto[] = [];
-  for (const execution of state.executions.values()) {
-    if (executionAddressKey(state, execution) === elementKey) visits.push(execution);
+): readonly WorkflowExecutionSummaryDto[] {
+  const visits: WorkflowExecutionSummaryDto[] = [];
+  for (const id of view.executionOrder) {
+    const execution = view.executions.get(id);
+    if (execution && executionAddressKey(view, execution) === elementKey) visits.push(execution);
   }
-  return visits.sort((left, right) =>
-    left.startedAt === right.startedAt
-      ? left.executionId - right.executionId
-      : left.startedAt < right.startedAt
-        ? -1
-        : 1,
-  );
+  return visits;
 }
 
 /**
- * Whether a selection still names something this projection has.
- *
- * Checked when the attached run changes or a baseline is replaced: a selection that survived into a
- * different run would describe one run's visit under another run's heading.
+ * Whether a selection still names something this run has, so a selection that survived into a
+ * different run cannot describe one run's execution under another's heading.
  */
 export function selectionResolves(
   selection: InspectorSelection | null,
-  state: WorkflowRunState | null,
+  view: WorkflowRunView | null,
 ): boolean {
   if (selection === null) return true;
-  if (state === null) return false;
+  if (view === null) return false;
   switch (selection.kind) {
     case 'element':
       return true;
     case 'execution':
-    case 'routing':
-      return state.executions.has(selection.executionId);
-    case 'frame_output':
-    case 'frame_segment':
-      return state.frames.has(selection.frameId);
+      return view.executions.has(selection.executionId);
+    case 'invocation':
+      return view.invocations.has(selection.invocationId);
   }
 }
