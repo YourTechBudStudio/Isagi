@@ -62,7 +62,7 @@ export type OptionalUpdate<V> = { readonly set: V } | { readonly clear: true };
 
 /**
  * The shipped reducers. All pure and synchronous: reduction happens inside the transaction that
- * commits a segment boundary, so a reducer that awaited or performed IO would break atomicity.
+ * records a node's step, so a reducer that awaited or performed IO would break atomicity.
  */
 export const reduce = {
   replace<V>(): StateField<V, V> {

@@ -1,22 +1,21 @@
 /**
  * Checkpoint plans: what one visit to a checkpoint node saves.
  *
- * A checkpoint's `prepare` returns a plan. The runtime captures the declared scopes from the run's
- * destination root, records that visit's Git commit when one exists, and folds the result onto the
- * run's previous checkpoint, so a scope the plan omits keeps whatever an earlier checkpoint saved
- * for it. Omitting a scope never means "delete it".
+ * A checkpoint's `prepare` returns a plan. The runtime records the destination's current Git commit
+ * (none for a folder project or a repository with no commits yet) and an exact copy of exactly the
+ * scopes the plan names. Nothing is inherited from earlier checkpoints: a scope the plan omits is
+ * simply not part of this checkpoint, so capture everything a rebuild needs. A scope whose path does
+ * not exist is recorded as missing, and exporting the checkpoint makes it absent.
  *
- * The one authoring rule that matters: a scope id names one artifact or region for the whole run.
- * A later visit that reuses the id must name the same root and kind; only its exclusions may
- * change. To capture a different root, use a different id.
+ * `scope` is a stable name for listing and comparing snapshots of the same thing across visits (for
+ * example every `plan` snapshot of a run).
  */
 
 export interface CheckpointPlan {
   /** Instance title. Defaults to the node's `title`, then its id. Trimmed, non-empty, ≤ 512 chars. */
   readonly title?: string | undefined;
   /**
-   * Zero or more scopes; at most 64, and no two may overlap. An empty plan records the automatic
-   * baseline and inherits every previously covered region.
+   * Zero or more scopes; at most 64, and no two may overlap. An empty plan records only the commit.
    */
   readonly capture: readonly CheckpointScope[];
 }
@@ -24,10 +23,7 @@ export interface CheckpointPlan {
 export type CheckpointScope = CheckpointDirectoryScope | CheckpointFileScope;
 
 export interface CheckpointDirectoryScope {
-  /**
-   * Stable artifact or region identity, `/^[a-z0-9][a-z0-9._-]{0,63}$/`, unique within the plan;
-   * later visits keep this root and kind.
-   */
+  /** Stable name for this snapshot, `/^[a-z0-9][a-z0-9._-]{0,63}$/`, unique within the plan. */
   readonly scope: string;
   /** Destination-root-relative directory. */
   readonly directory: string;
@@ -36,7 +32,7 @@ export interface CheckpointDirectoryScope {
 }
 
 export interface CheckpointFileScope {
-  /** Stable artifact identity; later visits keep this file path and kind. */
+  /** Stable name for this snapshot, unique within the plan. */
   readonly scope: string;
   /** Destination-root-relative regular file. */
   readonly file: string;

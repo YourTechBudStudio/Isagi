@@ -1,5 +1,4 @@
 import { brand, type WorkflowBrand } from './brand.js';
-import type { EvidenceCaptureInput, EvidenceHandle } from './evidence.js';
 import type { WorkflowOutcomeId } from './identifiers.js';
 import type {
   WorkflowAgentHarness,
@@ -28,7 +27,7 @@ export type OperationResult<Update> = WorkflowBrand &
       }
   );
 
-/** Finish this node visit now. Its router still runs as its own segment, on an `immediate` event. */
+/** Finish this node visit now. Its router runs on an `immediate` event. */
 export function complete<Update>(input?: {
   readonly update?: Update | undefined;
 }): OperationResult<Update> {
@@ -89,7 +88,7 @@ export const wait = {
   },
 };
 
-/** The outcome a completed child frame published, delivered to the parent as data. */
+/** The outcome a completed child graph invocation published, delivered to the parent as data. */
 export interface SubgraphResult<Output> {
   readonly outcomeId: WorkflowOutcomeId;
   readonly outcomeKind: 'success' | 'failure';
@@ -99,7 +98,7 @@ export interface SubgraphResult<Output> {
 
 /**
  * What a router sees. A closed union: an authored failure outcome and a delivered agent failure are
- * data here, while a callback, reducer, or router that throws is a segment failure and never
+ * data here, while a callback, reducer, or router that throws fails the execution and never
  * reaches this type.
  */
 export type NodeEvent =
@@ -125,7 +124,7 @@ export type AgentTurnEvent =
       readonly reason: AgentTurnInterruptionReason;
     };
 
-export type AgentTurnInterruptionReason = 'session_died' | 'superseded_by_new_turn';
+export type AgentTurnInterruptionReason = 'session_died';
 
 export interface HeadlessOperationResult {
   readonly operationId: string;
@@ -137,17 +136,12 @@ export interface HeadlessOperationResult {
 }
 
 /**
- * The runtime lost the process that was capturing this operation's output. Stopping the underlying
- * process is best effort, so its completeness is reported separately rather than assumed.
+ * The runtime restarted while this headless operation was running, so its process and output are
+ * gone. The operation is not relaunched; route on this like any other result.
  */
 export interface HeadlessInterruption {
-  readonly reason: 'capture_owner_lost';
+  readonly reason: 'runtime_restarted';
   readonly launchedAt: string;
-  readonly partialOutput?: string | undefined;
-  readonly stop: {
-    readonly state: 'pending' | 'confirmed' | 'failed' | 'unsupported';
-    readonly detail?: string | undefined;
-  };
 }
 
 /**
@@ -202,33 +196,30 @@ export interface WorkflowHeadlessAgentInput extends WorkflowPromptInput {
 
 export interface OperationInvocation {
   readonly runId: number;
-  /** The graph frame this visit belongs to. */
+  /** The graph invocation this visit belongs to: one entry into a graph or subgraph. */
   readonly invocationId: number;
   readonly executionId: number;
-  /** 1-based attempt index for this segment. */
-  readonly attempt: number;
-  readonly kind: 'initial' | 'resumed' | 'retry';
+  /** `retry` when this execution was created by an explicit Retry of a failed or interrupted one. */
+  readonly kind: 'initial' | 'retry';
 }
 
 /**
- * What an operation callback may do. The verbs do not all carry the same guarantee, and the
- * difference decides what a repaired segment repeats.
+ * What an operation callback may do.
  *
- * `spawnAgentSession`, `sendAgentPrompt`, `closePane`, `runHeadlessAgent` and `captureEvidence` are
- * **durable recorded operations**: each takes a call position, and a re-entered callback reaching a
- * recorded position with the same request reuses that receipt instead of repeating the effect. The
- * first four cross an external boundary; `captureEvidence` crosses none, but carries the same
- * guarantee for the same reason — a repaired segment must get back the thing that was judged, not a
- * newer one read on the way past.
+ * `spawnAgentSession`, `sendAgentPrompt`, `closePane` and `runHeadlessAgent` touch the outside
+ * world. Each call is logged in the run's operation history (the request, including the full prompt
+ * text, and what came back) so a run's dialogue can be read afterwards. The log is history only: it
+ * is never consulted to skip work.
  *
- * `getConversationHistory` is a **scoped read**. It takes no call position and has no receipt, so a
- * repaired segment normally reads again and may observe a different answer. When an explicit Retry
- * recovers a retained agent-turn wait, the runtime may instead bind reads for that same Isagi agent
- * session to the exact native turn selected by the Retry; other session reads remain fresh.
+ * Once a callback returns, its result is saved and never re-run. A Retry of an execution that failed
+ * before its result was saved runs the callback again, so its effects may repeat. Keep callbacks
+ * small: do the preparation, perform **one** side effect, and return. A second effect belongs in its
+ * own node, and file snapshots belong in checkpoint nodes.
  *
- * `log` and `setUiFeedback` are **durable diagnostics**. They are retained and inspectable — a log
- * written before a callback failure survives it — but they are not operations, consume no call
- * position, and are never reused as receipts.
+ * `getConversationHistory` reads the session's latest conversation.
+ *
+ * `log` and `setUiFeedback` are recorded in the run's event log. A log written before a callback
+ * failure survives it.
  */
 export interface OperationContext {
   readonly destination: WorkflowDestination;
@@ -251,16 +242,6 @@ export interface OperationContext {
   readonly runHeadlessAgent: (
     input: WorkflowHeadlessAgentInput,
   ) => Promise<HeadlessOperationHandle>;
-  /**
-   * Keep this exact thing, immutably, as evidence of what this run produced.
-   *
-   * Returns a durable reference. `title`, `role`, `labels` and `source` are the recorded identity of
-   * the call, so derive them from graph state and from handles you already hold, never from the
-   * content being captured. Capturing a newly produced judgment belongs in a later visit to the
-   * node; a second call at the same position with the same identity is a different call position,
-   * not a re-capture.
-   */
-  readonly captureEvidence: (input: EvidenceCaptureInput) => Promise<EvidenceHandle>;
   readonly log: (level: WorkflowLogLevel, message: string) => Promise<void>;
   readonly setUiFeedback: (feedback: WorkflowUiFeedback) => Promise<void>;
 }

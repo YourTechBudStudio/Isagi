@@ -7,8 +7,6 @@ export {
   duplicateSafeTitle,
 } from './surfaces.repository.js';
 export type {
-  CreateSinglePaneSurfaceResult,
-  KeyedSurfaceCreation,
   InitialSessionRejectionReason,
   SurfaceOrderMoveResult,
   SurfaceRepositoryService,

@@ -1,1 +1,0 @@
-ALTER TABLE `workflow_checkpoints` ADD `warning_groups_json` text DEFAULT '[]' NOT NULL;

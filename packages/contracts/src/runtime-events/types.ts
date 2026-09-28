@@ -7,7 +7,7 @@ import {
   sessionDiagnosticCodeSchema,
   terminalSessionStatusReasonSchema,
 } from '../surfaces/types.js';
-import { workflowRunSummarySchema, workflowRunTransitionDeltaSchema } from '../workflows/types.js';
+import { workflowEventSchema, workflowRunSummarySchema } from '../workflows/types.js';
 import { durableSessionIdentitySchema } from '../workspace/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
@@ -59,8 +59,7 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'attention_source_removed',
   'workflow_run_snapshot',
   'workflow_run_changed',
-  'workflow_run_detached',
-  'workflow_run_transition',
+  'workflow_run_event',
   'durable_session_deleted',
   'editor_context_changed',
 );
@@ -206,6 +205,7 @@ export const workflowRunSnapshotEventSchema = Schema.Struct({
   }),
 });
 
+/** A run's summary changed, including when a dismissed run detached from its surface. */
 export const workflowRunChangedEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
   type: Schema.Literal('workflow_run_changed'),
@@ -214,32 +214,15 @@ export const workflowRunChangedEventSchema = Schema.Struct({
 });
 
 /**
- * A run released its surface attachment. The run itself is retained and still inspectable through
- * the API; only its occupancy of a surface ended.
+ * One row appended to a run's event log, pushed as it is written. A client appends it to the trace
+ * and refetches the run or execution it names. The event list route is the source of truth for
+ * anything missed while disconnected.
  */
-export const workflowRunDetachedEventSchema = Schema.Struct({
+export const workflowRunEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
-  type: Schema.Literal('workflow_run_detached'),
+  type: Schema.Literal('workflow_run_event'),
   occurredAt: Schema.String.pipe(Schema.minLength(1)),
-  payload: Schema.Struct({
-    runId: positiveIntegerSchema,
-    surfaceId: Schema.NullOr(positiveIntegerSchema),
-  }),
-});
-
-/**
- * One committed history transition with every record it changed.
- *
- * Exactly one is published per committed transition, after commit, in revision order. A client
- * applies a delta only when its revision is exactly one past the last one applied; otherwise it
- * refetches the gap through the paginated history routes. A lost notification therefore cannot lose
- * history — the store stays the authority.
- */
-export const workflowRunTransitionEventSchema = Schema.Struct({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  type: Schema.Literal('workflow_run_transition'),
-  occurredAt: Schema.String.pipe(Schema.minLength(1)),
-  payload: workflowRunTransitionDeltaSchema,
+  payload: workflowEventSchema,
 });
 
 export const runtimeEventSchema = Schema.Union(
@@ -252,8 +235,7 @@ export const runtimeEventSchema = Schema.Union(
   attentionSourceRemovedEventSchema,
   workflowRunSnapshotEventSchema,
   workflowRunChangedEventSchema,
-  workflowRunDetachedEventSchema,
-  workflowRunTransitionEventSchema,
+  workflowRunEventSchema,
   durableSessionDeletedEventSchema,
   editorContextChangedEventSchema,
 );
@@ -281,10 +263,7 @@ export type AttentionSourceRemovedEvent = Schema.Schema.Type<
 >;
 export type WorkflowRunSnapshotEvent = Schema.Schema.Type<typeof workflowRunSnapshotEventSchema>;
 export type WorkflowRunChangedEvent = Schema.Schema.Type<typeof workflowRunChangedEventSchema>;
-export type WorkflowRunDetachedEvent = Schema.Schema.Type<typeof workflowRunDetachedEventSchema>;
-export type WorkflowRunTransitionEvent = Schema.Schema.Type<
-  typeof workflowRunTransitionEventSchema
->;
+export type WorkflowRunEvent = Schema.Schema.Type<typeof workflowRunEventSchema>;
 export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;
 export type DurableSessionDeletedEvent = Schema.Schema.Type<
   typeof durableSessionDeletedEventSchema

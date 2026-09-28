@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6da6b6a6-60c3-45b8-9c34-a4a58ed3e117",
-  "prevId": "e3cad21b-539f-4a45-8c15-27c52967e6e4",
+  "id": "c96186fc-f3ab-40ad-923c-7e499a68bb45",
+  "prevId": "48c5c2a1-8d7f-492b-a7a4-830bfebe054c",
   "tables": {
     "agent_sessions": {
       "name": "agent_sessions",
@@ -42,13 +42,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "creation_key": {
-          "name": "creation_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -71,13 +64,7 @@
           "autoincrement": false
         }
       },
-      "indexes": {
-        "agent_sessions_creation_key_unique": {
-          "name": "agent_sessions_creation_key_unique",
-          "columns": ["creation_key"],
-          "isUnique": true
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "agent_sessions_worktree_id_worktrees_id_fk": {
           "name": "agent_sessions_worktree_id_worktrees_id_fk",
@@ -481,13 +468,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "creation_key": {
-          "name": "creation_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -503,13 +483,7 @@
           "autoincrement": false
         }
       },
-      "indexes": {
-        "surface_panes_creation_key_unique": {
-          "name": "surface_panes_creation_key_unique",
-          "columns": ["creation_key"],
-          "isUnique": true
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "surface_panes_surface_id_worktree_surfaces_id_fk": {
           "name": "surface_panes_surface_id_worktree_surfaces_id_fk",
@@ -613,8 +587,8 @@
     "workflow_artifacts": {
       "name": "workflow_artifacts",
       "columns": {
-        "artifact_hash": {
-          "name": "artifact_hash",
+        "hash": {
+          "name": "hash",
           "type": "text",
           "primaryKey": true,
           "notNull": true,
@@ -623,27 +597,6 @@
         "workflow_key": {
           "name": "workflow_key",
           "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "contract_version": {
-          "name": "contract_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "manifest_version": {
-          "name": "manifest_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "descriptor_version": {
-          "name": "descriptor_version",
-          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -662,39 +615,18 @@
           "notNull": true,
           "autoincrement": false
         },
-        "source_hash": {
-          "name": "source_hash",
-          "type": "text",
+        "contract_version": {
+          "name": "contract_version",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "structure_hash": {
-          "name": "structure_hash",
+        "structure_json": {
+          "name": "structure_json",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
-        },
-        "root_graph_key": {
-          "name": "root_graph_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "descriptor_inline": {
-          "name": "descriptor_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "descriptor_ref": {
-          "name": "descriptor_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
           "autoincrement": false
         },
         "first_seen_at": {
@@ -708,22 +640,370 @@
       "indexes": {
         "workflow_artifacts_key_idx": {
           "name": "workflow_artifacts_key_idx",
-          "columns": ["workflow_key", "first_seen_at"],
+          "columns": ["workflow_key"],
           "isUnique": false
         }
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_artifacts_descriptor_slot": {
-          "name": "workflow_artifacts_descriptor_slot",
-          "value": "\"workflow_artifacts\".\"descriptor_inline\" IS NULL OR \"workflow_artifacts\".\"descriptor_ref\" IS NULL"
-        }
-      }
+      "checkConstraints": {}
     },
-    "workflow_graph_frames": {
-      "name": "workflow_graph_frames",
+    "workflow_checkpoints": {
+      "name": "workflow_checkpoints",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "commit_sha": {
+          "name": "commit_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scopes_json": {
+          "name": "scopes_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "workflow_checkpoints_run_idx": {
+          "name": "workflow_checkpoints_run_idx",
+          "columns": ["run_id", "id"],
+          "isUnique": false
+        },
+        "workflow_checkpoints_execution_idx": {
+          "name": "workflow_checkpoints_execution_idx",
+          "columns": ["execution_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "workflow_checkpoints_run_id_workflow_runs_id_fk": {
+          "name": "workflow_checkpoints_run_id_workflow_runs_id_fk",
+          "tableFrom": "workflow_checkpoints",
+          "tableTo": "workflow_runs",
+          "columnsFrom": ["run_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workflow_checkpoints_execution_id_workflow_executions_id_fk": {
+          "name": "workflow_checkpoints_execution_id_workflow_executions_id_fk",
+          "tableFrom": "workflow_checkpoints",
+          "tableTo": "workflow_executions",
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "workflow_events": {
+      "name": "workflow_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "at": {
+          "name": "at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data_json": {
+          "name": "data_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "workflow_events_run_idx": {
+          "name": "workflow_events_run_idx",
+          "columns": ["run_id", "id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "workflow_events_run_id_workflow_runs_id_fk": {
+          "name": "workflow_events_run_id_workflow_runs_id_fk",
+          "tableFrom": "workflow_events",
+          "tableTo": "workflow_runs",
+          "columnsFrom": ["run_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "workflow_executions": {
+      "name": "workflow_executions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "invocation_id": {
+          "name": "invocation_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "node_kind": {
+          "name": "node_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "visit_index": {
+          "name": "visit_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "artifact_hash": {
+          "name": "artifact_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "retry_of": {
+          "name": "retry_of",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_json": {
+          "name": "result_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "event_json": {
+          "name": "event_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "decision_json": {
+          "name": "decision_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "state_after_json": {
+          "name": "state_after_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "child_invocation_id": {
+          "name": "child_invocation_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "checkpoint_id": {
+          "name": "checkpoint_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error_json": {
+          "name": "error_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "workflow_executions_run_idx": {
+          "name": "workflow_executions_run_idx",
+          "columns": ["run_id", "id"],
+          "isUnique": false
+        },
+        "workflow_executions_invocation_idx": {
+          "name": "workflow_executions_invocation_idx",
+          "columns": ["invocation_id", "id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "workflow_executions_run_id_workflow_runs_id_fk": {
+          "name": "workflow_executions_run_id_workflow_runs_id_fk",
+          "tableFrom": "workflow_executions",
+          "tableTo": "workflow_runs",
+          "columnsFrom": ["run_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workflow_executions_invocation_id_workflow_graph_invocations_id_fk": {
+          "name": "workflow_executions_invocation_id_workflow_graph_invocations_id_fk",
+          "tableFrom": "workflow_executions",
+          "tableTo": "workflow_graph_invocations",
+          "columnsFrom": ["invocation_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workflow_executions_artifact_hash_workflow_artifacts_hash_fk": {
+          "name": "workflow_executions_artifact_hash_workflow_artifacts_hash_fk",
+          "tableFrom": "workflow_executions",
+          "tableTo": "workflow_artifacts",
+          "columnsFrom": ["artifact_hash"],
+          "columnsTo": ["hash"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "workflow_graph_invocations": {
+      "name": "workflow_graph_invocations",
       "columns": {
         "id": {
           "name": "id",
@@ -753,13 +1033,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "entry_artifact_hash": {
-          "name": "entry_artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "depth": {
           "name": "depth",
           "type": "integer",
@@ -767,213 +1040,23 @@
           "notNull": true,
           "autoincrement": false
         },
-        "status": {
-          "name": "status",
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "parameters_json": {
+          "name": "parameters_json",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "display_name": {
-          "name": "display_name",
+        "state_json": {
+          "name": "state_json",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "parameters_inline": {
-          "name": "parameters_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "parameters_ref": {
-          "name": "parameters_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "state_inline": {
-          "name": "state_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "state_ref": {
-          "name": "state_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "outcome_id": {
-          "name": "outcome_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "outcome_kind": {
-          "name": "outcome_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "outcome_reason": {
-          "name": "outcome_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "output_inline": {
-          "name": "output_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "output_ref": {
-          "name": "output_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "output_artifact_hash": {
-          "name": "output_artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "entered_at": {
-          "name": "entered_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_graph_frames_run_idx": {
-          "name": "workflow_graph_frames_run_idx",
-          "columns": ["run_id", "id"],
-          "isUnique": false
-        },
-        "workflow_graph_frames_parent_idx": {
-          "name": "workflow_graph_frames_parent_idx",
-          "columns": ["parent_execution_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workflow_graph_frames_run_id_workflow_runs_id_fk": {
-          "name": "workflow_graph_frames_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_graph_frames",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_graph_frames_parent_execution_id_workflow_node_executions_id_fk": {
-          "name": "workflow_graph_frames_parent_execution_id_workflow_node_executions_id_fk",
-          "tableFrom": "workflow_graph_frames",
-          "tableTo": "workflow_node_executions",
-          "columnsFrom": ["parent_execution_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_graph_frames_entry_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_graph_frames_entry_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_graph_frames",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["entry_artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "workflow_graph_frames_output_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_graph_frames_output_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_graph_frames",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["output_artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_graph_frames_parameters_slot": {
-          "name": "workflow_graph_frames_parameters_slot",
-          "value": "\"workflow_graph_frames\".\"parameters_inline\" IS NULL OR \"workflow_graph_frames\".\"parameters_ref\" IS NULL"
-        },
-        "workflow_graph_frames_state_slot": {
-          "name": "workflow_graph_frames_state_slot",
-          "value": "\"workflow_graph_frames\".\"state_inline\" IS NULL OR \"workflow_graph_frames\".\"state_ref\" IS NULL"
-        },
-        "workflow_graph_frames_output_slot": {
-          "name": "workflow_graph_frames_output_slot",
-          "value": "\"workflow_graph_frames\".\"output_inline\" IS NULL OR \"workflow_graph_frames\".\"output_ref\" IS NULL"
-        }
-      }
-    },
-    "workflow_node_executions": {
-      "name": "workflow_node_executions",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "frame_id": {
-          "name": "frame_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "node_id": {
-          "name": "node_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "node_kind": {
-          "name": "node_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "visit_index": {
-          "name": "visit_index",
-          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -985,15 +1068,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "child_frame_id": {
-          "name": "child_frame_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "display_name": {
-          "name": "display_name",
+        "outcome_json": {
+          "name": "outcome_json",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -1012,58 +1088,23 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "end_certainty": {
-          "name": "end_certainty",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
         }
       },
       "indexes": {
-        "workflow_node_executions_frame_idx": {
-          "name": "workflow_node_executions_frame_idx",
-          "columns": ["frame_id", "id"],
-          "isUnique": false
-        },
-        "workflow_node_executions_run_idx": {
-          "name": "workflow_node_executions_run_idx",
+        "workflow_graph_invocations_run_idx": {
+          "name": "workflow_graph_invocations_run_idx",
           "columns": ["run_id", "id"],
           "isUnique": false
-        },
-        "workflow_node_executions_visit_unique": {
-          "name": "workflow_node_executions_visit_unique",
-          "columns": ["frame_id", "node_id", "visit_index"],
-          "isUnique": true
         }
       },
       "foreignKeys": {
-        "workflow_node_executions_run_id_workflow_runs_id_fk": {
-          "name": "workflow_node_executions_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_node_executions",
+        "workflow_graph_invocations_run_id_workflow_runs_id_fk": {
+          "name": "workflow_graph_invocations_run_id_workflow_runs_id_fk",
+          "tableFrom": "workflow_graph_invocations",
           "tableTo": "workflow_runs",
           "columnsFrom": ["run_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_node_executions_frame_id_workflow_graph_frames_id_fk": {
-          "name": "workflow_node_executions_frame_id_workflow_graph_frames_id_fk",
-          "tableFrom": "workflow_node_executions",
-          "tableTo": "workflow_graph_frames",
-          "columnsFrom": ["frame_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_node_executions_child_frame_id_workflow_graph_frames_id_fk": {
-          "name": "workflow_node_executions_child_frame_id_workflow_graph_frames_id_fk",
-          "tableFrom": "workflow_node_executions",
-          "tableTo": "workflow_graph_frames",
-          "columnsFrom": ["child_frame_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -1081,22 +1122,8 @@
           "notNull": true,
           "autoincrement": true
         },
-        "operation_key": {
-          "name": "operation_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "run_id": {
           "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "frame_id": {
-          "name": "frame_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -1109,218 +1136,106 @@
           "notNull": true,
           "autoincrement": false
         },
-        "origin_attempt_id": {
-          "name": "origin_attempt_id",
+        "seq": {
+          "name": "seq",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "capability": {
-          "name": "capability",
+        "kind": {
+          "name": "kind",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "call_index": {
-          "name": "call_index",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "request_fingerprint": {
-          "name": "request_fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "request_inline": {
-          "name": "request_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "request_ref": {
-          "name": "request_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "artifact_hash": {
-          "name": "artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "stage": {
-          "name": "stage",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "receipt_inline": {
-          "name": "receipt_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "receipt_ref": {
-          "name": "receipt_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "result_inline": {
-          "name": "result_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "result_ref": {
-          "name": "result_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "target_kind": {
-          "name": "target_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_id": {
-          "name": "target_id",
+        "agent_session_id": {
+          "name": "agent_session_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "pty_process_id": {
-          "name": "pty_process_id",
+        "pane_id": {
+          "name": "pane_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "capture_owner": {
-          "name": "capture_owner",
+        "harness": {
+          "name": "harness",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "attribution": {
-          "name": "attribution",
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "effort": {
+          "name": "effort",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "request_json": {
+          "name": "request_json",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "correlated_start_seq": {
-          "name": "correlated_start_seq",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "correlated_harness_session_id": {
-          "name": "correlated_harness_session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "submission_watermark": {
-          "name": "submission_watermark",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stop_state": {
-          "name": "stop_state",
+        "status": {
+          "name": "status",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "stop_detail": {
-          "name": "stop_detail",
+        "response_text": {
+          "name": "response_text",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "stop_requested_at": {
-          "name": "stop_requested_at",
+        "result_json": {
+          "name": "result_json",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "stop_settled_at": {
-          "name": "stop_settled_at",
+        "harness_session_id": {
+          "name": "harness_session_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "uncertainty_detail": {
-          "name": "uncertainty_detail",
+        "usage_json": {
+          "name": "usage_json",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "late_evidence_inline": {
-          "name": "late_evidence_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "late_evidence_ref": {
-          "name": "late_evidence_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
+        "started_at": {
+          "name": "started_at",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "dispatched_at": {
-          "name": "dispatched_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "settled_at": {
-          "name": "settled_at",
+        "ended_at": {
+          "name": "ended_at",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -1328,34 +1243,19 @@
         }
       },
       "indexes": {
-        "workflow_operations_key_unique": {
-          "name": "workflow_operations_key_unique",
-          "columns": ["operation_key"],
-          "isUnique": true
-        },
-        "workflow_operations_call_position_unique": {
-          "name": "workflow_operations_call_position_unique",
-          "columns": ["execution_id", "call_index"],
-          "isUnique": true
-        },
-        "workflow_operations_run_state_idx": {
-          "name": "workflow_operations_run_state_idx",
-          "columns": ["run_id", "state"],
+        "workflow_operations_run_idx": {
+          "name": "workflow_operations_run_idx",
+          "columns": ["run_id", "id"],
           "isUnique": false
         },
-        "workflow_operations_capture_owner_idx": {
-          "name": "workflow_operations_capture_owner_idx",
-          "columns": ["capture_owner", "state"],
+        "workflow_operations_execution_idx": {
+          "name": "workflow_operations_execution_idx",
+          "columns": ["execution_id", "seq"],
           "isUnique": false
         },
-        "workflow_operations_target_idx": {
-          "name": "workflow_operations_target_idx",
-          "columns": ["target_kind", "target_id"],
-          "isUnique": false
-        },
-        "workflow_operations_pty_idx": {
-          "name": "workflow_operations_pty_idx",
-          "columns": ["pty_process_id"],
+        "workflow_operations_agent_session_idx": {
+          "name": "workflow_operations_agent_session_idx",
+          "columns": ["agent_session_id", "id"],
           "isUnique": false
         }
       },
@@ -1369,252 +1269,13 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "workflow_operations_frame_id_workflow_graph_frames_id_fk": {
-          "name": "workflow_operations_frame_id_workflow_graph_frames_id_fk",
+        "workflow_operations_execution_id_workflow_executions_id_fk": {
+          "name": "workflow_operations_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_operations",
-          "tableTo": "workflow_graph_frames",
-          "columnsFrom": ["frame_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_operations_execution_id_workflow_node_executions_id_fk": {
-          "name": "workflow_operations_execution_id_workflow_node_executions_id_fk",
-          "tableFrom": "workflow_operations",
-          "tableTo": "workflow_node_executions",
+          "tableTo": "workflow_executions",
           "columnsFrom": ["execution_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_operations_origin_attempt_id_workflow_segment_attempts_id_fk": {
-          "name": "workflow_operations_origin_attempt_id_workflow_segment_attempts_id_fk",
-          "tableFrom": "workflow_operations",
-          "tableTo": "workflow_segment_attempts",
-          "columnsFrom": ["origin_attempt_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_operations_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_operations_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_operations",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_operations_request_slot": {
-          "name": "workflow_operations_request_slot",
-          "value": "\"workflow_operations\".\"request_inline\" IS NULL OR \"workflow_operations\".\"request_ref\" IS NULL"
-        },
-        "workflow_operations_receipt_slot": {
-          "name": "workflow_operations_receipt_slot",
-          "value": "\"workflow_operations\".\"receipt_inline\" IS NULL OR \"workflow_operations\".\"receipt_ref\" IS NULL"
-        },
-        "workflow_operations_result_slot": {
-          "name": "workflow_operations_result_slot",
-          "value": "\"workflow_operations\".\"result_inline\" IS NULL OR \"workflow_operations\".\"result_ref\" IS NULL"
-        },
-        "workflow_operations_late_evidence_slot": {
-          "name": "workflow_operations_late_evidence_slot",
-          "value": "\"workflow_operations\".\"late_evidence_inline\" IS NULL OR \"workflow_operations\".\"late_evidence_ref\" IS NULL"
-        }
-      }
-    },
-    "workflow_pause_intervals": {
-      "name": "workflow_pause_intervals",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "paused_at": {
-          "name": "paused_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "resumed_at": {
-          "name": "resumed_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_pause_intervals_run_idx": {
-          "name": "workflow_pause_intervals_run_idx",
-          "columns": ["run_id", "id"],
-          "isUnique": false
-        },
-        "workflow_pause_intervals_open_unique": {
-          "name": "workflow_pause_intervals_open_unique",
-          "columns": ["run_id"],
-          "isUnique": true,
-          "where": "\"workflow_pause_intervals\".\"resumed_at\" IS NULL"
-        }
-      },
-      "foreignKeys": {
-        "workflow_pause_intervals_run_id_workflow_runs_id_fk": {
-          "name": "workflow_pause_intervals_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_pause_intervals",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "workflow_payloads": {
-      "name": "workflow_payloads",
-      "columns": {
-        "payload_ref": {
-          "name": "payload_ref",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "byte_size": {
-          "name": "byte_size",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "media_type": {
-          "name": "media_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "workflow_run_attachments": {
-      "name": "workflow_run_attachments",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "worktree_id": {
-          "name": "worktree_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "surface_id": {
-          "name": "surface_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "attached_at": {
-          "name": "attached_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_run_attachments_run_unique": {
-          "name": "workflow_run_attachments_run_unique",
-          "columns": ["run_id"],
-          "isUnique": true
-        },
-        "workflow_run_attachments_surface_unique": {
-          "name": "workflow_run_attachments_surface_unique",
-          "columns": ["surface_id"],
-          "isUnique": true,
-          "where": "\"workflow_run_attachments\".\"surface_id\" IS NOT NULL"
-        },
-        "workflow_run_attachments_worktree_idx": {
-          "name": "workflow_run_attachments_worktree_idx",
-          "columns": ["worktree_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workflow_run_attachments_run_id_workflow_runs_id_fk": {
-          "name": "workflow_run_attachments_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_run_attachments",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_run_attachments_worktree_id_worktrees_id_fk": {
-          "name": "workflow_run_attachments_worktree_id_worktrees_id_fk",
-          "tableFrom": "workflow_run_attachments",
-          "tableTo": "worktrees",
-          "columnsFrom": ["worktree_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_run_attachments_surface_id_worktree_surfaces_id_fk": {
-          "name": "workflow_run_attachments_surface_id_worktree_surfaces_id_fk",
-          "tableFrom": "workflow_run_attachments",
-          "tableTo": "worktree_surfaces",
-          "columnsFrom": ["surface_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -1632,6 +1293,13 @@
           "notNull": true,
           "autoincrement": true
         },
+        "project_id": {
+          "name": "project_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "workflow_key": {
           "name": "workflow_key",
           "type": "text",
@@ -1641,13 +1309,6 @@
         },
         "title": {
           "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "root_graph_key": {
-          "name": "root_graph_key",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1667,163 +1328,39 @@
           "notNull": true,
           "autoincrement": false
         },
-        "outcome_id": {
-          "name": "outcome_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "outcome_kind": {
-          "name": "outcome_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "output_inline": {
-          "name": "output_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "output_ref": {
-          "name": "output_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "position_json": {
-          "name": "position_json",
+        "inputs_json": {
+          "name": "inputs_json",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "active_frame_id": {
-          "name": "active_frame_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "paused": {
-          "name": "paused",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "environment_available": {
-          "name": "environment_available",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": true
-        },
-        "cancel_requested": {
-          "name": "cancel_requested",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "control_revision": {
-          "name": "control_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "active_attempt_id": {
-          "name": "active_attempt_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "pending_invocation_kind": {
-          "name": "pending_invocation_kind",
+        "placement_json": {
+          "name": "placement_json",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "owner": {
-          "name": "owner",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "owner_incarnation": {
-          "name": "owner_incarnation",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_code": {
-          "name": "failure_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_message": {
-          "name": "failure_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_attempt_id": {
-          "name": "failure_attempt_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "blocked_operation_id": {
-          "name": "blocked_operation_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "origin_worktree_id": {
           "name": "origin_worktree_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "origin_worktree_path": {
           "name": "origin_worktree_path",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "origin_surface_id": {
           "name": "origin_surface_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "origin_pane_id": {
@@ -1840,23 +1377,45 @@
           "notNull": false,
           "autoincrement": false
         },
-        "destination_worktree_id": {
-          "name": "destination_worktree_id",
+        "worktree_id": {
+          "name": "worktree_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "destination_worktree_path": {
-          "name": "destination_worktree_path",
+        "worktree_path": {
+          "name": "worktree_path",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "destination_surface_id": {
-          "name": "destination_surface_id",
+        "setup_done": {
+          "name": "setup_done",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "surface_id": {
+          "name": "surface_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error_json": {
+          "name": "error_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "outcome_json": {
+          "name": "outcome_json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1884,613 +1443,42 @@
         }
       },
       "indexes": {
+        "workflow_runs_project_idx": {
+          "name": "workflow_runs_project_idx",
+          "columns": ["project_id", "id"],
+          "isUnique": false
+        },
         "workflow_runs_status_idx": {
           "name": "workflow_runs_status_idx",
           "columns": ["status"],
           "isUnique": false
         },
-        "workflow_runs_dispatch_idx": {
-          "name": "workflow_runs_dispatch_idx",
-          "columns": ["status", "paused"],
-          "isUnique": false
-        },
-        "workflow_runs_key_idx": {
-          "name": "workflow_runs_key_idx",
+        "workflow_runs_workflow_key_idx": {
+          "name": "workflow_runs_workflow_key_idx",
           "columns": ["workflow_key", "id"],
           "isUnique": false
         },
-        "workflow_runs_created_idx": {
-          "name": "workflow_runs_created_idx",
-          "columns": ["created_at"],
-          "isUnique": false
-        },
-        "workflow_runs_revision_idx": {
-          "name": "workflow_runs_revision_idx",
-          "columns": ["revision"],
-          "isUnique": false
-        },
-        "workflow_runs_destination_worktree_idx": {
-          "name": "workflow_runs_destination_worktree_idx",
-          "columns": ["destination_worktree_id"],
-          "isUnique": false
-        },
-        "workflow_runs_destination_surface_idx": {
-          "name": "workflow_runs_destination_surface_idx",
-          "columns": ["destination_surface_id"],
+        "workflow_runs_surface_idx": {
+          "name": "workflow_runs_surface_idx",
+          "columns": ["surface_id"],
           "isUnique": false
         }
       },
       "foreignKeys": {
-        "workflow_runs_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_runs_artifact_hash_workflow_artifacts_artifact_hash_fk",
+        "workflow_runs_artifact_hash_workflow_artifacts_hash_fk": {
+          "name": "workflow_runs_artifact_hash_workflow_artifacts_hash_fk",
           "tableFrom": "workflow_runs",
           "tableTo": "workflow_artifacts",
           "columnsFrom": ["artifact_hash"],
-          "columnsTo": ["artifact_hash"],
+          "columnsTo": ["hash"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "workflow_runs_active_frame_id_workflow_graph_frames_id_fk": {
-          "name": "workflow_runs_active_frame_id_workflow_graph_frames_id_fk",
+        "workflow_runs_surface_id_worktree_surfaces_id_fk": {
+          "name": "workflow_runs_surface_id_worktree_surfaces_id_fk",
           "tableFrom": "workflow_runs",
-          "tableTo": "workflow_graph_frames",
-          "columnsFrom": ["active_frame_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "workflow_runs_active_attempt_id_workflow_segment_attempts_id_fk": {
-          "name": "workflow_runs_active_attempt_id_workflow_segment_attempts_id_fk",
-          "tableFrom": "workflow_runs",
-          "tableTo": "workflow_segment_attempts",
-          "columnsFrom": ["active_attempt_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "workflow_runs_failure_attempt_id_workflow_segment_attempts_id_fk": {
-          "name": "workflow_runs_failure_attempt_id_workflow_segment_attempts_id_fk",
-          "tableFrom": "workflow_runs",
-          "tableTo": "workflow_segment_attempts",
-          "columnsFrom": ["failure_attempt_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "workflow_runs_blocked_operation_id_workflow_operations_id_fk": {
-          "name": "workflow_runs_blocked_operation_id_workflow_operations_id_fk",
-          "tableFrom": "workflow_runs",
-          "tableTo": "workflow_operations",
-          "columnsFrom": ["blocked_operation_id"],
-          "columnsTo": ["id"],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_runs_output_slot": {
-          "name": "workflow_runs_output_slot",
-          "value": "\"workflow_runs\".\"output_inline\" IS NULL OR \"workflow_runs\".\"output_ref\" IS NULL"
-        }
-      }
-    },
-    "workflow_segment_attempts": {
-      "name": "workflow_segment_attempts",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "frame_id": {
-          "name": "frame_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "execution_id": {
-          "name": "execution_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "segment_kind": {
-          "name": "segment_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "segment_ref": {
-          "name": "segment_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "attempt_index": {
-          "name": "attempt_index",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "artifact_hash": {
-          "name": "artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "invocation_kind": {
-          "name": "invocation_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "ended_at": {
-          "name": "ended_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "end_certainty": {
-          "name": "end_certainty",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "failure_code": {
-          "name": "failure_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_message": {
-          "name": "failure_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "input_inline": {
-          "name": "input_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "input_ref": {
-          "name": "input_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "producer_output_inline": {
-          "name": "producer_output_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "producer_output_ref": {
-          "name": "producer_output_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "producer_artifact_hash": {
-          "name": "producer_artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_detail_inline": {
-          "name": "failure_detail_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "failure_detail_ref": {
-          "name": "failure_detail_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_segment_attempts_execution_idx": {
-          "name": "workflow_segment_attempts_execution_idx",
-          "columns": ["execution_id", "id"],
-          "isUnique": false
-        },
-        "workflow_segment_attempts_run_idx": {
-          "name": "workflow_segment_attempts_run_idx",
-          "columns": ["run_id", "id"],
-          "isUnique": false
-        },
-        "workflow_segment_attempts_segment_idx": {
-          "name": "workflow_segment_attempts_segment_idx",
-          "columns": ["frame_id", "segment_kind", "id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workflow_segment_attempts_run_id_workflow_runs_id_fk": {
-          "name": "workflow_segment_attempts_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_segment_attempts",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_segment_attempts_frame_id_workflow_graph_frames_id_fk": {
-          "name": "workflow_segment_attempts_frame_id_workflow_graph_frames_id_fk",
-          "tableFrom": "workflow_segment_attempts",
-          "tableTo": "workflow_graph_frames",
-          "columnsFrom": ["frame_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_segment_attempts_execution_id_workflow_node_executions_id_fk": {
-          "name": "workflow_segment_attempts_execution_id_workflow_node_executions_id_fk",
-          "tableFrom": "workflow_segment_attempts",
-          "tableTo": "workflow_node_executions",
-          "columnsFrom": ["execution_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_segment_attempts_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_segment_attempts_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_segment_attempts",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "workflow_segment_attempts_producer_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_segment_attempts_producer_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_segment_attempts",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["producer_artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_segment_attempts_input_slot": {
-          "name": "workflow_segment_attempts_input_slot",
-          "value": "\"workflow_segment_attempts\".\"input_inline\" IS NULL OR \"workflow_segment_attempts\".\"input_ref\" IS NULL"
-        },
-        "workflow_segment_attempts_producer_slot": {
-          "name": "workflow_segment_attempts_producer_slot",
-          "value": "\"workflow_segment_attempts\".\"producer_output_inline\" IS NULL OR \"workflow_segment_attempts\".\"producer_output_ref\" IS NULL"
-        },
-        "workflow_segment_attempts_failure_detail_slot": {
-          "name": "workflow_segment_attempts_failure_detail_slot",
-          "value": "\"workflow_segment_attempts\".\"failure_detail_inline\" IS NULL OR \"workflow_segment_attempts\".\"failure_detail_ref\" IS NULL"
-        }
-      }
-    },
-    "workflow_transitions": {
-      "name": "workflow_transitions",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "recorded_at": {
-          "name": "recorded_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "frame_id": {
-          "name": "frame_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "execution_id": {
-          "name": "execution_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "attempt_id": {
-          "name": "attempt_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "operation_id": {
-          "name": "operation_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "wait_id": {
-          "name": "wait_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "artifact_hash": {
-          "name": "artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "state_inline": {
-          "name": "state_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "state_ref": {
-          "name": "state_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "detail_inline": {
-          "name": "detail_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "detail_ref": {
-          "name": "detail_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_transitions_revision_unique": {
-          "name": "workflow_transitions_revision_unique",
-          "columns": ["run_id", "revision"],
-          "isUnique": true
-        },
-        "workflow_transitions_run_idx": {
-          "name": "workflow_transitions_run_idx",
-          "columns": ["run_id", "id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workflow_transitions_run_id_workflow_runs_id_fk": {
-          "name": "workflow_transitions_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_transitions_frame_id_workflow_graph_frames_id_fk": {
-          "name": "workflow_transitions_frame_id_workflow_graph_frames_id_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_graph_frames",
-          "columnsFrom": ["frame_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_transitions_execution_id_workflow_node_executions_id_fk": {
-          "name": "workflow_transitions_execution_id_workflow_node_executions_id_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_node_executions",
-          "columnsFrom": ["execution_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_transitions_attempt_id_workflow_segment_attempts_id_fk": {
-          "name": "workflow_transitions_attempt_id_workflow_segment_attempts_id_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_segment_attempts",
-          "columnsFrom": ["attempt_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_transitions_operation_id_workflow_operations_id_fk": {
-          "name": "workflow_transitions_operation_id_workflow_operations_id_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_operations",
-          "columnsFrom": ["operation_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_transitions_wait_id_workflow_waits_id_fk": {
-          "name": "workflow_transitions_wait_id_workflow_waits_id_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_waits",
-          "columnsFrom": ["wait_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_transitions_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_transitions_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_transitions",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_transitions_state_slot": {
-          "name": "workflow_transitions_state_slot",
-          "value": "\"workflow_transitions\".\"state_inline\" IS NULL OR \"workflow_transitions\".\"state_ref\" IS NULL"
-        },
-        "workflow_transitions_detail_slot": {
-          "name": "workflow_transitions_detail_slot",
-          "value": "\"workflow_transitions\".\"detail_inline\" IS NULL OR \"workflow_transitions\".\"detail_ref\" IS NULL"
-        }
-      }
-    },
-    "workflow_version_adoptions": {
-      "name": "workflow_version_adoptions",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "artifact_hash": {
-          "name": "artifact_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "attempt_id": {
-          "name": "attempt_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "adopted_at": {
-          "name": "adopted_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_version_adoptions_run_idx": {
-          "name": "workflow_version_adoptions_run_idx",
-          "columns": ["run_id", "id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workflow_version_adoptions_run_id_workflow_runs_id_fk": {
-          "name": "workflow_version_adoptions_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_version_adoptions",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_version_adoptions_artifact_hash_workflow_artifacts_artifact_hash_fk": {
-          "name": "workflow_version_adoptions_artifact_hash_workflow_artifacts_artifact_hash_fk",
-          "tableFrom": "workflow_version_adoptions",
-          "tableTo": "workflow_artifacts",
-          "columnsFrom": ["artifact_hash"],
-          "columnsTo": ["artifact_hash"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "workflow_version_adoptions_attempt_id_workflow_segment_attempts_id_fk": {
-          "name": "workflow_version_adoptions_attempt_id_workflow_segment_attempts_id_fk",
-          "tableFrom": "workflow_version_adoptions",
-          "tableTo": "workflow_segment_attempts",
-          "columnsFrom": ["attempt_id"],
+          "tableTo": "worktree_surfaces",
+          "columnsFrom": ["surface_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
@@ -2499,139 +1487,6 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
-    },
-    "workflow_waits": {
-      "name": "workflow_waits",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "execution_id": {
-          "name": "execution_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "wait_kind": {
-          "name": "wait_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "condition_inline": {
-          "name": "condition_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "condition_ref": {
-          "name": "condition_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "armed_at": {
-          "name": "armed_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "delivered_at": {
-          "name": "delivered_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "consumed_at": {
-          "name": "consumed_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "event_inline": {
-          "name": "event_inline",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "event_ref": {
-          "name": "event_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workflow_waits_run_status_idx": {
-          "name": "workflow_waits_run_status_idx",
-          "columns": ["run_id", "status"],
-          "isUnique": false
-        },
-        "workflow_waits_execution_idx": {
-          "name": "workflow_waits_execution_idx",
-          "columns": ["execution_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workflow_waits_run_id_workflow_runs_id_fk": {
-          "name": "workflow_waits_run_id_workflow_runs_id_fk",
-          "tableFrom": "workflow_waits",
-          "tableTo": "workflow_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_waits_execution_id_workflow_node_executions_id_fk": {
-          "name": "workflow_waits_execution_id_workflow_node_executions_id_fk",
-          "tableFrom": "workflow_waits",
-          "tableTo": "workflow_node_executions",
-          "columnsFrom": ["execution_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "workflow_waits_condition_slot": {
-          "name": "workflow_waits_condition_slot",
-          "value": "\"workflow_waits\".\"condition_inline\" IS NULL OR \"workflow_waits\".\"condition_ref\" IS NULL"
-        },
-        "workflow_waits_event_slot": {
-          "name": "workflow_waits_event_slot",
-          "value": "\"workflow_waits\".\"event_inline\" IS NULL OR \"workflow_waits\".\"event_ref\" IS NULL"
-        }
-      }
     },
     "worktree_command_runs": {
       "name": "worktree_command_runs",

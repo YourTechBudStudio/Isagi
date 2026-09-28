@@ -8,8 +8,8 @@ import {
   workflowContractVersion,
 } from './brand.js';
 
-test('the contract version is 3', () => {
-  assert.equal(workflowContractVersion, 3);
+test('the contract version is 4', () => {
+  assert.equal(workflowContractVersion, 4);
 });
 
 test('recognition reads plain data, so a separately bundled copy is still recognized', () => {

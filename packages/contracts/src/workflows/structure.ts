@@ -50,8 +50,8 @@ export const workflowStructureDiagnosticCodeSchema = Schema.Literal(
   'too_many_outcomes',
   'containment_too_deep',
   'deferred_executable_dependency',
-  // Saved-position validation, reported when a control is refused because the pinned
-  // structure no longer fits where the run is parked.
+  // Reload validation, reported when Resume or Retry is refused because the latest build no
+  // longer fits where the run is parked.
   'graph_missing',
   'subgraph_registration_changed',
   'node_missing',
@@ -127,24 +127,25 @@ export const workflowGraphDescriptorSchema = Schema.Struct({
 
 export const workflowStructureDescriptorSchema = Schema.Struct({
   descriptorVersion: Schema.Literal(1),
-  workflowContractVersion: Schema.Literal(3),
+  workflowContractVersion: Schema.Literal(4),
   rootGraphKey: nonEmptyString,
   graphs: Schema.Array(workflowGraphDescriptorSchema),
 });
 
-/** One adopted code pin, so a run's version history is inspectable without importing old code. */
-export const workflowVersionSchema = Schema.Struct({
+export const getWorkflowStructureQuerySchema = Schema.Struct({
+  /** Omitted returns the run's current build. Any build the run has used can be named. */
+  artifactHash: Schema.optional(nonEmptyString),
+});
+
+/** A verified build of a workflow and the structure it declares. */
+export const getWorkflowStructureOutputSchema = Schema.Struct({
   artifactHash: nonEmptyString,
-  pinOrdinal: positiveInteger,
+  workflowKey: nonEmptyString,
   sdkVersion: nonEmptyString,
   verifierVersion: nonEmptyString,
-  rootGraphKey: nonEmptyString,
-  adoptedAt: nonEmptyString,
-  /**
-   * Only a launch and an adopted Retry create an adoption. Resume loads the run's current pin and
-   * never discovers or adopts a newer artifact, so there is no `resume` reason to represent.
-   */
-  adoptedBy: Schema.Literal('launch', 'retry'),
+  contractVersion: positiveInteger,
+  firstSeenAt: nonEmptyString,
+  descriptor: workflowStructureDescriptorSchema,
 });
 
 export type WorkflowStructureDiagnosticCode = typeof workflowStructureDiagnosticCodeSchema.Type;
@@ -154,4 +155,5 @@ export type WorkflowEdgeDescriptorDto = typeof workflowEdgeDescriptorSchema.Type
 export type WorkflowOutcomeDescriptorDto = typeof workflowOutcomeDescriptorSchema.Type;
 export type WorkflowGraphDescriptorDto = typeof workflowGraphDescriptorSchema.Type;
 export type WorkflowStructureDescriptorDto = typeof workflowStructureDescriptorSchema.Type;
-export type WorkflowVersionDto = typeof workflowVersionSchema.Type;
+export type GetWorkflowStructureQuery = typeof getWorkflowStructureQuerySchema.Type;
+export type GetWorkflowStructureOutput = typeof getWorkflowStructureOutputSchema.Type;

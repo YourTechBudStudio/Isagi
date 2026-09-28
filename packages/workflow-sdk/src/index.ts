@@ -14,14 +14,6 @@ export type {
   CheckpointScope,
 } from './checkpoints.js';
 
-export type {
-  EvidenceCaptureInput,
-  EvidenceContent,
-  EvidenceHandle,
-  EvidenceLabels,
-  EvidenceSource,
-} from './evidence.js';
-
 export {
   workflowIdentifierPattern,
   type WorkflowEdgeId,

@@ -1,225 +1,118 @@
 import { Schema } from 'effect';
 
 import {
-  workflowExecutionSchema,
-  workflowFrameSchema,
-  workflowOperationSchema,
-  workflowTransitionSchema,
+  workflowErrorSchema,
+  workflowExecutionSummarySchema,
+  workflowGraphInvocationSchema,
+  workflowOutcomeSchema,
+  workflowWaitSchema,
 } from './executions.js';
+import { pagedSchema, paginationQueryFields, queryTextSchema } from './pagination.js';
 import {
   nonEmptyString,
-  nonNegativeInteger,
   positiveInteger,
-  workflowFailureCodeSchema,
+  workflowCommandManifestSchema,
+  workflowInputsSchema,
   workflowNodeKindSchema,
-  workflowOutcomeKindSchema,
-  workflowEnvironmentFailureDetailSchema,
   workflowPlacementRequestSchema,
-  workflowPlacementSchema,
   workflowPlacementSourceSchema,
-  workflowSetupReceiptSchema,
-  workflowSurfaceReceiptSchema,
-  workflowWorktreeReceiptSchema,
-  workflowPayloadSlotSchema,
-  workflowQuestionSpecSchema,
-  workflowSegmentKindSchema,
   workflowUiFeedbackSchema,
-  workflowWaitIdSchema,
-  workflowWaitKindSchema,
+  workflowUserInputAnswersSchema,
 } from './primitives.js';
+import { workflowStructureDiagnosticSchema } from './structure.js';
 
+/**
+ * Runs: one launch of a workflow.
+ *
+ * `waiting` means the run is parked on a wait (an agent turn, a headless job, or the user).
+ * `paused` means nothing new starts until Resume. `failed` means an execution failed and Retry is
+ * available.
+ */
 export const workflowRunStatusSchema = Schema.Literal(
-  'ready',
+  'preparing',
   'running',
   'waiting',
-  'blocked',
+  'paused',
+  'completed',
   'failed',
-  'done',
   'cancelled',
 );
 
-/**
- * The next segment the engine would run. The snapshot chooses what runs next; history explains what
- * ran.
- *
- * A discriminated union rather than one struct of nullable fields: each kind requires exactly the
- * identities that kind needs, so an impossible position — a `routing` position with no execution or
- * edge, say — cannot be represented, let alone transmitted.
- */
-export const workflowRunPositionSchema = Schema.Union(
-  /**
-   * Before the graph: the run is preparing its destination. `frameId` names the **root frame**,
-   * which is what makes preparation an ordinary segment — `workflow_segment_attempts.frame_id` is
-   * `NOT NULL`, attempt identity is derived from the position alone, and the summary's
-   * `failure.frameId` is a required positive integer. A position with no frame would break all three.
-   */
-  Schema.Struct({ kind: Schema.Literal('environment_preparation'), frameId: positiveInteger }),
-  Schema.Struct({ kind: Schema.Literal('graph_entry'), frameId: positiveInteger }),
-  Schema.Struct({
-    kind: Schema.Literal('node_callback'),
-    frameId: positiveInteger,
-    executionId: positiveInteger,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('awaiting_wait'),
-    frameId: positiveInteger,
-    executionId: positiveInteger,
-    waitId: workflowWaitIdSchema,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('routing'),
-    frameId: positiveInteger,
-    executionId: positiveInteger,
-    edgeId: nonEmptyString,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('graph_output'),
-    frameId: positiveInteger,
-    outcomeId: nonEmptyString,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('child_output_mapping'),
-    frameId: positiveInteger,
-    executionId: positiveInteger,
-    childFrameId: positiveInteger,
-  }),
-  Schema.Struct({ kind: Schema.Literal('terminal') }),
-);
-
-export const workflowOperationRefSchema = Schema.Struct({
-  operationKey: nonEmptyString,
-  frameId: positiveInteger,
-  /** Required here for the same reason it is required on the operation itself: an operation is only
-   *  ever created inside a node callback, so a reference that cannot name one describes a row the
-   *  durable model has no way to produce. */
-  executionId: positiveInteger,
-});
-
-/**
- * Best-effort stopping, reported honestly.
- *
- * Cancel stops successors and new effects; it cannot guarantee that an external process died. The
- * counts say exactly how much of the stop was confirmed.
- */
-export const workflowStopSummarySchema = Schema.Struct({
-  requested: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-  confirmed: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-  failed: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-  unsupported: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-  pending: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-});
-
-/**
- * Which controls the runtime will actually accept right now.
- *
- * Availability is decided by the runtime and rechecked at mutation time, so the bar and the
- * inspector cannot drift from the real preconditions.
- */
+/** Which controls the runtime will accept right now, derived from the run's status. */
 export const workflowRunControlsSchema = Schema.Struct({
   pause: Schema.Boolean,
   resume: Schema.Boolean,
   retry: Schema.Boolean,
   cancel: Schema.Boolean,
   dismiss: Schema.Boolean,
-  advance: Schema.Boolean,
+});
+
+/**
+ * Where a run was launched from. Retained as launched, so it may name a worktree, surface, pane or
+ * agent session that has since been deleted.
+ */
+export const workflowRunOriginSchema = Schema.Struct({
+  worktreeId: positiveInteger,
+  worktreePath: nonEmptyString,
+  surfaceId: positiveInteger,
+  paneId: Schema.NullOr(positiveInteger),
+  agentSessionId: Schema.NullOr(positiveInteger),
+});
+
+/**
+ * The node a run is parked on or running: its deepest unfinished execution. `wait` is set while the
+ * run is waiting; a `user_continue` or `user_input` wait is answered through `advance`.
+ */
+export const workflowRunCurrentSchema = Schema.Struct({
+  executionId: positiveInteger,
+  invocationId: positiveInteger,
+  graphKey: nonEmptyString,
+  nodeId: nonEmptyString,
+  nodeKind: workflowNodeKindSchema,
+  label: Schema.NullOr(Schema.String),
+  wait: Schema.NullOr(workflowWaitSchema),
 });
 
 export const workflowRunSummarySchema = Schema.Struct({
   runId: positiveInteger,
-  workflowKey: nonEmptyString,
-  /**
-   * The project this run belongs to, recorded at launch and never changed. Still reported after the
-   * project, its worktrees or the run's surface are gone: it is retained identity, not availability.
-   */
+  /** The project this run belongs to, recorded at launch and never changed. */
   projectId: positiveInteger,
+  workflowKey: nonEmptyString,
   title: nonEmptyString,
-  rootGraphKey: nonEmptyString,
-  status: workflowRunStatusSchema,
-  paused: Schema.Boolean,
-  /** The history revision this summary reflects. */
-  revision: positiveInteger,
+  /** The verified build the run uses now. Resume and Retry move it to the latest build. */
   artifactHash: nonEmptyString,
-  /** 1-based position of the current pin in this run's adoption history. */
-  pinOrdinal: positiveInteger,
-  outcome: Schema.NullOr(
-    Schema.Struct({
-      outcomeId: nonEmptyString,
-      kind: workflowOutcomeKindSchema,
-      reason: Schema.NullOr(Schema.String),
-      // The same sized reference every other recorded value uses: opaque, size-bearing, and never
-      // a filesystem path.
-      producedRef: workflowPayloadSlotSchema,
-    }),
-  ),
-  position: workflowRunPositionSchema,
-  activeNode: Schema.NullOr(
-    Schema.Struct({
-      frameId: positiveInteger,
-      graphKey: nonEmptyString,
-      nodeId: nonEmptyString,
-      nodeKind: workflowNodeKindSchema,
-      executionId: positiveInteger,
-      /** Zero-based, like every other visit index. */
-      visitIndex: nonNegativeInteger,
-      displayName: Schema.NullOr(Schema.String),
-    }),
-  ),
-  blockingWait: Schema.NullOr(
-    Schema.Struct({
-      waitId: workflowWaitIdSchema,
-      kind: workflowWaitKindSchema,
-      label: Schema.NullOr(Schema.String),
-      frameId: positiveInteger,
-      executionId: positiveInteger,
-      questions: Schema.NullOr(Schema.Array(workflowQuestionSpecSchema)),
-      armedAt: nonEmptyString,
-    }),
-  ),
-  /** Set when an operation whose delivery cannot be established is holding the run. */
-  blockedOperation: Schema.NullOr(workflowOperationRefSchema),
-  failure: Schema.NullOr(
-    Schema.Struct({
-      code: workflowFailureCodeSchema,
-      message: Schema.String,
-      segmentKind: workflowSegmentKindSchema,
-      attemptId: positiveInteger,
-      frameId: positiveInteger,
-      executionId: Schema.NullOr(positiveInteger),
-    }),
-  ),
-  stopSummary: Schema.NullOr(workflowStopSummarySchema),
-  uiFeedback: Schema.NullOr(workflowUiFeedbackSchema),
-  /** The removable row that occupies a surface. Its deletion releases placement, not history. */
-  attachment: Schema.NullOr(
-    Schema.Struct({
-      worktreeId: Schema.NullOr(positiveInteger),
-      surfaceId: Schema.NullOr(positiveInteger),
-    }),
-  ),
-  origin: workflowPlacementSchema,
-  destination: workflowPlacementSchema,
+  status: workflowRunStatusSchema,
+  origin: workflowRunOriginSchema,
   /**
-   * How this run's destination was chosen, and what preparing it actually did.
-   *
-   * Always present: every run records its placement decision before anything is allocated, so a run
-   * that failed half way through preparation is as inspectable as one that never started. The
-   * receipts are null for reuse choices, which allocate nothing.
-   *
-   * `status` is derived at read time from the run's position, status and receipts, never stored —
-   * storing it would create a second authority that can disagree with the position.
+   * What placement was asked for, who decided it, and the commit a `create` worktree's `fromRef`
+   * resolved to at launch. Preparation and its Retry create the worktree from `baseCommit`, never
+   * from the ref again, so a ref that moves after launch cannot change where the run starts.
    */
-  preparation: Schema.Struct({
+  placement: Schema.Struct({
     source: workflowPlacementSourceSchema,
     request: workflowPlacementRequestSchema,
-    /** The commit `fromRef` resolved to at launch. Null unless the worktree choice was `create`. */
+    /** Set exactly when the worktree choice is `create`. */
     baseCommit: Schema.NullOr(nonEmptyString),
-    status: Schema.Literal('pending', 'prepared', 'failed', 'cancelled'),
-    worktree: Schema.NullOr(workflowWorktreeReceiptSchema),
-    setup: Schema.NullOr(workflowSetupReceiptSchema),
-    surface: Schema.NullOr(workflowSurfaceReceiptSchema),
-    /** Present only while `status` is 'failed' and the failing attempt is a preparation attempt. */
-    failure: Schema.NullOr(workflowEnvironmentFailureDetailSchema),
-  }),
+  }).pipe(
+    Schema.filter((placement) =>
+      placement.request.worktree.kind === 'create'
+        ? placement.baseCommit !== null ||
+          'a create worktree placement must record the commit its ref resolved to'
+        : placement.baseCommit === null ||
+          `a ${placement.request.worktree.kind} worktree placement has no base commit`,
+    ),
+  ),
+  /** Where the run executes. Null until preparation has chosen or created the worktree. */
+  worktreeId: Schema.NullOr(positiveInteger),
+  worktreePath: Schema.NullOr(nonEmptyString),
+  setupDone: Schema.Boolean,
+  /** The surface the run is attached to. Null before preparation attaches it and once dismissed. */
+  surfaceId: Schema.NullOr(positiveInteger),
+  current: Schema.NullOr(workflowRunCurrentSchema),
+  /** The latest `ui_feedback` event's value. */
+  uiFeedback: Schema.NullOr(workflowUiFeedbackSchema),
+  error: Schema.NullOr(workflowErrorSchema),
+  outcome: Schema.NullOr(workflowOutcomeSchema),
   controls: workflowRunControlsSchema,
   createdAt: nonEmptyString,
   updatedAt: nonEmptyString,
@@ -227,55 +120,117 @@ export const workflowRunSummarySchema = Schema.Struct({
 });
 
 /**
- * One committed transition together with every record it changed.
- *
- * The arrays carry complete records, never bare ids, so a client applies a delta without fetching.
- * They may be empty, and they may carry several records: one transaction can change a frame, an
- * execution and more than one operation at once. `summary` is attached when the transition changed
- * the run's status, position, pause state or failure.
+ * A run with its whole tree: every graph invocation and every execution, as flat lists linked by
+ * `parentExecutionId`, `invocationId` and `childInvocationId`. Both lists are in id order.
  */
-export const workflowRunTransitionDeltaSchema = Schema.Struct({
-  runId: positiveInteger,
-  revision: positiveInteger,
-  transition: workflowTransitionSchema,
-  changes: Schema.Struct({
-    executions: Schema.Array(workflowExecutionSchema),
-    frames: Schema.Array(workflowFrameSchema),
-    operations: Schema.Array(workflowOperationSchema),
-    summary: Schema.optional(workflowRunSummarySchema),
-  }),
-}).pipe(
-  // The client applies a delta only when its revision is exactly one past the last one applied, so
-  // a delta that disagrees with itself about which revision it is would desynchronise that rule
-  // while decoding cleanly. The transition is the revision; the envelope repeats it for routing.
-  Schema.filter(
-    (delta) =>
-      delta.revision === delta.transition.revision ||
-      `a delta at revision ${delta.revision} carries a transition at revision ${delta.transition.revision}`,
-  ),
-  // An attached summary is the state this transition produced, not an earlier one.
-  Schema.filter(
-    (delta) =>
-      delta.changes.summary === undefined ||
-      delta.changes.summary.revision === delta.revision ||
-      `a delta at revision ${delta.revision} carries a summary at revision ${delta.changes.summary.revision}`,
-  ),
-  // ...and it describes the run the delta is about. Routing uses the envelope's run id while the
-  // summary is the authoritative state, so a disagreement would leave a client to invent precedence
-  // between two identities, or update the wrong cached run. The summary is the only changed record
-  // that carries a run id; executions, frames and operations are addressed within their run.
-  Schema.filter(
-    (delta) =>
-      delta.changes.summary === undefined ||
-      delta.changes.summary.runId === delta.runId ||
-      `a delta for run ${delta.runId} carries a summary for run ${delta.changes.summary.runId}`,
-  ),
+export const workflowRunDetailSchema = Schema.Struct({
+  run: workflowRunSummarySchema,
+  inputs: workflowInputsSchema,
+  invocations: Schema.Array(workflowGraphInvocationSchema),
+  executions: Schema.Array(workflowExecutionSummarySchema),
+});
+
+export const workflowLaunchOriginSchema = Schema.Struct({
+  worktreeId: positiveInteger,
+  surfaceId: positiveInteger,
+  paneId: Schema.optional(Schema.NullOr(positiveInteger)),
+  agentSessionId: Schema.optional(Schema.NullOr(positiveInteger)),
+});
+
+export const workflowLoadFailureReasonSchema = Schema.Literal(
+  'missing_build',
+  'invalid_manifest',
+  'unsupported_manifest',
+  'unsupported_contract',
+  'invalid_package',
+  'stale_source',
+  'artifact_tampered',
+  'artifact_load_failed',
+  'invalid_export',
+  'invalid_structure',
+  'structure_mismatch',
 );
 
+export const workflowDescriptorResultSchema = Schema.Union(
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    workflowKey: nonEmptyString,
+    manifest: workflowCommandManifestSchema,
+  }),
+  Schema.Struct({
+    ok: Schema.Literal(false),
+    workflowKey: nonEmptyString,
+    reason: workflowLoadFailureReasonSchema,
+    diagnostics: Schema.Array(workflowStructureDiagnosticSchema),
+  }),
+);
+
+export const listWorkflowDescriptorsInputSchema = Schema.Struct({
+  origin: workflowLaunchOriginSchema,
+});
+
+export const listWorkflowDescriptorsOutputSchema = Schema.Struct({
+  workflows: Schema.Array(workflowDescriptorResultSchema),
+});
+
+export const startWorkflowInputSchema = Schema.Struct({
+  workflowKey: nonEmptyString,
+  inputs: Schema.optional(workflowInputsSchema),
+  origin: workflowLaunchOriginSchema,
+  /**
+   * An explicit destination, which takes precedence over the workflow's own `environment` hook.
+   * Absent means the hook decides, and absent hook means the current worktree and surface. An
+   * override bypasses selection, never validation.
+   */
+  placement: Schema.optional(workflowPlacementRequestSchema),
+});
+
+export const startWorkflowOutputSchema = Schema.Struct({
+  runId: positiveInteger,
+  workflowKey: nonEmptyString,
+});
+
+export const workflowRunRouteParamsSchema = Schema.Struct({ runId: positiveInteger });
+
+export const listWorkflowRunsQuerySchema = Schema.Struct({
+  ...paginationQueryFields,
+  workflowKey: Schema.optional(queryTextSchema),
+  status: Schema.optional(workflowRunStatusSchema),
+  projectId: Schema.optional(positiveInteger),
+});
+
+export const listWorkflowRunsOutputSchema = pagedSchema(workflowRunSummarySchema);
+
+export const getWorkflowRunOutputSchema = workflowRunDetailSchema;
+
+/**
+ * Answers the user wait the run is parked on. The execution is named so a stale answer cannot
+ * satisfy a newer wait. `answers` is required for `user_input` and refused for `user_continue`.
+ */
+export const advanceWorkflowInputSchema = Schema.Struct({
+  executionId: positiveInteger,
+  answers: Schema.optional(workflowUserInputAnswersSchema),
+});
+
+/** Every control returns the run as it stands after the control was applied. */
+export const workflowRunControlOutputSchema = Schema.Struct({ run: workflowRunSummarySchema });
+
 export type WorkflowRunStatus = typeof workflowRunStatusSchema.Type;
-export type WorkflowRunPosition = typeof workflowRunPositionSchema.Type;
-export type WorkflowOperationRef = typeof workflowOperationRefSchema.Type;
-export type WorkflowStopSummary = typeof workflowStopSummarySchema.Type;
 export type WorkflowRunControls = typeof workflowRunControlsSchema.Type;
+export type WorkflowRunOrigin = typeof workflowRunOriginSchema.Type;
+export type WorkflowRunCurrent = typeof workflowRunCurrentSchema.Type;
 export type WorkflowRunSummary = typeof workflowRunSummarySchema.Type;
-export type WorkflowRunTransitionDelta = typeof workflowRunTransitionDeltaSchema.Type;
+export type WorkflowRunDetail = typeof workflowRunDetailSchema.Type;
+export type WorkflowLaunchOrigin = typeof workflowLaunchOriginSchema.Type;
+export type WorkflowLoadFailureReason = typeof workflowLoadFailureReasonSchema.Type;
+export type WorkflowDescriptorResult = typeof workflowDescriptorResultSchema.Type;
+export type ListWorkflowDescriptorsInput = typeof listWorkflowDescriptorsInputSchema.Type;
+export type ListWorkflowDescriptorsOutput = typeof listWorkflowDescriptorsOutputSchema.Type;
+export type StartWorkflowInput = typeof startWorkflowInputSchema.Type;
+export type StartWorkflowOutput = typeof startWorkflowOutputSchema.Type;
+export type WorkflowRunRouteParams = typeof workflowRunRouteParamsSchema.Type;
+export type ListWorkflowRunsQuery = typeof listWorkflowRunsQuerySchema.Type;
+export type ListWorkflowRunsOutput = typeof listWorkflowRunsOutputSchema.Type;
+export type GetWorkflowRunOutput = typeof getWorkflowRunOutputSchema.Type;
+export type AdvanceWorkflowInput = typeof advanceWorkflowInputSchema.Type;
+export type WorkflowRunControlOutput = typeof workflowRunControlOutputSchema.Type;

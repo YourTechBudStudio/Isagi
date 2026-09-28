@@ -21,13 +21,13 @@ type MaybePromise<Value> = Value | Promise<Value>;
 
 /**
  * Exactly one router per executable node. `choose` is pure, synchronous, and has no context: it
- * cannot launch agents, read files, capture evidence, or suspend, so routing stays a decision over
+ * cannot launch agents, read files, or suspend, so routing stays a decision over
  * facts the node already produced.
  */
 export interface GraphEdge<State, Updates> extends WorkflowBrand {
   readonly isagiKind: 'edge';
   readonly from: WorkflowNodeId;
-  /** Declared destinations. Choosing anything outside this set fails the segment before any commit. */
+  /** Declared destinations. Choosing anything outside this set fails the execution and leaves state unchanged. */
   readonly to: readonly (WorkflowNodeId | WorkflowOutcomeId)[];
   readonly choose: (state: State, event: NodeEvent) => EdgeDecision<GraphUpdate<Updates>>;
   readonly title?: string | undefined;
@@ -56,7 +56,7 @@ export function edge<State, Updates>(spec: {
 /**
  * A terminal result of this graph. `kind: 'failure'` is an *authored* domain failure carrying a
  * serializable output — a child delivers it to its parent's router as data — and is a different
- * thing from an execution segment that threw.
+ * thing from an execution that threw.
  */
 export interface GraphOutcome<State, Output> extends WorkflowBrand {
   readonly isagiKind: 'outcome';
@@ -90,7 +90,7 @@ export interface GraphDefinition<State, Resolved, Parameters, Output> extends Wo
   readonly intent?: 'business' | 'logical' | 'operational' | undefined;
   /** Optional dynamic display name, captured once at graph entry. Pure, synchronous, never identity. */
   readonly label?: ((parameters: Parameters) => string) | undefined;
-  /** Synchronous and destination-scoped. It never runs again to migrate an existing frame's state. */
+  /** Synchronous and destination-scoped. It never runs again to migrate an existing graph invocation's state. */
   readonly init: (destination: WorkflowDestination, parameters: Parameters) => State;
   readonly state: GraphStateFields<State, Resolved>;
   readonly entry: WorkflowNodeId;
@@ -101,7 +101,7 @@ export interface GraphDefinition<State, Resolved, Parameters, Output> extends Wo
 
 /**
  * Reusable graph structure. One definition can be registered by several subgraph nodes; each
- * registration becomes its own frame at run time, and the descriptor records one graph entry
+ * registration becomes its own graph invocation at run time, and the descriptor records one graph entry
  * referenced many times.
  *
  * The second type parameter is an *override map*: it names the update-value type only for fields

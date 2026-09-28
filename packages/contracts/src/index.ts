@@ -346,8 +346,7 @@ export {
   durableSessionDeletedEventSchema,
   editorContextChangedEventSchema,
   workflowRunChangedEventSchema,
-  workflowRunDetachedEventSchema,
-  workflowRunTransitionEventSchema,
+  workflowRunEventSchema,
   workflowRunSnapshotEventSchema,
   terminalAttentionStateSchema,
   agentSessionChangedEventSchema,
@@ -379,8 +378,7 @@ export type {
   SurfaceChangedEvent,
   TerminalSessionChangedEvent,
   WorkflowRunChangedEvent,
-  WorkflowRunDetachedEvent,
-  WorkflowRunTransitionEvent,
+  WorkflowRunEvent,
   WorkflowRunSnapshotEvent,
 } from './runtime-events/types.js';
 export { editorEndpoints } from './editor/api.js';

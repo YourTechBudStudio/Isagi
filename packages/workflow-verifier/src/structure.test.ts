@@ -71,7 +71,7 @@ function brokenGraph(overrides: Record<string, unknown>) {
 test('a valid module produces a descriptor at the current descriptor and contract versions', () => {
   const descriptor = describeOrThrow(leafGraph('Root'));
   assert.equal(descriptor.descriptorVersion, workflowStructureDescriptorVersion);
-  assert.equal(descriptor.workflowContractVersion, 3);
+  assert.equal(descriptor.workflowContractVersion, 4);
   assert.equal(descriptor.rootGraphKey, 'Root');
   assert.deepEqual(
     descriptor.graphs.map((graph) => graph.key),
@@ -89,13 +89,13 @@ test('a missing or unbranded default export is invalid_export, not a crash', () 
 
 test('a bundle built against another contract reports the real cause', () => {
   const result = describeWorkflowModule({
-    default: { isagiContract: 2, isagiKind: 'workflow', command() {}, validate() {} },
+    default: { isagiContract: 3, isagiKind: 'workflow', command() {}, validate() {} },
   });
   assert.equal(result.ok, false);
   assert.equal(result.ok ? null : result.diagnostics[0]?.code, 'unsupported_contract');
   assert.match(
     result.ok ? '' : (result.diagnostics[0]?.message ?? ''),
-    /contract version 2; this release supports version 3/,
+    /contract version 3; this release supports version 4/,
   );
 });
 
@@ -740,7 +740,7 @@ test('extraction reads registration data without invoking any author callback', 
     invoked.push(name);
     throw new Error(`${name} was invoked during extraction`);
   };
-  const branded = (kind: string) => ({ isagiContract: 3, isagiKind: kind });
+  const branded = (kind: string) => ({ isagiContract: 4, isagiKind: kind });
 
   const child = {
     ...branded('graph'),

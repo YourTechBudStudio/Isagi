@@ -39,7 +39,7 @@ test('owns source inclusion and reserved path policy', () => {
 test('parses and canonically serializes manifest format 2', () => {
   const manifest = {
     manifestVersion: 2,
-    workflowContractVersion: 3,
+    workflowContractVersion: 4,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
     source: { sha256: 'a'.repeat(64) },
@@ -62,7 +62,7 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
   // structure that artifact declares.
   const { structure, ...withoutStructure } = {
     manifestVersion: 2,
-    workflowContractVersion: 3,
+    workflowContractVersion: 4,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
     source: { sha256: 'a'.repeat(64) },
@@ -76,7 +76,7 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
 test('the structure block is parsed with exact keys and checked values', () => {
   const base = {
     manifestVersion: 2,
-    workflowContractVersion: 3,
+    workflowContractVersion: 4,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
     source: { sha256: 'a'.repeat(64) },
@@ -86,6 +86,10 @@ test('the structure block is parsed with exact keys and checked values', () => {
   const withStructure = (structure: Record<string, unknown>) =>
     parseWorkflowBuildManifest({ ...base, structure });
 
+  assert.throws(
+    () => parseWorkflowBuildManifest({ ...base, workflowContractVersion: 3 }),
+    /Unsupported workflowContractVersion 3; this verifier supports 4/,
+  );
   assert.throws(
     () => withStructure({ ...base.structure, extra: 1 }),
     /structure has unexpected fields: extra/,

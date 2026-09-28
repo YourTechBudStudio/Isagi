@@ -45,7 +45,7 @@ function artifact(options: { readonly checkpoint?: boolean; readonly graphKey?: 
   const node = options.checkpoint
     ? `{ ...brand('checkpoint-node'), title: 'Save notes', prepare: () => { throw new Error('prepare ran during verification'); } }`
     : `{ ...brand('operation-node'), run: async () => ({ ...brand('operation-result'), type: 'complete' }) }`;
-  return `const brand = (kind) => ({ isagiContract: 3, isagiKind: kind });
+  return `const brand = (kind) => ({ isagiContract: 4, isagiKind: kind });
 const graph = {
   ...brand('graph'),
   key: ${JSON.stringify(key)},
@@ -191,11 +191,11 @@ test('structural diagnostics name the code and the location', async () => {
   });
 });
 
-test('a contract-version-2 bundle reports the real cause and never loads', async () => {
-  const root = await fixture(artifact().replaceAll('isagiContract: 3', 'isagiContract: 2'));
+test('a contract-version-3 bundle reports the real cause and never loads', async () => {
+  const root = await fixture(artifact().replaceAll('isagiContract: 4', 'isagiContract: 3'));
   await assert.rejects(verifyWorkflow(root), (error: Error) => {
     assert.match(error.message, /\[unsupported_contract\]/);
-    assert.match(error.message, /contract version 2; this release supports version 3/);
+    assert.match(error.message, /contract version 3; this release supports version 4/);
     return true;
   });
 });
@@ -343,7 +343,7 @@ test('the generated descriptor is regenerated from the bundle, never read back a
     join(root, structureFile),
     `${JSON.stringify({
       descriptorVersion: 1,
-      workflowContractVersion: 3,
+      workflowContractVersion: 4,
       rootGraphKey: 'Impostor',
       graphs: [
         {

@@ -20,7 +20,7 @@ export const workflowStructureDescriptorVersion = 1 as const;
  * local leaves the packed verifier — which authors may install as a standalone CLI — free of a
  * runtime SDK resolution.
  */
-const recognizedContractVersion = 3;
+const recognizedContractVersion = 4;
 
 const limits = {
   graphs: 512,
@@ -32,7 +32,7 @@ const limits = {
 
 export interface WorkflowStructureDescriptor {
   readonly descriptorVersion: typeof workflowStructureDescriptorVersion;
-  readonly workflowContractVersion: 3;
+  readonly workflowContractVersion: 4;
   readonly rootGraphKey: string;
   /** Sorted by key, so one structure always canonicalizes to the same bytes. */
   readonly graphs: readonly GraphDescriptor[];

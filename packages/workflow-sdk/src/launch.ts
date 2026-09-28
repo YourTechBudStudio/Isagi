@@ -111,7 +111,7 @@ export interface WorkflowOrigin {
   readonly agentSessionId?: number | null | undefined;
 }
 
-/** Where a run's work is placed. Subgraphs inherit their parent frame's destination. */
+/** Where a run's work is placed. Subgraphs inherit their parent graph invocation's destination. */
 export interface WorkflowDestination {
   readonly worktreeId: number;
   readonly worktreePath: string;

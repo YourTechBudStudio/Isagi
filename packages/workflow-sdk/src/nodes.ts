@@ -54,7 +54,7 @@ export interface SubgraphNode<
   readonly description?: string | undefined;
   readonly label?: ((state: ParentState) => string) | undefined;
   readonly graph: GraphDefinition<any, any, ChildParameters, ChildOutput>;
-  /** Pure and synchronous: it runs inside the transaction that opens the child frame. */
+  /** Pure and synchronous: it runs inside the transaction that opens the child graph invocation. */
   readonly parameters: (parent: ParentState) => ChildParameters;
   /** Pure and synchronous: it maps the child's published output back through this graph's reducers. */
   readonly onResult: (
@@ -86,10 +86,12 @@ export function subgraph<ParentState, ParentUpdates, ChildParameters, ChildOutpu
 }
 
 /**
- * A filesystem boundary the runtime captures each time this node is visited.
+ * A filesystem snapshot the runtime captures each time this node is visited: the current Git commit
+ * plus an exact copy of exactly the scopes the plan names. Nothing is inherited from earlier
+ * checkpoints, and a missing path is recorded as missing.
  *
- * `prepare` is pure and synchronous: it receives a frozen copy of the frame state and returns the
- * plan for this visit. It runs only when the node is visited, never during verification or
+ * `prepare` is pure and synchronous: it receives a frozen copy of the graph invocation's state and
+ * returns the plan for this visit. It runs only when the node is visited, never during verification or
  * inspection. A checkpoint leaves state unchanged and routes along its single edge.
  *
  * A checkpoint has no dynamic `label`: its instance title comes from the plan `prepare` returns,

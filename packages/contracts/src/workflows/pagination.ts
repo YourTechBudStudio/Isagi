@@ -1,35 +1,42 @@
 import { Schema } from 'effect';
 
-import { nonEmptyString } from './primitives.js';
+import { nonEmptyString, positiveInteger } from './primitives.js';
 
 /**
  * Shared query vocabulary.
  *
- * Its own module because `evidence.ts` and `checkpoints.ts` declare their own route inputs and must
- * page and decode booleans identically, while `requests.ts` depends on the execution records that
- * embed a checkpoint summary. A second copy of either is exactly the drift these represent.
+ * The runtime's route decoder turns every all-digit query value into a number before decoding, so a
+ * free-text query field must accept that number back as text. Without this a file named `2024` or
+ * a scope named `1` would be refused as a type error.
  */
-export const booleanStringSchema = Schema.Union(Schema.Boolean, Schema.Literal('true', 'false'));
-
-/** Opaque and bound to its run, filters and snapshot boundary. Clients never construct one. */
-export const cursorSchema = nonEmptyString;
+export const queryTextSchema = Schema.transform(
+  Schema.Union(nonEmptyString, Schema.Number),
+  nonEmptyString,
+  { strict: true, decode: (value) => String(value), encode: (value) => value },
+);
 
 /**
- * Every list route pages the same way: default 100, hard maximum 500. The maximum is part of the
- * schema rather than prose, so an over-large request is rejected at the boundary instead of being
- * silently clamped or honoured.
+ * Every workflow list pages the same way: rows are ordered by id, and the cursor is the last id the
+ * client received. The runtime returns rows with a greater id, and `nextCursor` is `null` once there
+ * is nothing more.
  */
+export const cursorSchema = positiveInteger;
+
+/** Default 100, hard maximum 500. An over-large request is rejected rather than clamped. */
 export const workflowListPageLimitMaximum = 500;
 
-export const paginationQuerySchema = Schema.Struct({
-  limit: Schema.optional(
-    Schema.Number.pipe(
-      Schema.int(),
-      Schema.positive(),
-      Schema.lessThanOrEqualTo(workflowListPageLimitMaximum),
-    ),
-  ),
+/** Query fields shared by every list route. */
+export const paginationQueryFields = {
   cursor: Schema.optional(cursorSchema),
-});
+  limit: Schema.optional(
+    positiveInteger.pipe(Schema.lessThanOrEqualTo(workflowListPageLimitMaximum)),
+  ),
+};
+
+export const paginationQuerySchema = Schema.Struct(paginationQueryFields);
+
+/** The envelope every list route returns. */
+export const pagedSchema = <Item extends Schema.Schema.Any>(item: Item) =>
+  Schema.Struct({ items: Schema.Array(item), nextCursor: Schema.NullOr(cursorSchema) });
 
 export type PaginationQuery = typeof paginationQuerySchema.Type;

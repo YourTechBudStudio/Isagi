@@ -23,7 +23,6 @@ import {
   workflowStructureDescriptorSchema,
   workflowStructureDiagnosticCodeSchema,
   workflowStructureDiagnosticSchema,
-  workflowVersionSchema,
   type WorkflowStructureDescriptorDto,
   type WorkflowStructureDiagnosticCode,
 } from './structure.js';
@@ -156,7 +155,7 @@ test('a checkpoint descriptor decodes with its static metadata and no caption', 
 test('the schema rejects a descriptor from an unsupported contract or descriptor version', () => {
   const valid = {
     descriptorVersion: 1,
-    workflowContractVersion: 3,
+    workflowContractVersion: 4,
     rootGraphKey: 'Root',
     graphs: [],
   };
@@ -167,7 +166,7 @@ test('the schema rejects a descriptor from an unsupported contract or descriptor
   assert.throws(() =>
     Schema.decodeUnknownSync(workflowStructureDescriptorSchema)({
       ...valid,
-      workflowContractVersion: 2,
+      workflowContractVersion: 3,
     }),
   );
 });
@@ -234,27 +233,4 @@ test('a real extractor diagnostic decodes through the mirrored code set', () => 
     JSON.parse(JSON.stringify(result.ok ? null : result.diagnostics[0])),
   );
   assert.equal(decoded.code, 'invalid_export');
-});
-
-test('only a launch and an adopted Retry create a version adoption', () => {
-  // Resume loads the run's current pin and never discovers or adopts a newer artifact, so a
-  // `resume` adoption is a record the engine must never be able to produce.
-  const adoption = {
-    artifactHash: 'sha256:pin4',
-    pinOrdinal: 4,
-    sdkVersion: '0.1.0',
-    verifierVersion: '0.1.0',
-    rootGraphKey: 'Story',
-    adoptedAt: '2026-01-01T00:00:00.000Z',
-    adoptedBy: 'launch',
-  };
-  for (const adoptedBy of ['launch', 'retry']) {
-    assert.equal(
-      Schema.decodeUnknownSync(workflowVersionSchema)({ ...adoption, adoptedBy }).adoptedBy,
-      adoptedBy,
-    );
-  }
-  assert.throws(() =>
-    Schema.decodeUnknownSync(workflowVersionSchema)({ ...adoption, adoptedBy: 'resume' }),
-  );
 });
