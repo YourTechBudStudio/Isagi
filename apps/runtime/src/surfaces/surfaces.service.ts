@@ -1,8 +1,10 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 
 import type {
   CreateSurfaceOutput,
+  DeletePaneOutput,
   DeleteSurfaceOutput,
+  OpenEditorInput,
   OpenEditorOutput,
   PaneSessionClaimInput,
   PaneSessionClaimOutput,
@@ -14,13 +16,12 @@ import type {
   MoveSurfaceOrderOutput,
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
+  StartPaneInput,
   SurfaceDetail,
   SurfaceChangedEvent,
-  SurfaceLayoutNode,
   SurfaceOrderRejectionReason,
   WorktreeEnvironmentFocusOutput,
 } from '@isagi/contracts';
-import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
 import { displayNameForHarness } from '../agent-sessions/harness/display.js';
 import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
@@ -35,7 +36,11 @@ import {
   type EditorUnavailable,
 } from '../editor-contexts/index.js';
 import type { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
-import { EntityLock, type EntityLockHeld } from '../lib/locks/entity-lock.js';
+import {
+  EntityLock,
+  type EntityLockHeld,
+  type EntityLockService,
+} from '../lib/locks/entity-lock.js';
 import type { DatabaseError } from '../persistence/index.js';
 import {
   activePtyProcessIdsForSessions,
@@ -52,12 +57,14 @@ import { SessionLifecycle } from '../session-lifecycle/index.js';
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
 import { planSurfacePaneDelete, type SurfacePaneDeletePlan } from './delete-plan.js';
 import { SurfaceError, SurfaceOrderError } from './errors.js';
-import { setNodeWeights } from './layout.js';
+import { decodeSurfaceLayout, setNodeWeights } from './layout.js';
 import { openEditor } from './open-editor.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './session-status.js';
 import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
 import type {
   AgentSessionRow,
+  CreateEmptySurfaceInput,
+  CreateEmptySurfaceOutput,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
   SurfaceDeleteTarget,
@@ -86,9 +93,9 @@ export interface SurfaceService {
    * Idempotent placement of the worktree's one durable editor context. Starts no
    * process: the pane's `ensureRuntime` call is the on-demand half.
    */
-  readonly openEditor: (input: {
-    readonly worktreeId: number;
-  }) => Effect.Effect<OpenEditorOutput, SurfaceServiceError | EditorUnavailable>;
+  readonly openEditor: (
+    input: { readonly worktreeId: number } & OpenEditorInput,
+  ) => Effect.Effect<OpenEditorOutput, SurfaceServiceError | EditorUnavailable>;
   readonly renameSurface: (input: {
     readonly surfaceId: number;
     readonly title: string;
@@ -96,10 +103,11 @@ export interface SurfaceService {
   readonly deleteSurface: (
     surfaceId: number,
   ) => Effect.Effect<DeleteSurfaceOutput, SurfaceServiceError>;
+  /** Deleting the last pane leaves the surface empty; it never deletes the surface. */
   readonly deleteSurfacePane: (input: {
     readonly surfaceId: number;
     readonly paneId: number;
-  }) => Effect.Effect<DeleteSurfaceOutput, SurfaceServiceError>;
+  }) => Effect.Effect<DeletePaneOutput, SurfaceServiceError>;
   readonly createSurface: (input: {
     readonly worktreeId: number;
     readonly initialPane: PaneSessionSpec;
@@ -107,6 +115,11 @@ export interface SurfaceService {
   readonly splitPane: (input: {
     readonly worktreeId: number;
     readonly split: SplitPaneInput;
+  }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
+  /** Starts the first pane of an empty surface. A surface that has panes is refused. */
+  readonly startPane: (input: {
+    readonly surfaceId: number;
+    readonly start: StartPaneInput;
   }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
   readonly setSplitWeights: (input: {
     readonly surfaceId: number;
@@ -123,6 +136,10 @@ export interface SurfaceService {
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
   ) => Effect.Effect<CreateSinglePaneSurfaceOutput, SurfaceServiceError>;
+  /** A surface with no panes yet, focused. Its first pane is started with `startPane`. */
+  readonly createEmptySurface: (
+    input: CreateEmptySurfaceInput,
+  ) => Effect.Effect<CreateEmptySurfaceOutput, SurfaceServiceError>;
   readonly setWorktreeEnvironmentFocus: (input: {
     readonly worktreeId: number;
     readonly focus: SetWorktreeEnvironmentFocusInput;
@@ -150,6 +167,49 @@ export const SurfaceServiceLive = Layer.effect(
     // `EditorContextService` are built on, so placement and the editor's own
     // lifecycle genuinely serialize against each other.
     const entityLock = yield* EntityLock;
+
+    const deleteSurfacePane: SurfaceService['deleteSurfacePane'] = (input) =>
+      Effect.gen(function* () {
+        const target = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
+        if (!target) return emptyPaneDeleteOutput;
+        if (!target.panes.some(({ pane }) => pane.id === input.paneId))
+          return emptyPaneDeleteOutput;
+        const plan = planSurfacePaneDelete(target, input.paneId);
+        const deps = { repository, pty, eventBus, editors, entityLock };
+        // The lock decision inspects the pane the plan will actually delete,
+        // not whether the surface happens to hold an editor. Deleting an
+        // unrelated terminal pane from a surface that also holds one keeps the
+        // fast path; only deleting the editor pane itself needs the lock.
+        if (editorContextIdsOfPanes(panesForPlan(target, plan)).length === 0)
+          return yield* deletePlannedPanes(deps, target, plan, input.paneId, null);
+        return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
+          Effect.gen(function* () {
+            const fresh = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
+            if (!fresh) return emptyPaneDeleteOutput;
+            if (!fresh.panes.some(({ pane }) => pane.id === input.paneId))
+              return emptyPaneDeleteOutput;
+            const freshPlan = planSurfacePaneDelete(fresh, input.paneId);
+            return yield* deletePlannedPanes(deps, fresh, freshPlan, input.paneId, held);
+          }),
+        );
+      });
+
+    /**
+     * Compensation for a first pane whose session never started. Best effort:
+     * the caller is already failing with the cause that matters, and a pane
+     * this leaves behind is still closable from its own menu.
+     */
+    const removeStartedPane = (input: { readonly surfaceId: number; readonly paneId: number }) =>
+      deleteSurfacePane(input).pipe(
+        Effect.catchAllCause((cause) =>
+          Effect.sync(() =>
+            console.warn('[runtime] Could not remove a first pane whose session failed to start', {
+              ...input,
+              cause,
+            }),
+          ),
+        ),
+      );
 
     return {
       getSurfaceDetail: (surfaceId) =>
@@ -184,7 +244,7 @@ export const SurfaceServiceLive = Layer.effect(
             id: surface.id,
             worktreeId: surface.worktreeId,
             title: surface.title,
-            layout: decodeLayout(surface.layoutJson),
+            layout: decodeSurfaceLayout(surface.layoutJson),
             activePaneId,
             panes: panes.map((pane) => ({
               id: pane.id,
@@ -222,7 +282,7 @@ export const SurfaceServiceLive = Layer.effect(
       deleteSurface: (surfaceId) =>
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, surfaceId);
-          const deps = { repository, pty, eventBus, editors };
+          const deps = { repository, pty, eventBus, editors, entityLock };
           // Deleting this surface removes every one of its panes, so the whole
           // capture is what the lock decision inspects.
           if (editorContextIdsOfPanes(target.panes.map(({ pane }) => pane)).length === 0)
@@ -235,33 +295,7 @@ export const SurfaceServiceLive = Layer.effect(
             }),
           );
         }),
-      deleteSurfacePane: (input) =>
-        Effect.gen(function* () {
-          const target = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
-          if (!target) return emptyDeleteOutput;
-          if (!target.panes.some(({ pane }) => pane.id === input.paneId)) return emptyDeleteOutput;
-          const plan = planSurfacePaneDelete(target, input.paneId);
-          const deps = { repository, pty, eventBus, editors };
-          // The lock decision inspects the panes the plan will actually delete,
-          // not whether the surface happens to hold an editor. Deleting an
-          // unrelated terminal pane from a surface that also holds one keeps the
-          // fast path; only a plan that escalates into removing the editor pane
-          // needs the lock.
-          if (editorContextIdsOfPanes(panesForPlan(target, plan)).length === 0)
-            return yield* deletePlannedPanes(deps, target, plan, input.paneId, null);
-          return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
-            Effect.gen(function* () {
-              const fresh = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
-              if (!fresh) return emptyDeleteOutput;
-              if (!fresh.panes.some(({ pane }) => pane.id === input.paneId))
-                return emptyDeleteOutput;
-              // Re-planned, never reused: another pane deletion may have
-              // changed the layout or escalated what this plan removes.
-              const freshPlan = planSurfacePaneDelete(fresh, input.paneId);
-              return yield* deletePlannedPanes(deps, fresh, freshPlan, input.paneId, held);
-            }),
-          );
-        }),
+      deleteSurfacePane,
       createSurface: (input) =>
         Effect.gen(function* () {
           const surface = yield* createSinglePaneSurface(repository, {
@@ -333,6 +367,62 @@ export const SurfaceServiceLive = Layer.effect(
             title: split.title,
           } satisfies CreateSurfaceOutput;
         }),
+      startPane: (input) =>
+        Effect.gen(function* () {
+          const newPane = input.start.newPane;
+          const started = yield* repository.startSurfacePane({
+            surfaceId: input.surfaceId,
+            titleBase: titleBaseForInitialPane(newPane),
+          });
+          if (started.status === 'surface_not_found')
+            return yield* Effect.fail(
+              new SurfaceError({
+                code: 'surface_not_found',
+                message: `Surface ${input.surfaceId} was not found.`,
+                surfaceId: input.surfaceId,
+              }),
+            );
+          if (started.status === 'surface_not_empty')
+            return yield* Effect.fail(
+              new SurfaceError({
+                code: 'surface_not_empty',
+                message: `Surface ${input.surfaceId} already has panes; split one instead.`,
+                worktreeId: started.worktreeId,
+                surfaceId: input.surfaceId,
+              }),
+            );
+          // The pane exists first, then its session is created and bound. If
+          // that fails the pane is removed again, so the surface goes back to
+          // honestly empty (with its start actions) rather than holding a
+          // sessionless pane nothing will ever claim.
+          yield* createPaneSession(
+            repository,
+            agents,
+            terminals,
+            lifecycle,
+            eventBus,
+            started.worktreeId,
+            paneSessionCreateInput(started.paneId, newPane),
+          ).pipe(
+            Effect.onError(() =>
+              removeStartedPane({
+                surfaceId: started.surfaceId,
+                paneId: started.paneId,
+              }),
+            ),
+          );
+          yield* publishSurfaceChanged(eventBus, {
+            worktreeId: started.worktreeId,
+            surfaceId: started.surfaceId,
+            change: 'layout_changed',
+          });
+          return {
+            worktreeId: started.worktreeId,
+            surfaceId: started.surfaceId,
+            paneId: started.paneId,
+            title: started.title,
+          } satisfies CreateSurfaceOutput;
+        }),
       setSplitWeights: (input) =>
         Effect.gen(function* () {
           const surface = yield* repository.findSurface(input.surfaceId);
@@ -344,8 +434,9 @@ export const SurfaceServiceLive = Layer.effect(
                 surfaceId: input.surfaceId,
               }),
             );
-          const layout = decodeLayout(surface.layoutJson);
-          const nextLayout = setNodeWeights(layout, input.weights.nodeId, input.weights.weights);
+          const layout = decodeSurfaceLayout(surface.layoutJson);
+          const nextLayout =
+            layout && setNodeWeights(layout, input.weights.nodeId, input.weights.weights);
           if (!nextLayout)
             return yield* Effect.fail(
               new SurfaceError({
@@ -403,6 +494,21 @@ export const SurfaceServiceLive = Layer.effect(
         }),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
+          // Validated here and not only in `renameSurface`: a title that cannot be set by rename
+          // has no business being created either, and launch-time placement validation calls the
+          // same rule so a title is refused before anything is allocated rather than after.
+          const titleBase = yield* validateSurfaceTitle(input.titleBase);
+          const output = yield* createSinglePaneSurface(repository, { ...input, titleBase });
+          yield* publishSurfaceChanged(eventBus, {
+            worktreeId: input.worktreeId,
+            surfaceId: output.surfaceId,
+            change: 'created',
+          });
+          return output;
+        }),
+      createEmptySurface: (input) =>
+        Effect.gen(function* () {
+          const titleBase = yield* validateSurfaceTitle(input.titleBase);
           const exists = yield* repository.worktreeExists(input.worktreeId);
           if (!exists)
             return yield* Effect.fail(
@@ -412,7 +518,7 @@ export const SurfaceServiceLive = Layer.effect(
                 worktreeId: input.worktreeId,
               }),
             );
-          const output = yield* repository.createSinglePaneSurface(input);
+          const output = yield* repository.createEmptySurface({ ...input, titleBase });
           yield* publishSurfaceChanged(eventBus, {
             worktreeId: input.worktreeId,
             surfaceId: output.surfaceId,
@@ -511,6 +617,8 @@ function createPaneSession(
   return Effect.gen(function* () {
     const target = yield* loadPaneSessionTarget(repository, worktreeId, create.paneId);
     const session = yield* resolveCreatedSession(agents, terminals, worktreeId, target.cwd, create);
+    // If the pane was removed meanwhile (its surface closed during startup), the
+    // claim fails and the new, never-started session is left for orphan GC.
     const output = yield* assignPaneSession(repository, lifecycle, eventBus, {
       worktreeId,
       surfaceId: target.surface.id,
@@ -601,11 +709,31 @@ function assignPaneSession(
 ) {
   return Effect.gen(function* () {
     const key = { kind: input.session.kind, sessionId: input.session.sessionId };
-    yield* repository.claimPaneSession({
-      paneId: input.paneId,
-      sessionKind: input.session.kind,
-      sessionId: input.session.sessionId,
-    });
+    // Under the session's lock, shared with process launch and
+    // `stopUnlessPlaced`: whoever decides a session is unplaced decides it
+    // before or after this binding, never across it.
+    const claimed = yield* lifecycle.withRestoreLock(
+      key,
+      repository.claimPaneSession({
+        paneId: input.paneId,
+        sessionKind: input.session.kind,
+        sessionId: input.session.sessionId,
+      }),
+    );
+    if (claimed !== 'claimed')
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: claimed === 'pane_missing' ? 'pane_not_found' : 'session_not_found',
+          message:
+            claimed === 'pane_missing'
+              ? `Pane ${input.paneId} was removed before its session could be placed.`
+              : `Session ${input.session.sessionId} was removed before it could be placed.`,
+          worktreeId: input.worktreeId,
+          surfaceId: input.surfaceId,
+          paneId: input.paneId,
+          sessionId: input.session.sessionId,
+        }),
+      );
     yield* lifecycle.supersedeAttachment(key);
     const attachToken = yield* lifecycle.issueAttachToken(key);
     yield* repository.setEnvironmentFocus({
@@ -743,7 +871,7 @@ function sessionSurfaceError(
   });
 }
 
-function validateSurfaceTitle(title: string) {
+export function validateSurfaceTitle(title: string) {
   const trimmed = title.trim();
   if (trimmed.length === 0 || trimmed.length > 80)
     return Effect.fail(
@@ -787,11 +915,14 @@ const emptyDeleteOutput = {
   deletedPaneIds: [],
 } satisfies DeleteSurfaceOutput;
 
+const emptyPaneDeleteOutput = { deletedPaneIds: [] } satisfies DeletePaneOutput;
+
 interface SurfaceDeleteDependencies {
   readonly repository: SurfaceRepositoryService;
   readonly pty: PtyServiceShape;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly editors: EditorContextServiceShape;
+  readonly entityLock: EntityLockService;
 }
 
 function loadDeleteTargetOrNull(repository: SurfaceRepositoryService, surfaceId: number) {
@@ -826,27 +957,25 @@ function deleteWholeSurface(
   held: EntityLockHeld | null,
 ) {
   return Effect.gen(function* () {
-    const panes = target.panes.map(({ pane }) => pane);
-    const sessions = yield* sessionsForPaneIds(
-      deps.repository,
-      panes.map((pane) => pane.id),
-    );
-    const deleted = yield* deps.repository.deleteSurface(target);
+    // Cleanup acts on the panes the delete actually removed, read inside its
+    // transaction: a first pane whose session was bound after `target` was
+    // read still has that session stopped.
+    const deleted = yield* deps.repository.deleteSurface(target.surface.id);
+    if (deleted.deletedSurfaceId === null) return emptyDeleteOutput;
+    const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
     yield* finishSurfaceDelete(deps, {
-      sessions,
-      deletedPanes: panes,
-      editorContextIds: editorContextIdsOfPanes(panes),
+      deletedPanes: deleted.deletedPanes,
       held,
       surfaceChanged: {
         worktreeId: target.surface.worktreeId,
         surfaceId: target.surface.id,
         change: 'deleted',
-        deletedPaneIds: [...deleted.deletedPaneIds],
+        deletedPaneIds,
       },
     });
     return {
       deletedSurfaceId: deleted.deletedSurfaceId,
-      deletedPaneIds: [...deleted.deletedPaneIds],
+      deletedPaneIds,
     } satisfies DeleteSurfaceOutput;
   });
 }
@@ -860,14 +989,20 @@ function deletePlannedPanes(
   held: EntityLockHeld | null,
 ) {
   return Effect.gen(function* () {
-    const sessions = yield* sessionsForPaneIds(deps.repository, plan.deletedPaneIds);
-    const deleted = yield* deps.repository.deleteSurfacePane({ target, plan });
-    if (deleted.deletedPaneIds.length === 0 && deleted.deletedSurfaceId === null) {
-      // A delete plan was built from a pane that existed at load time, yet the
-      // repository removed nothing. This is not the idempotent "already gone"
-      // case (handled by the caller) — it is a concurrent deletion racing this
-      // one, so leave a breadcrumb to distinguish it from a genuine repository
-      // miss. Nothing committed, so nothing is published.
+    // `plan` only decides the lock. The repository re-plans against the rows
+    // inside its transaction and removes only what that says, so a concurrent
+    // delete can never leave a stale layout behind, and cleanup acts on the
+    // sessions bound to the panes it actually removed.
+    const deleted = yield* deps.repository.deleteSurfacePane({
+      surfaceId: target.surface.id,
+      paneId: requestedPaneId,
+    });
+    if (deleted.deletedPanes.length === 0) {
+      // The pane existed at load time, yet the repository removed nothing. This
+      // is not the idempotent "already gone" case (handled by the caller) — it
+      // is a concurrent deletion racing this one, so leave a breadcrumb to
+      // distinguish it from a genuine repository miss. Nothing committed, so
+      // nothing is published.
       console.warn(
         '[runtime] Surface pane delete planned a removal but the repository deleted nothing; treating as already gone',
         {
@@ -876,27 +1011,20 @@ function deletePlannedPanes(
           plannedDeletedPaneIds: plan.deletedPaneIds,
         },
       );
-      return emptyDeleteOutput;
+      return emptyPaneDeleteOutput;
     }
-    const deletedPanes = target.panes
-      .map(({ pane }) => pane)
-      .filter((pane) => deleted.deletedPaneIds.includes(pane.id));
+    const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
     yield* finishSurfaceDelete(deps, {
-      sessions,
-      deletedPanes,
-      editorContextIds: editorContextIdsOfPanes(deletedPanes),
+      deletedPanes: deleted.deletedPanes,
       held,
       surfaceChanged: {
         worktreeId: target.surface.worktreeId,
         surfaceId: target.surface.id,
-        change: deleted.deletedSurfaceId === target.surface.id ? 'deleted' : 'pane_deleted',
-        deletedPaneIds: [...deleted.deletedPaneIds],
+        change: 'pane_deleted',
+        deletedPaneIds,
       },
     });
-    return {
-      deletedSurfaceId: deleted.deletedSurfaceId,
-      deletedPaneIds: [...deleted.deletedPaneIds],
-    } satisfies DeleteSurfaceOutput;
+    return { deletedPaneIds } satisfies DeletePaneOutput;
   });
 }
 
@@ -914,12 +1042,7 @@ function deletePlannedPanes(
 function finishSurfaceDelete(
   deps: SurfaceDeleteDependencies,
   args: {
-    readonly sessions: {
-      readonly agents: readonly AgentSessionRow[];
-      readonly terminals: readonly TerminalSessionRow[];
-    };
     readonly deletedPanes: readonly SurfacePaneRow[];
-    readonly editorContextIds: readonly number[];
     readonly held: EntityLockHeld | null;
     readonly surfaceChanged: SurfaceChangedEvent['payload'];
   },
@@ -927,35 +1050,39 @@ function finishSurfaceDelete(
   const cleanup = Effect.gen(function* () {
     // Agents and terminals only. An editor is never routed through this helper:
     // it is best-effort inside a `catchAll`, and clearing an editor's ownership
-    // requires the affirmative outcome that discards.
-    yield* terminateDeletedPanePtys(deps.pty, args.sessions);
-    const { held } = args;
-    if (!held) return;
-    for (const editorContextId of args.editorContextIds) {
-      // Read through the surfaces repository, by the surfaces layer: handing the
-      // editor domain a pane read to answer a question about itself would
-      // reopen the cycle the one-way dependency exists to prevent.
-      const placement = yield* deps.repository.findPaneForSession({
-        sessionKind: 'editor_context',
-        sessionId: editorContextId,
+    // requires the affirmative outcome that discards. Read here, inside the
+    // guarded cleanup, so a failed read still publishes the committed delete.
+    const sessions = yield* deps.repository.listSessionsBoundTo(args.deletedPanes);
+    yield* terminateDeletedPanePtys(deps.pty, sessions);
+    const editorContextIds = editorContextIdsOfPanes(args.deletedPanes);
+    if (editorContextIds.length === 0) return;
+    const release = (held: EntityLockHeld) =>
+      Effect.gen(function* () {
+        for (const editorContextId of editorContextIds) {
+          // Read through the surfaces repository, by the surfaces layer: handing
+          // the editor domain a pane read to answer a question about itself
+          // would reopen the cycle the one-way dependency exists to prevent.
+          const placement = yield* deps.repository.findPaneForSession({
+            sessionKind: 'editor_context',
+            sessionId: editorContextId,
+          });
+          // Re-placed or bound elsewhere while we held the lock: never terminate.
+          if (placement) continue;
+          yield* deps.editors.releaseIncarnation({ held, editorContextId });
+        }
       });
-      // Re-placed or bound elsewhere while we held the lock: never terminate.
-      if (placement) continue;
-      yield* deps.editors.releaseIncarnation({ held, editorContextId });
-    }
+    // The delete took the fast path because no editor was there when it looked,
+    // but one was placed before it committed (opening an editor into an empty
+    // surface). Take the lock now and apply the same release decision.
+    yield* args.held
+      ? release(args.held)
+      : deps.entityLock.withLock(editorLockKey(args.surfaceChanged.worktreeId), release);
   });
   const publications = Effect.gen(function* () {
     yield* publishDeletedPaneSessionChanges(deps.eventBus, args.deletedPanes);
     yield* publishSurfaceChanged(deps.eventBus, args.surfaceChanged);
   });
   return cleanup.pipe(Effect.ensuring(publications));
-}
-
-function sessionsForPaneIds(repository: SurfaceRepositoryService, paneIds: readonly number[]) {
-  return Effect.all({
-    agents: repository.listAgentSessionsForPanes(paneIds),
-    terminals: repository.listTerminalSessionsForPanes(paneIds),
-  });
 }
 
 function terminateDeletedPanePtys(
@@ -1154,8 +1281,4 @@ function setWorktreeEnvironmentFocus(
       activePaneId: input.focus.activePaneId,
     });
   });
-}
-
-function decodeLayout(layoutJson: string): SurfaceLayoutNode {
-  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(layoutJson));
 }

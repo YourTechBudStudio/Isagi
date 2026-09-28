@@ -56,6 +56,21 @@ export const paletteCopy = {
       title: 'Workflow did not start.',
       diagnosticLabel: 'Runtime detail',
     },
+    // Preparing an environment creates a worktree and runs setup hooks, which takes
+    // real time. The panel names the work rather than performing patience; the
+    // retry hint differs only in saying that nothing is being created a second time.
+    preparing: {
+      title: 'Preparing the environment…',
+      hint: 'Creating a worktree and running setup hooks.',
+    },
+    retrying: {
+      title: 'Preparing the environment…',
+      hint: 'Retrying on the same worktree.',
+    },
+    // Re-reading a run Isagi already started. Short, because it is one request.
+    readingRun: {
+      title: 'Reading what happened…',
+    },
   },
   // The Commands section: rows are configured worktree processes. Subs state
   // the selection behavior in plain working chrome \u2014 startable rows launch, the
@@ -104,6 +119,8 @@ export const paletteCopy = {
     commandUnavailableBody:
       'The workspace changed while the palette was open. Close this and try again.',
     close: 'Close',
+    retry: 'Retry',
+    tryAgain: 'Try again',
     diagnostic: 'Diagnostic detail',
   },
   // Calm status while a command's async run is in flight. The chip names the

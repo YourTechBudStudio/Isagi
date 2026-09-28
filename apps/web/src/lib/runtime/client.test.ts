@@ -7,23 +7,14 @@ import type {
   AddProjectOutput,
   ApiError,
   CreateSurfaceOutput,
-  DeleteSurfaceOutput,
+  DeletePaneOutput,
   Project,
   RenameSurfaceOutput,
-  WorkspaceSnapshot,
   ClientSettingsOutput,
 } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeDecodeError } from '@isagi/runtime-client';
 
-import {
-  createRuntimeClient,
-  RuntimeApiError,
-  RuntimeDecodeError,
-  RuntimeTransportError,
-} from './client.js';
-
-const workspace = {
-  projects: [],
-} satisfies WorkspaceSnapshot;
+import { createRuntimeClient } from './client.js';
 
 const project = {
   id: 1,
@@ -57,10 +48,7 @@ const renameSurfaceOutput = {
   title: 'Terminal',
 } satisfies RenameSurfaceOutput;
 
-const deleteSurfaceOutput = {
-  deletedSurfaceId: 7,
-  deletedPaneIds: [11],
-} satisfies DeleteSurfaceOutput;
+const deletePaneOutput = { deletedPaneIds: [11] } satisfies DeletePaneOutput;
 
 const createSurfaceOutput = {
   worktreeId: 10,
@@ -83,20 +71,6 @@ const clientSettings = {
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
-});
-
-test('runtime client decodes success envelopes', async () => {
-  globalThis.fetch = mockFetch(
-    new Response(JSON.stringify({ data: workspace, meta: { requestId: 'req-success' } }), {
-      status: 200,
-    }),
-  );
-
-  const snapshot = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').fetchWorkspace(),
-  );
-
-  assert.deepEqual(snapshot, workspace);
 });
 
 test('runtime client requests and decodes client settings without applying defaults', async () => {
@@ -150,29 +124,6 @@ test('runtime client decodes minimal mutation success envelopes', async () => {
   assert.deepEqual(output, addProjectOutput);
 });
 
-test('runtime client interpolates path params', async () => {
-  let requestedUrl = '';
-  globalThis.fetch = ((input) => {
-    requestedUrl = String(input);
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          data: { projectId: 42, deleted: true },
-          meta: { requestId: 'req-delete' },
-        }),
-        { status: 200 },
-      ),
-    );
-  }) as typeof fetch;
-
-  const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').deleteProject(42),
-  );
-
-  assert.equal(requestedUrl, 'http://runtime.test/api/v1/projects/42');
-  assert.deepEqual(output, { projectId: 42, deleted: true });
-});
-
 test('runtime client calls the worktree commands endpoint', async () => {
   let requestedUrl = '';
   globalThis.fetch = ((input) => {
@@ -219,7 +170,7 @@ test('runtime client calls surface title and delete endpoints', async () => {
       method: init?.method ?? 'GET',
       body: String(init?.body ?? ''),
     });
-    const data = requests.length === 1 ? renameSurfaceOutput : deleteSurfaceOutput;
+    const data = requests.length === 1 ? renameSurfaceOutput : deletePaneOutput;
     return Promise.resolve(
       new Response(JSON.stringify({ data, meta: { requestId: `req-${requests.length}` } }), {
         status: 200,
@@ -232,7 +183,7 @@ test('runtime client calls surface title and delete endpoints', async () => {
     surfaceId: 7,
     title: 'Terminal',
   });
-  assert.deepEqual(await Effect.runPromise(client.deleteSurfacePane(7, 11)), deleteSurfaceOutput);
+  assert.deepEqual(await Effect.runPromise(client.deleteSurfacePane(7, 11)), deletePaneOutput);
 
   assert.deepEqual(requests, [
     {
@@ -279,7 +230,7 @@ test('runtime client calls surface creation endpoint with initial pane', async (
   });
 });
 
-test('runtime client sends workflow start variables in the request body', async () => {
+test('runtime client sends workflow start inputs and origin in the request body', async () => {
   let request: { readonly url: string; readonly method: string; readonly body: string } | null =
     null;
   globalThis.fetch = ((input, init) => {
@@ -291,7 +242,7 @@ test('runtime client sends workflow start variables in the request body', async 
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          data: { workflowRunId: 77, workflowKey: 'argument-probe' },
+          data: { runId: 77, workflowKey: 'argument-probe' },
           meta: { requestId: 'req-workflow-start' },
         }),
         { status: 200 },
@@ -302,29 +253,29 @@ test('runtime client sends workflow start variables in the request body', async 
   const output = await Effect.runPromise(
     createRuntimeClient('http://runtime.test').startWorkflow({
       workflowKey: 'argument-probe',
-      variables: {
+      inputs: {
         text: 'hello',
         select: 'no',
         multi: ['a', 'b'],
         confirm: true,
       },
-      context: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
+      origin: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
     }),
   );
 
-  assert.deepEqual(output, { workflowRunId: 77, workflowKey: 'argument-probe' });
+  assert.deepEqual(output, { runId: 77, workflowKey: 'argument-probe' });
   assert.deepEqual(request, {
     url: 'http://runtime.test/api/v1/workflows/runs',
     method: 'POST',
     body: JSON.stringify({
       workflowKey: 'argument-probe',
-      variables: {
+      inputs: {
         text: 'hello',
         select: 'no',
         multi: ['a', 'b'],
         confirm: true,
       },
-      context: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
+      origin: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
     }),
   });
 });
@@ -460,92 +411,6 @@ test('runtime client surfaces rail order refusals as typed API errors', async ()
   });
 });
 
-test('runtime client decodes endpoint API errors before base API errors', async () => {
-  const apiError = {
-    code: 'project_path_rejected',
-    status: 400,
-    message: 'Not a Git repository: /repo/nope',
-    requestId: 'req-api-error',
-    data: { reason: 'not_git_repository', path: '/repo/nope' },
-  } satisfies ApiError;
-
-  globalThis.fetch = mockFetch(
-    new Response(JSON.stringify({ error: apiError }), {
-      status: 400,
-    }),
-  );
-
-  const error = await Effect.runPromise(
-    Effect.flip(createRuntimeClient('http://runtime.test').addProject('/repo/nope')),
-  );
-
-  assert.ok(error instanceof RuntimeApiError);
-  assert.equal(error.apiError.code, 'project_path_rejected');
-  assert.equal(error.apiError.requestId, 'req-api-error');
-});
-
-test('runtime client classifies invalid success envelopes as decode errors', async () => {
-  globalThis.fetch = mockFetch(
-    new Response(JSON.stringify({ data: { invalid: true }, meta: { requestId: 'req-invalid' } }), {
-      status: 200,
-    }),
-  );
-
-  const error = await Effect.runPromise(
-    Effect.flip(createRuntimeClient('http://runtime.test').fetchWorkspace()),
-  );
-
-  assert.ok(error instanceof RuntimeDecodeError);
-});
-
-test('runtime client passes Effect interruption to fetch', async () => {
-  let resolveStarted!: () => void;
-  let resolveAborted!: () => void;
-  const started = new Promise<void>((resolve) => {
-    resolveStarted = resolve;
-  });
-  const aborted = new Promise<void>((resolve) => {
-    resolveAborted = resolve;
-  });
-
-  globalThis.fetch = ((_input, init) =>
-    new Promise<Response>((resolve) => {
-      resolveStarted();
-      init?.signal?.addEventListener(
-        'abort',
-        () => {
-          resolveAborted();
-          resolve(
-            new Response(JSON.stringify({ data: workspace, meta: { requestId: 'req-aborted' } }), {
-              status: 200,
-            }),
-          );
-        },
-        { once: true },
-      );
-    })) as typeof fetch;
-
-  const controller = new AbortController();
-  const request = Effect.runPromise(createRuntimeClient('http://runtime.test').fetchWorkspace(), {
-    signal: controller.signal,
-  }).catch(() => {});
-
-  await started;
-  controller.abort();
-  await aborted;
-  await request;
-});
-
-test('runtime client classifies fetch failures as transport errors', async () => {
-  globalThis.fetch = (() => Promise.reject(new Error('network down'))) as typeof fetch;
-
-  const error = await Effect.runPromise(
-    Effect.flip(createRuntimeClient('http://runtime.test').fetchWorkspace()),
-  );
-
-  assert.ok(error instanceof RuntimeTransportError);
-});
-
 function mockFetch(response: Response) {
   return (() => Promise.resolve(response.clone())) as typeof fetch;
 }
@@ -592,7 +457,7 @@ function captureRequest(data: unknown) {
   return captured;
 }
 
-test('runtime client opens an editor by worktree path parameter, with no body', async () => {
+test('runtime client opens an editor by worktree path parameter, naming where an unplaced one goes', async () => {
   const captured = captureRequest({
     worktreeId: 10,
     surfaceId: 501,
@@ -600,12 +465,13 @@ test('runtime client opens an editor by worktree path parameter, with no body', 
     editorContextId: 7,
   });
 
-  const output = await Effect.runPromise(createRuntimeClient('http://runtime.test').openEditor(10));
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').openEditor(10, { intoSurfaceId: 501 }),
+  );
 
   assert.equal(captured.url, 'http://runtime.test/api/v1/worktrees/10/editor');
   assert.equal(captured.method, 'POST');
-  // The worktree is the whole input; a body would only invite a second target.
-  assert.equal(captured.body, null);
+  assert.deepEqual(JSON.parse(captured.body ?? 'null'), { intoSurfaceId: 501 });
   assert.deepEqual(output, { worktreeId: 10, surfaceId: 501, paneId: 601, editorContextId: 7 });
 });
 

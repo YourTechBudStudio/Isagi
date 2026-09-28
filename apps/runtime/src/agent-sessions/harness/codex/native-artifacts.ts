@@ -7,6 +7,19 @@ import { Effect } from 'effect';
 
 import type { HarnessObservationRecord } from '../projection.js';
 
+/**
+ * The owning agent session, for a support log, or nothing.
+ *
+ * These lookups are reached two ways: from a live session, which has an id, and from a read-time
+ * provenance locator, which has only recorded facts and no session at all. Printing a stand-in for
+ * the second case would put a false identifier in the one line a maintainer reads while debugging
+ * remotely — and an id that names the wrong session is worse than an absent field, because it
+ * invites a search for a session that was never involved. Absent says exactly what is true.
+ */
+function owningSession(agentSessionId: number | null) {
+  return agentSessionId === null ? {} : { agentSessionId };
+}
+
 export interface CodexRolloutPath {
   readonly harnessSessionId: string;
   readonly path: string;
@@ -24,7 +37,7 @@ const MAX_CODEX_HISTORY_DEPTH = 32;
 
 /** Shared, read-only native rollout location strategy for conversation and lifecycle. */
 export function locateCodexRolloutPaths(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly harnessSessionId?: string | null | undefined;
   readonly codexDirectory?: string | undefined;
   readonly discovery?: 'index_only' | 'full' | undefined;
@@ -71,7 +84,7 @@ export function hookCodexRolloutPaths(
 }
 
 export function readCodexRolloutEntries(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly paths: readonly CodexRolloutPath[];
   readonly missingIsExpected: boolean;
 }) {
@@ -98,7 +111,7 @@ export function readCodexRolloutEntries(input: {
 
 /** Reads paginated ancestors for conversation projection without widening lifecycle observation. */
 export function readCodexConversationEntries(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly paths: readonly CodexRolloutPath[];
   readonly codexDirectory?: string | undefined;
   readonly missingIsExpected: boolean;
@@ -151,7 +164,7 @@ export function parseCodexRolloutEntries(raw: string): readonly CodexRolloutEntr
 }
 
 function indexedCodexRolloutPath(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly harnessSessionId: string;
   readonly codexDirectory: string;
 }) {
@@ -176,7 +189,7 @@ function indexedCodexRolloutPath(input: {
       Effect.sync(() => {
         if (!isMissingCodexIndexError(error)) {
           console.warn('[runtime] Codex thread index could not be read', {
-            agentSessionId: input.agentSessionId,
+            ...owningSession(input.agentSessionId),
             harnessSessionId: input.harnessSessionId,
             codexDirectory: input.codexDirectory,
             error,
@@ -189,7 +202,7 @@ function indexedCodexRolloutPath(input: {
 }
 
 function discoverNativeRolloutPaths(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly harnessSessionId: string;
   readonly codexDirectory: string;
 }) {
@@ -216,7 +229,7 @@ function discoverNativeRolloutPaths(input: {
 }
 
 function readCodexConversationPage(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly codexDirectory?: string | undefined;
   readonly rollout: CodexRolloutPath;
   readonly raw: Buffer;
@@ -315,7 +328,7 @@ function rolloutHasSessionId(entries: readonly CodexRolloutEntry[], harnessSessi
 }
 
 function warnCodexHistory(
-  input: { readonly agentSessionId: number; readonly rollout: CodexRolloutPath },
+  input: { readonly agentSessionId: number | null; readonly rollout: CodexRolloutPath },
   historyBase: CodexHistoryBase,
   code:
     | 'history_base_unavailable'
@@ -366,7 +379,7 @@ function findRolloutFiles(input: {
 }
 
 function readRolloutFile(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly harnessSessionId: string;
   readonly rolloutPath: string;
   readonly missingIsExpected: boolean;
@@ -375,7 +388,7 @@ function readRolloutFile(input: {
 }
 
 function readRolloutBuffer(input: {
-  readonly agentSessionId: number;
+  readonly agentSessionId: number | null;
   readonly harnessSessionId: string;
   readonly rolloutPath: string;
   readonly missingIsExpected: boolean;
@@ -388,7 +401,7 @@ function readRolloutBuffer(input: {
       Effect.sync(() => {
         if (input.missingIsExpected && isMissingFileError(error)) return null;
         console.warn('[runtime] Codex rollout could not be read', {
-          agentSessionId: input.agentSessionId,
+          ...owningSession(input.agentSessionId),
           harnessSessionId: input.harnessSessionId,
           rolloutPath: input.rolloutPath,
           error,

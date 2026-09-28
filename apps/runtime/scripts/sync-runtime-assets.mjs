@@ -1,4 +1,12 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +17,7 @@ const workflowScaffoldRoot = resolve(
   repoRoot,
   'packages/workflow-verifier/fixtures/minimal-workflow',
 );
+const cliBundlePath = resolve(repoRoot, 'apps/cli/dist/isagi.mjs');
 const sourceAssetRoot = resolve(runtimeRoot, '.generated', 'assets');
 const shouldWriteDist = process.argv.includes('--dist');
 
@@ -52,9 +61,28 @@ function syncAssets(assetRoot) {
     'harness',
     'skill-content',
   );
-  for (const name of ['SKILL.md', 'config-global.md', 'config-project.md', 'workflows.md']) {
+  for (const name of [
+    'SKILL.md',
+    'config-global.md',
+    'config-project.md',
+    'workflows.md',
+    'workflow-environments.md',
+    'workflow-agents.md',
+    'workflow-recovery.md',
+    'workflow-checkpoints.md',
+    'cli-investigate-runs.md',
+    'cli-reconstruct-and-launch.md',
+  ]) {
     copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'isagi-docs', name));
   }
+
+  // The bundled `isagi` CLI the runtime's shim runs. Built by `workspace-deps`; a missing bundle is a
+  // build defect, so this fails rather than shipping a runtime whose terminals lack the CLI.
+  if (!existsSync(cliBundlePath)) {
+    throw new Error(`Missing ${cliBundlePath}. Build it first: pnpm -C apps/cli build`);
+  }
+  mkdirSync(resolve(assetRoot, 'cli'), { recursive: true });
+  copyFileSync(cliBundlePath, resolve(assetRoot, 'cli', 'isagi.mjs'));
 
   // The canonical workflow scaffold is copied verbatim so the shipped skill can carry it as
   // reference files. The verifier fixture is the single source of truth; node_modules and dist

@@ -29,11 +29,41 @@ export const worktreeBaseRefSchema = Schema.Union(
     kind: Schema.Literal('detached_worktree'),
     worktreeId: positiveIntegerSchema,
   }),
+  // An already-resolved commit. A caller that resolved a ref itself branches from the commit it
+  // actually saw, rather than re-resolving a moving ref and silently branching from somewhere else.
+  // Caller-supplied and crossing a trust boundary, so the shape is validated here.
+  Schema.Struct({
+    kind: Schema.Literal('commit'),
+    commit: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
+  }),
+);
+
+/**
+ * Why a destination cannot hold a new worktree. One vocabulary for every place the rule is checked:
+ * the runtime's detached creation, the rejection it reports, and a client's own precheck.
+ */
+export const worktreeDestinationIssueSchema = Schema.Literal(
+  /** The runtime requires an absolute path. */
+  'not_absolute',
+  /** It exists and has entries. */
+  'not_empty',
+  /** It exists and is a file, a symlink or something else that is not a directory. */
+  'not_directory',
+  /** It is equal to, or inside, a project root or worktree Isagi knows. */
+  'inside_checkout',
+  /** It cannot be inspected, or its parent cannot be created. */
+  'inaccessible',
 );
 
 export const openWorktreeInputSchema = Schema.Struct({
   branch: Schema.String.pipe(Schema.minLength(1)),
   base: Schema.optional(worktreeBaseRefSchema),
+  /**
+   * `open` (default) adopts an existing worktree or branch; `create_new` refuses both. A caller that
+   * has already decided it is creating something wants the collision reported, not absorbed into a
+   * silent reuse of somebody else's checkout.
+   */
+  mode: Schema.optional(Schema.Literal('open', 'create_new')),
 });
 
 export const checkoutRemovalModeSchema = Schema.Literal('normal', 'force');
@@ -223,6 +253,7 @@ export type WorktreeRouteParams = Schema.Schema.Type<typeof worktreeRouteParamsS
 export type WorktreeBranch = Schema.Schema.Type<typeof worktreeBranchSchema>;
 export type ListProjectBranchesOutput = Schema.Schema.Type<typeof listProjectBranchesOutputSchema>;
 export type WorktreeBaseRef = Schema.Schema.Type<typeof worktreeBaseRefSchema>;
+export type WorktreeDestinationIssue = Schema.Schema.Type<typeof worktreeDestinationIssueSchema>;
 export type OpenWorktreeInput = Schema.Schema.Type<typeof openWorktreeInputSchema>;
 export type CheckoutRemovalMode = Schema.Schema.Type<typeof checkoutRemovalModeSchema>;
 export type BranchRemovalMode = Schema.Schema.Type<typeof branchRemovalModeSchema>;

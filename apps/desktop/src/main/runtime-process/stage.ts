@@ -40,6 +40,7 @@ export function validateRuntimeStage(root: string): ValidatedRuntimeStage {
   const required = [
     metadata.entrypoint,
     'assets/manifest.json',
+    'assets/cli/isagi.mjs',
     'drizzle/meta/_journal.json',
     'package.json',
   ];

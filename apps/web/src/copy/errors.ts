@@ -13,6 +13,7 @@ import type {
   WorktreeDeleteRejectionReason,
   WorktreeOperationRejectionReason,
   WorktreeOrderRejectionReason,
+  WorkflowRejectionReason,
   WorktreeSetupRejectionReason,
 } from '@isagi/contracts';
 
@@ -35,6 +36,14 @@ const setupTrustMismatch = 'The setup hooks changed since you last trusted them.
 // A folder project maintains its own single environment, so every checkout
 // management family refuses with the same fact.
 const folderProjectNoWorktrees = 'This project is a plain folder, so it has no worktrees.';
+// The same two Git facts refuse a worktree the person opened by hand and a
+// worktree a workflow asked for, so they read identically in both places.
+const branchNameRejected = "Git won't accept that branch name.";
+const baseRefMissing = "Couldn't find the base ref to branch from.";
+// A create that found the thing already there. The same two facts refuse a
+// worktree the person asked for by hand and one a workflow's placement asked for.
+const branchAlreadyExists = 'That branch already exists.';
+const worktreeAlreadyExists = "There's already a worktree for that branch.";
 const harnessLaunchBlockCopy = {
   onboarding_incomplete: 'Harness setup is incomplete, so Isagi cannot start this session.',
   config_invalid: 'Harness configuration is invalid, so Isagi cannot start this session.',
@@ -112,8 +121,8 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       project_not_present: projectFilesGone,
       branch_not_found: "Git doesn't have that branch.",
       new_branch_requires_base: 'A new branch needs a base ref to grow from.',
-      invalid_branch_name: "Git won't accept that branch name.",
-      base_ref_not_found: "Couldn't find the base ref to branch from.",
+      invalid_branch_name: branchNameRejected,
+      base_ref_not_found: baseRefMissing,
       checkout_path_exists: "Something's already sitting at that checkout path.",
       checkout_path_registered: 'Another worktree already claims that checkout path.',
       checkout_parent_unavailable: "The folder that should hold this worktree isn't there.",
@@ -122,6 +131,10 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       setup_trust_required: 'These setup hooks need your OK before they can run.',
       setup_trust_mismatch: setupTrustMismatch,
       worktrees_not_supported: folderProjectNoWorktrees,
+      // Only reachable when the caller asked to create rather than adopt, so
+      // "already exists" is the refusal, not a state to work with.
+      branch_exists: branchAlreadyExists,
+      worktree_exists: worktreeAlreadyExists,
     }),
   },
   worktree_setup_rejected: {
@@ -160,6 +173,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       surface_not_found: surfaceGone,
       pane_not_found: "That pane isn't here anymore.",
       invalid_surface_title: "That surface title won't work.",
+      surface_not_empty: 'That surface already has panes. Split one instead.',
     },
   },
   worktree_environment_focus_rejected: {
@@ -179,27 +193,56 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   },
   workflow_rejected: {
     summary: "Isagi couldn't complete that workflow action.",
-    byReason: {
+    byReason: byReason<WorkflowRejectionReason>({
       unknown_workflow_key: "Isagi doesn't recognize that workflow.",
       workflow_discovery_failed: "Couldn't read a workflow source path.",
-      workflow_load_failed: "Couldn't load that workflow's code.",
+      workflow_load_failed: "Couldn't load that workflow's verified build.",
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
       surface_worktree_mismatch: 'That surface belongs to a different worktree.',
       pane_not_found: "That pane isn't here anymore.",
       agent_session_not_on_surface: "That agent session isn't on this surface.",
       workflow_launch_context_mismatch: "That pane and agent session don't match.",
-      validation_failed: "Those answers didn't pass the workflow's checks.",
-      workflow_root_surface_required: 'A workflow needs a surface to run on.',
-      workflow_root_run_required: 'That action needs the main workflow run.',
-      workflow_surface_busy: 'This surface already has a workflow running.',
+      workflow_command_failed: "That workflow couldn't describe itself, so Isagi can't start it.",
+      workflow_inputs_rejected: "Those answers didn't pass the workflow's checks.",
+      // Destination wording: the busy surface is the one the run was aimed at, which is not
+      // necessarily the one the person is looking at.
+      workflow_surface_busy: 'That surface already has a workflow on it. Dismiss that one first.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
-      workflow_run_not_failed: "That workflow isn't in a failed state.",
-      workflow_wait_not_satisfiable: "That workflow can't be advanced right now.",
+      workflow_execution_not_found: "That step isn't part of this run.",
+      workflow_operation_not_found: "That recorded call isn't part of this run.",
+      workflow_checkpoint_not_found: "That checkpoint isn't here anymore.",
+      workflow_checkpoint_file_not_found: "That file isn't in this checkpoint.",
+      // The run moved on between the bar drawing the button and the click landing.
+      workflow_control_unavailable: "That doesn't apply to this run right now. It's moved on.",
+      workflow_wait_not_found: "That question isn't waiting for an answer anymore.",
       workflow_user_input_invalid:
         "Those answers didn't go through. Check the fields and try again.",
-      workflow_event_ledger_failed: "Couldn't read the workflow's event log.",
-    },
+      workflow_agent_observation_unavailable:
+        "Isagi couldn't refresh that agent session, so the retry didn't change the run.",
+      workflow_environment_selection_failed:
+        "This workflow couldn't decide where to run, so nothing was started.",
+      workflow_placement_invalid: "That isn't a place this workflow can run.",
+      workflow_worktree_creation_unsupported: folderProjectNoWorktrees,
+      workflow_branch_invalid: branchNameRejected,
+      workflow_base_ref_not_found: baseRefMissing,
+      workflow_environment_collision:
+        'Something already sits where this workflow wanted to set up.',
+      workflow_preparation_failed: "Couldn't set up this workflow's worktree or surface.",
+      // Commits are recorded, not kept; Git may have discarded this one. The message says which.
+      workflow_checkpoint_commit_unavailable:
+        "The commit that checkpoint was taken on isn't available anymore.",
+      // The file's path, size and digest stay on screen, so this names the saved bytes.
+      workflow_checkpoint_content_unavailable:
+        "Isagi couldn't read the bytes this checkpoint saved for that file.",
+      workflow_checkpoint_export_failed:
+        'The export stopped part-way. Whatever it already created is still there.',
+      workflow_structure_validation_failed: "That workflow's graph didn't pass verification.",
+      // Resume and Retry reload the latest build; this one no longer fits where the run is parked.
+      workflow_code_incompatible:
+        "The latest build doesn't fit where this run is parked, so nothing changed. Put the graph back, rebuild, and try again.",
+      workflow_checkpoint_destination_rejected: "That folder can't hold the export.",
+    }),
   },
   worktree_commands_rejected: {
     summary: "Isagi couldn't complete that command action.",
@@ -358,6 +401,18 @@ export function apiErrorDiagnostic(apiError: ApiError): string {
     }
     for (const shadowed of data.shadowedWorkflowPackageDirectories ?? []) {
       lines.push(`Shadowed package: ${shadowed}`);
+    }
+    // Which registrations no longer fit, as the verifier reported them.
+    if ('diagnostics' in data) {
+      for (const diagnostic of data.diagnostics) {
+        const at = [diagnostic.at.graphKey, diagnostic.at.nodeId ?? diagnostic.at.edgeId]
+          .filter(Boolean)
+          .join('/');
+        lines.push(`${diagnostic.code}${at ? ` (${at})` : ''}: ${diagnostic.message}`);
+      }
+    }
+    if ('destinationPath' in data) {
+      lines.push(`Destination: ${data.destinationPath} (${data.destinationIssue})`);
     }
   }
   const trailing = runtimeErrorCopy.diagnostic(apiError);

@@ -3,11 +3,25 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { ApiError } from '@isagi/contracts';
+import type { ApiError, WorkflowRunSummary } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
-import { paletteCopy, runtimeErrorCopy } from '../../copy/index.js';
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '../runtime/client.js';
-import { workflowFailurePresentation, workflowStartFailureContent } from './workflow-failure.js';
+import {
+  paletteCopy,
+  runtimeErrorCopy,
+  workflowCopy,
+  workflowEnvironmentCopy,
+  workflowEnvironmentCreatedLine,
+  workflowErrorStageHeadline,
+} from '../../copy/index.js';
+import { workflowSummaryFixture } from '../workspace/workflow/test-support.js';
+import {
+  workflowFailurePresentation,
+  workflowLaunchOutcome,
+  workflowRetryOutcome,
+  workflowStartFailureContent,
+  type WorkflowLaunchDeps,
+} from './workflow-failure.js';
 
 const failure = paletteCopy.workflows.failure;
 
@@ -128,4 +142,254 @@ test('start failure omits the diagnostic for transport and unknown, frames endpo
   const decode = workflowStartFailureContent(new RuntimeDecodeError('workflows.start', null));
   assert.equal(decode.body, runtimeErrorCopy.decode);
   assert.equal(decode.diagnostic?.detail, 'Endpoint: workflows.start');
+});
+
+/**
+ * Preparation outcomes.
+ *
+ * Launch returns as soon as the run exists and preparation runs in the background, so the palette
+ * waits for the run to leave `preparing` and reports what it did. The rules that matter: never name
+ * a resource the run did not create, never offer Retry where the runtime will not take it, and
+ * never let a cancelled preparation read as work still in progress.
+ */
+
+const environmentCopy = workflowEnvironmentCopy;
+
+function summary(overrides: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
+  return workflowSummaryFixture({ runId: 42, ...overrides });
+}
+
+const createPlacement: WorkflowRunSummary['placement'] = {
+  source: 'selector',
+  request: {
+    worktree: { kind: 'create', branch: 'feat/story-44', fromRef: 'main' },
+    surface: { kind: 'create', title: 'Implement story #44' },
+  },
+  baseCommit: '9f3e1c2a4b5d',
+};
+
+function failedPreparing(overrides: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
+  return summary({
+    status: 'failed',
+    placement: createPlacement,
+    worktreeId: null,
+    worktreePath: null,
+    surfaceId: null,
+    error: { stage: 'environment', message: 'fatal: a branch named feat/story-44 already exists' },
+    controls: { pause: false, resume: false, retry: true, cancel: false, dismiss: true },
+    ...overrides,
+  });
+}
+
+/** The three runtime calls, each failing loudly unless a test supplies it. */
+function deps(overrides: Partial<WorkflowLaunchDeps> = {}): WorkflowLaunchDeps {
+  return {
+    start: () => Promise.resolve({ runId: 42 }),
+    retry: () => Promise.reject(new Error('retry not expected')),
+    awaitPrepared: () => Promise.reject(new Error('read not expected')),
+    ...overrides,
+  };
+}
+
+const launchInput = {
+  workflowKey: 'review',
+  inputs: {},
+  origin: { worktreeId: 1, surfaceId: 2, paneId: null, agentSessionId: null },
+} as const;
+
+test('a prepared launch closes the palette and records the entry', async () => {
+  const recorded: number[] = [];
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({
+      awaitPrepared: () => Promise.resolve(summary({ status: 'running' })),
+      onPrepared: (runId) => recorded.push(runId),
+    }),
+  );
+  assert.deepEqual(outcome, { kind: 'close' });
+  assert.deepEqual(recorded, [42]);
+});
+
+test('a failed preparation names what it created, what Retry does, and that nothing was deleted', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({
+      awaitPrepared: () =>
+        Promise.resolve(
+          failedPreparing({ worktreeId: 7, worktreePath: '/work/wt/feat-story-44', surfaceId: 9 }),
+        ),
+    }),
+  );
+  assert.equal(outcome.kind, 'error');
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  assert.equal(content?.title, environmentCopy.preparationFailedTitle);
+  const paragraphs = (content?.body ?? '').split('\n\n');
+  assert.equal(paragraphs[0], workflowErrorStageHeadline('environment'));
+  assert.equal(
+    paragraphs[1],
+    workflowEnvironmentCreatedLine({ worktreePath: '/work/wt/feat-story-44', surface: true }),
+  );
+  assert.equal(
+    paragraphs[2],
+    `${environmentCopy.retryKeepsWhatExists} ${environmentCopy.nothingDeleted}`,
+  );
+  // Git's own words are a framed diagnostic, never the sentence a person reads first.
+  assert.equal(content?.diagnostic?.detail, 'fatal: a branch named feat/story-44 already exists');
+  assert.deepEqual(
+    content?.actions?.map((action) => action.value),
+    ['retry', 'close'],
+  );
+});
+
+test('a failure that created nothing says so and promises nothing about Retry', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({ awaitPrepared: () => Promise.resolve(failedPreparing()) }),
+  );
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  const paragraphs = (content?.body ?? '').split('\n\n');
+  assert.deepEqual(paragraphs.slice(1), [environmentCopy.nothingCreated]);
+});
+
+test('a worktree the run was placed on already is not reported as created', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({
+      awaitPrepared: () =>
+        Promise.resolve(
+          failedPreparing({
+            placement: {
+              source: 'override',
+              request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+              baseCommit: null,
+            },
+            worktreeId: 10,
+            worktreePath: '/work/repo',
+          }),
+        ),
+    }),
+  );
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  assert.ok((content?.body ?? '').includes(environmentCopy.nothingCreated));
+});
+
+test('Retry is offered only when the runtime says it will take one', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({
+      awaitPrepared: () =>
+        Promise.resolve(
+          failedPreparing({
+            controls: { pause: false, resume: false, retry: false, cancel: false, dismiss: true },
+          }),
+        ),
+    }),
+  );
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  assert.equal(content?.actions, undefined);
+});
+
+test('a cancelled preparation is a warning that never reads as in progress, with Close only', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({
+      awaitPrepared: () => Promise.resolve(summary({ status: 'cancelled', surfaceId: null })),
+    }),
+  );
+  assert.equal(outcome.kind, 'result');
+  const content = outcome.kind === 'result' ? outcome.content : null;
+  assert.equal(content?.tone, 'warning');
+  assert.equal(content?.title, environmentCopy.preparationCancelledTitle);
+  assert.equal(content?.actions, undefined);
+});
+
+test('a retry that fails again offers Retry again, over the same mapping', async () => {
+  let retries = 0;
+  const launchDeps = deps({
+    retry: () => {
+      retries += 1;
+      return Promise.resolve();
+    },
+    awaitPrepared: () =>
+      Promise.resolve(retries < 2 ? failedPreparing() : summary({ status: 'running' })),
+  });
+
+  const first = await workflowLaunchOutcome(launchInput, launchDeps);
+  const retryAction = first.kind === 'error' ? first.content.actions?.[0] : undefined;
+  assert.ok(retryAction?.run);
+  assert.deepEqual(retryAction.running, paletteCopy.workflows.retrying);
+
+  const second = await retryAction.run();
+  const secondRetry = second && second.kind === 'error' ? second.content.actions?.[0] : undefined;
+  assert.ok(secondRetry?.run);
+
+  assert.deepEqual(await secondRetry.run(), { kind: 'close' });
+  assert.equal(retries, 2);
+});
+
+test('a launch rejected before any run offers no Retry, because nothing changed by itself', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({
+      start: () =>
+        Promise.reject(
+          new RuntimeApiError(
+            workflowRejected({ reason: 'workflow_environment_collision', collision: 'branch' }),
+          ),
+        ),
+    }),
+  );
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  assert.equal(content?.title, paletteCopy.workflows.startFailed.title);
+  assert.equal(content?.actions, undefined);
+});
+
+test('a refused retry is reported as a retry failure, not as a failed start', async () => {
+  const outcome = await workflowRetryOutcome(
+    42,
+    deps({
+      retry: () =>
+        Promise.reject(
+          new RuntimeApiError(
+            workflowRejected({ reason: 'workflow_control_unavailable', control: 'retry' }),
+          ),
+        ),
+    }),
+  );
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  assert.equal(content?.title, workflowCopy.retryActionFailed);
+  assert.equal(content?.actions, undefined);
+});
+
+test('a launch whose run could not be read never claims the workflow did not start', async () => {
+  const outcome = await workflowLaunchOutcome(
+    launchInput,
+    deps({ awaitPrepared: () => Promise.reject(new RuntimeTransportError('socket gone', null)) }),
+  );
+  const content = outcome.kind === 'error' ? outcome.content : null;
+  assert.equal(content?.title, environmentCopy.summaryUnreadableTitle);
+  const paragraphs = (content?.body ?? '').split('\n\n');
+  assert.equal(paragraphs[0], environmentCopy.summaryUnreadableBody);
+  assert.equal(paragraphs[1], runtimeErrorCopy.transport);
+  assert.deepEqual(
+    content?.actions?.map((action) => action.value),
+    ['read-again', 'close'],
+  );
+});
+
+test('asking again after an unreadable run reports the run, not the read', async () => {
+  let reads = 0;
+  const launchDeps = deps({
+    awaitPrepared: () => {
+      reads += 1;
+      return reads === 1
+        ? Promise.reject(new RuntimeTransportError('socket gone', null))
+        : Promise.resolve(summary({ status: 'running' }));
+    },
+  });
+  const first = await workflowLaunchOutcome(launchInput, launchDeps);
+  const readAgain = first.kind === 'error' ? first.content.actions?.[0] : undefined;
+  assert.ok(readAgain?.run);
+  assert.deepEqual(await readAgain.run(), { kind: 'close' });
+  assert.equal(reads, 2);
 });

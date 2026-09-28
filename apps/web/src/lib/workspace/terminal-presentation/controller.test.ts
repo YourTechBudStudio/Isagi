@@ -4,9 +4,9 @@ import { describe, it } from 'node:test';
 import { Effect } from 'effect';
 
 import { terminalSettingsDefaults } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
 import { ptyCopy, runtimeErrorCopy } from '../../../copy/index.js';
-import { RuntimeApiError } from '../../runtime/client.js';
 import {
   createTerminalPresentationCache,
   emptyTerminalBufferMeasurement,

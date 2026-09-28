@@ -1,4 +1,4 @@
-import type { AgentHarness, SurfaceDetail, WorkflowStartContext } from '@isagi/contracts';
+import type { AgentHarness, SurfaceDetail, WorkflowLaunchOrigin } from '@isagi/contracts';
 
 import type { Project, Worktree } from '../workspace/types.js';
 import type { PaletteContext } from './types.js';
@@ -60,12 +60,12 @@ export function buildPaletteContext(
   };
 }
 
-export function workflowContextFromSurfaceDetail(input: {
+export function workflowOriginFromSurfaceDetail(input: {
   readonly worktreeId: number;
   readonly surfaceId: number;
   readonly activePaneId: number | null;
   readonly detail: SurfaceDetail;
-}): WorkflowStartContext {
+}): WorkflowLaunchOrigin {
   const paneId = input.activePaneId ?? input.detail.activePaneId;
   const pane =
     paneId === null

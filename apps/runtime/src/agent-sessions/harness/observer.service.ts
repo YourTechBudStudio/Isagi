@@ -45,7 +45,7 @@ export interface HarnessLedgerObserverService {
   ) => Effect.Effect<readonly ObservedHarnessTurnEdge[]>;
   readonly refreshTurnEdges: (
     agentSessionId: number,
-  ) => Effect.Effect<readonly ObservedHarnessTurnEdge[], unknown>;
+  ) => Effect.Effect<readonly ObservedHarnessTurnEdge[], HarnessObserverRefreshError>;
   readonly getAttention: (agentSessionId: number) => Effect.Effect<AttentionState | undefined>;
 }
 
@@ -844,7 +844,18 @@ export const HarnessLedgerObserverLive = Layer.scoped(
               return state?.edges ?? [];
             }),
           );
-        }),
+        }).pipe(
+          Effect.mapError((cause) =>
+            cause instanceof HarnessObserverRefreshError
+              ? cause
+              : new HarnessObserverRefreshError({
+                  agentSessionId,
+                  failedSources: [],
+                  failedOperations: ['inventory_refresh'],
+                  message: `Agent session ${agentSessionId} observation could not be refreshed: ${String(cause)}`,
+                }),
+          ),
+        ),
       getAttention: (agentSessionId) => Effect.sync(() => states.get(agentSessionId)?.attention),
     };
     testControls.set(service, { pollOnce, pollAgentSession });

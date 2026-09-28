@@ -305,18 +305,68 @@ test('agent session startup restore replaces stale node-pty running process rows
   assert.equal(state.session.activePtyProcessId, 99);
 });
 
+test('stopUnlessPlaced leaves a placed session running and stops an unplaced one', async () => {
+  const run = (input: {
+    readonly placement: { readonly surfaceId: number; readonly paneId: number } | null;
+    readonly terminate: PtyServiceShape['terminate'];
+  }) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* AgentSessionService;
+        return yield* service.stopUnlessPlaced({ agentSessionId: 10, ptyProcessId: 42 });
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            state: mutableAgentSession({}),
+            launchInputs: [],
+            ptyLaunches: [],
+            placement: input.placement,
+            terminate: input.terminate,
+          }),
+        ),
+      ),
+    );
+  const stopped: number[] = [];
+  const terminate: PtyServiceShape['terminate'] = (request) =>
+    Effect.sync(() => {
+      stopped.push(request.ptyProcessId);
+      return 'terminated_live' as const;
+    });
+
+  assert.deepEqual(await run({ placement: { surfaceId: 9, paneId: 11 }, terminate }), {
+    kind: 'placed',
+    surfaceId: 9,
+    paneId: 11,
+  });
+  assert.deepEqual(stopped, [], 'a placed session keeps its process');
+
+  assert.deepEqual(await run({ placement: null, terminate }), { kind: 'stopped' });
+  assert.deepEqual(stopped, [42]);
+
+  const failed = await run({
+    placement: null,
+    terminate: () => Effect.fail(new Error('the backend refused the signal') as never),
+  });
+  assert.equal(failed.kind, 'stop_failed');
+});
+
 function testLayer(input: {
   readonly state: ReturnType<typeof mutableAgentSession>;
   readonly launchInputs: RecordedLaunchInput[];
   readonly ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>;
   readonly createCalls?: number[] | undefined;
   readonly controlPlaneLayer?: ReturnType<typeof blockedHarnessControlPlaneLayer> | undefined;
+  readonly placement?: { readonly surfaceId: number; readonly paneId: number } | null | undefined;
+  readonly terminate?: PtyServiceShape['terminate'] | undefined;
 }) {
   return AgentSessionServiceLive.pipe(
     Layer.provide(
-      Layer.succeed(AgentSessionRepository, fakeRepository(input.state, input.createCalls)),
+      Layer.succeed(
+        AgentSessionRepository,
+        fakeRepository(input.state, input.createCalls, input.placement),
+      ),
     ),
-    Layer.provide(Layer.succeed(PtyService, fakePtyService(input.ptyLaunches))),
+    Layer.provide(Layer.succeed(PtyService, fakePtyService(input.ptyLaunches, input.terminate))),
     Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses(input.launchInputs))),
     Layer.provide(SessionLifecycleLive.pipe(Layer.provide(EntityLockLive))),
     Layer.provide(InternalRuntimeEventBusLive),
@@ -327,6 +377,7 @@ function testLayer(input: {
 function fakeRepository(
   state: ReturnType<typeof mutableAgentSession>,
   createCalls: number[] = [],
+  placement: { readonly surfaceId: number; readonly paneId: number } | null | undefined = undefined,
 ): AgentSessionRepositoryService {
   return {
     create: () =>
@@ -350,11 +401,14 @@ function fakeRepository(
     findByActivePtyProcessId: () => Effect.die('findByActivePtyProcessId is not used'),
     listOrphans: () => Effect.die('listOrphans is not used'),
     delete: () => Effect.die('delete is not used'),
+    findPlacement: () =>
+      placement === undefined ? Effect.die('findPlacement is not used') : Effect.succeed(placement),
   } satisfies AgentSessionRepositoryService;
 }
 
 function fakePtyService(
   ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>,
+  terminate: PtyServiceShape['terminate'] = () => Effect.die('terminate is not used'),
 ): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
@@ -377,7 +431,7 @@ function fakePtyService(
     writeInput: () => Effect.die('writeInput is not used'),
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
-    terminate: () => Effect.die('terminate is not used'),
+    terminate,
     pin: () => Effect.void,
     unpin: () => Effect.void,
     cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),

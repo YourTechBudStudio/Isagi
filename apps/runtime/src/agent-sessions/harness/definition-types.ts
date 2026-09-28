@@ -1,6 +1,6 @@
 import type { Effect } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness, WorkflowOperationUsage } from '@isagi/contracts';
 
 import type { LaunchPtyProcessInput } from '../../pty-processes/types.js';
 import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
@@ -94,6 +94,19 @@ export interface HarnessDefinition {
     ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
     readonly extractHeadlessOutput: (raw: string) => string;
     readonly semanticHeadlessError?: ((raw: string) => string | null) | undefined;
+    /**
+     * The native session id and usage this provider reported, read out of its finished output.
+     *
+     * Optional, and a harness that omits it is recorded as knowing nothing rather than as reporting
+     * zero. Pure by design: it interprets bytes the caller already holds, so settlement does not
+     * acquire IO.
+     */
+    readonly extractHeadlessProvenance?:
+      | ((raw: string) => {
+          readonly harnessSessionId: string | null;
+          readonly usage: WorkflowOperationUsage | null;
+        })
+      | undefined;
   };
   readonly lifecycle: {
     readonly reduce: (input: {
@@ -125,6 +138,24 @@ export interface HarnessDefinition {
           readonly streams: readonly [string, readonly HarnessObservationRecord[]][];
           readonly discovery: 'index_only' | 'full';
         }) => Effect.Effect<readonly CodexRolloutPath[]>)
+      | undefined;
+    /**
+     * Where this harness's native transcript for a past session would be, and whether it is there.
+     *
+     * Deliberately separate from `locateNativeSources`, which needs the observer's live in-memory
+     * streams — exactly what is gone once a session has been collected. This one takes only facts
+     * the runtime recorded durably, so it can answer long after the session ended.
+     *
+     * `available` is one `stat` at read time rather than a stored flag, keeping ADR 0007's posture
+     * that native artifacts are best-effort external sources: a path that was constructed but never
+     * written, or a transcript the provider has since rotated, reads as `false` instead of looking
+     * live. `null` means no locator could be built at all.
+     */
+    readonly locateTranscript?:
+      | ((input: {
+          readonly harnessSessionId: string;
+          readonly cwd: string;
+        }) => Effect.Effect<{ readonly locator: string; readonly available: boolean } | null>)
       | undefined;
   };
 }

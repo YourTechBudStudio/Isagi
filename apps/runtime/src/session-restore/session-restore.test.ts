@@ -421,6 +421,9 @@ function fakeSurfaceRepository(
     deleteSurface: () => Effect.die('deleteSurface is not used'),
     deleteSurfacePane: () => Effect.die('deleteSurfacePane is not used'),
     createSinglePaneSurface: () => Effect.die('createSinglePaneSurface is not used'),
+    createEmptySurface: () => Effect.die('createEmptySurface is not used'),
+    startSurfacePane: () => Effect.die('startSurfacePane is not used'),
+    listSessionsBoundTo: () => Effect.die('listSessionsBoundTo is not used'),
     splitSurfacePane: () => Effect.die('splitSurfacePane is not used'),
     setSurfaceLayout: () => Effect.die('setSurfaceLayout is not used'),
     setPaneSession: () => Effect.die('setPaneSession is not used'),
@@ -438,6 +441,7 @@ function fakeAgentService(
     get: () => Effect.die('agent get is not used'),
     ensureActivePtyProcess: () => Effect.die('agent ensureActivePtyProcess is not configured'),
     activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used'),
+    stopUnlessPlaced: () => Effect.die('agent stopUnlessPlaced is not used'),
     ...overrides,
   } satisfies AgentSessionServiceShape;
 }

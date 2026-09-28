@@ -299,35 +299,125 @@ test('the rail-order migration upgrades a pre-0002 database without losing data'
   }
 });
 
-test('the workflow control revision migration preserves existing runs', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-control-migration-'));
+/** The migration set as it stood before the graph-workflow tables replaced the old store. */
+const PRE_GRAPH_WORKFLOW_TAGS = [
+  ...PRE_WORKFLOW_CONTROL_TAGS,
+  '0004_mixed_synch',
+  '0005_tiny_jackal',
+  '0006_stale_the_hood',
+  '0007_light_supreme_intelligence',
+] as const;
+
+const GRAPH_WORKFLOW_TABLES = [
+  'workflow_artifacts',
+  'workflow_checkpoints',
+  'workflow_events',
+  'workflow_executions',
+  'workflow_graph_invocations',
+  'workflow_operations',
+  'workflow_runs',
+] as const;
+
+function workflowTables(client: BetterSqlite.Database) {
+  return (
+    client
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'workflow%' ORDER BY name`,
+      )
+      .all() as { readonly name: string }[]
+  ).map((row) => row.name);
+}
+
+/** What `0008` + `0009` must leave behind, whether the database is new or upgraded. */
+function assertGraphWorkflowSchema(client: BetterSqlite.Database) {
+  assert.deepEqual(workflowTables(client), [...GRAPH_WORKFLOW_TABLES]);
+  const runtimeIdentity = client
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runtime_identity'`)
+    .get();
+  assert.equal(runtimeIdentity, undefined);
+  for (const table of ['agent_sessions', 'surface_panes', 'worktree_surfaces']) {
+    assert.equal(hasColumn(client, table, 'creation_key'), false, `${table}.creation_key`);
+  }
+  assert.equal(hasColumn(client, 'workflow_runs', 'project_id'), true);
+  assert.deepEqual(client.pragma('foreign_key_check'), []);
+}
+
+test('a fresh database gets exactly the seven graph-workflow tables', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-fresh-schema-'));
   const dataDirectory = makeTestDataDirectory(dataRoot);
-  const historicalFolder = historicalMigrationsFolder(dataRoot, PRE_WORKFLOW_CONTROL_TAGS);
+
+  try {
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    const runs = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* RuntimeDatabase;
+        return yield* db.use('test_open_fresh_database', (connection) =>
+          connection.select().from(workflowRuns).all(),
+        );
+      }).pipe(Effect.provide(database)),
+    );
+    assert.deepEqual(runs, []);
+
+    const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      assertGraphWorkflowSchema(inspect);
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('the graph-workflow migrations drop the old workflow store and keep everything else', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-graph-workflow-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
 
   try {
     const client = new BetterSqlite(dataDirectory.paths.databasePath);
+    let seeded: ReturnType<typeof readHistoricalRows<keyof typeof UNRELATED_COLUMNS>>;
     try {
       client.pragma('foreign_keys = ON');
-      migrate(drizzle(client), { migrationsFolder: historicalFolder });
-      const inserted = client
+      migrate(drizzle(client), {
+        migrationsFolder: historicalMigrationsFolder(dataRoot, PRE_GRAPH_WORKFLOW_TAGS),
+      });
+      const project = client
+        .prepare(
+          `INSERT INTO projects (name, root_path, status, created_at, updated_at, last_seen_at, missing_reason)
+           VALUES ('isagi', '/repo/isagi', 'present', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL, NULL)`,
+        )
+        .run();
+      const worktree = client
+        .prepare(
+          `INSERT INTO worktrees (project_id, path, branch, head, created_at, updated_at, first_seen_at, last_seen_at)
+           VALUES (?, '/repo/isagi', 'main', 'abc', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL)`,
+        )
+        .run(project.lastInsertRowid);
+      const surface = client
+        .prepare(
+          `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, created_at, updated_at)
+           VALUES (?, 'Main', '{}', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+        )
+        .run(worktree.lastInsertRowid);
+      // An old-store run attached to that surface, with one event, so the drop has rows to remove
+      // and a foreign key into kept data to release.
+      const run = client
         .prepare(
           `INSERT INTO workflow_runs (
-             workflow_key, workflow_title, workflow_artifact_hash, status, retrying, paused,
-             cancel_requested, state_json, state_version, created_at, updated_at
-           ) VALUES (?, ?, ?, 'waiting', 0, 1, 0, ?, 1, ?, ?)`,
+             workflow_key, workflow_title, worktree_id, surface_id, status, state_json, state_version,
+             created_at, updated_at
+           ) VALUES ('old', 'Old', ?, ?, 'waiting', '{}', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
         )
-        .run(
-          'migration-fixture',
-          'Migration fixture',
-          'a'.repeat(64),
-          '{"phase":"waiting"}',
-          '2026-08-16T00:00:00.000Z',
-          '2026-08-16T00:00:00.000Z',
-        );
+        .run(worktree.lastInsertRowid, surface.lastInsertRowid);
       client
-        .prepare('UPDATE workflow_runs SET root_run_id = ? WHERE id = ?')
-        .run(inserted.lastInsertRowid, inserted.lastInsertRowid);
-      assert.equal(hasColumn(client, 'workflow_runs', 'control_revision'), false);
+        .prepare(
+          `INSERT INTO workflow_run_events (workflow_run_id, recorded_at, state, trigger)
+           VALUES (?, '2026-01-01T00:00:00.000Z', '{}', 'start')`,
+        )
+        .run(run.lastInsertRowid);
+      seeded = readHistoricalRows(client, UNRELATED_COLUMNS);
     } finally {
       client.close();
     }
@@ -335,28 +425,38 @@ test('the workflow control revision migration preserves existing runs', async ()
     const database = RuntimeDatabaseLive.pipe(
       Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
     );
-    const run = await Effect.runPromise(
+    await Effect.runPromise(
       Effect.gen(function* () {
         const db = yield* RuntimeDatabase;
-        return yield* db.use('test_read_migrated_workflow_run', (connection) =>
-          connection.select().from(workflowRuns).get(),
+        return yield* db.use('test_open_upgraded_database', (connection) =>
+          connection.select().from(workflowRuns).all(),
         );
       }).pipe(Effect.provide(database)),
     );
 
-    assert.ok(run);
-    assert.equal(run.workflowKey, 'migration-fixture');
-    assert.equal(run.workflowArtifactHash, 'a'.repeat(64));
-    assert.equal(run.status, 'waiting');
-    assert.equal(run.paused, true);
-    assert.equal(run.stateJson, '{"phase":"waiting"}');
-    assert.equal(run.controlRevision, 0);
-    assert.equal(run.createdAt, '2026-08-16T00:00:00.000Z');
-    assert.equal(run.updatedAt, '2026-08-16T00:00:00.000Z');
+    const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      assertGraphWorkflowSchema(inspect);
+      assert.equal(
+        (inspect.prepare('SELECT count(*) AS count FROM workflow_runs').get() as { count: number })
+          .count,
+        0,
+      );
+      assert.deepEqual(readHistoricalRows(inspect, UNRELATED_COLUMNS), seeded);
+      assert.equal(seeded.worktree_surfaces.length, 1);
+    } finally {
+      inspect.close();
+    }
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+const UNRELATED_COLUMNS = {
+  projects: [],
+  worktrees: [],
+  worktree_surfaces: [],
+} as const satisfies Record<string, readonly string[]>;
 
 /**
  * Proves the project-kind migration (`0007`) upgrades a database created before

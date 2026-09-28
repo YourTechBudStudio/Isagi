@@ -47,11 +47,7 @@ test('delete pane updates layout and keeps the remaining pane', async () => {
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(output.deleted, {
-      deletedSurfaceId: null,
-      deletedPaneIds: [output.first.paneId],
-    });
-    assert.equal(output.deleted.deletedPaneIds.length, 1);
+    assert.deepEqual(output.deleted, { deletedPaneIds: [output.first.paneId] });
     assert.equal(output.detail.panes.length, 1);
     assert.equal(output.detail.panes[0]?.id, output.secondPaneId);
     assert.deepEqual(output.detail.layout, {
@@ -84,13 +80,13 @@ test('delete pane no-ops when the pane is missing', async () => {
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(output, { deletedSurfaceId: null, deletedPaneIds: [] });
+    assert.deepEqual(output, { deletedPaneIds: [] });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 
-test('delete pane no-ops when the pane deletion already removed the surface', async () => {
+test('deleting the same pane twice removes it once', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-pane-repeat-'));
   try {
     const output = await Effect.runPromise(
@@ -113,17 +109,14 @@ test('delete pane no-ops when the pane deletion already removed the surface', as
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(output.first, {
-      deletedSurfaceId: output.surface.surfaceId,
-      deletedPaneIds: [output.surface.paneId],
-    });
-    assert.deepEqual(output.second, { deletedSurfaceId: null, deletedPaneIds: [] });
+    assert.deepEqual(output.first, { deletedPaneIds: [output.surface.paneId] });
+    assert.deepEqual(output.second, { deletedPaneIds: [] });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 
-test('delete last pane deletes the surface and leaves referenced logs for PTY GC', async () => {
+test('delete last pane leaves an empty surface and referenced logs for PTY GC', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-last-pane-'));
   try {
     const output = await Effect.runPromise(
@@ -149,17 +142,16 @@ test('delete last pane deletes the surface and leaves referenced logs for PTY GC
           surfaceId: surface.surfaceId,
           paneId: surface.paneId,
         });
-        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId);
         return { deleted, detail, logPath, surface };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(output.deleted, {
-      deletedSurfaceId: output.surface.surfaceId,
-      deletedPaneIds: [output.surface.paneId],
-    });
+    assert.deepEqual(output.deleted, { deletedPaneIds: [output.surface.paneId] });
     assert.equal(existsSync(output.logPath), true);
-    assert.equal(Either.isLeft(output.detail), true);
+    assert.equal(output.detail.id, output.surface.surfaceId);
+    assert.deepEqual(output.detail.panes, []);
+    assert.equal(output.detail.layout, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -354,7 +346,7 @@ test('delete pane publishes a shared surface changed event', async () => {
   }
 });
 
-test('delete pane deletes every pane when invalid layout escalates to surface delete', async () => {
+test('delete pane removes panes a corrupt layout cannot place, leaving an empty surface', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-pane-invalid-layout-'));
   try {
     const output = await Effect.runPromise(
@@ -385,16 +377,16 @@ test('delete pane deletes every pane when invalid layout escalates to surface de
           surfaceId: surface.surfaceId,
           paneId: surface.paneId,
         });
-        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId);
         return { deleted, detail, surface, secondPaneId };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
     assert.deepEqual(output.deleted, {
-      deletedSurfaceId: output.surface.surfaceId,
       deletedPaneIds: [output.surface.paneId, output.secondPaneId],
     });
-    assert.equal(Either.isLeft(output.detail), true);
+    assert.deepEqual(output.detail.panes, []);
+    assert.equal(output.detail.layout, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -415,7 +407,7 @@ test('delete pane deletes every pane when invalid layout escalates to surface de
 function openEditorWithIncarnation(worktreeId: number) {
   return Effect.gen(function* () {
     const surfaces = yield* SurfaceService;
-    const opened = yield* surfaces.openEditor({ worktreeId });
+    const opened = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
     const repository = yield* EditorContextRepository;
     const ptyProcessId = yield* insertEditorPtyProcess();
     yield* repository.markAttemptInProgress(opened.editorContextId);
@@ -574,7 +566,6 @@ test('deleting a terminal pane beside an editor pane keeps the unlocked fast pat
     // The plan removes only the terminal pane, so the editor is untouched: its
     // incarnation is neither released nor terminated.
     assert.deepEqual(output.deleted.deletedPaneIds, [output.deleted.deletedPaneIds[0]]);
-    assert.equal(output.deleted.deletedSurfaceId, null);
     assert.equal(terminated.includes(output.ptyProcessId), false);
     assert.equal(output.row?.activePtyProcessId, output.ptyProcessId);
   } finally {
@@ -594,7 +585,10 @@ test('an editor still placed when the lock is acquired is never terminated', asy
         // Delete and re-open, interleaved: whichever takes the lock first wins
         // completely, and the re-placed editor must keep its process either way.
         const [, reopened] = yield* Effect.all(
-          [surfaces.deleteSurface(opened.surfaceId), surfaces.openEditor({ worktreeId })],
+          [
+            surfaces.deleteSurface(opened.surfaceId),
+            surfaces.openEditor({ worktreeId, intoSurfaceId: null }),
+          ],
           { concurrency: 'unbounded' },
         );
         const repository = yield* EditorContextRepository;

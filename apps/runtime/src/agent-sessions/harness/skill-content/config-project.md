@@ -45,8 +45,8 @@ worktrees:
       - type: copy
         src: config/secrets
         dest: config/secrets
-        include: ["**/*.json"]
-        exclude: ["**/*.example.json"]
+        include: ['**/*.json']
+        exclude: ['**/*.example.json']
         overwrite: false
 
       - type: symlink
@@ -58,7 +58,7 @@ worktrees:
         cwd: .
         timeout: 5m
         env:
-          CI: "1"
+          CI: '1'
 ```
 
 `timeout` accepts values like `500ms`, `30s`, `10m`, `1h`, and defaults to `10m`. A hook that exceeds its timeout is terminated.
@@ -95,9 +95,9 @@ commands:
   - name: db
     command: docker compose up postgres
     cwd: infra
-    envFiles: [".env.local"]
+    envFiles: ['.env.local']
     env:
-      POSTGRES_PORT: "5432"
+      POSTGRES_PORT: '5432'
     lifecycle:
       postCreate:
         start: true
@@ -132,8 +132,4 @@ Two rules the parser enforces strictly, unlike the rest of this file:
 
 ## Schema
 
-This is the schema Isagi validates the file against. The field descriptions are authoritative.
-
-```ts
-{{PROJECT_CONFIG_SCHEMA}}
-```
+For exact fields, defaults, and constraints, read the [validated schema](config-project.schema.ts). Its field descriptions are authoritative when prose and schema disagree.

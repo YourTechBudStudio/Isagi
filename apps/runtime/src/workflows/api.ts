@@ -1,26 +1,31 @@
-import { Effect, Either, Schema, type ManagedRuntime } from 'effect';
+import { Effect, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
-  apiBasePath,
   apiEndpoints,
-  workflowEventsStreamInputMessageSchema,
-  workflowEventsStreamOutputMessageSchema,
-  workflowEventsStreamWebSocketEndpoint,
+  workflowContentEndpoints,
   type ApiError,
-  type WorkflowEventsStreamErrorCode,
-  type WorkflowEventsStreamOutputMessage,
+  type WorkflowRejectionData,
 } from '@isagi/contracts';
 
-import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
-import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
-import { DatabaseError } from '../persistence/index.js';
-import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import {
+  errorMessage,
+  infrastructureApiError,
+  registerApiEndpoint,
+  registerContentEndpoint,
+  type ApiRouteContext,
+} from '../lib/api/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { WorkflowEventLedger, WorkflowEventLedgerError } from './event-ledger.service.js';
-import { WorkflowEngineError } from './types.js';
-import { WorkflowEngine } from './workflow-engine.service.js';
-import { WorkflowRunProjection } from './workflow-run-projection.service.js';
+import { WorkflowEngine } from './engine/service.js';
+import { WorkflowEngineError } from './errors.js';
+
+/**
+ * The workflow HTTP surface: launch, the controls, and plain reads.
+ *
+ * Every control returns the run's summary after it was applied. Live changes reach clients on the
+ * shared runtime event socket as `workflow_run_event` and `workflow_run_changed`; these routes are
+ * what a client refetches from.
+ */
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -30,363 +35,201 @@ const runWithRuntime =
   ) =>
     runtime.runPromise(effect, options);
 
-// Bound the snapshot sent on connect/replay so a long-lived surface's ledger can't
-// ship an unbounded payload (and overfill the client's bounded buffer). Events are
-// chronological, so the most recent N are what the panel shows. Keep aligned with the
-// client cap in apps/web/src/lib/workspace/workflow-events/stream.ts.
-const maxSnapshotEvents = 1000;
-
-function capRecentEvents<T>(events: readonly T[]): readonly T[] {
-  return events.length > maxSnapshotEvents
-    ? events.slice(events.length - maxSnapshotEvents)
-    : events;
-}
-
 export function registerWorkflowApi(
   fastify: FastifyInstance,
   runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
 ) {
   const run = runWithRuntime(runtime);
+  const endpoints = apiEndpoints.workflows;
+  const register = <Endpoint extends Parameters<typeof registerApiEndpoint>[1]>(
+    endpoint: Endpoint,
+    handle: Parameters<typeof registerApiEndpoint<Endpoint, RuntimeServices>>[2]['handle'],
+  ) =>
+    registerApiEndpoint<Endpoint, RuntimeServices>(fastify, endpoint, {
+      handle,
+      mapError: toWorkflowApiError,
+      run,
+    });
 
-  registerApiEndpoint(fastify, apiEndpoints.workflows.descriptors, {
-    handle: (input) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        const workflows = yield* engine.listWorkflowDescriptors({ context: input.context });
-        return { workflows: [...workflows] };
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.listRuns, {
-    handle: (_input, _context, _params, query) =>
-      Effect.gen(function* () {
-        const projection = yield* WorkflowRunProjection;
-        const runs = yield* projection.listSummaries({
-          surfaceId: query.surfaceId,
-          worktreeId: query.worktreeId,
-          status: query.status,
-          rootOnly: query.rootOnly === undefined ? true : booleanQuery(query.rootOnly),
-        });
-        return { runs: [...runs] };
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.getRun, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const projection = yield* WorkflowRunProjection;
-        const runSummary = yield* projection.getSummary(params.runId);
-        if (!runSummary) {
-          return yield* Effect.fail(
-            new WorkflowEngineError({
-              code: 'workflow_run_not_found',
-              message: `Workflow run ${params.runId} was not found.`,
-              workflowRunId: params.runId,
-            }),
-          );
-        }
-        return { run: runSummary };
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.start, {
-    handle: (input) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        const workflowRun = yield* engine.startWorkflow({
-          workflowKey: input.workflowKey,
-          variables: input.variables ?? {},
-          context: input.context,
-        });
-        return { workflowRunId: workflowRun.id, workflowKey: workflowRun.workflowKey };
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.runEvents, {
-    handle: (_input, _context, params, query) =>
-      Effect.gen(function* () {
-        const projection = yield* WorkflowRunProjection;
-        const ledger = yield* WorkflowEventLedger;
-        const runSummary = yield* projection.getSummary(params.runId);
-        if (!runSummary) {
-          return yield* workflowRunNotFound(params.runId);
-        }
-        const includeChildren = booleanQuery(query.includeChildren ?? false);
-        const events = yield* ledger.readRunEvents({ runId: params.runId, includeChildren });
-        return { runId: params.runId, includeChildren, events: capRecentEvents(events) };
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.pause, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.pause({ runId: params.runId });
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.resume, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.resume({ runId: params.runId });
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.clear, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.clear({ runId: params.runId });
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.retry, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.retry({ runId: params.runId });
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workflows.advance, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        const result = yield* engine.advance({ runId: params.runId, answers: input.answers });
-        return { runId: result.run.id, status: result.run.status };
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
-  registerWorkflowEventsStreamRoute(fastify, run);
-}
-
-function registerWorkflowEventsStreamRoute(
-  fastify: FastifyInstance,
-  run: ReturnType<typeof runWithRuntime>,
-) {
-  fastify.get(
-    `${apiBasePath}${workflowEventsStreamWebSocketEndpoint.path}`,
-    {
-      websocket: true,
-      preValidation: enforceRuntimeWebSocketOrigin,
-    },
-    (socket, request) => {
-      const runId = decodeRunId(request.params);
-      const includeChildren = decodeIncludeChildren(request.query);
-      let closed = false;
-      let subscribed = false;
-      let unsubscribe = () => {};
-
-      const send = (message: WorkflowEventsStreamOutputMessage) => {
-        if (socket.readyState !== 1) return false;
-        try {
-          const encoded = Schema.decodeUnknownSync(workflowEventsStreamOutputMessageSchema)(
-            message,
-          );
-          socket.send(JSON.stringify(encoded));
-          return true;
-        } catch (error: unknown) {
-          console.error('[runtime] Workflow events websocket encoding failed', error);
-          socket.close();
-          return false;
-        }
+  register(endpoints.descriptors, (input) =>
+    Effect.gen(function* () {
+      const engine = yield* WorkflowEngine;
+      const listings = yield* engine.listWorkflowDescriptors(input.origin);
+      return {
+        workflows: listings.map((listing) =>
+          listing.result.ok
+            ? {
+                ok: true as const,
+                workflowKey: listing.workflowKey,
+                manifest: listing.result.manifest,
+              }
+            : {
+                ok: false as const,
+                workflowKey: listing.workflowKey,
+                reason: listing.result.reason,
+                diagnostics: [...listing.result.diagnostics],
+              },
+        ),
       };
+    }),
+  );
 
-      socket.once('close', () => {
-        closed = true;
-        unsubscribe();
-      });
+  register(endpoints.start, (input) =>
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      engine.launch({
+        workflowKey: input.workflowKey,
+        inputs: input.inputs ?? {},
+        origin: input.origin,
+        ...(input.placement === undefined ? {} : { placement: input.placement }),
+      }),
+    ),
+  );
 
-      if (runId === null) {
-        send({
-          type: 'error',
-          code: 'workflow_run_not_found',
-          message: 'Workflow events stream target was invalid.',
-        });
-        socket.close();
-        return;
-      }
+  register(endpoints.listRuns, (_input, _context, _params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listRuns(query)),
+  );
+  register(endpoints.getRun, (_input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getRun(params.runId)),
+  );
+  register(endpoints.getStructure, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      engine.getStructure(params.runId, query.artifactHash),
+    ),
+  );
+  register(endpoints.listEvents, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listEvents(params.runId, query)),
+  );
+  register(endpoints.listOperations, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listOperations(params.runId, query)),
+  );
+  register(endpoints.getExecution, (_input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getExecution(params.executionId)),
+  );
+  register(endpoints.getOperation, (_input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getOperation(params.operationId)),
+  );
 
-      socket.on('message', (raw: Buffer) => {
-        const message = decodeStreamClientMessage(raw);
-        if (!message) {
-          send({ type: 'error', code: 'invalid_message' });
-          socket.close();
-          return;
-        }
-        if (subscribed) return;
-        subscribed = true;
-
-        void run(
-          Effect.gen(function* () {
-            const internalBus = yield* InternalRuntimeEventBus;
-            const ledger = yield* WorkflowEventLedger;
-            const projection = yield* WorkflowRunProjection;
-            const runSummary = yield* projection.getSummary(runId);
-            if (!runSummary) {
-              return yield* workflowRunNotFound(runId);
-            }
-            const subscription = yield* internalBus.subscribe({
-              types: ['workflow_event_appended'],
-            });
-            const events = yield* ledger.readRunEvents({ runId, includeChildren });
-            return { subscription, events, rootRunId: runSummary.rootRunId };
-          }).pipe(Effect.either),
-        )
-          .then((result) => {
-            if (closed) return;
-            if (Either.isLeft(result)) {
-              console.error('[runtime] Workflow events websocket snapshot failed', result.left);
-              send({
-                type: 'error',
-                code: workflowEventsStreamErrorCode(result.left),
-                message: errorMessage(result.left),
-              });
-              socket.close();
-              return;
-            }
-
-            const { subscription, events, rootRunId } = result.right;
-            unsubscribe = () => {
-              void run(subscription.unsubscribe).catch((error: unknown) => {
-                console.warn('[runtime] Workflow events websocket unsubscribe failed', error);
-              });
-            };
-            if (!send({ type: 'workflow_events_snapshot', events: [...capRecentEvents(events)] }))
-              return;
-
-            const pump = (): void => {
-              if (closed) return;
-              void run(subscription.take.pipe(Effect.either)).then(
-                (eventResult) => {
-                  if (closed) return;
-                  if (Either.isLeft(eventResult)) {
-                    console.error(
-                      '[runtime] Workflow events websocket receive failed',
-                      eventResult.left,
-                    );
-                    send({
-                      type: 'error',
-                      code: 'workflow_events_unavailable',
-                      message: errorMessage(eventResult.left),
-                    });
-                    socket.close();
-                    return;
-                  }
-                  const event = eventResult.right;
-                  if (
-                    event.type === 'workflow_event_appended' &&
-                    (includeChildren ? event.rootRunId === rootRunId : event.runId === runId)
-                  ) {
-                    if (!send({ type: 'workflow_event_appended', event: event.event })) return;
-                  }
-                  pump();
-                },
-                (error: unknown) => {
-                  if (closed) return;
-                  console.error('[runtime] Workflow events websocket failed', error);
-                  socket.close();
-                },
-              );
-            };
-
-            pump();
-          })
-          .catch((error: unknown) => {
-            console.error('[runtime] Workflow events websocket failed', error);
-            socket.close();
-          });
-      });
+  register(endpoints.listCheckpoints, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listCheckpoints(params.runId, query)),
+  );
+  register(endpoints.getCheckpoint, (_input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getCheckpoint(params.checkpointId)),
+  );
+  register(endpoints.exportCheckpoint, (input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      engine.exportCheckpoint(params.checkpointId, input.destinationPath),
+    ),
+  );
+  registerContentEndpoint<typeof workflowContentEndpoints.getCheckpointFile, RuntimeServices>(
+    fastify,
+    workflowContentEndpoints.getCheckpointFile,
+    {
+      handle: (_context, params, query) =>
+        Effect.flatMap(WorkflowEngine, (engine) =>
+          engine.openCheckpointFile(params.checkpointId, query.path),
+        ),
+      mapError: toWorkflowApiError,
+      run,
     },
+  );
+
+  register(endpoints.pause, (_input, _context, params) =>
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.pause(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
+  );
+  register(endpoints.resume, (_input, _context, params) =>
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.resume(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
+  );
+  register(endpoints.retry, (_input, _context, params) =>
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.retry(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
+  );
+  register(endpoints.cancel, (_input, _context, params) =>
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.cancel(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
+  );
+  register(endpoints.dismiss, (_input, _context, params) =>
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.dismiss(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
+  );
+  register(endpoints.advance, (input, _context, params) =>
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) =>
+        engine.advance({
+          runId: params.runId,
+          executionId: input.executionId,
+          answers: input.answers,
+        }),
+      ),
+      (summary) => ({ run: summary }),
+    ),
   );
 }
 
+/** One vocabulary: the engine already decides in the contract's reasons, so this only copies context. */
 function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError {
   if (error instanceof WorkflowEngineError) {
+    const identities = {
+      ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
+      ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
+      ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
+      ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+      ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
+      ...(error.paneId ? { paneId: error.paneId } : {}),
+      ...(error.agentSessionId ? { agentSessionId: error.agentSessionId } : {}),
+      ...(error.executionId ? { executionId: error.executionId } : {}),
+      ...(error.operationId ? { operationId: error.operationId } : {}),
+      ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
+      ...(error.path ? { path: error.path } : {}),
+      ...(error.commitSha ? { commitSha: error.commitSha } : {}),
+      ...(error.control ? { control: error.control } : {}),
+      ...(error.workflowLoadFailureReason
+        ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
+        : {}),
+      ...(error.workflowSourceDirectory
+        ? { workflowSourceDirectory: error.workflowSourceDirectory }
+        : {}),
+      ...(error.workflowPackageDirectory
+        ? { workflowPackageDirectory: error.workflowPackageDirectory }
+        : {}),
+      ...(error.shadowedWorkflowPackageDirectories?.length
+        ? { shadowedWorkflowPackageDirectories: [...error.shadowedWorkflowPackageDirectories] }
+        : {}),
+      ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
+      ...(error.collision ? { collision: error.collision } : {}),
+      ...(error.branch ? { branch: error.branch } : {}),
+      ...(error.baseRef ? { baseRef: error.baseRef } : {}),
+      ...(error.projectId ? { projectId: error.projectId } : {}),
+    };
     return {
       code: 'workflow_rejected',
-      status: statusForWorkflowEngineCode(error.code),
+      status: statusFor(error.code),
       message: error.message,
       requestId: context.requestId,
-      data: {
-        reason: error.code,
-        ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
-        ...(error.workflowLoadFailureReason
-          ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
-          : {}),
-        ...(error.workflowSourceDirectory
-          ? { workflowSourceDirectory: error.workflowSourceDirectory }
-          : {}),
-        ...(error.workflowPackageDirectory
-          ? { workflowPackageDirectory: error.workflowPackageDirectory }
-          : {}),
-        ...(error.shadowedWorkflowPackageDirectories &&
-        error.shadowedWorkflowPackageDirectories.length > 0
-          ? {
-              shadowedWorkflowPackageDirectories: [...error.shadowedWorkflowPackageDirectories],
-            }
-          : {}),
-        ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
-        ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
-        ...(error.operation ? { operation: error.operation } : {}),
-        ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-        ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
-        ...(error.paneId ? { paneId: error.paneId } : {}),
-        ...(error.agentSessionId ? { agentSessionId: error.agentSessionId } : {}),
-      },
+      data: rejectionData(error, identities),
     };
   }
 
-  if (error instanceof DatabaseError) {
-    return {
-      code: 'runtime_database_failed',
-      status: 500,
-      message: `Database operation failed: ${error.operation}`,
-      requestId: context.requestId,
-      data: { operation: error.operation },
-    };
-  }
-
-  if (error instanceof WorkflowEventLedgerError) {
-    return {
-      code: 'workflow_rejected',
-      status: 500,
-      message: `Workflow event ledger failed: ${error.code}`,
-      requestId: context.requestId,
-      data: {
-        reason: 'workflow_event_ledger_failed',
-        ...(error.runId ? { workflowRunId: error.runId } : {}),
-        ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
-      },
-    };
-  }
+  // Launch makes one owning-service call (the worktree preflight), so Git, the database, the
+  // state file and project paths can fail underneath it. They are reported as themselves.
+  const infrastructure = infrastructureApiError(error, context);
+  if (infrastructure) return infrastructure;
 
   console.error(
     `[runtime] Unhandled workflow API handler error during ${context.endpointId}`,
     error,
   );
-
   return {
     code: 'api_unhandled_error',
     status: 500,
@@ -396,50 +239,39 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
   };
 }
 
-function statusForWorkflowEngineCode(code: WorkflowEngineError['code']): 400 | 409 | 500 {
-  if (code === 'workflow_discovery_failed') return 500;
-  if (code === 'workflow_surface_busy') return 409;
-  return 400;
+function rejectionData(
+  error: WorkflowEngineError,
+  identities: Record<string, unknown>,
+): WorkflowRejectionData {
+  switch (error.code) {
+    case 'workflow_structure_validation_failed':
+    case 'workflow_code_incompatible':
+      return { ...identities, reason: error.code, diagnostics: [...(error.diagnostics ?? [])] };
+    case 'workflow_checkpoint_destination_rejected':
+      return {
+        ...identities,
+        reason: error.code,
+        destinationPath: error.destination?.path ?? '',
+        destinationIssue: error.destination?.issue ?? 'inaccessible',
+      };
+    default:
+      return { ...identities, reason: error.code };
+  }
 }
 
-function workflowRunNotFound(runId: number) {
-  return Effect.fail(
-    new WorkflowEngineError({
-      code: 'workflow_run_not_found',
-      message: `Workflow run ${runId} was not found.`,
-      workflowRunId: runId,
-    }),
-  );
-}
-
-function workflowEventsStreamErrorCode(error: unknown): WorkflowEventsStreamErrorCode {
-  return error instanceof WorkflowEngineError && error.code === 'workflow_run_not_found'
-    ? 'workflow_run_not_found'
-    : 'workflow_events_unavailable';
-}
-
-function decodeRunId(params: unknown) {
-  if (!params || typeof params !== 'object' || !('runId' in params)) return null;
-  const value = (params as Record<string, unknown>).runId;
-  const decoded = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
-  return typeof decoded === 'number' && Number.isInteger(decoded) && decoded > 0 ? decoded : null;
-}
-
-function decodeIncludeChildren(query: unknown) {
-  if (!query || typeof query !== 'object' || !('includeChildren' in query)) return false;
-  return booleanQuery((query as Record<string, unknown>).includeChildren);
-}
-
-function booleanQuery(value: unknown): boolean {
-  return value === true || value === 'true';
-}
-
-function decodeStreamClientMessage(raw: Buffer) {
-  try {
-    return Schema.decodeUnknownSync(workflowEventsStreamInputMessageSchema)(
-      JSON.parse(raw.toString()),
-    );
-  } catch {
-    return null;
+function statusFor(code: WorkflowEngineError['code']): 400 | 409 | 500 {
+  switch (code) {
+    case 'workflow_discovery_failed':
+    case 'workflow_checkpoint_export_failed':
+      return 500;
+    // A conflict with somebody else's state: the request would succeed against a different one.
+    case 'workflow_surface_busy':
+    case 'workflow_environment_collision':
+    case 'workflow_control_unavailable':
+    case 'workflow_code_incompatible':
+    case 'workflow_checkpoint_commit_unavailable':
+      return 409;
+    default:
+      return 400;
   }
 }

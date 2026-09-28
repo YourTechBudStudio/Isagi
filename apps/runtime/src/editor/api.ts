@@ -38,10 +38,13 @@ export function registerEditorApi(
   ) => runtime.runPromise(effect, options);
 
   registerApiEndpoint(fastify, apiEndpoints.editor.open, {
-    handle: (_input, _context, params) =>
+    handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
-        return yield* surfaces.openEditor({ worktreeId: params.worktreeId });
+        return yield* surfaces.openEditor({
+          worktreeId: params.worktreeId,
+          intoSurfaceId: input.intoSurfaceId,
+        });
       }),
     mapError: toEditorApiError,
     run,
@@ -152,10 +155,11 @@ function toEditorApiError(error: unknown, context: ApiRouteContext): ApiError {
     };
   if (error instanceof SurfaceError) {
     // Translated rather than delegated, because the editor's own refusal
-    // vocabulary already names it and the palette reads one reason set. Every
-    // other `SurfaceError` variant is unreachable from `openEditor` in practice,
-    // but the type channel carries them, so delegation keeps this mapper total
-    // without inventing editor reasons for surfaces conditions.
+    // vocabulary already names it and the palette reads one reason set. The
+    // target-surface refusals (`surface_not_found`, `surface_not_empty`) are
+    // surfaces conditions and delegate as such; the rest are unreachable from
+    // `openEditor` in practice, but the type channel carries them, so
+    // delegation keeps this mapper total.
     if (error.code === 'worktree_not_found')
       return {
         code: 'editor_rejected',

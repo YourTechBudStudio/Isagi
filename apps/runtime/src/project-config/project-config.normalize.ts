@@ -100,8 +100,8 @@ function normalizeCopyHook(input: Schema.Schema.Type<typeof copyHookSchema>): Co
     type: 'copy',
     src: input.src,
     dest: input.dest,
-    include: input.include ?? ['**/*'],
-    exclude: input.exclude ?? [],
+    ...(input.include ? { include: input.include } : {}),
+    ...(input.exclude ? { exclude: input.exclude } : {}),
     overwrite: input.overwrite ?? true,
   };
 }

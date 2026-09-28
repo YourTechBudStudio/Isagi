@@ -27,18 +27,18 @@ export const copyHookSchema = Schema.Struct({
     description: 'Selects a copy hook for post-create worktree setup.',
   }),
   src: nonBlankStringSchema.annotations({
-    description: `${hookPathDescription} For copy hooks, src is the source directory or file under the project root.`,
+    description: `${hookPathDescription} For copy hooks, src is the source directory or file under the project root. A missing src fails the setup step.`,
   }),
   dest: nonBlankStringSchema.annotations({
     description: `${hookPathDescription} For copy hooks, dest is the target directory or file under the worktree root.`,
   }),
   include: Schema.optional(Schema.Array(nonBlankStringSchema)).annotations({
     description:
-      'Glob patterns included from copy.src. Defaults to ["**/*"]. Empty or blank pattern strings are rejected.',
+      'Glob patterns included from a directory copy.src. Defaults to ["**/*"]. Setting it when copy.src is a file fails the setup step. Empty or blank pattern strings are rejected.',
   }),
   exclude: Schema.optional(Schema.Array(nonBlankStringSchema)).annotations({
     description:
-      'Glob patterns excluded after include matching. Defaults to an empty list. Empty or blank pattern strings are rejected.',
+      'Glob patterns excluded after include matching for a directory copy.src. Defaults to an empty list. Setting it when copy.src is a file fails the setup step. Empty or blank pattern strings are rejected.',
   }),
   overwrite: Schema.optional(Schema.Boolean).annotations({
     description: 'Whether copied files replace existing worktree files. Defaults to true.',
@@ -285,8 +285,10 @@ export interface CopyHook {
   readonly type: 'copy';
   readonly src: string;
   readonly dest: string;
-  readonly include: readonly string[];
-  readonly exclude: readonly string[];
+  /** Undefined when not configured; directory sources then include everything. */
+  readonly include?: readonly string[];
+  /** Undefined when not configured; directory sources then exclude nothing. */
+  readonly exclude?: readonly string[];
   readonly overwrite: boolean;
 }
 

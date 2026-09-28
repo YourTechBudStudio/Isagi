@@ -110,6 +110,7 @@ function forbiddenRepositoryFor(row: ProjectRow): WorkspaceRepositoryService {
     findProjectWorktree: () => Effect.die(new Error('project worktree lookup must not run')),
     findProjectRootWorktree: () => Effect.die(new Error('root worktree lookup must not run')),
     findProjectWorktreeByBranch: () => Effect.die(new Error('branch lookup must not run')),
+    findProjectWorktreeByPath: () => Effect.die(new Error('path lookup must not run')),
     deleteProject: () => Effect.die(new Error('project must not be deleted')),
     deleteWorktree: () => Effect.die(new Error('worktree rows must not be deleted')),
     readWorktreeDeleteDiagnostics: () => Effect.die(new Error('delete diagnostics must not run')),

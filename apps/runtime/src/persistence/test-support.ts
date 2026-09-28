@@ -1,27 +1,23 @@
-import { join } from 'node:path';
-
-import type { DataDirectoryService, IsagiDataDirectory } from './data-directory.service.js';
+import {
+  isagiDataDirectoryPaths,
+  type DataDirectoryService,
+  type IsagiDataDirectory,
+} from './data-directory.service.js';
 
 /**
- * Builds a {@link DataDirectoryService} stub rooted at `root`, deriving the
- * standard child paths the same way the live service does. Pass `overrides` to
- * point an individual path elsewhere (e.g. a custom worktrees parent).
+ * Builds a {@link DataDirectoryService} stub rooted at `root`, deriving the standard child paths
+ * through the **product's own** derivation. Pass `overrides` to point an individual path elsewhere
+ * (e.g. a custom worktrees parent).
+ *
+ * Delegating rather than restating it is what lets a test prove something about path derivation at
+ * all: the root is canonicalized here because `isagiDataDirectoryPaths` canonicalizes it, so a test
+ * whose subject is "an Isagi-derived path agrees with the one Git reports" fails if that
+ * canonicalization is ever removed, instead of passing on a normalization the fixture applied
+ * itself.
  */
 export function makeTestDataDirectory(
   root: string,
   overrides: Partial<IsagiDataDirectory> = {},
 ): DataDirectoryService {
-  return {
-    paths: {
-      root,
-      databasePath: join(root, 'isagi.db'),
-      statePath: join(root, 'state.json'),
-      worktreesPath: join(root, 'worktrees'),
-      sessionsPath: join(root, 'sessions'),
-      workflowsPath: join(root, 'workflows'),
-      toolsPath: join(root, 'tools'),
-      editorsPath: join(root, 'editors'),
-      ...overrides,
-    },
-  };
+  return { paths: { ...isagiDataDirectoryPaths(root), ...overrides } };
 }

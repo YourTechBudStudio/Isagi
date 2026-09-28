@@ -108,6 +108,31 @@ export interface CommandOutcomeAction {
   readonly value: 'close' | 'cancel' | (string & {});
   readonly label: string;
   readonly intent?: 'default' | 'primary' | 'danger' | 'cancel';
+  /**
+   * A follow-up this action runs instead of dismissing the panel.
+   *
+   * The palette runs it through the same cycle a command's `run` goes through:
+   * the running panel while it is in flight, then the returned outcome rendered
+   * in place. A returned outcome may carry actions of its own, which is how an
+   * action that fails again can offer itself a second time. An action without
+   * `run` behaves exactly as before — `close` and `cancel` dismiss, anything
+   * else is inert.
+   */
+  readonly run?: () => MaybePromise<CommandOutcome | void>;
+  /** Calm status shown while this action's `run` is in flight. */
+  readonly running?: PaletteRunningCopy;
+}
+
+/**
+ * What the palette says about work it is waiting on.
+ *
+ * One shape wherever a run is in flight: a command's declared `running`, an
+ * outcome action's follow-up, or a caller-supplied run. Naming the work keeps a
+ * long operation honest instead of looking frozen.
+ */
+export interface PaletteRunningCopy {
+  readonly title: string;
+  readonly hint?: string;
 }
 
 export interface CommandResultContent {
@@ -285,10 +310,7 @@ export interface PaletteCommand {
    * time; naming the work keeps the palette honest instead of looking frozen.
    * Omit it for fast commands — they fall back to a generic working status.
    */
-  readonly running?: {
-    readonly title: string;
-    readonly hint?: string;
-  };
+  readonly running?: PaletteRunningCopy;
   readonly run: (
     values: ArgValues,
     ctx: PaletteContext,

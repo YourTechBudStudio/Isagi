@@ -128,6 +128,22 @@ function runPaletteEffect(
     return;
   }
 
+  if (effect.kind === 'callbackRun') {
+    // No entry to resolve and none to record: the caller owns the function, and
+    // whether this counts as "recently used" is the caller's fact, not the
+    // palette's. Everything else is the ordinary run cycle.
+    void resolveMaybe(effect.run).then(
+      (outcome) => options.send({ type: 'run-succeeded', attemptId: effect.attemptId, outcome }),
+      (error: unknown) =>
+        options.send({
+          type: 'run-failed',
+          attemptId: effect.attemptId,
+          error: formatRuntimeErrorSummary(error),
+        }),
+    );
+    return;
+  }
+
   if (effect.kind === 'suggestPaths') {
     if (options.pathSuggestTimer.current !== null) {
       window.clearTimeout(options.pathSuggestTimer.current);

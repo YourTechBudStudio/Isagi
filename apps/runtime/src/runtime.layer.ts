@@ -12,6 +12,7 @@ import {
   type AgentSessionAttentionProjectionService,
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
+import { CliAccessLive, type CliAccessService } from './cli-access/index.js';
 import {
   CommandPortProbeLive,
   CommandRepositoryLive,
@@ -58,10 +59,10 @@ import {
   InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
   RuntimeEventBusLive,
-  RuntimeEventProjectionLive,
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
 } from './runtime-events/index.js';
+import { RuntimeEventProjectionLive } from './runtime-events/projection.service.js';
 import { SessionGcLive, type SessionGcService } from './session-gc/index.js';
 import { SessionLifecycleLive, type SessionLifecycleService } from './session-lifecycle/index.js';
 import {
@@ -76,16 +77,10 @@ import {
   type TerminalSessionServiceShape,
 } from './terminal-sessions/index.js';
 import {
-  WorkflowCapabilitiesLive,
+  WorkflowContentStoreLive,
   WorkflowEngineLive,
-  WorkflowEventLedgerLive,
-  WorkflowHeadlessLive,
-  WorkflowRunProjectionLive,
   WorkflowRegistryLive,
-  WorkflowRepositoryLive,
   type WorkflowEngineService,
-  type WorkflowEventLedgerService,
-  type WorkflowRunProjectionService,
 } from './workflows/index.js';
 import {
   WorkspaceRepository,
@@ -136,12 +131,15 @@ const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(Datab
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowRepositoryLayer = WorkflowRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowEventLedgerLayer = WorkflowEventLedgerLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
+const WorkflowRegistryLayer = WorkflowRegistryLive.pipe(
   Layer.provide(DataDirectoryLive),
+  Layer.provide(RuntimeConfigLayer),
 );
+// One instance for the whole runtime: the server publishes the URL into the same service every PTY
+// launch reads its environment from.
+const CliAccessLayer = CliAccessLive.pipe(Layer.provide(DataDirectoryLive));
 const PtyServiceLayer = PtyServiceLive.pipe(
+  Layer.provide(CliAccessLayer),
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendCatalogLive),
   Layer.provide(PtyForegroundStateLayer),
@@ -153,11 +151,6 @@ const PtyServiceLayer = PtyServiceLive.pipe(
 const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
   Layer.provide(DataDirectoryLive),
   Layer.provide(AgentSessionArtifactsLayer),
-);
-const WorkflowHeadlessLayer = WorkflowHeadlessLive.pipe(
-  Layer.provide(HarnessAdapterRegistryLayer),
-  Layer.provide(PtyServiceLayer),
-  Layer.provide(HarnessControlPlaneLayer),
 );
 const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
@@ -213,31 +206,36 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(EntityLockLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
-const WorkflowCapabilitiesLayer = WorkflowCapabilitiesLive.pipe(
-  Layer.provide(AgentSessionServiceLayer),
-  Layer.provide(SurfaceServiceLayer),
-  Layer.provide(PtyServiceLayer),
-  Layer.provide(AgentSessionArtifactsLayer),
-  Layer.provide(HarnessLedgerObserverLayer),
-  Layer.provide(WorkflowHeadlessLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
-);
-const WorkflowEngineLayer = WorkflowEngineLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
-  Layer.provide(
-    WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive), Layer.provide(RuntimeConfigLayer)),
-  ),
+const CommandServiceLayer = CommandServiceLive.pipe(
+  Layer.provide(CommandRepositoryLayer),
   Layer.provide(RepositoryLive),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(PtyRepositoryLayer),
+  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
+  Layer.provide(DataDirectoryLive),
+);
+const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(SurfaceAndPtyServiceLayer),
+  Layer.provide(CommandServiceLayer),
+);
+// The engine owns every workflow write and pushes its events live. It creates worktrees and
+// surfaces through their owning services (ADR 0008).
+const WorkflowEngineLayer = WorkflowEngineLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(GitLive),
+  Layer.provide(WorkflowContentStoreLive.pipe(Layer.provide(DataDirectoryLive))),
+  Layer.provide(WorkflowRegistryLayer),
+  Layer.provide(RepositoryLive),
+  Layer.provide(WorkspaceServiceLayer),
   Layer.provide(SurfaceServiceLayer),
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(AgentSessionServiceLayer),
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
-  Layer.provide(WorkflowHeadlessLayer),
-  Layer.provide(WorkflowCapabilitiesLayer),
-);
-const WorkflowRunProjectionLayer = WorkflowRunProjectionLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(HarnessAdapterRegistryLayer),
+  Layer.provide(HarnessControlPlaneLayer),
 );
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
@@ -255,26 +253,12 @@ const ApiServicesLayer = Layer.mergeAll(
   SurfaceAndPtyServiceLayer,
   SessionServicesLayer,
   EventProjectionLayer,
-  WorkflowRunProjectionLayer,
-  WorkflowEventLedgerLayer,
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
   EditorProvisioningLayer,
   EditorContextServiceLayer,
-);
-const CommandServiceLayer = CommandServiceLive.pipe(
-  Layer.provide(CommandRepositoryLayer),
-  Layer.provide(RepositoryLive),
-  Layer.provide(PtyServiceLayer),
-  Layer.provide(PtyRepositoryLayer),
-  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
-  Layer.provide(DataDirectoryLive),
-);
-const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(SurfaceRepositoryLayer),
-  Layer.provide(SurfaceAndPtyServiceLayer),
-  Layer.provide(CommandServiceLayer),
+  CliAccessLayer,
 );
 const StartupActivationLayer = Layer.scopedDiscard(
   Effect.gen(function* () {
@@ -310,11 +294,10 @@ export type RuntimeServices =
   | SessionGcService
   | SurfaceRepositoryService
   | WorkflowEngineService
-  | WorkflowEventLedgerService
-  | WorkflowRunProjectionService
   | HostInventoryService
   | HarnessControlPlaneService
   | EditorProvisioningService
+  | CliAccessService
   // `EntityLockService` is deliberately absent, and stays absent now that the
   // placement path uses it: it is a construction dependency of
   // `SessionLifecycle`, `EditorContextService`, and `SurfaceService`, each of

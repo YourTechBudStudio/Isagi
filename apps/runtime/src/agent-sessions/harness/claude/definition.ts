@@ -1,11 +1,14 @@
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import type { HarnessDefinition } from '../definition-types.js';
 import { resolveDocsTarget } from '../docs-targets.js';
 import { extractClaudeHeadlessOutput } from '../headless-output.js';
+import { transcriptAt } from '../transcript-locator.js';
 import { buildClaudeHeadlessLaunch, buildClaudeLaunch } from './adapter.js';
 import { claudeHookSource, claudeSettings } from './artifacts.js';
-import { readClaudeConversation } from './conversation.js';
+import { nativeClaudeTranscriptPath, readClaudeConversation } from './conversation.js';
+import { extractClaudeHeadlessProvenance } from './headless-provenance.js';
 import { reduceClaudeLifecycle } from './lifecycle.js';
 
 export const claudeHarnessDefinition = {
@@ -36,6 +39,7 @@ export const claudeHarnessDefinition = {
       }),
     headless: buildClaudeHeadlessLaunch,
     extractHeadlessOutput: extractClaudeHeadlessOutput,
+    extractHeadlessProvenance: extractClaudeHeadlessProvenance,
   },
   lifecycle: {
     reduce: ({ records }) => reduceClaudeLifecycle(records),
@@ -54,5 +58,20 @@ export const claudeHarnessDefinition = {
         },
       ];
     },
+    /**
+     * Claude's transcript path is *constructed*, not looked up — so it is always producible, and
+     * `available` is the only honest part of the answer. The `.claude` root follows the same
+     * default as the conversation reader rather than consulting `CLAUDE_CONFIG_DIR`; a user with a
+     * custom root gets `available: false`, which is a true statement about what the runtime can
+     * find rather than a locator that claims more than it knows.
+     */
+    locateTranscript: ({ harnessSessionId, cwd }) =>
+      transcriptAt(
+        nativeClaudeTranscriptPath({
+          claudeDirectory: join(homedir(), '.claude'),
+          cwd,
+          harnessSessionId,
+        }),
+      ),
   },
 } satisfies HarnessDefinition;

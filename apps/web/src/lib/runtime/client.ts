@@ -1,28 +1,20 @@
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 
 import {
   apiBasePath,
   apiEndpoints,
+  workflowContentEndpoints,
   agentSessionPtyWebSocketEndpoint,
   commandLogStreamWebSocketEndpoint,
-  workflowEventsStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
-  apiErrorResponseSchema,
-  apiInfrastructureErrorSchema,
-  apiSuccessResponseSchema,
-  type ApiEndpoint,
-  type ApiEndpointError,
-  type ApiEndpointOutput,
-  type ApiEndpointParams,
-  type ApiEndpointRequestArgs,
-  type ApiInfrastructureError,
   type AcceptHarnessPolicyInput,
   type AcceptHarnessPolicyOutput,
   type ControlPlaneSnapshot,
   type EditorDiagnosticsOutput,
   type EnsureEditorRuntimeInput,
   type EnsureEditorRuntimeOutput,
+  type OpenEditorInput,
   type OpenEditorOutput,
   type RefreshInventoryOutput,
   type RetryEditorProvisioningOutput,
@@ -37,7 +29,9 @@ import {
   type SetSplitWeightsOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SplitPaneInput,
+  type StartPaneInput,
   type SurfaceDetail,
+  type DeletePaneOutput,
   type DeleteSurfaceOutput,
   type RenameSurfaceOutput,
   type WorktreeEnvironmentFocusOutput,
@@ -67,21 +61,35 @@ import {
   type CommandLogMetadataOutput,
   type ClientSettingsOutput,
   type AdvanceWorkflowInput,
+  type GetWorkflowExecutionOutput,
+  type GetWorkflowRunOutput,
+  type GetWorkflowStructureOutput,
   type ListWorkflowDescriptorsInput,
   type ListWorkflowDescriptorsOutput,
+  type ListWorkflowEventsQuery,
+  type ListWorkflowEventsOutput,
+  type GetWorkflowCheckpointOutput,
+  type ListWorkflowCheckpointsOutput,
+  type ListWorkflowCheckpointsQuery,
+  type ListWorkflowRunsQuery,
+  type ListWorkflowRunsOutput,
   type StartWorkflowInput,
   type StartWorkflowOutput,
   type WorkflowRunControlOutput,
   type WorkspaceSnapshot,
   type DurableSessionInventory,
 } from '@isagi/contracts';
-
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './errors.js';
-
-type RuntimeEndpointError<Endpoint> =
-  | RuntimeApiError<ApiEndpointError<Endpoint> | ApiInfrastructureError>
-  | RuntimeDecodeError
-  | RuntimeTransportError;
+import {
+  contentEndpointUrl,
+  createEndpointRequester,
+  interpolatePath,
+  requestContent,
+  RuntimeDecodeError,
+  type AnyApiContentEndpoint,
+  type ContentQuery,
+  type RuntimeContentEndpointError,
+  type RuntimeEndpointError,
+} from '@isagi/runtime-client';
 
 export interface RuntimeClient {
   readonly fetchClientSettings: () => Effect.Effect<
@@ -110,10 +118,6 @@ export interface RuntimeClient {
     RuntimeEndpointError<typeof apiEndpoints.commands.logMetadata>
   >;
   readonly resolveCommandLogStreamWebSocketUrl: (worktreeId: number, commandName: string) => string;
-  readonly resolveWorkflowEventsStreamWebSocketUrl: (
-    runId: number,
-    options?: { readonly includeChildren?: boolean | undefined },
-  ) => string;
   readonly runCommand: (
     worktreeId: number,
     commandName: string,
@@ -165,7 +169,7 @@ export interface RuntimeClient {
     surfaceId: number,
     paneId: number,
   ) => Effect.Effect<
-    DeleteSurfaceOutput,
+    DeletePaneOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.deletePane>
   >;
   readonly setWorktreeEnvironmentFocus: (
@@ -188,6 +192,13 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     CreateSurfaceOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.splitPane>
+  >;
+  readonly startPane: (
+    surfaceId: number,
+    input: StartPaneInput,
+  ) => Effect.Effect<
+    CreateSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.startPane>
   >;
   readonly setSplitWeights: (
     surfaceId: number,
@@ -320,17 +331,25 @@ export interface RuntimeClient {
     WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.resume>
   >;
-  readonly clearWorkflow: (
-    runId: number,
-  ) => Effect.Effect<
-    WorkflowRunControlOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.clear>
-  >;
   readonly retryWorkflow: (
     runId: number,
   ) => Effect.Effect<
     WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.retry>
+  >;
+  /** Stops graph work and new effects. History is retained and the run stays inspectable. */
+  readonly cancelWorkflow: (
+    runId: number,
+  ) => Effect.Effect<
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.cancel>
+  >;
+  /** Releases a terminal run's surface attachment. It removes the bar, never the history. */
+  readonly dismissWorkflow: (
+    runId: number,
+  ) => Effect.Effect<
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.dismiss>
   >;
   readonly advanceWorkflow: (
     runId: number,
@@ -339,6 +358,73 @@ export interface RuntimeClient {
     WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.advance>
   >;
+  readonly getWorkflowRun: (
+    runId: number,
+  ) => Effect.Effect<
+    GetWorkflowRunOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getRun>
+  >;
+  readonly listWorkflowRuns: (
+    query: ListWorkflowRunsQuery,
+  ) => Effect.Effect<
+    ListWorkflowRunsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listRuns>
+  >;
+  /** The structure of one verified build the run has used. */
+  readonly getWorkflowStructure: (
+    runId: number,
+    artifactHash: string,
+  ) => Effect.Effect<
+    GetWorkflowStructureOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getStructure>
+  >;
+  readonly listWorkflowEvents: (
+    runId: number,
+    query: ListWorkflowEventsQuery,
+  ) => Effect.Effect<
+    ListWorkflowEventsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listEvents>
+  >;
+  /** One execution in full, with every operation it performed. */
+  readonly getWorkflowExecution: (
+    executionId: number,
+  ) => Effect.Effect<
+    GetWorkflowExecutionOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getExecution>
+  >;
+  readonly listWorkflowCheckpoints: (
+    runId: number,
+    query: ListWorkflowCheckpointsQuery,
+  ) => Effect.Effect<
+    ListWorkflowCheckpointsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpoints>
+  >;
+  readonly getWorkflowCheckpoint: (
+    checkpointId: number,
+  ) => Effect.Effect<
+    GetWorkflowCheckpointOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getCheckpoint>
+  >;
+  /**
+   * The bytes of one saved checkpoint file.
+   *
+   * A raw `fetch` rather than the typed requester, because the success body is not the JSON
+   * envelope every other route returns. A failure still is, so a non-OK response is decoded exactly
+   * as the typed requester decodes one and the caller sees the same error shape.
+   */
+  readonly fetchWorkflowCheckpointFile: (
+    checkpointId: number,
+    path: string,
+  ) => Effect.Effect<
+    Blob,
+    RuntimeContentEndpointError<typeof workflowContentEndpoints.getCheckpointFile>
+  >;
+  /** The URL a download action points at. No request is made; anchors and previews use it. */
+  readonly workflowCheckpointFileUrl: (
+    checkpointId: number,
+    path: string,
+    options?: { readonly download?: boolean },
+  ) => string;
   readonly listWorkflowDescriptors: (
     input: ListWorkflowDescriptorsInput,
   ) => Effect.Effect<
@@ -367,6 +453,7 @@ export interface RuntimeClient {
   >;
   readonly openEditor: (
     worktreeId: number,
+    input: OpenEditorInput,
   ) => Effect.Effect<OpenEditorOutput, RuntimeEndpointError<typeof apiEndpoints.editor.open>>;
   readonly ensureEditorRuntime: (
     editorContextId: number,
@@ -408,15 +495,6 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },
-    resolveWorkflowEventsStreamWebSocketUrl: (runId, options = {}) => {
-      const httpUrl = new URL(
-        `${apiBasePath}${interpolatePath(workflowEventsStreamWebSocketEndpoint.path, { runId })}`,
-        runtimeUrl,
-      );
-      if (options.includeChildren) httpUrl.searchParams.set('includeChildren', 'true');
-      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-      return httpUrl.toString();
-    },
     runCommand: (worktreeId, commandName) =>
       request(apiEndpoints.commands.run, { worktreeId }, { commandName }),
     stopCommand: (worktreeId, commandName) =>
@@ -438,6 +516,7 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.surfaces.createSurface, { worktreeId }, input),
     splitPane: (worktreeId, input) =>
       request(apiEndpoints.surfaces.splitPane, { worktreeId }, input),
+    startPane: (surfaceId, input) => request(apiEndpoints.surfaces.startPane, { surfaceId }, input),
     setSplitWeights: (surfaceId, input) =>
       request(apiEndpoints.surfaces.setSplitWeights, { surfaceId }, input),
     createPaneSession: (worktreeId, input) =>
@@ -491,15 +570,42 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.paths.suggestions, { input, limit }),
     pauseWorkflow: (runId) => request(apiEndpoints.workflows.pause, { runId }),
     resumeWorkflow: (runId) => request(apiEndpoints.workflows.resume, { runId }),
-    clearWorkflow: (runId) => request(apiEndpoints.workflows.clear, { runId }),
     retryWorkflow: (runId) => request(apiEndpoints.workflows.retry, { runId }),
+    cancelWorkflow: (runId) => request(apiEndpoints.workflows.cancel, { runId }),
+    dismissWorkflow: (runId) => request(apiEndpoints.workflows.dismiss, { runId }),
     advanceWorkflow: (runId, input) => request(apiEndpoints.workflows.advance, { runId }, input),
+    getWorkflowRun: (runId) => request(apiEndpoints.workflows.getRun, { runId }),
+    listWorkflowRuns: (query) => request(apiEndpoints.workflows.listRuns, query),
+    getWorkflowStructure: (runId, artifactHash) =>
+      request(apiEndpoints.workflows.getStructure, { runId }, { artifactHash }),
+    listWorkflowEvents: (runId, query) =>
+      request(apiEndpoints.workflows.listEvents, { runId }, query),
+    getWorkflowExecution: (executionId) =>
+      request(apiEndpoints.workflows.getExecution, { executionId }),
+    listWorkflowCheckpoints: (runId, query) =>
+      request(apiEndpoints.workflows.listCheckpoints, { runId }, query),
+    getWorkflowCheckpoint: (checkpointId) =>
+      request(apiEndpoints.workflows.getCheckpoint, { checkpointId }),
+    workflowCheckpointFileUrl: (checkpointId, path, options) =>
+      contentEndpointUrl(
+        runtimeUrl,
+        workflowContentEndpoints.getCheckpointFile,
+        { checkpointId },
+        { path, ...(options?.download ? { download: true } : {}) },
+      ),
+    fetchWorkflowCheckpointFile: (checkpointId, path) =>
+      fetchContent(
+        runtimeUrl,
+        workflowContentEndpoints.getCheckpointFile,
+        { checkpointId },
+        { path },
+      ),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
     refreshInventory: () => request(apiEndpoints.controlPlane.refreshInventory),
     acceptHarnessPolicy: (input) => request(apiEndpoints.controlPlane.acceptPolicy, input),
-    openEditor: (worktreeId) => request(apiEndpoints.editor.open, { worktreeId }),
+    openEditor: (worktreeId, input) => request(apiEndpoints.editor.open, { worktreeId }, input),
     ensureEditorRuntime: (editorContextId, input) =>
       request(apiEndpoints.editor.ensureRuntime, { editorContextId }, input),
     // Params, then query — the argument order `ApiEndpointRequestArgs` derives for
@@ -511,103 +617,22 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
   };
 }
 
-function createEndpointRequester(runtimeUrl: string) {
-  return function requestEndpoint<
-    Endpoint extends ApiEndpoint<
-      Schema.Schema.AnyNoContext | undefined,
-      Schema.Schema.AnyNoContext,
-      Schema.Schema.AnyNoContext,
-      Schema.Schema.AnyNoContext | undefined,
-      Schema.Schema.AnyNoContext | undefined
-    >,
-  >(
-    endpoint: Endpoint,
-    ...args: ApiEndpointRequestArgs<Endpoint>
-  ): Effect.Effect<ApiEndpointOutput<Endpoint>, RuntimeEndpointError<Endpoint>> {
-    return Effect.gen(function* () {
-      const response = yield* Effect.tryPromise({
-        try: (signal) => {
-          const init: RequestInit = { method: endpoint.method, signal };
-          const params = endpoint.params ? (args[0] as ApiEndpointParams<Endpoint>) : undefined;
-          const query = endpoint.query ? args[endpoint.params ? 1 : 0] : undefined;
-          const body = endpoint.body
-            ? args[(endpoint.params ? 1 : 0) + (endpoint.query ? 1 : 0)]
-            : undefined;
-          if (endpoint.body) {
-            init.headers = { 'Content-Type': 'application/json' };
-            init.body = JSON.stringify(body);
-          }
-          const url = new URL(
-            `${apiBasePath}${interpolatePath(endpoint.path, params)}`,
-            runtimeUrl,
-          );
-          appendQuery(url, query);
-          return fetch(url, init);
-        },
-        catch: (cause) =>
-          new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
-      });
-
-      const payload = yield* Effect.tryPromise({
-        try: () => response.json() as Promise<unknown>,
+/**
+ * One content route's bytes, buffered: the web renders or downloads a capture whole. The request and
+ * its error decoding are the shared client's, so a failure has the same shape as any other route's.
+ */
+function fetchContent<Endpoint extends AnyApiContentEndpoint>(
+  runtimeUrl: string,
+  endpoint: Endpoint,
+  params: Record<string, string | number>,
+  query?: ContentQuery,
+): Effect.Effect<Blob, RuntimeContentEndpointError<Endpoint>> {
+  return requestContent(runtimeUrl, endpoint, params, query).pipe(
+    Effect.flatMap((response) =>
+      Effect.tryPromise({
+        try: () => response.blob(),
         catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-      });
-
-      if (!response.ok) {
-        const decoded = yield* decode(
-          apiErrorResponseSchema(endpoint.errors),
-          payload,
-          endpoint.id,
-        ).pipe(
-          Effect.catchAll(() =>
-            decode(apiErrorResponseSchema(apiInfrastructureErrorSchema), payload, endpoint.id),
-          ),
-        );
-        return yield* Effect.fail(new RuntimeApiError(decoded.error));
-      }
-
-      const decoded = yield* decode(
-        apiSuccessResponseSchema(endpoint.output),
-        payload,
-        endpoint.id,
-      );
-      return decoded.data as ApiEndpointOutput<Endpoint>;
-    });
-  };
-}
-
-function appendQuery(url: URL, query: unknown) {
-  if (!query || typeof query !== 'object') {
-    return;
-  }
-
-  for (const [key, value] of Object.entries(query)) {
-    if (value === undefined) continue;
-    url.searchParams.set(key, String(value));
-  }
-}
-
-function interpolatePath(path: string, params: unknown) {
-  if (!params || typeof params !== 'object') {
-    return path;
-  }
-
-  return Object.entries(params).reduce(
-    (nextPath, [key, value]) => nextPath.replace(`:${key}`, encodeURIComponent(String(value))),
-    path,
+      }),
+    ),
   );
 }
-
-function decode<Decoded, Encoded>(
-  schema: Schema.Schema<Decoded, Encoded, never>,
-  value: unknown,
-  endpointId: string,
-) {
-  return Effect.try({
-    try: () => Schema.decodeUnknownSync(schema)(value),
-    catch: (cause) => new RuntimeDecodeError(endpointId, cause),
-  });
-}
-
-export { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError };
-export type { RuntimeClientError } from './errors.js';

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -212,7 +212,11 @@ test('opening a missing branch creates it from a local branch base', async () =>
 
 test('opening a missing branch can create it from the current detached worktree', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-new-commit-branch-project-'));
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-new-commit-branch-data-'));
+  // Canonical, like the project root beside it: the runtime resolves its data root, so a fixture
+  // that hand-builds an expected path from an unresolved one is doing different arithmetic from the
+  // code under test. Canonicalizing here keeps that difference out of tests whose subject is the
+  // path *derivation* rather than its resolution.
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-new-commit-branch-data-')));
   const branch = 'feature/from-commit';
   const commit = 'abc123456789';
   const detachedPath = join(projectRoot, '../isagi-detached');

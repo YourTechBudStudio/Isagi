@@ -87,6 +87,9 @@ const testSurfaceRepository = {
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  createEmptySurface: () => Effect.die('surface creation is not used by workspace tests'),
+  startSurfacePane: () => Effect.die('surface pane start is not used by workspace tests'),
+  listSessionsBoundTo: () => Effect.succeed({ agents: [], terminals: [] }),
   splitSurfacePane: () => Effect.die('surface split is not used by workspace tests'),
   setSurfaceLayout: () => Effect.die('surface layout update is not used by workspace tests'),
   setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
@@ -103,10 +106,12 @@ const testSurfaceService = {
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSurface: () => Effect.die('surface creation is not used by workspace tests'),
   splitPane: () => Effect.die('surface split is not used by workspace tests'),
+  startPane: () => Effect.die('surface pane start is not used by workspace tests'),
   setSplitWeights: () => Effect.die('surface layout update is not used by workspace tests'),
   createPaneSession: () => Effect.die('surface pane session create is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  createEmptySurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
   moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
   openEditor: () => Effect.die('openEditor is not used by workspace tests'),
@@ -432,6 +437,12 @@ test('workspace reads known rows without reconciling Git state', async () => {
         worktrees.find(
           (worktree) =>
             worktree.projectId === lookup.projectId && worktree.branch === lookup.branch,
+        ) ?? null,
+      ),
+    findProjectWorktreeByPath: (lookup) =>
+      Effect.succeed(
+        worktrees.find(
+          (worktree) => worktree.projectId === lookup.projectId && worktree.path === lookup.path,
         ) ?? null,
       ),
     deleteProject: () => Effect.succeed(false),

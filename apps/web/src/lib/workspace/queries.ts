@@ -7,6 +7,7 @@ import type {
   CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
+  DeletePaneOutput,
   DeleteSurfaceOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
@@ -14,9 +15,8 @@ import type {
   SetSplitWeightsInput,
   SetSplitWeightsOutput,
   SplitPaneInput,
+  StartPaneInput,
   SurfaceDetail,
-  AdvanceWorkflowInput,
-  WorkflowStartContext,
 } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
@@ -34,7 +34,6 @@ import {
   activeContextQueryKey,
   commandLogMetadataQueryKey,
   surfaceDetailQueryKey,
-  workflowDescriptorsQueryKey,
   workspaceQueryKey,
   worktreeCommandsQueryKey,
 } from './query-keys.js';
@@ -50,24 +49,18 @@ import {
   fetchWorktreeCommands,
   fetchWorkspace,
   formatRuntimeError,
-  advanceWorkflow,
   getSurfaceDetail,
-  listWorkflowDescriptors,
   launchAgentSession,
   launchTerminalSession,
   openWorktree,
   renameSurfaceTitle,
   restartCommand,
   runCommand,
-  clearWorkflow,
-  retryWorkflow,
   relocateProject,
-  pauseWorkflow,
   reconcileWorkspace,
-  resumeWorkflow,
   setSplitWeights,
   splitPane,
-  startWorkflow,
+  startPane,
   stopCommand,
 } from './runtime-data.js';
 import { useWorkspaceStore } from './store.js';
@@ -175,90 +168,6 @@ export function useRestartCommandMutation(worktreeId: number | null) {
     onSettled: async (_output, _error, commandName) => {
       await invalidateCommandQueries(client, worktreeId, commandName);
     },
-  });
-}
-
-export function usePauseWorkflowMutation(runId: number | null) {
-  return useMutation({
-    mutationFn: () => {
-      if (runId === null) throw new Error('Workflow pause requires a root run.');
-      return runRuntimeEffect(pauseWorkflow(runId));
-    },
-  });
-}
-
-export function useResumeWorkflowMutation(runId: number | null) {
-  return useMutation({
-    mutationFn: () => {
-      if (runId === null) throw new Error('Workflow resume requires a root run.');
-      return runRuntimeEffect(resumeWorkflow(runId));
-    },
-  });
-}
-
-export function useClearWorkflowMutation(runId: number | null) {
-  return useMutation({
-    mutationFn: () => {
-      if (runId === null) throw new Error('Workflow clear requires a root run.');
-      return runRuntimeEffect(clearWorkflow(runId));
-    },
-  });
-}
-
-export function useRetryWorkflowMutation(runId: number | null) {
-  return useMutation({
-    mutationFn: () => {
-      if (runId === null) throw new Error('Workflow retry requires a root run.');
-      return runRuntimeEffect(retryWorkflow(runId));
-    },
-  });
-}
-
-export function useAdvanceWorkflowMutation() {
-  return useMutation({
-    mutationFn: (input: {
-      readonly runId: number;
-      readonly answers?: AdvanceWorkflowInput['answers'];
-    }) => runRuntimeEffect(advanceWorkflow(input.runId, { answers: input.answers })),
-  });
-}
-
-export function useWorkflowDescriptorsQuery(
-  context: WorkflowStartContext | null,
-  options: { readonly enabled?: boolean | undefined } = {},
-) {
-  return useQuery({
-    queryKey: workflowDescriptorsQueryKey(
-      context?.worktreeId ?? null,
-      context?.surfaceId ?? null,
-      context?.paneId ?? null,
-      context?.agentSessionId ?? null,
-    ),
-    enabled: (options.enabled ?? true) && context !== null,
-    staleTime: 30_000,
-    queryFn: ({ signal }) => {
-      if (context === null) {
-        throw new Error('Workflow descriptor query requires an active launch context.');
-      }
-      return runRuntimeEffect(listWorkflowDescriptors({ context }), { signal });
-    },
-  });
-}
-
-export function useStartWorkflowMutation() {
-  return useMutation({
-    mutationFn: (input: {
-      readonly workflowKey: string;
-      readonly variables?: Record<string, unknown> | undefined;
-      readonly context: WorkflowStartContext;
-    }) =>
-      runRuntimeEffect(
-        startWorkflow({
-          workflowKey: input.workflowKey,
-          variables: input.variables,
-          context: input.context,
-        }),
-      ),
   });
 }
 
@@ -498,6 +407,24 @@ export async function startTerminalSessionFromPalette(worktreeId: number) {
   return output;
 }
 
+/** Starts the first pane of an empty surface, then settles like any new placement. */
+export async function startPaneFromPalette(
+  surfaceId: number,
+  newPane: StartPaneInput['newPane'],
+  client: QueryClient = queryClient,
+) {
+  try {
+    const output = await runRuntimeEffect(startPane(surfaceId, { newPane }));
+    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
+    await commitLaunchSessionSuccess(client, output);
+    return output;
+  } catch (error) {
+    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
+    await commitLaunchSessionFailure(client);
+    throw error;
+  }
+}
+
 /**
  * Launch a configured command from outside a React component, for palette rows
  * that have no mutation hook to lean on. Invalidation runs in `finally` so the
@@ -555,7 +482,7 @@ export async function deleteSurfacePaneFromPalette(input: {
 }) {
   try {
     const output = await runRuntimeEffect(deleteSurfacePane(input.surfaceId, input.paneId));
-    await commitDeleteSurfaceSuccess(queryClient, {
+    await commitDeletePaneSuccess(queryClient, {
       worktreeId: input.worktreeId,
       surfaceId: input.surfaceId,
       paneId: input.paneId,
@@ -699,35 +626,60 @@ export async function commitDeleteSurfaceSuccess(
   input: {
     readonly worktreeId: number;
     readonly surfaceId: number;
-    readonly paneId?: number | undefined;
     readonly output: DeleteSurfaceOutput;
     readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
   },
 ) {
-  const fetchWorkspaceData = input.fetchWorkspaceData ?? loadWorkspaceData;
+  await refetchWorkspace(client, input.fetchWorkspaceData);
+  if (input.output.deletedSurfaceId !== input.surfaceId) return;
+  publishTerminalWorkspaceFact({
+    type: 'placement_removed',
+    worktreeId: input.worktreeId,
+    surfaceId: input.surfaceId,
+  });
+  const store = useWorkspaceStore.getState();
+  cancelWorkbenchFocusPersistence(input.worktreeId);
+  client.removeQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId), exact: true });
+  store.forgetSurface(input.worktreeId, input.surfaceId);
+  store.forgetPane(input.surfaceId);
+}
 
+/**
+ * A pane delete never removes its surface: the last pane going leaves the
+ * surface empty, still selected, showing its empty state.
+ */
+export async function commitDeletePaneSuccess(
+  client: QueryClient,
+  input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly paneId: number;
+    readonly output: DeletePaneOutput;
+    readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
+  },
+) {
+  await refetchWorkspace(client, input.fetchWorkspaceData);
+  publishTerminalWorkspaceFact({
+    type: 'placement_removed',
+    worktreeId: input.worktreeId,
+    surfaceId: input.surfaceId,
+    paneId: input.paneId,
+  });
+  useWorkspaceStore.getState().forgetPane(input.surfaceId, input.paneId);
+  await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
+}
+
+async function refetchWorkspace(
+  client: QueryClient,
+  fetchWorkspaceData: (
+    signal?: AbortSignal | undefined,
+  ) => Promise<WorkspaceData> = loadWorkspaceData,
+) {
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
     queryFn: ({ signal }) => fetchWorkspaceData(signal),
     staleTime: 0,
   });
-
-  const store = useWorkspaceStore.getState();
-  publishTerminalWorkspaceFact({
-    type: 'placement_removed',
-    worktreeId: input.worktreeId,
-    surfaceId: input.surfaceId,
-    ...(input.output.deletedSurfaceId === input.surfaceId ? {} : { paneId: input.paneId }),
-  });
-  if (input.output.deletedSurfaceId === input.surfaceId) {
-    cancelWorkbenchFocusPersistence(input.worktreeId);
-    client.removeQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId), exact: true });
-    store.forgetSurface(input.worktreeId, input.surfaceId);
-    store.forgetPane(input.surfaceId);
-  } else if (input.paneId !== undefined) {
-    store.forgetPane(input.surfaceId, input.paneId);
-    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
-  }
 }
 
 export async function commitDeleteWorktreeSuccess(

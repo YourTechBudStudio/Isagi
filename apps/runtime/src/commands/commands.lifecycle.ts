@@ -107,8 +107,11 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
         );
         return;
       }
-      // No state rows exist yet just after a worktree is created, so there is no
-      // prior outcome to gate on here — unlike activation, where there is.
+      // Nothing is gated on a prior outcome here. Just after a worktree is created there is no
+      // prior outcome to gate on; on a setup re-run through `runWorktreeSetup` there may be, and
+      // re-establishing the environment is what that caller is asking for. `runCommand` already
+      // returns without launching when a command is still running, so only a command that exited
+      // or failed is started again.
       for (const command of catalog.config.commands) {
         if (!command.lifecycle.postCreate.start) continue;
         yield* deps

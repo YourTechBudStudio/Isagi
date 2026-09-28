@@ -19,12 +19,18 @@ import {
  * the operation, then settle through the one workspace commit that already
  * fetches the snapshot and activates the placed pane correctly.
  *
+ * `intoSurfaceId` names an empty surface to place a not-yet-placed editor in.
+ * An editor that is already placed is focused where it is, never moved.
+ *
  * The runtime's answer is a bare placement — opening an editor deliberately
  * carries no title, because placement is the operation's answer and a title
  * would be a second naming authority over a surface the runtime already named.
  */
-export async function openEditorFromPalette(worktreeId: number): Promise<OpenEditorOutput> {
-  const output = await runRuntimeEffect(openEditor(worktreeId));
+export async function openEditorFromPalette(
+  worktreeId: number,
+  intoSurfaceId: number | null = null,
+): Promise<OpenEditorOutput> {
+  const output = await runRuntimeEffect(openEditor(worktreeId, { intoSurfaceId }));
   await commitLaunchSessionSuccess(queryClient, output);
   return output;
 }

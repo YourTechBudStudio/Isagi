@@ -86,6 +86,11 @@ export interface WorkspaceRepositoryService {
     readonly projectId: number;
     readonly branch: string;
   }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
+  /** An exact match on the stored path, which reconciliation records as Git reports it. */
+  readonly findProjectWorktreeByPath: (input: {
+    readonly projectId: number;
+    readonly path: string;
+  }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
   readonly deleteProject: (projectId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly deleteWorktree: (worktreeId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly readWorktreeDeleteDiagnostics: (
@@ -206,6 +211,15 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .where(
               and(eq(worktrees.projectId, input.projectId), eq(worktrees.branch, input.branch)),
             )
+            .get();
+          return row ? worktreeRow(row) : null;
+        }),
+      findProjectWorktreeByPath: (input) =>
+        database.use<WorktreeRow | null>('find_project_worktree_by_path', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.path)))
             .get();
           return row ? worktreeRow(row) : null;
         }),

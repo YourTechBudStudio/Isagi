@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
+import { CliAccessNone } from '../cli-access/index.js';
 import type {
   EditorProvisioningService,
   ResolvedEditorInstallation,
@@ -312,6 +313,7 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
     }),
   );
   const pty = PtyServiceLive.pipe(
+    Layer.provide(CliAccessNone),
     Layer.provide(ptyRepository),
     Layer.provide(catalog),
     Layer.provide(PtyForegroundStateLive),

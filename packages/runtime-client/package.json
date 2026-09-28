@@ -1,0 +1,24 @@
+{
+  "name": "@isagi/runtime-client",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm test",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@isagi/contracts": "workspace:*",
+    "effect": "^3.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2"
+  }
+}

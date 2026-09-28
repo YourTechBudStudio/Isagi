@@ -1,60 +1,27 @@
+/**
+ * The workflows module's public surface: the engine, its HTTP routes, and the two services other
+ * runtime code composes (discovery and the on-disk content store).
+ */
+
 export { registerWorkflowApi } from './api.js';
-export { cont, done, fail, suspend } from '@yourtechbudstudio/isagi-workflow-sdk';
-export {
-  chooseSpawnSplit,
-  sendAgentPrompt,
-  WorkflowCapabilities,
-  WorkflowCapabilitiesLive,
-  type WorkflowCapabilitiesService,
-} from './capabilities.js';
-export { workflowContext } from './context.js';
-export {
-  WorkflowEventLedger,
-  WorkflowEventLedgerLive,
-  workflowEventLedgerWarningPayload,
-  type WorkflowEventLedgerService,
-} from './event-ledger.service.js';
-export {
-  defaultHeadlessTimeoutMs,
-  extractHeadlessOutput,
-  normalizeHeadlessLaunch,
-  WorkflowHeadless,
-  WorkflowHeadlessLive,
-  type WorkflowHeadlessService,
-} from './headless.js';
-export {
-  createWorkflowRegistry,
-  WorkflowRegistry,
-  WorkflowRegistryLive,
-  type WorkflowRegistryService,
-} from './registry.js';
 export {
   WorkflowEngine,
   WorkflowEngineLive,
-  type WorkflowDrainSummary,
+  startEngine,
   type WorkflowEngineService,
-} from './workflow-engine.service.js';
+} from './engine/service.js';
+export { WorkflowEngineError } from './errors.js';
 export {
-  WorkflowRepository,
-  WorkflowRepositoryLive,
-  type WorkflowRepositoryService,
-} from './repository.js';
+  ContentPublishError,
+  ContentUnavailable,
+  makeWorkflowContentStore,
+  WorkflowContentStore,
+  WorkflowContentStoreLive,
+  type WorkflowContentStoreService,
+} from './store/content-store.js';
+export { WorkflowLoadError, type LoadedWorkflowArtifact } from './structure/loader.js';
 export {
-  deriveWorkflowRunSummary,
-  WorkflowRunProjection,
-  WorkflowRunProjectionLive,
-  type WorkflowRunProjectionService,
-} from './workflow-run-projection.service.js';
-export type {
-  WorkflowContext,
-  WorkflowDefinition,
-  WorkflowEngineServiceError,
-  WorkflowInvocation,
-  WorkflowResult,
-  WorkflowRunRow,
-  WorkflowStatus,
-  WorkflowUiFeedback,
-  WorkflowWaitCondition,
-  WorkflowWaitKind,
-} from './types.js';
-export { WorkflowEngineError } from './types.js';
+  WorkflowRegistry,
+  WorkflowRegistryLive,
+  type WorkflowRegistryService,
+} from './structure/registry.js';

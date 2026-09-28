@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -50,7 +51,11 @@ test('agent session artifacts initialize and read harness metadata', async () =>
 });
 
 test('agent session artifacts expose the harness artifact directory without creating JSONL files', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-paths-'));
+  // Canonical, like the project root beside it: the runtime resolves its data root, so a fixture
+  // that hand-builds an expected path from an unresolved one is doing different arithmetic from the
+  // code under test. Canonicalizing here keeps that difference out of tests whose subject is the
+  // path *derivation* rather than its resolution.
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-paths-')));
   try {
     const paths = await Effect.runPromise(
       Effect.gen(function* () {

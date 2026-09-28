@@ -15,3 +15,24 @@ export function worktreeIdFromValues(values: ArgValues, ctx: PaletteContext): nu
   }
   return ctx.activeWorktree?.id ?? null;
 }
+
+/**
+ * The empty surface a start command fills instead of creating a new surface.
+ *
+ * An explicit `intoSurfaceId` wins (the empty-surface actions name their own
+ * surface). Otherwise, plain palette or keyboard dispatch — which names no
+ * worktree — fills the active surface when it has no panes, so `cmd+k` on an
+ * empty surface starts something *there*. A command aimed at an explicit
+ * worktree never borrows the active surface.
+ */
+export function emptySurfaceIdFromValues(values: ArgValues, ctx: PaletteContext): number | null {
+  const intoSurfaceId = Number(values.intoSurfaceId);
+  if (Number.isInteger(intoSurfaceId)) {
+    return intoSurfaceId;
+  }
+  if (values.worktreeId !== undefined) {
+    return null;
+  }
+  const surface = ctx.activeSurface;
+  return surface && surface.paneKinds.length === 0 ? surface.id : null;
+}

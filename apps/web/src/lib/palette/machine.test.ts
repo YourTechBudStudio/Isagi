@@ -3,7 +3,14 @@ import test from 'node:test';
 
 import { Plus } from 'lucide-react';
 
-import { initialPaletteState, paletteReducer, type PaletteState } from './machine.js';
+import {
+  initialPaletteState,
+  inlineError,
+  isBusy,
+  paletteReducer,
+  callerRunningCopy,
+  type PaletteState,
+} from './machine.js';
 import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
 
 const ctx: PaletteContext = {
@@ -451,7 +458,11 @@ test('an error-detail entry opens an error outcome and closes on action or back'
   assert.equal(state.kind, 'error');
   assert.equal(state.kind === 'error' && state.content.title, 'Scan failed');
 
-  assert.equal(paletteReducer(state, { type: 'outcome-action', value: 'close' }).kind, 'closed');
+  assert.equal(
+    paletteReducer(state, { type: 'outcome-action', action: { value: 'close', label: 'Close' } })
+      .kind,
+    'closed',
+  );
   assert.equal(paletteReducer(state, { type: 'back', ctx }).kind, 'closed');
 });
 
@@ -979,3 +990,156 @@ test('path actions are ignored outside a path step', () => {
   assert.equal(paletteReducer(search, { type: 'path-navigate', delta: 1 }), search);
   assert.equal(paletteReducer(search, { type: 'path-enter', command: pathCommand, ctx }), search);
 });
+
+/**
+ * A run the caller owns.
+ *
+ * The palette can run a function it was handed as well as one it can resolve from an entry, and
+ * both go through the same cycle. These pin the parts that are easy to get subtly wrong: that the
+ * follow-up is a real run rather than a second pipeline, that the palette is genuinely locked while
+ * it is in flight, and that an outcome it returns can offer its own follow-up again.
+ */
+
+test('an outcome action with a run starts a follow-up and renders what it returns', () => {
+  const retried = {
+    kind: 'result',
+    content: { tone: 'info', title: 'Second time lucky' },
+  } as const;
+  let state = errorOutcomeState({ title: 'Broke', body: 'once' });
+
+  state = paletteReducer(state, {
+    type: 'outcome-action',
+    action: {
+      value: 'retry',
+      label: 'Retry',
+      intent: 'primary',
+      run: () => retried,
+      running: { title: 'Trying again…', hint: 'on the same thing' },
+    },
+  });
+
+  // The failed outcome stays underneath while the follow-up runs, so a failure that produces no
+  // outcome at all comes back to what was already on screen.
+  assert.equal(state.kind, 'error');
+  assert.equal(isBusy(state), true);
+  assert.deepEqual(callerRunningCopy(state), { title: 'Trying again…', hint: 'on the same thing' });
+
+  const effect = state.effects.at(-1);
+  assert.equal(effect?.kind, 'callbackRun');
+  const attemptId = effect?.kind === 'callbackRun' ? effect.attemptId : -1;
+
+  state = paletteReducer(state, { type: 'run-succeeded', attemptId, outcome: retried });
+  assert.equal(state.kind, 'result');
+  assert.equal(state.kind === 'result' && state.content.title, 'Second time lucky');
+  assert.equal(isBusy(state), false);
+});
+
+test('an outcome returned by a follow-up can offer the follow-up again', () => {
+  let state = errorOutcomeState({ title: 'Broke', body: 'once' });
+  const again = {
+    kind: 'error',
+    content: {
+      title: 'Broke again',
+      actions: [{ value: 'retry', label: 'Retry', run: () => ({ kind: 'close' }) as const }],
+    },
+  } as const;
+
+  state = paletteReducer(state, {
+    type: 'outcome-action',
+    action: { value: 'retry', label: 'Retry', run: () => again },
+  });
+  const first = state.effects.at(-1);
+  state = paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId: first?.attemptId ?? -1,
+    outcome: again,
+  });
+  assert.equal(state.kind === 'error' && state.content.title, 'Broke again');
+
+  // The second Retry is an ordinary action on an ordinary outcome, so it runs the same way.
+  const action = state.kind === 'error' ? state.content.actions?.[0] : undefined;
+  assert.ok(action);
+  state = paletteReducer(state, { type: 'outcome-action', action });
+  assert.equal(state.effects.at(-1)?.kind, 'callbackRun');
+  assert.equal(isBusy(state), true);
+});
+
+test('close and cancel actions still just close, run or no run', () => {
+  const state = errorOutcomeState({ title: 'Broke', body: 'once' });
+  for (const value of ['close', 'cancel']) {
+    assert.equal(
+      paletteReducer(state, { type: 'outcome-action', action: { value, label: value } }).kind,
+      'closed',
+    );
+  }
+  // An action with neither a run nor a closing value is inert rather than a silent dismissal.
+  assert.equal(
+    paletteReducer(state, { type: 'outcome-action', action: { value: 'other', label: 'Other' } }),
+    state,
+  );
+});
+
+test('a follow-up that fails outright releases the palette and says so', () => {
+  let state = errorOutcomeState({ title: 'Broke', body: 'once' });
+  state = paletteReducer(state, {
+    type: 'outcome-action',
+    action: { value: 'retry', label: 'Retry', run: () => ({ kind: 'close' }) as const },
+  });
+  const attemptId = state.effects.at(-1)?.attemptId ?? -1;
+
+  state = paletteReducer(state, { type: 'run-failed', attemptId, error: 'the runtime went away' });
+
+  assert.equal(state.kind, 'error');
+  assert.equal(isBusy(state), false);
+  assert.equal(inlineError(state), 'the runtime went away');
+  // The panel it was started from is still there to act on.
+  assert.equal(state.kind === 'error' && state.content.title, 'Broke');
+});
+
+test('a caller-supplied run starts from search and reports through the ordinary cycle', () => {
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, {
+    type: 'start-run',
+    run: () => ({ kind: 'close' }) as const,
+    running: { title: 'Preparing…' },
+  });
+
+  assert.equal(isBusy(state), true);
+  assert.deepEqual(callerRunningCopy(state), { title: 'Preparing…' });
+  const effect = state.effects.at(-1);
+  assert.equal(effect?.kind, 'callbackRun');
+
+  // While busy the palette refuses to start anything else, exactly as it does for a command.
+  const ignored = paletteReducer(state, {
+    type: 'start-run',
+    run: () => undefined,
+  });
+  assert.equal(ignored.effects.length, state.effects.length);
+
+  state = paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId: effect?.attemptId ?? -1,
+    outcome: { kind: 'close' },
+  });
+  assert.equal(state.kind, 'closed');
+});
+
+/** An error outcome on screen, reached the way a command's failed run reaches it. */
+function errorOutcomeState(content: { title: string; body?: string }): PaletteState {
+  const entry: PaletteEntry = {
+    id: 'thing',
+    label: 'Thing',
+    icon: Plus,
+    group: 'global',
+    run: () => ({ kind: 'error', content }),
+  };
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+  state = paletteReducer(state, { type: 'activate-entry', entry, ctx });
+  const attemptId = state.effects.at(-1)?.attemptId ?? -1;
+  return paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId,
+    outcome: { kind: 'error', content },
+  });
+}

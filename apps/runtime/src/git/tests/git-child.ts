@@ -21,7 +21,12 @@ import {
  * Not itself a test file: the runner collects `*.test.ts` only.
  */
 type Request =
-  | { readonly op: 'run'; readonly args: readonly string[]; readonly env?: Record<string, string> }
+  | {
+      readonly op: 'run';
+      readonly args: readonly string[];
+      readonly env?: Record<string, string>;
+      readonly unsetEnv?: readonly string[];
+    }
   | { readonly op: 'classify'; readonly path: string };
 
 const request = JSON.parse(process.argv[2] ?? '{}') as Request;
@@ -30,7 +35,7 @@ const program: Effect.Effect<unknown, unknown, GitService> =
   request.op === 'run'
     ? Effect.gen(function* () {
         const git = yield* Git;
-        return yield* git.run(request.args, request.env ? { env: request.env } : {});
+        return yield* git.run(request.args, { env: request.env, unsetEnv: request.unsetEnv });
       })
     : Effect.gen(function* () {
         const root = yield* normalizeExistingDirectory(request.path);

@@ -19,7 +19,8 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
     | 'session_not_found'
     | 'session_worktree_mismatch'
     | 'invalid_surface_title'
-    | 'layout_node_stale';
+    | 'layout_node_stale'
+    | 'surface_not_empty';
   readonly message: string;
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;

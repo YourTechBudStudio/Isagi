@@ -4,10 +4,11 @@ import { worktreeActionsCopy } from '../../../copy/index.js';
 import { harnessLabel, parseAgentHarness } from '../../harness-labels.js';
 import {
   startAgentSessionFromPalette,
+  startPaneFromPalette,
   startTerminalSessionFromPalette,
 } from '../../workspace/queries.js';
 import type { ArgSpec, PaletteCommand } from '../types.js';
-import { worktreeIdFromValues } from './worktree-target.js';
+import { emptySurfaceIdFromValues, worktreeIdFromValues } from './worktree-target.js';
 
 export const harnessSelectArg: Extract<ArgSpec, { readonly kind: 'select' }> = {
   kind: 'select',
@@ -25,7 +26,8 @@ export const harnessSelectArg: Extract<ArgSpec, { readonly kind: 'select' }> = {
  * it is dispatched, whether from the palette list, a shortcut, or the rail
  * worktree context menu. The target worktree comes from explicit values when a
  * chrome affordance supplies them, falling back to the active worktree for
- * palette/keyboard use.
+ * palette/keyboard use. An empty target surface is filled rather than a new
+ * surface created (see `emptySurfaceIdFromValues`).
  */
 export const startTerminalSessionCommand: PaletteCommand = {
   id: 'start-terminal-session',
@@ -34,6 +36,11 @@ export const startTerminalSessionCommand: PaletteCommand = {
   group: 'worktree-actions',
   available: (ctx) => Boolean(ctx.activeWorktree),
   run: async (values, ctx) => {
+    const intoSurfaceId = emptySurfaceIdFromValues(values, ctx);
+    if (intoSurfaceId !== null) {
+      await startPaneFromPalette(intoSurfaceId, { kind: 'terminal_session' });
+      return;
+    }
     const worktreeId = worktreeIdFromValues(values, ctx);
     if (worktreeId === null) {
       return;
@@ -55,9 +62,17 @@ export const startAgentSessionCommand: PaletteCommand = {
   available: (ctx) => Boolean(ctx.activeWorktree),
   args: [harnessSelectArg],
   run: async (values, ctx) => {
-    const worktreeId = worktreeIdFromValues(values, ctx);
     const harness = parseAgentHarness(values.harness);
-    if (worktreeId === null || harness === null) {
+    if (harness === null) {
+      return;
+    }
+    const intoSurfaceId = emptySurfaceIdFromValues(values, ctx);
+    if (intoSurfaceId !== null) {
+      await startPaneFromPalette(intoSurfaceId, { kind: 'agent_session', harness });
+      return;
+    }
+    const worktreeId = worktreeIdFromValues(values, ctx);
+    if (worktreeId === null) {
       return;
     }
     await startAgentSessionFromPalette(worktreeId, harness);

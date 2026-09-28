@@ -4,8 +4,8 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import type { ApiError } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { RuntimeApiError } from './client.js';
 import { runRuntimeEffect, unwrapRuntimeFailure } from './run.js';
 
 const pathRejectedError = new RuntimeApiError({

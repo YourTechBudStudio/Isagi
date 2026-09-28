@@ -7,7 +7,7 @@ import {
   sessionDiagnosticCodeSchema,
   terminalSessionStatusReasonSchema,
 } from '../surfaces/types.js';
-import { workflowRunSummarySchema } from '../workflows/types.js';
+import { workflowEventSchema, workflowRunSummarySchema } from '../workflows/types.js';
 import { durableSessionIdentitySchema } from '../workspace/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
@@ -59,7 +59,7 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'attention_source_removed',
   'workflow_run_snapshot',
   'workflow_run_changed',
-  'workflow_run_cleared',
+  'workflow_run_event',
   'durable_session_deleted',
   'editor_context_changed',
 );
@@ -205,6 +205,7 @@ export const workflowRunSnapshotEventSchema = Schema.Struct({
   }),
 });
 
+/** A run's summary changed, including when a dismissed run detached from its surface. */
 export const workflowRunChangedEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
   type: Schema.Literal('workflow_run_changed'),
@@ -212,15 +213,16 @@ export const workflowRunChangedEventSchema = Schema.Struct({
   payload: workflowRunSummarySchema,
 });
 
-export const workflowRunClearedEventSchema = Schema.Struct({
+/**
+ * One row appended to a run's event log, pushed as it is written. A client appends it to the trace
+ * and refetches the run or execution it names. The event list route is the source of truth for
+ * anything missed while disconnected.
+ */
+export const workflowRunEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
-  type: Schema.Literal('workflow_run_cleared'),
+  type: Schema.Literal('workflow_run_event'),
   occurredAt: Schema.String.pipe(Schema.minLength(1)),
-  payload: Schema.Struct({
-    runId: positiveIntegerSchema,
-    rootRunId: positiveIntegerSchema,
-    surfaceId: Schema.NullOr(positiveIntegerSchema),
-  }),
+  payload: workflowEventSchema,
 });
 
 export const runtimeEventSchema = Schema.Union(
@@ -233,7 +235,7 @@ export const runtimeEventSchema = Schema.Union(
   attentionSourceRemovedEventSchema,
   workflowRunSnapshotEventSchema,
   workflowRunChangedEventSchema,
-  workflowRunClearedEventSchema,
+  workflowRunEventSchema,
   durableSessionDeletedEventSchema,
   editorContextChangedEventSchema,
 );
@@ -261,7 +263,7 @@ export type AttentionSourceRemovedEvent = Schema.Schema.Type<
 >;
 export type WorkflowRunSnapshotEvent = Schema.Schema.Type<typeof workflowRunSnapshotEventSchema>;
 export type WorkflowRunChangedEvent = Schema.Schema.Type<typeof workflowRunChangedEventSchema>;
-export type WorkflowRunClearedEvent = Schema.Schema.Type<typeof workflowRunClearedEventSchema>;
+export type WorkflowRunEvent = Schema.Schema.Type<typeof workflowRunEventSchema>;
 export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;
 export type DurableSessionDeletedEvent = Schema.Schema.Type<
   typeof durableSessionDeletedEventSchema

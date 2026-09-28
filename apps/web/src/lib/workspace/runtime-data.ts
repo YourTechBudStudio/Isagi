@@ -12,6 +12,7 @@ import type {
   CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
+  DeletePaneOutput,
   DeleteSurfaceOutput,
   DeleteProjectOutput,
   PaneSessionClaimInput,
@@ -30,6 +31,7 @@ import type {
   EditorDiagnosticsOutput,
   EnsureEditorRuntimeInput,
   EnsureEditorRuntimeOutput,
+  OpenEditorInput,
   OpenEditorOutput,
   PathSuggestOutput,
   RetryEditorProvisioningOutput,
@@ -39,6 +41,7 @@ import type {
   SetSplitWeightsOutput,
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
+  StartPaneInput,
   SurfaceDetail,
   WorktreeEnvironmentFocusOutput,
   WorktreeSetupPreflightOutput,
@@ -53,8 +56,18 @@ import type {
   RelocateProjectOutput,
   WorkspaceSnapshot,
   AdvanceWorkflowInput,
+  GetWorkflowCheckpointOutput,
+  GetWorkflowExecutionOutput,
+  GetWorkflowRunOutput,
+  GetWorkflowStructureOutput,
   ListWorkflowDescriptorsInput,
   ListWorkflowDescriptorsOutput,
+  ListWorkflowEventsQuery,
+  ListWorkflowEventsOutput,
+  ListWorkflowCheckpointsOutput,
+  ListWorkflowCheckpointsQuery,
+  ListWorkflowRunsQuery,
+  ListWorkflowRunsOutput,
   StartWorkflowInput,
   StartWorkflowOutput,
   WorkflowRunControlOutput,
@@ -135,12 +148,70 @@ export function resumeWorkflow(runId: number): Effect.Effect<WorkflowRunControlO
   return getClient().pipe(Effect.flatMap((client) => client.resumeWorkflow(runId)));
 }
 
-export function clearWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.clearWorkflow(runId)));
-}
-
 export function retryWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.retryWorkflow(runId)));
+}
+
+export function cancelWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.cancelWorkflow(runId)));
+}
+
+export function dismissWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.dismissWorkflow(runId)));
+}
+
+export function getWorkflowRun(runId: number): Effect.Effect<GetWorkflowRunOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowRun(runId)));
+}
+
+export function listWorkflowRuns(
+  query: ListWorkflowRunsQuery,
+): Effect.Effect<ListWorkflowRunsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowRuns(query)));
+}
+
+export function getWorkflowStructure(
+  runId: number,
+  artifactHash: string,
+): Effect.Effect<GetWorkflowStructureOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.getWorkflowStructure(runId, artifactHash)),
+  );
+}
+
+export function listWorkflowEvents(
+  runId: number,
+  query: ListWorkflowEventsQuery,
+): Effect.Effect<ListWorkflowEventsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowEvents(runId, query)));
+}
+
+export function getWorkflowExecution(
+  executionId: number,
+): Effect.Effect<GetWorkflowExecutionOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowExecution(executionId)));
+}
+
+export function listWorkflowCheckpoints(
+  runId: number,
+  query: ListWorkflowCheckpointsQuery,
+): Effect.Effect<ListWorkflowCheckpointsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowCheckpoints(runId, query)));
+}
+
+export function getWorkflowCheckpoint(
+  checkpointId: number,
+): Effect.Effect<GetWorkflowCheckpointOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowCheckpoint(checkpointId)));
+}
+
+export function fetchWorkflowCheckpointFile(
+  checkpointId: number,
+  path: string,
+): Effect.Effect<Blob, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.fetchWorkflowCheckpointFile(checkpointId, path)),
+  );
 }
 
 export function advanceWorkflow(
@@ -196,7 +267,7 @@ export function deleteSurface(surfaceId: number): Effect.Effect<DeleteSurfaceOut
 export function deleteSurfacePane(
   surfaceId: number,
   paneId: number,
-): Effect.Effect<DeleteSurfaceOutput, Error> {
+): Effect.Effect<DeletePaneOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.deleteSurfacePane(surfaceId, paneId)));
 }
 
@@ -221,6 +292,14 @@ export function splitPane(
   input: SplitPaneInput,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.splitPane(worktreeId, input)));
+}
+
+/** Starts the first pane of an empty surface. */
+export function startPane(
+  surfaceId: number,
+  input: StartPaneInput,
+): Effect.Effect<CreateSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.startPane(surfaceId, input)));
 }
 
 export function setSplitWeights(
@@ -283,15 +362,6 @@ export function resolveCommandLogStreamWebSocketUrl(
 ): Effect.Effect<string, Error> {
   return getClient().pipe(
     Effect.map((client) => client.resolveCommandLogStreamWebSocketUrl(worktreeId, commandName)),
-  );
-}
-
-export function resolveWorkflowEventsStreamWebSocketUrl(
-  runId: number,
-  options: { readonly includeChildren?: boolean | undefined } = {},
-): Effect.Effect<string, Error> {
-  return getClient().pipe(
-    Effect.map((client) => client.resolveWorkflowEventsStreamWebSocketUrl(runId, options)),
   );
 }
 
@@ -407,8 +477,11 @@ export function acceptHarnessPolicy(
   return getClient().pipe(Effect.flatMap((client) => client.acceptHarnessPolicy(input)));
 }
 
-export function openEditor(worktreeId: number): Effect.Effect<OpenEditorOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.openEditor(worktreeId)));
+export function openEditor(
+  worktreeId: number,
+  input: OpenEditorInput,
+): Effect.Effect<OpenEditorOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.openEditor(worktreeId, input)));
 }
 
 export function ensureEditorRuntime(
@@ -431,6 +504,29 @@ export function editorDiagnostics(
 
 export function retryEditorProvisioning(): Effect.Effect<RetryEditorProvisioningOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.retryEditorProvisioning()));
+}
+
+/**
+ * A stable name for the runtime this client is talking to.
+ *
+ * There is no runtime-issued identifier on the wire, and the app resolves one runtime URL per
+ * session, so the normalized URL is the identity. It namespaces the workflow caches and the
+ * synchronization coordinator, which is what stops a run's converged state being reused for a
+ * different runtime if the configured URL ever changes under the same page.
+ */
+export function resolveRuntimeIdentity(): Effect.Effect<string, Error> {
+  return resolveRuntimeUrl().pipe(Effect.map(normalizeRuntimeIdentity));
+}
+
+export function normalizeRuntimeIdentity(runtimeUrl: string): string {
+  try {
+    const url = new URL(runtimeUrl);
+    return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    // An unparseable value is still a distinct configuration, and using it verbatim keeps two
+    // different broken values apart rather than collapsing them onto one namespace.
+    return runtimeUrl;
+  }
 }
 
 function getClient() {

@@ -7,12 +7,13 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && vite build && node scripts/sync-runtime-assets.mjs --dist",
+    "build": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && vite build && node scripts/sync-runtime-assets.mjs --dist",
     "check": "pnpm typecheck && pnpm test && pnpm build",
-    "dev": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 tsx src/index.ts",
+    "dev": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
+    "typecheck": "pnpm workspace-deps && tsc --noEmit -p tsconfig.json",
+    "workspace-deps": "pnpm -C ../../packages/workflow-sdk build && pnpm -C ../../packages/workflow-verifier build && pnpm -C ../cli build"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
@@ -29,6 +30,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@isagi/cli": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "cross-env": "^10.1.0",

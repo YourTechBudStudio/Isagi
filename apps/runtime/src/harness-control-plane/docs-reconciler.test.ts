@@ -62,8 +62,7 @@ test('Docs installation follows intent despite missing executables and replaces 
     writeFileSync(skill, 'user edit');
     result = await Effect.runPromise(reconcileDocs(input));
     assert.equal(result.results.find((r) => r.harness === 'codex')?.action, 'replaced');
-    assert.match(readFileSync(skill, 'utf8'), /name: isagi-docs/);
-    assert.match(readFileSync(skill, 'utf8'), /Use only when the user asks to configure Isagi/);
+    assert.equal(readFileSync(skill, 'utf8'), isagiDocsPackageFiles(root).get('SKILL.md'));
     assert.equal(existsSync(join(home, '.codex', 'skills', 'isagi-docs', 'agents')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });

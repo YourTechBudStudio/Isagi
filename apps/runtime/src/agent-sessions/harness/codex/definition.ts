@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 import type { HarnessDefinition } from '../definition-types.js';
 import { resolveDocsTarget } from '../docs-targets.js';
 import { extractCodexHeadlessOutput } from '../headless-output.js';
+import { transcriptAt } from '../transcript-locator.js';
 import { buildCodexHeadlessLaunch, buildCodexLaunch } from './adapter.js';
 import { codexHookSource } from './artifacts.js';
 import { readCodexConversation } from './conversation.js';
@@ -63,6 +64,24 @@ export const codexHarnessDefinition = {
             discovery: input.discovery,
           })),
         ];
+      }),
+    /**
+     * Codex's transcript path is *looked up* in its rollout index rather than constructed, so a
+     * missing index entry means no locator can be built at all — `null`, not a path that is merely
+     * unavailable. `index_only` discovery keeps this a bounded read: a read-time provenance lookup
+     * must not walk the rollout tree.
+     */
+    locateTranscript: ({ harnessSessionId }) =>
+      Effect.gen(function* () {
+        const paths = yield* locateCodexRolloutPaths({
+          // No agent session is in hand at read time, and none is invented: the lookup omits the
+          // field from its diagnostics rather than logging a stand-in id.
+          agentSessionId: null,
+          harnessSessionId,
+          discovery: 'index_only',
+        });
+        const first = paths[0];
+        return first ? yield* transcriptAt(first.path) : null;
       }),
   },
 } satisfies HarnessDefinition;

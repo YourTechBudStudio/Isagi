@@ -13,6 +13,35 @@ export function extractClaudeHeadlessOutput(raw: string) {
   return result ? result.trim() : clean;
 }
 
+/**
+ * Claude's `--output-format json` result object, or null if the output holds none.
+ *
+ * Shared with the provenance extractor so both read the *same* object out of the *same* bytes. The
+ * tolerance is load-bearing rather than defensive: a captured headless run routinely carries
+ * unrelated leading text on the same stream — an observed run began with a `Warning: … blocked by
+ * enterprise policy` line before the JSON — so a bare `JSON.parse` of the whole capture would find
+ * nothing. `parseFirstJsonValue` is what makes the JSON findable inside that noise.
+ *
+ * On an array capture this takes the last element that is an object, which is **not** the same
+ * predicate as `extractClaudeHeadlessOutput`'s — that one takes the last element carrying a
+ * `result` string. The two would disagree only on an array whose final element is an object
+ * without `result`, which `--output-format json` does not produce: it returns a single object.
+ * Stated here rather than glossed as agreement, so nobody later relies on a match that does not
+ * hold.
+ */
+export function parseClaudeHeadlessResult(raw: string): Record<string, unknown> | null {
+  const clean = stripAnsi(raw).trim();
+  const parsed = parseJson(clean) ?? parseFirstJsonValue(clean);
+  if (Array.isArray(parsed)) {
+    for (let index = parsed.length - 1; index >= 0; index -= 1) {
+      const record = objectAt(parsed[index], []);
+      if (record) return record;
+    }
+    return null;
+  }
+  return objectAt(parsed, []);
+}
+
 export function extractCodexHeadlessOutput(raw: string) {
   const clean = stripAnsi(raw);
   const records = parseJsonLines(clean);

@@ -4,9 +4,9 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import type { ApiError } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
 import { classifyRuntimeFailure } from './classify.js';
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './errors.js';
 
 const apiError = {
   code: 'runtime_database_failed',

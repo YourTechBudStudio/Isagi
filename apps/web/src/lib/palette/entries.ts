@@ -1,5 +1,7 @@
 import { ArrowRight, TriangleAlert, Workflow } from 'lucide-react';
 
+import type { WorkflowStructureDiagnosticDto } from '@isagi/contracts';
+
 import {
   paletteCopy,
   workflowLoadFailureReasonCopy,
@@ -101,11 +103,13 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
             content: {
               title: paletteCopy.workflows.failure.broken.title,
               body: workflowLoadFailureReasonCopy(descriptor.reason),
-              ...(descriptor.diagnostic
+              // Structural diagnostics are addressable records, so the panel lists them as the
+              // runtime reported them rather than folding several problems into one sentence.
+              ...(descriptor.diagnostics.length > 0
                 ? {
                     diagnostic: {
                       label: paletteCopy.workflows.failure.diagnosticLabel,
-                      detail: descriptor.diagnostic,
+                      detail: descriptor.diagnostics.map(formatStructureDiagnostic).join('\n'),
                     },
                   }
                 : {}),
@@ -258,4 +262,23 @@ function isPaneTargetedSurfaceCommand(commandId: string) {
     commandId === 'split-pane-right' ||
     commandId === 'split-pane-down'
   );
+}
+
+/**
+ * One structural diagnostic as a line a person can act on.
+ *
+ * The location is the reason these are records rather than a sentence: "which node in which graph"
+ * is what turns a verification failure into something the author can go and fix.
+ */
+function formatStructureDiagnostic(diagnostic: WorkflowStructureDiagnosticDto): string {
+  const at = [
+    diagnostic.at.graphKey,
+    diagnostic.at.nodeId ?? diagnostic.at.edgeId ?? diagnostic.at.outcomeId,
+    diagnostic.at.field,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join('.');
+  return at.length > 0
+    ? `${diagnostic.code} at ${at}: ${diagnostic.message}`
+    : `${diagnostic.code}: ${diagnostic.message}`;
 }

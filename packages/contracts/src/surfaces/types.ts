@@ -222,7 +222,12 @@ export const surfaceDetailSchema = Schema.Struct({
   id: positiveIntegerSchema,
   worktreeId: positiveIntegerSchema,
   title: Schema.String,
-  layout: surfaceLayoutNodeSchema,
+  /**
+   * Null exactly when the surface has no panes. An empty surface is a normal,
+   * durable state: closing its last pane, or a workflow creating a surface
+   * before its first agent starts, leaves the surface in place.
+   */
+  layout: Schema.NullOr(surfaceLayoutNodeSchema),
   activePaneId: Schema.NullOr(positiveIntegerSchema),
   panes: Schema.Array(surfacePaneSchema),
 });
@@ -262,6 +267,11 @@ export const createSurfaceInputSchema = Schema.Struct({
   initialPane: paneSessionSpecSchema,
 });
 
+/** Starts the first pane of an empty surface. A surface that has panes is refused. */
+export const startPaneInputSchema = Schema.Struct({
+  newPane: paneSessionSpecSchema,
+});
+
 export const splitPaneDirectionSchema = Schema.Literal('left', 'right', 'up', 'down');
 
 export const splitPaneInputSchema = Schema.Struct({
@@ -291,6 +301,14 @@ export const renameSurfaceOutputSchema = Schema.Struct({
 
 export const deleteSurfaceOutputSchema = Schema.Struct({
   deletedSurfaceId: Schema.NullOr(positiveIntegerSchema),
+  deletedPaneIds: Schema.Array(positiveIntegerSchema),
+});
+
+/**
+ * Deleting a pane never deletes its surface: removing the last pane leaves the
+ * surface empty. Empty `deletedPaneIds` means the pane was already gone.
+ */
+export const deletePaneOutputSchema = Schema.Struct({
   deletedPaneIds: Schema.Array(positiveIntegerSchema),
 });
 
@@ -437,11 +455,13 @@ export type CreateSurfaceInput = Schema.Schema.Type<typeof createSurfaceInputSch
 export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputSchema>;
 export type SplitPaneDirection = Schema.Schema.Type<typeof splitPaneDirectionSchema>;
 export type SplitPaneInput = Schema.Schema.Type<typeof splitPaneInputSchema>;
+export type StartPaneInput = Schema.Schema.Type<typeof startPaneInputSchema>;
 export type SetSplitWeightsInput = Schema.Schema.Type<typeof setSplitWeightsInputSchema>;
 export type SetSplitWeightsOutput = Schema.Schema.Type<typeof setSplitWeightsOutputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
 export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;
+export type DeletePaneOutput = Schema.Schema.Type<typeof deletePaneOutputSchema>;
 export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusOutputSchema
 >;

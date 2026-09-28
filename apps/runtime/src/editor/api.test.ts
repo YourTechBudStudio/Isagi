@@ -226,7 +226,11 @@ test('the open route returns the placement the operation resolved', async () => 
   await withEditorApi(
     fakeProvisioning({}),
     async (fastify) => {
-      const response = await fastify.inject({ method: 'POST', url: '/api/v1/worktrees/4/editor' });
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/worktrees/4/editor',
+        payload: { intoSurfaceId: 11 },
+      });
       const payload = response.json() as { data?: OpenEditorOutput };
 
       assert.equal(response.statusCode, 200);
@@ -241,8 +245,13 @@ test('the open route returns the placement the operation resolved', async () => 
     },
     {
       surfaces: {
-        openEditor: ({ worktreeId }) =>
-          Effect.succeed({ worktreeId, surfaceId: 11, paneId: 23, editorContextId: 5 }),
+        openEditor: ({ worktreeId, intoSurfaceId }) =>
+          Effect.succeed({
+            worktreeId,
+            surfaceId: intoSurfaceId ?? 99,
+            paneId: 23,
+            editorContextId: 5,
+          }),
       },
     },
   );
@@ -312,7 +321,7 @@ test('the diagnostics route decodes params and query together', async () => {
 
 test('EditorUnavailable maps to a 400 rejection carrying its reason and diagnostic', async () => {
   const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor' },
+    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
     {
       surfaces: {
         openEditor: () =>
@@ -402,7 +411,7 @@ test('EditorDiagnosticsUnavailable maps to a 500 carrying its detail', async () 
 
 test('a surfaces worktree_not_found is translated into the editor rejection vocabulary', async () => {
   const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor' },
+    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
     {
       surfaces: {
         openEditor: () =>
@@ -427,7 +436,7 @@ test('a surfaces worktree_not_found is translated into the editor rejection voca
 
 test('any other SurfaceError is delegated rather than given an invented editor reason', async () => {
   const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor' },
+    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
     {
       surfaces: {
         openEditor: () =>
@@ -448,7 +457,7 @@ test('any other SurfaceError is delegated rather than given an invented editor r
 
 test('a database fault reaches the client as runtime_database_failed, not an encoding failure', async () => {
   const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor' },
+    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
     {
       surfaces: {
         openEditor: () =>

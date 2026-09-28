@@ -1,11 +1,10 @@
 import { and, eq, getTableColumns, inArray, isNotNull } from 'drizzle-orm';
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 
-import {
-  surfaceLayoutNodeSchema,
-  type PaneSessionKind,
-  type SurfaceLayoutNode,
-  type SurfaceOrderRejectionReason,
+import type {
+  PaneSessionKind,
+  SurfaceLayoutNode,
+  SurfaceOrderRejectionReason,
 } from '@isagi/contracts';
 
 import {
@@ -29,8 +28,14 @@ import {
   worktrees,
   worktreeSurfaces,
 } from '../persistence/schema.js';
-import type { SurfacePaneDeletePlan } from './delete-plan.js';
-import { insertPaneIntoLayout, layoutContainsPane } from './layout.js';
+import { planSurfacePaneDelete } from './delete-plan.js';
+import {
+  decodeSurfaceLayout,
+  encodeSurfaceLayout,
+  insertPaneIntoLayout,
+  layoutContainsPane,
+  leafForPane,
+} from './layout.js';
 import {
   agentSessionRow,
   focusRow,
@@ -41,8 +46,11 @@ import {
 } from './row-mappers.js';
 import type {
   AgentSessionRow,
+  CreateEmptySurfaceInput,
+  CreateEmptySurfaceOutput,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
+  DeletePaneRowsOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
   RenameSurfaceOutput,
@@ -54,6 +62,8 @@ import type {
   PaneSessionBinding,
   SplitSurfacePaneInput,
   SplitSurfacePaneOutput,
+  StartSurfacePaneInput,
+  StartSurfacePaneResult,
   TerminalSessionRow,
 } from './types.js';
 
@@ -85,6 +95,16 @@ export interface SurfaceRepositoryService {
     paneIds: readonly number[],
   ) => Effect.Effect<EditorContextRow[], DatabaseError>;
   readonly listPaneSessionBindings: Effect.Effect<PaneSessionBinding[], DatabaseError>;
+  /**
+   * The sessions named by pane bindings, by session id. For cleanup after a
+   * delete, when the pane rows — and so the pane join — are already gone.
+   */
+  readonly listSessionsBoundTo: (
+    panes: readonly SurfacePaneRow[],
+  ) => Effect.Effect<
+    { readonly agents: AgentSessionRow[]; readonly terminals: TerminalSessionRow[] },
+    DatabaseError
+  >;
   readonly findPaneForSession: (input: {
     readonly sessionKind: PaneSessionKind;
     readonly sessionId: number;
@@ -100,15 +120,31 @@ export interface SurfaceRepositoryService {
     readonly title: string;
   }) => Effect.Effect<RenameSurfaceOutput, DatabaseError>;
   readonly deleteSurface: (
-    target: SurfaceDeleteTarget,
+    surfaceId: number,
   ) => Effect.Effect<DeleteSurfaceRowsOutput, DatabaseError>;
+  /**
+   * Removes a pane, planning from the rows as they are inside the transaction,
+   * so two concurrent deletes can never each write a layout the other made
+   * stale. Removes nothing when the pane is already gone.
+   */
   readonly deleteSurfacePane: (input: {
-    readonly target: SurfaceDeleteTarget;
-    readonly plan: SurfacePaneDeletePlan;
-  }) => Effect.Effect<DeleteSurfaceRowsOutput, DatabaseError>;
+    readonly surfaceId: number;
+    readonly paneId: number;
+  }) => Effect.Effect<DeletePaneRowsOutput, DatabaseError>;
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
   ) => Effect.Effect<CreateSinglePaneSurfaceOutput, DatabaseError>;
+  /** A surface with no panes, focused with no active pane. */
+  readonly createEmptySurface: (
+    input: CreateEmptySurfaceInput,
+  ) => Effect.Effect<CreateEmptySurfaceOutput, DatabaseError>;
+  /**
+   * The first pane of an empty surface, focused. Refused, with nothing written, when the surface is
+   * gone or already has panes.
+   */
+  readonly startSurfacePane: (
+    input: StartSurfacePaneInput,
+  ) => Effect.Effect<StartSurfacePaneResult, DatabaseError>;
   readonly splitSurfacePane: (
     input: SplitSurfacePaneInput,
   ) => Effect.Effect<SplitSurfacePaneOutput | null, DatabaseError>;
@@ -121,11 +157,18 @@ export interface SurfaceRepositoryService {
     readonly sessionKind: 'agent_session' | 'terminal_session' | null;
     readonly sessionId: number | null;
   }) => Effect.Effect<void, DatabaseError>;
+  /**
+   * Binds a session to a pane, moving it off any pane it was on. Both ends are
+   * checked inside the transaction and nothing changes when either is gone: the
+   * pane (its surface closed while the session was being created) or the
+   * session (deleted by orphan GC after the caller last saw it — `session_id` has no
+   * foreign key, so nothing else would stop a pane pointing at a missing row).
+   */
   readonly claimPaneSession: (input: {
     readonly paneId: number;
     readonly sessionKind: 'agent_session' | 'terminal_session';
     readonly sessionId: number;
-  }) => Effect.Effect<void, DatabaseError>;
+  }) => Effect.Effect<PaneSessionClaimResult, DatabaseError>;
   readonly setEnvironmentFocus: (
     input: EnvironmentFocusRow,
   ) => Effect.Effect<EnvironmentFocusRow, DatabaseError>;
@@ -135,6 +178,8 @@ export interface SurfaceRepositoryService {
     readonly beforeSurfaceId: number | null;
   }) => Effect.Effect<SurfaceOrderMoveResult, DatabaseError>;
 }
+
+export type PaneSessionClaimResult = 'claimed' | 'pane_missing' | 'session_missing';
 
 /**
  * Returned rather than thrown: `database.transaction` converts a throw into a
@@ -249,6 +294,7 @@ export const SurfaceRepositoryLive = Layer.effect(
       listEditorContextsForPanes: (paneIds) =>
         listEditorContextsForPanes(database, ptyColumns, paneIds),
       listPaneSessionBindings: listPaneSessionBindings(database),
+      listSessionsBoundTo: (panes) => listSessionsBoundTo(artifacts, database, ptyColumns, panes),
       findPaneForSession: (input) =>
         database.use('find_pane_for_session', (db) => {
           const row = db
@@ -298,37 +344,57 @@ export const SurfaceRepositoryLive = Layer.effect(
             .run();
           return { surfaceId: input.surfaceId, title: input.title };
         }),
-      deleteSurface: (target) =>
+      deleteSurface: (surfaceId) =>
         database.transaction('delete_surface', (db) => {
-          db.delete(worktreeSurfaces).where(eq(worktreeSurfaces.id, target.surface.id)).run();
-          return {
-            deletedSurfaceId: target.surface.id,
-            deletedPaneIds: target.panes.map(({ pane }) => pane.id),
-          };
+          const deletedPanes = db
+            .select()
+            .from(surfacePanes)
+            .where(eq(surfacePanes.surfaceId, surfaceId))
+            .all()
+            .map(paneRow);
+          const deleted = db
+            .delete(worktreeSurfaces)
+            .where(eq(worktreeSurfaces.id, surfaceId))
+            .returning({ id: worktreeSurfaces.id })
+            .all();
+          return deleted.length === 0
+            ? { deletedSurfaceId: null, deletedPanes: [] }
+            : { deletedSurfaceId: surfaceId, deletedPanes };
         }),
       deleteSurfacePane: (input) =>
         database.transaction('delete_surface_pane', (db) => {
-          if (input.plan.deletedPaneIds.length === 0)
-            return { deletedSurfaceId: null, deletedPaneIds: [] };
-          if (input.plan.deletedSurfaceId !== null) {
-            db.delete(worktreeSurfaces)
-              .where(eq(worktreeSurfaces.id, input.target.surface.id))
-              .run();
-            return {
-              deletedSurfaceId: input.target.surface.id,
-              deletedPaneIds: input.plan.deletedPaneIds,
-            };
-          }
-          const deletedPaneId = input.plan.deletedPaneIds[0];
-          if (!deletedPaneId || !input.plan.nextLayout)
-            return { deletedSurfaceId: null, deletedPaneIds: [] };
-          const now = timestamp();
-          db.update(worktreeSurfaces)
-            .set({ layoutJson: JSON.stringify(input.plan.nextLayout), updatedAt: now })
-            .where(eq(worktreeSurfaces.id, input.target.surface.id))
+          const surface = db
+            .select()
+            .from(worktreeSurfaces)
+            .where(eq(worktreeSurfaces.id, input.surfaceId))
+            .get();
+          if (!surface) return { deletedPanes: [] };
+          const panes = db
+            .select()
+            .from(surfacePanes)
+            .where(eq(surfacePanes.surfaceId, input.surfaceId))
+            .all()
+            .map(paneRow);
+          const plan = planSurfacePaneDelete(
+            deleteTarget(surfaceRow(surface), panes),
+            input.paneId,
+          );
+          if (plan.deletedPaneIds.length === 0) return { deletedPanes: [] };
+          db.delete(surfacePanes)
+            .where(
+              and(
+                inArray(surfacePanes.id, [...plan.deletedPaneIds]),
+                eq(surfacePanes.surfaceId, input.surfaceId),
+              ),
+            )
             .run();
-          db.delete(surfacePanes).where(eq(surfacePanes.id, deletedPaneId)).run();
-          return { deletedSurfaceId: null, deletedPaneIds: [deletedPaneId] };
+          db.update(worktreeSurfaces)
+            .set({ layoutJson: encodeSurfaceLayout(plan.nextLayout), updatedAt: timestamp() })
+            .where(eq(worktreeSurfaces.id, input.surfaceId))
+            .run();
+          return {
+            deletedPanes: panes.filter((pane) => plan.deletedPaneIds.includes(pane.id)),
+          };
         }),
       createSinglePaneSurface: (input) =>
         database
@@ -345,29 +411,17 @@ export const SurfaceRepositoryLive = Layer.effect(
             // Checked before anything is inserted, so a rejection leaves no
             // surface, pane, layout, or focus residue behind.
             if (rejection) return { status: 'rejected' as const, reason: rejection };
-            const surface = createSinglePaneSurfaceRows(db, input);
-            const now = timestamp();
-            const focus = db
-              .select({ id: worktreeEnvironmentStates.id })
-              .from(worktreeEnvironmentStates)
-              .where(eq(worktreeEnvironmentStates.worktreeId, input.worktreeId))
-              .get();
-            const focusValues = {
-              activeSurfaceId: surface.surfaceId,
-              activePaneId: surface.paneId,
-              updatedAt: now,
+            const surface = insertEmptySurfaceRow(db, input);
+            const paneId = insertRootPaneRows(db, {
+              surfaceId: surface.surfaceId,
+              title: surface.title,
+              initialSession: input.initialSession,
+            });
+            focusSurfaceRows(db, input.worktreeId, surface.surfaceId, paneId);
+            return {
+              status: 'created' as const,
+              output: { ...surface, paneId, cwd: worktree.path },
             };
-            if (focus) {
-              db.update(worktreeEnvironmentStates)
-                .set(focusValues)
-                .where(eq(worktreeEnvironmentStates.id, focus.id))
-                .run();
-            } else {
-              db.insert(worktreeEnvironmentStates)
-                .values({ worktreeId: input.worktreeId, ...focusValues, createdAt: now })
-                .run();
-            }
-            return { status: 'created' as const, output: { ...surface, cwd: worktree.path } };
           })
           .pipe(
             Effect.flatMap((result) =>
@@ -386,6 +440,67 @@ export const SurfaceRepositoryLive = Layer.effect(
                   ),
             ),
           ),
+      createEmptySurface: (input) =>
+        database.transaction('create_empty_surface', (db) => {
+          const worktree = db
+            .select({ id: worktrees.id })
+            .from(worktrees)
+            .where(eq(worktrees.id, input.worktreeId))
+            .get();
+          if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
+          const surface = insertEmptySurfaceRow(db, input);
+          focusSurfaceRows(db, input.worktreeId, surface.surfaceId, null);
+          return surface;
+        }),
+      startSurfacePane: (input) =>
+        database
+          .transaction('start_surface_pane', (db) => {
+            const surface = db
+              .select()
+              .from(worktreeSurfaces)
+              .where(eq(worktreeSurfaces.id, input.surfaceId))
+              .get();
+            if (!surface) return { status: 'surface_not_found' as const };
+            const existingPane = db
+              .select({ id: surfacePanes.id })
+              .from(surfacePanes)
+              .where(eq(surfacePanes.surfaceId, input.surfaceId))
+              .get();
+            if (existingPane || decodeSurfaceLayout(surface.layoutJson) !== null)
+              return { status: 'surface_not_empty' as const, worktreeId: surface.worktreeId };
+            const rejection = input.initialSession
+              ? rejectInitialSession(db, surface.worktreeId, input.initialSession)
+              : null;
+            if (rejection) return { status: 'rejected' as const, reason: rejection, surface };
+            const paneId = insertRootPaneRows(db, {
+              surfaceId: surface.id,
+              title: input.titleBase,
+              initialSession: input.initialSession,
+            });
+            focusSurfaceRows(db, surface.worktreeId, surface.id, paneId);
+            return {
+              status: 'started' as const,
+              worktreeId: surface.worktreeId,
+              surfaceId: surface.id,
+              paneId,
+              title: input.titleBase,
+            };
+          })
+          .pipe(
+            Effect.flatMap(
+              (result): Effect.Effect<StartSurfacePaneResult> =>
+                result.status === 'rejected'
+                  ? // A defect for the same reason as `createSinglePaneSurface`'s.
+                    Effect.die(
+                      new SurfaceRepositoryInitialSessionRejected(
+                        result.surface.worktreeId,
+                        input.initialSession?.sessionId ?? null,
+                        result.reason,
+                      ),
+                    )
+                  : Effect.succeed(result),
+            ),
+          ),
       splitSurfacePane: (input) =>
         database.transaction('split_surface_pane', (db) => {
           const surface = db
@@ -399,8 +514,8 @@ export const SurfaceRepositoryLive = Layer.effect(
             .from(surfacePanes)
             .where(eq(surfacePanes.surfaceId, input.surfaceId))
             .all();
-          const layout = decodeLayout(surface.layoutJson);
-          if (!layoutContainsPane(layout, input.sourcePaneId)) return null;
+          const layout = decodeSurfaceLayout(surface.layoutJson);
+          if (!layout || !layoutContainsPane(layout, input.sourcePaneId)) return null;
 
           const now = timestamp();
           const title = duplicateSafeTitle(
@@ -429,7 +544,7 @@ export const SurfaceRepositoryLive = Layer.effect(
             input.direction,
           );
           db.update(worktreeSurfaces)
-            .set({ layoutJson: JSON.stringify(nextLayout), updatedAt: now })
+            .set({ layoutJson: encodeSurfaceLayout(nextLayout), updatedAt: now })
             .where(eq(worktreeSurfaces.id, input.surfaceId))
             .run();
           return { surfaceId: input.surfaceId, paneId: pane.id, title };
@@ -437,7 +552,7 @@ export const SurfaceRepositoryLive = Layer.effect(
       setSurfaceLayout: (input) =>
         database.use('set_surface_layout', (db) => {
           db.update(worktreeSurfaces)
-            .set({ layoutJson: JSON.stringify(input.layout), updatedAt: timestamp() })
+            .set({ layoutJson: encodeSurfaceLayout(input.layout), updatedAt: timestamp() })
             .where(eq(worktreeSurfaces.id, input.surfaceId))
             .run();
           return { surfaceId: input.surfaceId, layout: input.layout };
@@ -455,6 +570,20 @@ export const SurfaceRepositoryLive = Layer.effect(
         }),
       claimPaneSession: (input) =>
         database.transaction('claim_surface_pane_session', (db) => {
+          const pane = db
+            .select({ id: surfacePanes.id })
+            .from(surfacePanes)
+            .where(eq(surfacePanes.id, input.paneId))
+            .get();
+          if (!pane) return 'pane_missing' as const;
+          const sessionTable =
+            input.sessionKind === 'agent_session' ? agentSessions : terminalSessions;
+          const session = db
+            .select({ id: sessionTable.id })
+            .from(sessionTable)
+            .where(eq(sessionTable.id, input.sessionId))
+            .get();
+          if (!session) return 'session_missing' as const;
           const now = timestamp();
           db.update(surfacePanes)
             .set({ sessionKind: null, sessionId: null, updatedAt: now })
@@ -473,6 +602,7 @@ export const SurfaceRepositoryLive = Layer.effect(
             })
             .where(eq(surfacePanes.id, input.paneId))
             .run();
+          return 'claimed' as const;
         }),
       setEnvironmentFocus: (input) =>
         database.use('set_worktree_environment_focus', (db) => {
@@ -601,6 +731,49 @@ function listAgentSessionsForPanes(
     return yield* Effect.all(
       rows.map((row) => agentSessionRow(artifacts, row.session, row.process)),
     );
+  });
+}
+
+function listSessionsBoundTo(
+  artifacts: AgentSessionArtifactsService,
+  database: RuntimeDatabaseService,
+  ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
+  panes: readonly SurfacePaneRow[],
+) {
+  const idsOf = (kind: 'agent_session' | 'terminal_session') =>
+    panes.flatMap((pane) =>
+      pane.sessionKind === kind && pane.sessionId !== null ? [pane.sessionId] : [],
+    );
+  const agentIds = idsOf('agent_session');
+  const terminalIds = idsOf('terminal_session');
+  return Effect.gen(function* () {
+    const rows = yield* database.use('list_sessions_bound_to_panes', (db) => ({
+      agents:
+        agentIds.length === 0
+          ? []
+          : db
+              .select({ session: agentSessions, process: ptyColumns })
+              .from(agentSessions)
+              .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+              .where(inArray(agentSessions.id, agentIds))
+              .all(),
+      terminals:
+        terminalIds.length === 0
+          ? []
+          : db
+              .select({ session: terminalSessions, process: ptyColumns })
+              .from(terminalSessions)
+              .leftJoin(ptyProcesses, eq(terminalSessions.activePtyProcessId, ptyProcesses.id))
+              .where(inArray(terminalSessions.id, terminalIds))
+              .all()
+              .map((row) => terminalSessionRow(row.session, row.process)),
+    }));
+    return {
+      agents: yield* Effect.all(
+        rows.agents.map((row) => agentSessionRow(artifacts, row.session, row.process)),
+      ),
+      terminals: rows.terminals,
+    };
   });
 }
 
@@ -796,10 +969,11 @@ function rejectInitialSession(
   return placement ? 'already_placed' : null;
 }
 
-function createSinglePaneSurfaceRows(
+/** A surface row with no panes: its layout is JSON `null`. */
+function insertEmptySurfaceRow(
   db: RuntimeDatabaseConnection,
-  input: CreateSinglePaneSurfaceInput,
-): Omit<CreateSinglePaneSurfaceOutput, 'cwd'> {
+  input: { readonly worktreeId: number; readonly titleBase: string },
+): CreateEmptySurfaceOutput {
   const now = timestamp();
   const existingSurfaces = db
     .select({ title: worktreeSurfaces.title, sortOrder: worktreeSurfaces.sortOrder })
@@ -817,18 +991,31 @@ function createSinglePaneSurfaceRows(
     .values({
       worktreeId: input.worktreeId,
       title,
-      layoutJson: '{}',
+      layoutJson: encodeSurfaceLayout(null),
       sortOrder,
       createdAt: now,
       updatedAt: now,
     })
     .returning({ id: worktreeSurfaces.id })
     .get();
+  return { surfaceId: surface.id, title };
+}
+
+/** The one pane of a surface that had none, and the leaf layout that places it. */
+function insertRootPaneRows(
+  db: RuntimeDatabaseConnection,
+  input: {
+    readonly surfaceId: number;
+    readonly title: string;
+    readonly initialSession: CreateSinglePaneSurfaceInput['initialSession'];
+  },
+): number {
+  const now = timestamp();
   const pane = db
     .insert(surfacePanes)
     .values({
-      surfaceId: surface.id,
-      title,
+      surfaceId: input.surfaceId,
+      title: input.title,
       sortOrder: 0,
       // Written here rather than by a follow-up update, so the pane is never
       // observable without its binding.
@@ -840,18 +1027,35 @@ function createSinglePaneSurfaceRows(
     .returning({ id: surfacePanes.id })
     .get();
   db.update(worktreeSurfaces)
-    .set({
-      layoutJson: JSON.stringify({
-        kind: 'leaf',
-        nodeId: `pane-${pane.id}`,
-        paneId: pane.id,
-        collapsed: false,
-      }),
-      updatedAt: now,
-    })
-    .where(eq(worktreeSurfaces.id, surface.id))
+    .set({ layoutJson: encodeSurfaceLayout(leafForPane(pane.id)), updatedAt: now })
+    .where(eq(worktreeSurfaces.id, input.surfaceId))
     .run();
-  return { surfaceId: surface.id, paneId: pane.id, title };
+  return pane.id;
+}
+
+function focusSurfaceRows(
+  db: RuntimeDatabaseConnection,
+  worktreeId: number,
+  surfaceId: number,
+  paneId: number | null,
+) {
+  const now = timestamp();
+  const focus = db
+    .select({ id: worktreeEnvironmentStates.id })
+    .from(worktreeEnvironmentStates)
+    .where(eq(worktreeEnvironmentStates.worktreeId, worktreeId))
+    .get();
+  const focusValues = { activeSurfaceId: surfaceId, activePaneId: paneId, updatedAt: now };
+  if (focus) {
+    db.update(worktreeEnvironmentStates)
+      .set(focusValues)
+      .where(eq(worktreeEnvironmentStates.id, focus.id))
+      .run();
+  } else {
+    db.insert(worktreeEnvironmentStates)
+      .values({ worktreeId, ...focusValues, createdAt: now })
+      .run();
+  }
 }
 
 function deleteTarget(surface: SurfaceRow, panes: readonly SurfacePaneRow[]): SurfaceDeleteTarget {
@@ -861,9 +1065,6 @@ function deleteTarget(surface: SurfaceRow, panes: readonly SurfacePaneRow[]): Su
   };
 }
 
-function decodeLayout(json: string): SurfaceLayoutNode {
-  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(json));
-}
 function timestamp() {
   return new Date().toISOString();
 }

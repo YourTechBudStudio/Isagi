@@ -6,7 +6,9 @@
     { "path": "./packages/workflow-sdk" },
     { "path": "./packages/workflow-verifier" },
     { "path": "./packages/contracts" },
+    { "path": "./packages/runtime-client" },
     { "path": "./apps/runtime" },
+    { "path": "./apps/cli" },
     { "path": "./apps/web" },
     { "path": "./apps/desktop" }
   ]

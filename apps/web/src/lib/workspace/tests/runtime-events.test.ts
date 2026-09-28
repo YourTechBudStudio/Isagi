@@ -12,7 +12,8 @@ import {
 } from '../query-keys.js';
 import { handleRuntimeEvent } from '../runtime-events.js';
 import { useWorkspaceStore } from '../store.js';
-import { useWorkflowRunStore } from '../workflow-runs.js';
+import { subscribeToWorkflowSignals, type WorkflowSignal } from '../workflow/signals.js';
+import { workflowEventFixture, workflowSummaryFixture } from '../workflow/test-support.js';
 
 test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();
@@ -160,65 +161,40 @@ test('command change events patch managed command status when config is malforme
   queryClient.clear();
 });
 
-test('workflow run events replace, upsert, and clear workflow summaries', () => {
-  useWorkflowRunStore.getState().replace([]);
+test('workflow runtime events reach the workflow layer as signals, not a second store', () => {
+  const seen: WorkflowSignal[] = [];
+  const unsubscribe = subscribeToWorkflowSignals((signal) => seen.push(signal));
 
+  const attached = workflowSummaryFixture({ runId: 42 });
   handleRuntimeEvent({
     id: 'evt_workflow_snapshot',
     type: 'workflow_run_snapshot',
     occurredAt: '2026-06-12T00:00:00.000Z',
-    payload: {
-      summaries: [
-        workflowSummaryFixture(),
-        workflowSummaryFixture({ runId: 77, rootRunId: 77, surfaceId: 4 }),
-      ],
-    },
+    payload: { summaries: [attached] },
   });
-  assert.deepEqual(Object.keys(useWorkflowRunStore.getState().runsById), ['42', '77']);
-  assert.equal(useWorkflowRunStore.getState().rootRunIdBySurfaceId[3], 42);
-  assert.equal(useWorkflowRunStore.getState().rootRunIdBySurfaceId[4], 77);
-
   handleRuntimeEvent({
     id: 'evt_workflow_changed',
     type: 'workflow_run_changed',
     occurredAt: '2026-06-12T00:00:01.000Z',
-    payload: workflowSummaryFixture({
-      status: 'waiting',
-      waitKind: 'user_continue',
-      blockingWait: { kind: 'user_continue', runId: 42 },
-      prompt: { runId: 42, questions: [] },
-    }),
+    payload: workflowSummaryFixture({ runId: 42, status: 'waiting' }),
   });
-  assert.equal(useWorkflowRunStore.getState().runsById[42]?.status, 'waiting');
-
   handleRuntimeEvent({
-    id: 'evt_workflow_cleared',
-    type: 'workflow_run_cleared',
+    id: 'evt_workflow_event',
+    type: 'workflow_run_event',
     occurredAt: '2026-06-12T00:00:02.000Z',
-    payload: { runId: 42, rootRunId: 42, surfaceId: 3 },
+    payload: workflowEventFixture({ runId: 42, eventId: 3 }),
   });
-  assert.deepEqual(Object.keys(useWorkflowRunStore.getState().runsById), ['77']);
-  assert.deepEqual(useWorkflowRunStore.getState().rootRunIdBySurfaceId, { 4: 77 });
-});
+  unsubscribe();
 
-function workflowSummaryFixture(
-  overrides: Partial<import('@isagi/contracts').WorkflowRunSummary> = {},
-): import('@isagi/contracts').WorkflowRunSummary {
-  return {
-    runId: 42,
-    rootRunId: 42,
-    parentRunId: null,
-    workflowKey: 'gate',
-    title: 'Gate',
-    status: 'running',
-    paused: false,
-    waitKind: null,
-    blockingWait: null,
-    worktreeId: 9,
-    surfaceId: 3,
-    ...overrides,
-  };
-}
+  assert.deepEqual(
+    seen.map((signal) => signal.type),
+    ['snapshot', 'run_changed', 'run_event'],
+  );
+  // The handler forwards facts and holds none of its own.
+  assert.deepEqual(seen[0]?.type === 'snapshot' ? seen[0].summaries : null, [attached]);
+  assert.equal(seen[1]?.type === 'run_changed' ? seen[1].summary.status : null, 'waiting');
+  assert.equal(seen[2]?.type === 'run_event' ? seen[2].event.eventId : null, 3);
+});
 
 function editorContextChangedEvent() {
   return {

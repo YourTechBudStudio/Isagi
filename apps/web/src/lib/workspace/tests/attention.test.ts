@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { WorkflowRunSummary } from '@isagi/contracts';
+
 import { aggregateAttention, applyAttentionToProjects, useAttentionStore } from '../attention.js';
 import type { Project } from '../types.js';
-import { workflowPresentationStatus, workflowRunAttention } from '../workflow-derive.js';
+import { workflowPresentationStatus, workflowRunAttention } from '../workflow/derive.js';
+import { workflowSummaryFixture } from '../workflow/test-support.js';
 
 test('attention aggregation prioritizes error, then working, then waiting, then idle', () => {
   assert.equal(aggregateAttention(['waiting', 'idle']), 'waiting');
@@ -123,17 +126,13 @@ test('surface attention aggregates workflow and pane signals through the shared 
         attention: 'working',
       },
     },
-    {
-      77: workflowSummaryFixture({
+    [
+      workflowSummaryFixture({
         runId: 77,
-        rootRunId: 77,
-        surfaceId: 101,
         status: 'waiting',
-        waitKind: 'workflow',
-        blockingWait: { kind: 'user_input', runId: 77 },
+        current: parkedOn('user_input'),
       }),
-    },
-    { 101: 77 },
+    ],
   );
 
   assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'working');
@@ -151,15 +150,7 @@ test('workflow errors remain higher priority than working panes', () => {
         attention: 'working',
       },
     },
-    {
-      77: workflowSummaryFixture({
-        runId: 77,
-        rootRunId: 77,
-        surfaceId: 101,
-        status: 'failed',
-      }),
-    },
-    { 101: 77 },
+    [workflowSummaryFixture({ runId: 77, status: 'failed' })],
   );
 
   assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'error');
@@ -170,20 +161,26 @@ test('a workflow on a terminal-only surface still reaches worktree attention', (
     [
       workflowSummaryFixture({
         runId: 78,
-        rootRunId: 78,
-        surfaceId: 102,
         status: 'waiting',
-        waitKind: 'workflow',
-        blockingWait: { kind: 'user_input', runId: 78 },
+        current: parkedOn('user_input'),
+        surfaceId: 102,
       }),
       'waiting',
     ],
     [
-      workflowSummaryFixture({ runId: 78, rootRunId: 78, surfaceId: 102, status: 'failed' }),
+      workflowSummaryFixture({
+        runId: 78,
+        status: 'failed',
+        surfaceId: 102,
+      }),
       'error',
     ],
     [
-      workflowSummaryFixture({ runId: 78, rootRunId: 78, surfaceId: 102, status: 'running' }),
+      workflowSummaryFixture({
+        runId: 78,
+        status: 'running',
+        surfaceId: 102,
+      }),
       'working',
     ],
   ] as const) {
@@ -198,8 +195,7 @@ test('a workflow on a terminal-only surface still reaches worktree attention', (
           attention: 'working',
         },
       },
-      { 78: summary },
-      { 102: 78 },
+      [summary],
     );
 
     assert.equal(project?.worktrees[0]?.attention, expected);
@@ -222,8 +218,13 @@ test('a finished workflow on a terminal-only surface leaves the worktree idle', 
         attention: 'error',
       },
     },
-    { 78: workflowSummaryFixture({ runId: 78, rootRunId: 78, surfaceId: 102, status: 'done' }) },
-    { 102: 78 },
+    [
+      workflowSummaryFixture({
+        runId: 78,
+        status: 'completed',
+        surfaceId: 102,
+      }),
+    ],
   );
 
   assert.equal(project?.worktrees[0]?.attention, 'idle');
@@ -234,23 +235,26 @@ test('workflow derivations map status to attention signals', () => {
   assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'running' })), 'working');
   assert.equal(
     workflowRunAttention(
-      workflowSummaryFixture({
-        status: 'waiting',
-        waitKind: 'workflow',
-        blockingWait: { kind: 'user_input', runId: 2 },
-      }),
+      workflowSummaryFixture({ status: 'waiting', current: parkedOn('user_input') }),
     ),
     'waiting',
   );
-  assert.equal(workflowRunAttention(workflowSummaryFixture({ paused: true })), 'idle');
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'paused' })), 'idle');
   assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'failed' })), 'error');
-  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'done' })), null);
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'completed' })), null);
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'preparing' })), 'working');
+  // Cancelled is terminal and deliberate: it draws no attention, exactly like a finished run.
+  assert.equal(workflowRunAttention(workflowSummaryFixture({ status: 'cancelled' })), null);
 });
 
 test('workflow presentation derives user waits and paused state from summary fields', () => {
+  // An agent turn is the workflow waiting on a machine, not on a person.
   assert.equal(
     workflowPresentationStatus(
-      workflowSummaryFixture({ status: 'waiting', waitKind: 'agent_turn' }),
+      workflowSummaryFixture({
+        status: 'waiting',
+        current: parkedOn('agent_turn'),
+      }),
     ),
     'driving',
   );
@@ -258,51 +262,40 @@ test('workflow presentation derives user waits and paused state from summary fie
     workflowPresentationStatus(
       workflowSummaryFixture({
         status: 'waiting',
-        waitKind: 'workflow',
-        blockingWait: { kind: 'user_continue', runId: 2 },
+        current: parkedOn('user_continue'),
       }),
     ),
     'waiting_user',
   );
   assert.equal(
     workflowPresentationStatus(
-      workflowSummaryFixture({
-        status: 'running',
-        waitKind: null,
-        blockingWait: { kind: 'user_input', runId: 2 },
-      }),
-    ),
-    'waiting_user',
-  );
-  assert.equal(
-    workflowPresentationStatus(
-      workflowSummaryFixture({
-        status: 'waiting',
-        waitKind: 'workflow',
-        blockingWait: { kind: 'user_input', runId: 2 },
-        paused: true,
-      }),
+      workflowSummaryFixture({ status: 'paused', current: parkedOn('user_input') }),
     ),
     'paused',
   );
+  assert.equal(
+    workflowPresentationStatus(workflowSummaryFixture({ status: 'cancelled' })),
+    'cancelled',
+  );
 });
 
-function workflowSummaryFixture(
-  overrides: Partial<import('@isagi/contracts').WorkflowRunSummary> = {},
-): import('@isagi/contracts').WorkflowRunSummary {
+function parkedOn(
+  kind: 'user_input' | 'user_continue' | 'agent_turn',
+): NonNullable<WorkflowRunSummary['current']> {
+  const wait: NonNullable<WorkflowRunSummary['current']>['wait'] =
+    kind === 'user_input'
+      ? { kind, questions: [] }
+      : kind === 'user_continue'
+        ? { kind }
+        : { kind, target: { agentSessionId: 1, sentAt: '2026-09-15T10:00:00.000Z' } };
   return {
-    runId: 1,
-    rootRunId: 1,
-    parentRunId: null,
-    workflowKey: 'gate',
-    title: 'Gate',
-    status: 'running',
-    paused: false,
-    waitKind: null,
-    blockingWait: null,
-    worktreeId: 10,
-    surfaceId: 101,
-    ...overrides,
+    executionId: 1,
+    invocationId: 1,
+    graphKey: 'root',
+    nodeId: 'ask',
+    nodeKind: 'operation',
+    label: null,
+    wait,
   };
 }
 

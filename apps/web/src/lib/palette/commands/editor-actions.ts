@@ -3,10 +3,12 @@ import { Code } from 'lucide-react';
 import { worktreeActionsCopy } from '../../../copy/index.js';
 import { openEditorFromPalette } from '../../editor/queries.js';
 import type { PaletteCommand } from '../types.js';
-import { worktreeIdFromValues } from './worktree-target.js';
+import { emptySurfaceIdFromValues, worktreeIdFromValues } from './worktree-target.js';
 
 /**
  * Open the worktree's editor, placing and focusing the durable editor context.
+ * An unplaced editor fills an empty target surface; a placed one is focused
+ * where it already is.
  *
  * It starts no process. Opening settles the placement and activates the pane;
  * the pane's own mount is what asks the runtime for a workbench, so the editor
@@ -28,7 +30,7 @@ export const openEditorCommand: PaletteCommand = {
     if (worktreeId === null) {
       return;
     }
-    await openEditorFromPalette(worktreeId);
+    await openEditorFromPalette(worktreeId, emptySurfaceIdFromValues(values, ctx));
   },
 };
 

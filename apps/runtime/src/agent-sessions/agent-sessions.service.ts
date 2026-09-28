@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Either, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
@@ -31,7 +31,22 @@ export interface AgentSessionService {
   readonly activePtyProcessId: (
     agentSessionId: number,
   ) => Effect.Effect<number, DatabaseError | AgentSessionError>;
+  /**
+   * Stops a process its launcher started, unless a pane holds the session. The
+   * placement read and the stop happen under the session's lock, which a claim
+   * also takes to bind the session, so a claim can never land between them: a
+   * session placed at any point up to the decision keeps its process.
+   */
+  readonly stopUnlessPlaced: (input: {
+    readonly agentSessionId: number;
+    readonly ptyProcessId: number;
+  }) => Effect.Effect<StopUnlessPlacedOutcome, DatabaseError>;
 }
+
+export type StopUnlessPlacedOutcome =
+  | { readonly kind: 'placed'; readonly surfaceId: number; readonly paneId: number }
+  | { readonly kind: 'stopped' }
+  | { readonly kind: 'stop_failed'; readonly cause: unknown };
 
 export interface AgentSessionEnsureActiveOptions extends HarnessLaunchOptions {
   readonly replaceEphemeralProcess?: boolean | undefined;
@@ -125,6 +140,20 @@ export const AgentSessionServiceLive = Layer.effect(
         }),
       get: (agentSessionId) => findAgentSessionOrFail(repository, agentSessionId),
       ensureActivePtyProcess,
+      stopUnlessPlaced: (input) =>
+        lifecycle.withRestoreLock(
+          { kind: 'agent_session', sessionId: input.agentSessionId },
+          Effect.gen(function* () {
+            const placement = yield* repository.findPlacement(input.agentSessionId);
+            if (placement) return { kind: 'placed', ...placement } as const;
+            const stopped = yield* pty
+              .terminate({ ptyProcessId: input.ptyProcessId, gracefulTimeoutMs: 1_000 })
+              .pipe(Effect.either);
+            return Either.isRight(stopped)
+              ? ({ kind: 'stopped' } as const)
+              : ({ kind: 'stop_failed', cause: stopped.left } as const);
+          }),
+        ),
       activePtyProcessId: (agentSessionId) =>
         Effect.gen(function* () {
           const session = yield* findAgentSessionOrFail(repository, agentSessionId);

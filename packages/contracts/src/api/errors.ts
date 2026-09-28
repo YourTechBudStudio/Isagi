@@ -2,7 +2,11 @@ import { Schema } from 'effect';
 
 import { editorAttemptFailureReasonSchema } from '../editor/types.js';
 import { harnessLaunchBlockReasonSchema } from '../surfaces/types.js';
-import { workflowLoadFailureReasonSchema } from '../workflows/types.js';
+import {
+  workflowStructureDiagnosticSchema,
+  workflowLoadFailureReasonSchema,
+} from '../workflows/types.js';
+import { worktreeDestinationIssueSchema } from '../worktrees/types.js';
 import { apiInfrastructureErrorSchema } from './responses.js';
 
 export const projectPathRejectionReasonSchema = Schema.Literal(
@@ -82,6 +86,8 @@ export const surfaceRejectionReasonSchema = Schema.Literal(
   'session_worktree_mismatch',
   'invalid_surface_title',
   'layout_node_stale',
+  // Starting a surface's first pane when it already has panes.
+  'surface_not_empty',
 );
 
 export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
@@ -100,27 +106,6 @@ export const worktreeCommandsRejectionReasonSchema = Schema.Literal(
   'command_config_invalid',
   'command_not_found',
   'command_action_failed',
-);
-
-export const workflowRejectionReasonSchema = Schema.Literal(
-  'unknown_workflow_key',
-  'workflow_discovery_failed',
-  'workflow_load_failed',
-  'worktree_not_found',
-  'surface_not_found',
-  'surface_worktree_mismatch',
-  'pane_not_found',
-  'agent_session_not_on_surface',
-  'workflow_launch_context_mismatch',
-  'validation_failed',
-  'workflow_root_surface_required',
-  'workflow_root_run_required',
-  'workflow_surface_busy',
-  'workflow_run_not_found',
-  'workflow_run_not_failed',
-  'workflow_wait_not_satisfiable',
-  'workflow_user_input_invalid',
-  'workflow_event_ledger_failed',
 );
 
 export const projectRelocationRejectionReasonSchema = Schema.Literal(
@@ -155,6 +140,12 @@ export const worktreeOperationRejectionReasonSchema = Schema.Literal(
    * in each of the four management families that carry it.
    */
   'worktrees_not_supported',
+  /**
+   * `openWorktreeInput.mode: 'create_new'` was asked to create something that already exists. Both
+   * are unreachable under the default `open` mode, which adopts instead of refusing.
+   */
+  'branch_exists',
+  'worktree_exists',
   'command_cleanup_failed',
 );
 
@@ -398,26 +389,165 @@ export const worktreeCommandsRejectedErrorSchema = Schema.Struct({
   }),
 });
 
+/**
+ * Context any workflow rejection may carry. Reason-specific *required* context is added by the
+ * variants below rather than being optional here, because a caller that must render a structural
+ * rejection or an unusable export destination cannot do so from a reason alone.
+ */
+const workflowRejectionContextFields = {
+  workflowKey: Schema.optional(Schema.String),
+  workflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  /** The run already attached to the surface, for `workflow_surface_busy`. */
+  activeWorkflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  executionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  operationId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  checkpointId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  /** A checkpoint file path, for `workflow_checkpoint_file_not_found`. */
+  path: Schema.optional(Schema.String),
+  /** The control that was refused, for `workflow_control_unavailable`. */
+  control: Schema.optional(
+    Schema.Literal('pause', 'resume', 'retry', 'cancel', 'dismiss', 'advance'),
+  ),
+  workflowLoadFailureReason: Schema.optional(workflowLoadFailureReasonSchema),
+  workflowSourceDirectory: Schema.optional(Schema.String),
+  workflowPackageDirectory: Schema.optional(Schema.String),
+  shadowedWorkflowPackageDirectories: Schema.optional(Schema.Array(Schema.String)),
+  /** Which way a placement is unusable, for `workflow_placement_invalid`. */
+  placementIssue: Schema.optional(
+    Schema.Literal(
+      'surface_not_on_worktree',
+      'worktree_not_in_project',
+      'invalid_surface_title',
+      'no_current_surface',
+    ),
+  ),
+  /** What already exists, for `workflow_environment_collision`. */
+  collision: Schema.optional(Schema.Literal('branch', 'worktree', 'checkout_path')),
+  /** The branch a launch asked to create, for the branch and collision reasons. */
+  branch: Schema.optional(Schema.String),
+  /** The ref that could not be resolved, for `workflow_base_ref_not_found`. */
+  baseRef: Schema.optional(Schema.String),
+  /** The launch project, or the project a checkpoint export needs. */
+  projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  /** The commit a checkpoint names, for `workflow_checkpoint_commit_unavailable`. */
+  commitSha: Schema.optional(Schema.String),
+} as const;
+
+/** The reasons whose context is mandatory; each has its own data variant below. */
+const workflowContextualRejectionReasonSchema = Schema.Literal(
+  /** A workflow build failed structural verification. */
+  'workflow_structure_validation_failed',
+  /**
+   * Resume or Retry was refused because the latest build no longer fits where the run is parked:
+   * a graph, subgraph link or parked node is gone or changed kind. The run is unchanged.
+   */
+  'workflow_code_incompatible',
+  /** The folder named for a checkpoint export cannot hold one. See `destinationIssue`. */
+  'workflow_checkpoint_destination_rejected',
+);
+
+/** Reasons that carry no mandatory context of their own. */
+const workflowPlainRejectionReasonSchema = Schema.Literal(
+  'unknown_workflow_key',
+  'workflow_discovery_failed',
+  'workflow_load_failed',
+  'worktree_not_found',
+  'surface_not_found',
+  'surface_worktree_mismatch',
+  'pane_not_found',
+  'agent_session_not_on_surface',
+  'workflow_launch_context_mismatch',
+  'workflow_command_failed',
+  'workflow_inputs_rejected',
+  /** A surface holds at most one attached run. See `activeWorkflowRunId`. */
+  'workflow_surface_busy',
+  'workflow_run_not_found',
+  'workflow_execution_not_found',
+  'workflow_operation_not_found',
+  'workflow_checkpoint_not_found',
+  'workflow_checkpoint_file_not_found',
+  /** The run's status does not allow this control right now. See `control`. */
+  'workflow_control_unavailable',
+  /** `advance` named an execution that is not waiting on the user. */
+  'workflow_wait_not_found',
+  'workflow_user_input_invalid',
+  /** Retry could not refresh the agent session's turns to re-check its wait. */
+  'workflow_agent_observation_unavailable',
+  /** The workflow's `environment` hook threw, or returned a value the placement schema refuses. */
+  'workflow_environment_selection_failed',
+  /** The requested placement does not describe a usable destination. See `placementIssue`. */
+  'workflow_placement_invalid',
+  /** A folder project maintains its own single environment, so it has no worktrees to create. */
+  'workflow_worktree_creation_unsupported',
+  'workflow_branch_invalid',
+  'workflow_base_ref_not_found',
+  /**
+   * Something already occupies what the launch asked to create. 409 rather than 400: the request is
+   * well-formed and would succeed against a different live state. See `collision`.
+   */
+  'workflow_environment_collision',
+  /** Preparing the run's worktree or surface failed. The run records what was created. */
+  'workflow_preparation_failed',
+  /**
+   * A Git checkpoint's base cannot be used: its project is gone or no longer a Git repository, or
+   * its commit no longer exists (a squashed or discarded commit, a known limitation). The message
+   * says which.
+   */
+  'workflow_checkpoint_commit_unavailable',
+  /** A checkpoint's saved bytes could not be read. */
+  'workflow_checkpoint_content_unavailable',
+  /**
+   * Creating the export worktree or writing its files failed after something was created. Nothing
+   * is cleaned up; the message names the step, the path and whether the destination has content,
+   * and `worktreeId` is set when a worktree was registered.
+   */
+  'workflow_checkpoint_export_failed',
+);
+
+/**
+ * Every expected workflow failure a client is meant to handle. Derived from the two sets the data
+ * variants use, so a reason can never be advertised here while `workflowRejectedErrorSchema`
+ * rejects it.
+ */
+export const workflowRejectionReasonSchema = Schema.Union(
+  workflowPlainRejectionReasonSchema,
+  workflowContextualRejectionReasonSchema,
+);
+
+/**
+ * The rejection payload, discriminated by reason so the reasons with mandatory context cannot be
+ * sent without it.
+ */
+export const workflowRejectionDataSchema = Schema.Union(
+  Schema.Struct({
+    ...workflowRejectionContextFields,
+    reason: Schema.Literal('workflow_structure_validation_failed', 'workflow_code_incompatible'),
+    /** Which registrations are wrong. Addressable records, never one free-text sentence. */
+    diagnostics: Schema.Array(workflowStructureDiagnosticSchema),
+  }),
+  Schema.Struct({
+    ...workflowRejectionContextFields,
+    reason: Schema.Literal('workflow_checkpoint_destination_rejected'),
+    /** The path as the runtime judged it: canonical when it got that far, otherwise as given. */
+    destinationPath: Schema.String.pipe(Schema.minLength(1)),
+    destinationIssue: worktreeDestinationIssueSchema,
+  }),
+  Schema.Struct({
+    ...workflowRejectionContextFields,
+    reason: workflowPlainRejectionReasonSchema,
+  }),
+);
+
 export const workflowRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('workflow_rejected'),
   status: Schema.Union(Schema.Literal(400), Schema.Literal(409), Schema.Literal(500)),
   message: Schema.String,
   requestId: Schema.String,
-  data: Schema.Struct({
-    reason: workflowRejectionReasonSchema,
-    workflowKey: Schema.optional(Schema.String),
-    workflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    activeWorkflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    operation: Schema.optional(Schema.String),
-    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    workflowLoadFailureReason: Schema.optional(workflowLoadFailureReasonSchema),
-    workflowSourceDirectory: Schema.optional(Schema.String),
-    workflowPackageDirectory: Schema.optional(Schema.String),
-    shadowedWorkflowPackageDirectories: Schema.optional(Schema.Array(Schema.String)),
-  }),
+  data: workflowRejectionDataSchema,
 });
 
 export const projectRelocationRejectedErrorSchema = Schema.Struct({
@@ -584,11 +714,37 @@ export const worktreeCommandsApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
-export const workflowApiErrorSchema = Schema.Union(
+/**
+ * Launching a run can fail the way any project-touching endpoint can.
+ *
+ * Beyond `workflow_rejected`, the launch path makes one owning-service call — the worktree-creation
+ * preflight — so Git, the state file, a project path and project configuration can all fail
+ * underneath it. Those are infrastructure rather than a placement the caller chose badly, and they
+ * are reported as themselves so a client can tell "fix your request" from "something broke
+ * underneath it". They must be declared here or the response encoder refuses them and the caller
+ * receives `api_response_encoding_failed` instead of the diagnosable failure.
+ */
+const workflowApiErrorUnion = Schema.Union(
   workflowRejectedErrorSchema,
+  projectPathRejectedErrorSchema,
+  worktreeSetupRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
+  runtimeStateFileFailedErrorSchema,
   runtimeDataDirectoryFailedErrorSchema,
 );
+
+/**
+ * Named rather than inferred. Every workflow endpoint carries this schema, and declaration emit
+ * would otherwise spell out the whole union at each one, which exceeds what the compiler will
+ * serialize for `workflowsEndpoints`.
+ */
+export interface WorkflowApiErrorSchema extends Schema.Schema<
+  typeof workflowApiErrorUnion.Type,
+  typeof workflowApiErrorUnion.Encoded
+> {}
+
+export const workflowApiErrorSchema: WorkflowApiErrorSchema = workflowApiErrorUnion;
 
 export const projectApiErrorSchema = Schema.Union(
   projectOperationRejectedErrorSchema,
@@ -679,6 +835,7 @@ export type WorktreeCommandsRejectionReason = Schema.Schema.Type<
   typeof worktreeCommandsRejectionReasonSchema
 >;
 export type WorkflowRejectionReason = Schema.Schema.Type<typeof workflowRejectionReasonSchema>;
+export type WorkflowRejectionData = Schema.Schema.Type<typeof workflowRejectionDataSchema>;
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;

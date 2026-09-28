@@ -57,6 +57,20 @@
       "when": 1788851109055,
       "tag": "0007_light_supreme_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790574984089,
+      "tag": "0008_drop_old_workflow_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1790631067930,
+      "tag": "0009_graph_workflow_tables",
+      "breakpoints": true
     }
   ]
 }

@@ -106,6 +106,16 @@ export function registerSurfacesApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.startPane, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.startPane({ surfaceId: params.surfaceId, start: input });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.surfaces.setSplitWeights, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
@@ -241,6 +251,7 @@ function surfaceRejectionReason(error: SurfaceError) {
     case 'session_not_found':
     case 'session_worktree_mismatch':
     case 'layout_node_stale':
+    case 'surface_not_empty':
       return error.code;
     default:
       return 'surface_not_found';

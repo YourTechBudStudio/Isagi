@@ -32,6 +32,13 @@ export interface GitService {
       readonly cwd?: string | undefined;
       /** Merged over `process.env` for this child only. */
       readonly env?: Readonly<Record<string, string>> | undefined;
+      /**
+       * Inherited variables removed before `env` is merged. For callers that must not be retargeted by
+       * the runtime's own environment — `-C <dir>` does not override an inherited `GIT_DIR`.
+       */
+      readonly unsetEnv?: readonly string[] | undefined;
+      /** Largest stdout or stderr accepted before the child is killed; defaults to 1 MiB. */
+      readonly maxBuffer?: number | undefined;
     },
   ) => Effect.Effect<{ readonly stdout: string; readonly stderr: string }, GitCommandError>;
 }
@@ -45,8 +52,8 @@ export const GitLive = Layer.succeed(Git, {
         const { stdout, stderr } = await execFileAsync('git', [...args], {
           cwd: options.cwd,
           encoding: 'utf8',
-          env: options.env ? { ...process.env, ...options.env } : undefined,
-          maxBuffer: 1024 * 1024,
+          env: options.env || options.unsetEnv ? childEnvironment(options) : undefined,
+          maxBuffer: options.maxBuffer ?? 1024 * 1024,
           signal,
         });
         return { stdout, stderr };
@@ -61,6 +68,15 @@ export const GitLive = Layer.succeed(Git, {
         }),
     }),
 } satisfies GitService);
+
+function childEnvironment(options: {
+  readonly env?: Readonly<Record<string, string>> | undefined;
+  readonly unsetEnv?: readonly string[] | undefined;
+}) {
+  const inherited: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of options.unsetEnv ?? []) delete inherited[name];
+  return { ...inherited, ...options.env };
+}
 
 /**
  * Precedence is deliberate and load-bearing: an abort is reported by name, a

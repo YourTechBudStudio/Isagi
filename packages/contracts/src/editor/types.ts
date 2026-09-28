@@ -149,6 +149,16 @@ export const openEditorRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
 });
 
+/**
+ * Where to place the editor *if it is not placed yet*. `intoSurfaceId` names an
+ * empty surface of the same worktree; null creates a new surface. An editor
+ * that is already placed is never moved: opening it answers with its existing
+ * placement whatever this says.
+ */
+export const openEditorInputSchema = Schema.Struct({
+  intoSurfaceId: Schema.NullOr(positiveIntegerSchema),
+});
+
 export const editorContextRouteParamsSchema = Schema.Struct({
   editorContextId: positiveIntegerSchema,
 });
@@ -226,6 +236,7 @@ export type EditorContextFacts = Schema.Schema.Type<typeof editorContextFactsSch
 export type EditorContextMetadata = Schema.Schema.Type<typeof editorContextMetadataSchema>;
 export type OpenEditorRouteParams = Schema.Schema.Type<typeof openEditorRouteParamsSchema>;
 export type EditorContextRouteParams = Schema.Schema.Type<typeof editorContextRouteParamsSchema>;
+export type OpenEditorInput = Schema.Schema.Type<typeof openEditorInputSchema>;
 export type OpenEditorOutput = Schema.Schema.Type<typeof openEditorOutputSchema>;
 export type EnsureEditorRuntimeInput = Schema.Schema.Type<typeof ensureEditorRuntimeInputSchema>;
 export type EnsureEditorRuntimeOutput = Schema.Schema.Type<typeof ensureEditorRuntimeOutputSchema>;

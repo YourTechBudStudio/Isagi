@@ -8,6 +8,7 @@ import { CommandService, type CommandServiceShape } from '../../commands/index.j
 import { Git, GitLive, type GitService } from '../../git/index.js';
 import {
   DataDirectory,
+  RuntimeDatabase,
   RuntimeDatabaseLive,
   type RuntimeDatabaseService,
   StateFile,
@@ -19,7 +20,12 @@ import {
   type InternalRuntimeEventBusService,
 } from '../../runtime-events/index.js';
 import { SurfaceRepository } from '../../surfaces/index.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
+import {
+  WorktreeSetupRepository,
+  type WorktreeSetupRepositoryService,
+  WorktreeSetupService,
+} from '../../worktree-setup/index.js';
+import type { WorktreeSetupService as WorktreeSetupServiceShape } from '../../worktree-setup/worktree-setup.service.js';
 import {
   WorkspaceRepository,
   WorkspaceRepositoryLive,
@@ -63,6 +69,20 @@ export interface LiveWorkspaceOptions {
    * to look.
    */
   readonly internalEvents?: InternalRuntimeEventBusService | undefined;
+  /**
+   * Replaces the `not_configured` trust stub. Setup outcomes are decided by trust state and hook
+   * config, neither of which a real Git repository can express, so a test that wants `configured`
+   * or `setup_trust_required` supplies the service that answers it.
+   */
+  readonly worktreeSetup?: WorktreeSetupServiceShape | undefined;
+  /** Replaces the setup-run recording stub, for tests that assert on the recorded run. */
+  readonly worktreeSetupRepository?: WorktreeSetupRepositoryService | undefined;
+  /**
+   * An existing database connection to use instead of opening one in the data directory, so a
+   * fixture that already owns one (the workflow persistence fixture) and the workspace service read
+   * and write the same rows.
+   */
+  readonly database?: RuntimeDatabaseService | undefined;
 }
 
 const baseCommands = {
@@ -96,6 +116,11 @@ export function runWithLiveWorkspace<A, E>(
     RuntimeDatabaseService | WorkspaceRepositoryService | WorkspaceService
   >,
 ) {
+  // Deliberately *not* canonicalized here. `os.tmpdir()` is a symlink on macOS, so this root is a
+  // genuine instance of the case the product has to handle, and `makeTestDataDirectory` resolves it
+  // through the same derivation the runtime uses. Normalizing it in the fixture would make the one
+  // test that checks Isagi's paths against Git's pass for the fixture's reason rather than the
+  // product's.
   const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${name}-`));
   return Effect.runPromise(
     build.pipe(Effect.provide(liveWorkspaceLayer(dataRoot, options))),
@@ -116,7 +141,9 @@ export function runWithLiveWorkspace<A, E>(
  */
 export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptions) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
+  const database = options.database
+    ? Layer.succeed(RuntimeDatabase, options.database)
+    : RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const realRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const repository = options.decorateRepository
     ? Layer.effect(
@@ -142,8 +169,11 @@ export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptio
           StateFile,
           stateFileWithWriteCounter(() => {}),
         ),
-        Layer.succeed(WorktreeSetupService, testWorktreeSetup),
-        Layer.succeed(WorktreeSetupRepository, testWorktreeSetupRepository),
+        Layer.succeed(WorktreeSetupService, options.worktreeSetup ?? testWorktreeSetup),
+        Layer.succeed(
+          WorktreeSetupRepository,
+          options.worktreeSetupRepository ?? testWorktreeSetupRepository,
+        ),
       ),
     ),
   );

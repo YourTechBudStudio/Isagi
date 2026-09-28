@@ -1,6 +1,7 @@
 export { agentSessionCopy, type PaneRestorePrompt } from './agentSession.js';
 export {
   canvasCopy,
+  emptySurfaceCopy,
   missingProjectCopy,
   ptyCopy,
   surfaceDetailCopy,
@@ -36,6 +37,9 @@ export { updateCopy } from './updates.js';
 export { workbenchCopy } from './workbench.js';
 export {
   workflowCopy,
+  workflowEnvironmentCopy,
+  workflowEnvironmentCreatedLine,
+  workflowErrorStageHeadline,
   workflowLoadFailureReasonCopy,
   workflowLoadFailureReasonCopyOrFallback,
 } from './workflows.js';
