@@ -32,77 +32,39 @@ test('every table entry refuses a missing positional or required flag', () => {
   }
 });
 
-test('the story commands parse with their story flags', () => {
+test('the postmortem and reconstruction command lines parse', () => {
   for (const line of [
     'runs list --workflow implement-story --json',
-    'runs inspect 42 --json',
-    'evidence list --run 42 --execution 137 --descendants --json',
-    'evidence inspect artifact-501 --run 42 --json',
-    'evidence read artifact-501 --run 42',
-    'evidence export artifact-503 --run 42 --output ./review-screenshot.png --json',
-    'checkpoints list --run 42 --execution 137 --descendants --json',
-    'checkpoints inspect checkpoint-42-2 --run 42 --json',
-    'checkpoints inspect checkpoint-42-2 --run 42 --resolved --json',
-    'checkpoints inspect checkpoint-42-2 --run 42 --manifest --json',
+    'runs show 42 --json',
+    'runs events 42 --cursor 120 --json',
+    'executions show 137 --json',
+    'operations list --run 42 --session 9 --json',
+    'operations show 31 --json',
+    'checkpoints list --run 42 --scope plan --json',
+    'checkpoints show 5 --json',
+    'checkpoints read 5 scratch/plan.md',
+    'checkpoints export 5 --output ../rebuilt --json',
   ]) {
     assert.equal(parseCommandLine(line.split(' ')).kind, 'command', line);
   }
 });
 
-test('values are converted: IDs to numbers, keys kept verbatim, labels repeated', () => {
-  const parsed = parseCommandLine([
-    'evidence',
-    'list',
-    '--run',
-    '42',
-    '--execution',
-    '137',
-    '--label',
-    'round-1',
-    '--label',
-    'a,b',
-  ]);
-  assert.equal(parsed.kind, 'command');
-  if (parsed.kind !== 'command') return;
-  assert.deepEqual(parsed.arguments.options, {
-    run: 42,
-    execution: 137,
-    descendants: false,
-    role: undefined,
-    label: ['round-1', 'a,b'],
-    cursor: undefined,
-    limit: undefined,
-  });
+test('values are converted: IDs and cursors to numbers, paths kept verbatim', () => {
+  const read = parseCommandLine(['checkpoints', 'read', '5', 'notes/a b.md']);
+  assert.ok(read.kind === 'command');
+  assert.deepEqual(read.arguments.positionals, { checkpointId: 5, path: 'notes/a b.md' });
 
-  const inspected = parseCommandLine(['checkpoints', 'inspect', 'wcp_01J', '--run', '42']);
-  assert.ok(inspected.kind === 'command');
-  assert.deepEqual(inspected.arguments.positionals, { checkpointId: 'wcp_01J' });
-});
-
-test('--resolved and --manifest are mutually exclusive', () => {
-  const message = parsesAsUsageError([
-    'checkpoints',
-    'inspect',
-    'wcp_1',
-    '--run',
-    '1',
-    '--resolved',
-    '--manifest',
-  ]);
-  assert.match(message, /--resolved and --manifest cannot be combined/);
-});
-
-test('--descendants requires --execution for both evidence and checkpoints', () => {
-  for (const group of ['evidence', 'checkpoints']) {
-    const message = parsesAsUsageError([group, 'list', '--run', '1', '--descendants']);
-    assert.match(message, /--descendants requires --execution/);
-  }
+  const events = parseCommandLine(['runs', 'events', '4', '--cursor', '120']);
+  assert.ok(events.kind === 'command');
+  assert.deepEqual(events.arguments.options, { cursor: 120, limit: undefined });
+  parsesAsUsageError(['runs', 'events', '4', '--cursor', 'c1']);
 });
 
 test('IDs must be positive integers', () => {
   for (const value of ['0', '-3', '1.5', 'abc', '1e3', '99999999999999999999']) {
-    parsesAsUsageError(['runs', 'inspect', value]);
-    parsesAsUsageError(['executions', 'list', '--run', value]);
+    parsesAsUsageError(['runs', 'show', value]);
+    parsesAsUsageError(['operations', 'list', '--run', value]);
+    parsesAsUsageError(['checkpoints', 'show', value]);
   }
 });
 
@@ -120,25 +82,31 @@ test('unknown commands, flags and extra arguments are usage errors', () => {
   parsesAsUsageError(['nope', 'list']);
   parsesAsUsageError(['runs', 'nope']);
   parsesAsUsageError(['runs', 'list', '--bogus']);
-  parsesAsUsageError(['runs', 'inspect', '1', '2']);
+  parsesAsUsageError(['runs', 'show', '1', '2']);
   // Not exposed on purpose.
   parsesAsUsageError(['runs', 'dismiss', '1']);
   parsesAsUsageError(['runs', 'advance', '1']);
+  // Removed: ids are global, and evidence, attempts, payloads and versions are gone.
+  parsesAsUsageError(['checkpoints', 'show', '5', '--run', '42']);
+  for (const [group, verb] of [
+    ['runs', 'inspect'],
+    ['runs', 'versions'],
+    ['executions', 'list'],
+    ['attempts', 'list'],
+    ['payloads', 'read'],
+    ['evidence', 'list'],
+    ['checkpoints', 'inspect'],
+  ]) {
+    parsesAsUsageError([group!, verb!, '1']);
+  }
 });
 
 test('global flags are read wherever they appear, including on a usage error', () => {
-  const parsed = parseCommandLine([
-    '--json',
-    '--runtime-url',
-    'http://h:1',
-    'runs',
-    'inspect',
-    '3',
-  ]);
+  const parsed = parseCommandLine(['--json', '--runtime-url', 'http://h:1', 'runs', 'show', '3']);
   assert.ok(parsed.kind === 'command');
   assert.deepEqual(parsed.global, { json: true, runtimeUrl: 'http://h:1' });
 
-  const refused = parseCommandLine(['runs', 'inspect', 'x', '--json']);
+  const refused = parseCommandLine(['runs', 'show', 'x', '--json']);
   assert.ok(refused.kind === 'usage_error');
   assert.equal(refused.global.json, true);
 });
@@ -148,24 +116,15 @@ test('help is generated from the table', () => {
   assert.ok(top.kind === 'help');
   for (const spec of commandTable) assert.ok(top.text.includes(`${spec.group} ${spec.verb}`));
 
-  const one = parseCommandLine(['checkpoints', 'inspect', '--help']);
+  const one = parseCommandLine(['checkpoints', 'read', '--help']);
   assert.ok(one.kind === 'help');
-  assert.match(one.text, /Usage: isagi checkpoints inspect <checkpointId> --run <runId>/);
-  assert.match(one.text, /--resolved and --manifest are mutually exclusive/);
+  assert.match(one.text, /Usage: isagi checkpoints read <checkpointId> <path>/);
+  assert.match(one.text, /Writes raw bytes to stdout/);
 });
 
 test('launch and export commands parse with their story flags', () => {
   for (const argv of [
-    [
-      'checkpoints',
-      'export',
-      'wcp_01J',
-      '--run',
-      '42',
-      '--output',
-      '/Users/me/isagi-experiments/phase-2',
-      '--json',
-    ],
+    ['checkpoints', 'export', '5', '--output', '/Users/me/isagi-experiments/phase-2', '--json'],
     ['workflows', 'list', '--json'],
     ['workflows', 'list', '--worktree', '3', '--surface', '9'],
     ['runs', 'launch', 'implement-story', '--inputs', '{"story":47}', '--json'],

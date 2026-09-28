@@ -6,13 +6,7 @@
  * its own keys the same way, so a misplaced handler fails where it is written.
  */
 import { checkpointsHandlers } from './checkpoints.js';
-import { evidenceHandlers } from './evidence.js';
-import {
-  attemptsHandlers,
-  executionsHandlers,
-  operationsHandlers,
-  payloadsHandlers,
-} from './executions.js';
+import { executionsHandlers, operationsHandlers } from './executions.js';
 import type { CommandHandler, CommandHandlers } from './handlers.js';
 import { runsHandlers } from './runs.js';
 import type { CommandId } from './table.js';
@@ -22,10 +16,7 @@ export const commandHandlers = {
   ...workflowsHandlers,
   ...runsHandlers,
   ...executionsHandlers,
-  ...attemptsHandlers,
   ...operationsHandlers,
-  ...payloadsHandlers,
-  ...evidenceHandlers,
   ...checkpointsHandlers,
 } satisfies CommandHandlers;
 

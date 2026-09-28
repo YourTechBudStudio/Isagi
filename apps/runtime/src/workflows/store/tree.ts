@@ -74,7 +74,7 @@ export function insertExecution(
     | 'artifactHash'
     | 'retryOf'
   > &
-    Partial<Pick<ExecutionRow, 'resultJson' | 'eventJson'>>,
+    Partial<Pick<ExecutionRow, 'resultJson' | 'eventJson' | 'checkpointId'>>,
 ): ExecutionRow {
   return db
     .insert(workflowExecutions)

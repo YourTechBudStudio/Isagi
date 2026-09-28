@@ -8,6 +8,7 @@ import type {
 import type { RuntimeDrizzleDatabase } from '../../persistence/index.js';
 import type {
   workflowArtifacts,
+  workflowCheckpoints,
   workflowEvents,
   workflowExecutions,
   workflowGraphInvocations,
@@ -30,6 +31,7 @@ export type InvocationRow = typeof workflowGraphInvocations.$inferSelect;
 export type ExecutionRow = typeof workflowExecutions.$inferSelect;
 export type OperationRow = typeof workflowOperations.$inferSelect;
 export type EventRow = typeof workflowEvents.$inferSelect;
+export type CheckpointRow = typeof workflowCheckpoints.$inferSelect;
 
 /** `placement_json`: what was asked for, who decided it, and the commit a `create` resolved to. */
 export interface RunPlacement {

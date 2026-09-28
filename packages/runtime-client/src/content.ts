@@ -17,10 +17,8 @@ export type AnyApiContentEndpoint = ApiContentEndpoint<
   Schema.Schema.AnyNoContext | undefined
 >;
 
-export interface ContentQuery {
-  /** Ask the runtime to serve the bytes as an attachment. */
-  readonly download?: boolean;
-}
+/** The route's own query values, such as a checkpoint file's `path`; undefined values are left out. */
+export type ContentQuery = Readonly<Record<string, string | number | boolean | undefined>>;
 
 export function contentEndpointUrl(
   runtimeUrl: string,
@@ -29,7 +27,9 @@ export function contentEndpointUrl(
   query?: ContentQuery,
 ): string {
   const url = new URL(`${apiBasePath}${interpolatePath(endpoint.path, params)}`, runtimeUrl);
-  if (query?.download === true) url.searchParams.set('download', 'true');
+  for (const [name, value] of Object.entries(query ?? {})) {
+    if (value !== undefined) url.searchParams.set(name, String(value));
+  }
   return url.toString();
 }
 

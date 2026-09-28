@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { Transform, Writable } from 'node:stream';
+import { Writable } from 'node:stream';
 import test from 'node:test';
 
 import { Effect } from 'effect';
@@ -72,36 +72,4 @@ test('an absent body writes nothing', async () => {
   const written = await Effect.runPromise(streamContent(null, target.stream, { end: true }));
   assert.equal(written, 0);
   assert.equal(target.received.length, 0);
-});
-
-test('a failure raised by the `through` stage is the transform side, not source or destination', async () => {
-  const refuse = new Transform({
-    transform(_chunk, _encoding, callback) {
-      callback(new Error('too many bytes'));
-    },
-  });
-  const { stream } = destination();
-  const failure = await Effect.runPromise(
-    Effect.flip(streamContent(body(), stream, { end: true, through: refuse })),
-  );
-  assert.ok(failure instanceof ContentStreamFailure);
-  assert.equal(failure.side, 'transform');
-  assert.equal((failure.cause as Error).message, 'too many bytes');
-});
-
-test('a `through` stage sees the end of an empty body', async () => {
-  let flushed = false;
-  const through = new Transform({
-    transform(chunk, _encoding, callback) {
-      callback(null, chunk);
-    },
-    flush(callback) {
-      flushed = true;
-      callback();
-    },
-  });
-  const { stream } = destination();
-  const written = await Effect.runPromise(streamContent(null, stream, { end: true, through }));
-  assert.equal(written, 0);
-  assert.ok(flushed);
 });

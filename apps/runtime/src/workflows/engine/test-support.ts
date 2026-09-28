@@ -14,6 +14,7 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
+import { Git, GitLive } from '../../git/index.js';
 import {
   DatabaseError,
   type RuntimeDatabaseService,
@@ -27,7 +28,14 @@ import {
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
 } from '../../runtime-events/index.js';
+import { DetachedWorktreeError } from '../../workspace/detached-worktree.js';
+import { checkNewDirectory } from '../../workspace/new-directory.js';
 import { WorkspaceError } from '../../workspace/workspace.service.js';
+import { makeCheckpointsPort } from '../checkpoints/port.js';
+import {
+  makeWorkflowContentStore,
+  type WorkflowContentStoreService,
+} from '../store/content-store.js';
 import type { Db } from '../store/rows.js';
 import {
   describeWorkflowArtifact,
@@ -39,7 +47,13 @@ import {
 import type { DiscoveredWorkflowEntry, WorkflowRegistryService } from '../structure/registry.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import type { TurnEdge } from '../waits/latest-turn.js';
-import type { AgentPort, HeadlessExit, HeadlessPort, PlacesPort } from './runtime.js';
+import type {
+  AgentPort,
+  CheckpointsPort,
+  HeadlessExit,
+  HeadlessPort,
+  PlacesPort,
+} from './runtime.js';
 import { startEngine, type EngineHandle } from './service.js';
 
 /**
@@ -61,6 +75,8 @@ export interface EngineHarness {
   readonly places: FakePlaces;
   readonly agents: FakeAgents;
   readonly headless: FakeHeadless;
+  /** The seeded worktree's checkout, where operation and checkpoint nodes work. */
+  readonly worktreePath: string;
   readonly internalEvents: InternalRuntimeEventBusService;
   /** Makes the next write with this operation name fail and roll back, as a full disk would. */
   readonly failNextWrite: (operation: string) => void;
@@ -131,6 +147,7 @@ export async function makeEngineHarness(
   };
   const registry = new FakeRegistry();
   const places = new FakePlaces(root, worktreePath, client);
+  const content = makeWorkflowContentStore(join(root, 'workflow-content'));
   const clock = new FakeClock();
   const agents = new FakeAgents(clock, internalEvents);
   const headless = new FakeHeadless(internalEvents);
@@ -147,6 +164,7 @@ export async function makeEngineHarness(
             places: places.port(),
             agents: agents.port(),
             headless: headless.port(),
+            checkpoints: places.checkpointsPort(content),
             internalEvents,
           },
         }),
@@ -165,6 +183,7 @@ export async function makeEngineHarness(
     places,
     agents,
     headless,
+    worktreePath,
     internalEvents,
     failNextWrite: (operation) => void failingWrites.add(operation),
     run: async (effect) => {
@@ -309,6 +328,8 @@ export class FakePlaces {
   /** What the next worktree setup reports: the one in `openWorktree`, then each rerun. */
   setupResults: ('succeeded' | 'failed')[] = [];
   failSurfaceCreation = false;
+  /** The seeded project's kind; `folder` makes checkpoints record no commit. */
+  projectKind: 'git' | 'folder' = 'git';
   private nextWorktree = 2;
   private nextSurface = 2;
 
@@ -372,6 +393,70 @@ export class FakePlaces {
         };
   }
 
+  /**
+   * Checkpoints over real Git and a real content store. The new-directory rule is the real one,
+   * over these rows; a detached worktree is a real `git worktree add --detach` from the seeded
+   * worktree, registered here instead of by reconciliation.
+   */
+  checkpointsPort(content: WorkflowContentStoreService): CheckpointsPort {
+    const repository = {
+      listProjects: Effect.sync(() => [{ rootPath: this.root }] as never),
+      listWorktrees: Effect.sync(() => [...this.worktrees.values()] as never),
+    };
+    const git = Effect.runSync(Effect.provide(Git, GitLive));
+    const checkNew = (path: string) => checkNewDirectory(repository, path);
+    return makeCheckpointsPort({
+      git,
+      content,
+      workspace: {
+        checkNewDirectory: checkNew,
+        createDetachedWorktree: (input) =>
+          Effect.gen(this, function* () {
+            const failure = (
+              reason: DetachedWorktreeError['reason'],
+              message: string,
+              extra: Partial<DetachedWorktreeError> = {},
+            ) =>
+              new DetachedWorktreeError({
+                reason,
+                message,
+                projectId: input.projectId,
+                path: input.path,
+                ...extra,
+              });
+            if (input.projectId !== 1 || this.projectKind !== 'git') {
+              return yield* Effect.fail(failure('project_unavailable', 'Not a Git project.'));
+            }
+            const source = this.worktrees.get(1)!.path;
+            const destination = yield* checkNew(input.path).pipe(
+              Effect.catchTag('NewDirectoryRejected', (rejected) =>
+                Effect.fail(
+                  failure('destination_rejected', rejected.message, {
+                    path: rejected.path,
+                    destinationIssue: rejected.issue,
+                  }),
+                ),
+              ),
+            );
+            const verified = yield* git
+              .run(['-C', source, 'cat-file', '-e', `${input.commit}^{commit}`])
+              .pipe(Effect.either);
+            if (verified._tag === 'Left') {
+              return yield* Effect.fail(
+                failure('commit_not_found', `Commit ${input.commit} is not in the repository.`),
+              );
+            }
+            yield* git
+              .run(['-C', source, 'worktree', 'add', '--detach', destination, input.commit])
+              .pipe(Effect.mapError((cause) => failure('git_add_failed', cause.stderr)));
+            const id = this.nextWorktree++;
+            this.addWorktree(id, destination, '');
+            return { projectId: 1, worktreeId: id, path: destination, head: input.commit };
+          }),
+      },
+    });
+  }
+
   port(): PlacesPort {
     const worktreeRow = (worktree: FakeWorktree) => ({
       ...worktree,
@@ -395,7 +480,7 @@ export class FakePlaces {
                   id: 1,
                   name: 'Project',
                   rootPath: this.root,
-                  kind: 'git' as const,
+                  kind: this.projectKind,
                   status: 'present' as const,
                   createdAt: '',
                   updatedAt: '',

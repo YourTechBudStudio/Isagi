@@ -78,6 +78,7 @@ import {
   type DetachedWorktreeInput,
 } from './detached-worktree.js';
 import { directoryAvailability } from './directory-availability.js';
+import { checkNewDirectory, type NewDirectoryRejected } from './new-directory.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 import {
   WorkspaceRepository,
@@ -198,6 +199,13 @@ export interface WorkspaceService {
   readonly createDetachedWorktree: (
     input: DetachedWorktreeInput,
   ) => Effect.Effect<DetachedWorktree, DetachedWorktreeError | DatabaseError | GitCommandError>;
+  /**
+   * Read-only: whether `path` can become a new directory (absolute, absent or empty, outside every
+   * checkout Isagi knows). Returns the canonical path. See `new-directory.ts`.
+   */
+  readonly checkNewDirectory: (
+    path: string,
+  ) => Effect.Effect<string, NewDirectoryRejected | DatabaseError>;
   readonly preflightWorktreeCreation: (input: {
     readonly projectId: number;
     readonly branch: string;
@@ -556,6 +564,7 @@ export const WorkspaceServiceLive = Layer.effect(
           },
           input,
         ),
+      checkNewDirectory: (path) => checkNewDirectory(repository, path),
       preflightWorktreeCreation: (input) =>
         diagnosticPhase(
           'workspace.preflight_worktree_creation',

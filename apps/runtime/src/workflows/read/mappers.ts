@@ -1,5 +1,7 @@
 import type {
   AgentHarness,
+  WorkflowCheckpointDto,
+  WorkflowCheckpointSummaryDto,
   WorkflowEventDto,
   WorkflowExecutionDetailDto,
   WorkflowExecutionSummaryDto,
@@ -13,9 +15,11 @@ import type {
 } from '@isagi/contracts';
 
 import type { SavedResult } from '../engine/results.js';
+import type { CheckpointScope } from '../store/checkpoints.js';
 import { latestUiFeedback } from '../store/events.js';
 import {
   fromJson,
+  type CheckpointRow,
   type Db,
   type EventRow,
   type ExecutionRow,
@@ -177,6 +181,26 @@ export function operationDto(row: OperationRow): WorkflowOperationDto {
     usage: fromJson<WorkflowOperationUsage>(row.usageJson),
     startedAt: row.startedAt,
     endedAt: row.endedAt,
+  };
+}
+
+export function checkpointDto(row: CheckpointRow): WorkflowCheckpointDto {
+  return {
+    checkpointId: row.id,
+    runId: row.runId,
+    executionId: row.executionId,
+    title: row.title,
+    commitSha: row.commitSha,
+    createdAt: row.createdAt,
+    scopes: fromJson<CheckpointScope[]>(row.scopesJson),
+  };
+}
+
+export function checkpointSummaryDto(row: CheckpointRow): WorkflowCheckpointSummaryDto {
+  const { scopes, ...checkpoint } = checkpointDto(row);
+  return {
+    ...checkpoint,
+    scopes: scopes.map(({ files, ...scope }) => ({ ...scope, fileCount: files.length })),
   };
 }
 

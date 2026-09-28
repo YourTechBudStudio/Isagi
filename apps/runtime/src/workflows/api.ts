@@ -1,7 +1,12 @@
 import { Effect, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, workflowContentEndpoints, type ApiError } from '@isagi/contracts';
+import {
+  apiEndpoints,
+  workflowContentEndpoints,
+  type ApiError,
+  type WorkflowRejectionData,
+} from '@isagi/contracts';
 
 import {
   errorMessage,
@@ -104,24 +109,25 @@ export function registerWorkflowApi(
     Effect.flatMap(WorkflowEngine, (engine) => engine.getOperation(params.operationId)),
   );
 
-  // Checkpoints are captured, read and exported by a later change. Until then these routes answer
-  // honestly that no checkpoint exists.
-  register(endpoints.listCheckpoints, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) =>
-      Effect.as(engine.getRun(params.runId), { items: [], nextCursor: null }),
-    ),
+  register(endpoints.listCheckpoints, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listCheckpoints(params.runId, query)),
   );
   register(endpoints.getCheckpoint, (_input, _context, params) =>
-    Effect.fail(checkpointNotFound(params.checkpointId)),
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getCheckpoint(params.checkpointId)),
   );
-  register(endpoints.exportCheckpoint, (_input, _context, params) =>
-    Effect.fail(checkpointNotFound(params.checkpointId)),
+  register(endpoints.exportCheckpoint, (input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      engine.exportCheckpoint(params.checkpointId, input.destinationPath),
+    ),
   );
   registerContentEndpoint<typeof workflowContentEndpoints.getCheckpointFile, RuntimeServices>(
     fastify,
     workflowContentEndpoints.getCheckpointFile,
     {
-      handle: (_context, params) => Effect.fail(checkpointNotFound(params.checkpointId)),
+      handle: (_context, params, query) =>
+        Effect.flatMap(WorkflowEngine, (engine) =>
+          engine.openCheckpointFile(params.checkpointId, query.path),
+        ),
       mapError: toWorkflowApiError,
       run,
     },
@@ -171,14 +177,6 @@ export function registerWorkflowApi(
   );
 }
 
-function checkpointNotFound(checkpointId: number) {
-  return new WorkflowEngineError({
-    code: 'workflow_checkpoint_not_found',
-    message: `Checkpoint ${checkpointId} was not found: checkpoints are not implemented in this build.`,
-    checkpointId,
-  });
-}
-
 /** One vocabulary: the engine already decides in the contract's reasons, so this only copies context. */
 function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError {
   if (error instanceof WorkflowEngineError) {
@@ -193,6 +191,8 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
       ...(error.executionId ? { executionId: error.executionId } : {}),
       ...(error.operationId ? { operationId: error.operationId } : {}),
       ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
+      ...(error.path ? { path: error.path } : {}),
+      ...(error.commitSha ? { commitSha: error.commitSha } : {}),
       ...(error.control ? { control: error.control } : {}),
       ...(error.workflowLoadFailureReason
         ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
@@ -217,11 +217,7 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
       status: statusFor(error.code),
       message: error.message,
       requestId: context.requestId,
-      data:
-        error.code === 'workflow_structure_validation_failed' ||
-        error.code === 'workflow_code_incompatible'
-          ? { ...identities, reason: error.code, diagnostics: [...(error.diagnostics ?? [])] }
-          : { ...identities, reason: error.code },
+      data: rejectionData(error, identities),
     };
   }
 
@@ -243,6 +239,26 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
   };
 }
 
+function rejectionData(
+  error: WorkflowEngineError,
+  identities: Record<string, unknown>,
+): WorkflowRejectionData {
+  switch (error.code) {
+    case 'workflow_structure_validation_failed':
+    case 'workflow_code_incompatible':
+      return { ...identities, reason: error.code, diagnostics: [...(error.diagnostics ?? [])] };
+    case 'workflow_checkpoint_destination_rejected':
+      return {
+        ...identities,
+        reason: error.code,
+        destinationPath: error.destination?.path ?? '',
+        destinationIssue: error.destination?.issue ?? 'inaccessible',
+      };
+    default:
+      return { ...identities, reason: error.code };
+  }
+}
+
 function statusFor(code: WorkflowEngineError['code']): 400 | 409 | 500 {
   switch (code) {
     case 'workflow_discovery_failed':
@@ -253,7 +269,6 @@ function statusFor(code: WorkflowEngineError['code']): 400 | 409 | 500 {
     case 'workflow_environment_collision':
     case 'workflow_control_unavailable':
     case 'workflow_code_incompatible':
-    case 'workflow_checkpoint_repository_unavailable':
     case 'workflow_checkpoint_commit_unavailable':
       return 409;
     default:

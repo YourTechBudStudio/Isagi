@@ -1,10 +1,13 @@
 import type { WorkflowStructureDescriptor } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 
 import type {
+  GetWorkflowCheckpointOutput,
   GetWorkflowExecutionOutput,
   GetWorkflowOperationOutput,
   GetWorkflowRunOutput,
   GetWorkflowStructureOutput,
+  ListWorkflowCheckpointsOutput,
+  ListWorkflowCheckpointsQuery,
   ListWorkflowEventsOutput,
   ListWorkflowEventsQuery,
   ListWorkflowOperationsOutput,
@@ -15,12 +18,15 @@ import type {
 } from '@isagi/contracts';
 
 import { WorkflowEngineError } from '../errors.js';
+import { getCheckpoint, listCheckpoints } from '../store/checkpoints.js';
 import { listEvents } from '../store/events.js';
 import { getOperation, listOperations } from '../store/operations.js';
 import { fromJson, type Db } from '../store/rows.js';
 import { getArtifact, getRun, listAttachedRuns, listRuns } from '../store/runs.js';
 import { getExecution, listExecutions, listInvocations } from '../store/tree.js';
 import {
+  checkpointDto,
+  checkpointSummaryDto,
   eventDto,
   executionDetailDto,
   executionSummaryDto,
@@ -143,6 +149,38 @@ export function getOperationDetail(db: Db, operationId: number): GetWorkflowOper
     });
   }
   return { operation: operationDto(operation) };
+}
+
+export function listRunCheckpoints(
+  db: Db,
+  runId: number,
+  query: ListWorkflowCheckpointsQuery,
+): ListWorkflowCheckpointsOutput {
+  requireRun(db, runId);
+  const limit = query.limit ?? defaultLimit;
+  return page(
+    listCheckpoints(db, {
+      runId,
+      executionId: query.executionId,
+      scope: query.scope,
+      cursor: query.cursor,
+      limit: limit + 1,
+    }),
+    limit,
+    checkpointSummaryDto,
+  );
+}
+
+export function getCheckpointDetail(db: Db, checkpointId: number): GetWorkflowCheckpointOutput {
+  const checkpoint = getCheckpoint(db, checkpointId);
+  if (!checkpoint) {
+    throw new WorkflowEngineError({
+      code: 'workflow_checkpoint_not_found',
+      message: `Checkpoint ${checkpointId} was not found.`,
+      checkpointId,
+    });
+  }
+  return { checkpoint: checkpointDto(checkpoint) };
 }
 
 function requireRun(db: Db, runId: number) {

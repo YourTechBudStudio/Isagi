@@ -17,30 +17,30 @@ const page = { items: [], nextCursor: null };
 
 test('with --json, stdout holds exactly one document: the result', async () => {
   const runtime = fakeRuntime({
-    'workflows.listRuns': () => ({ items: [{ runId: 1 }], nextCursor: 'c2' }),
+    'workflows.listRuns': () => ({ items: [{ runId: 1 }], nextCursor: 2 }),
   });
   const run = await runIsagi(['runs', 'list', '--json'], { runtime });
   assert.equal(run.code, 0);
-  assert.deepEqual(onlyJsonDocument(run.stdout), { items: [{ runId: 1 }], nextCursor: 'c2' });
+  assert.deepEqual(onlyJsonDocument(run.stdout), { items: [{ runId: 1 }], nextCursor: 2 });
   assert.equal(run.stderr, '');
 });
 
 test('without --json, a result prints as indented JSON', async () => {
   const runtime = fakeRuntime({ 'workflows.getRun': () => ({ run: { runId: 3 } }) });
-  const run = await runIsagi(['runs', 'inspect', '3'], { runtime });
+  const run = await runIsagi(['runs', 'show', '3'], { runtime });
   assert.equal(run.code, 0);
   assert.equal(run.stdout, `${JSON.stringify({ run: { runId: 3 } }, null, 2)}\n`);
 });
 
 test('a usage error exits 2 before any request, as one JSON document under --json', async () => {
   const runtime = fakeRuntime({});
-  const run = await runIsagi(['runs', 'inspect', 'nope', '--json'], { runtime });
+  const run = await runIsagi(['runs', 'show', 'nope', '--json'], { runtime });
   assert.equal(run.code, 2);
   assert.equal(runtime.calls.length, 0);
   const document = onlyJsonDocument(run.stdout) as { error: { code: string } };
   assert.equal(document.error.code, 'cli_usage_invalid');
 
-  const plain = await runIsagi(['runs', 'inspect', 'nope'], { runtime });
+  const plain = await runIsagi(['runs', 'show', 'nope'], { runtime });
   assert.equal(plain.code, 2);
   assert.equal(plain.stdout, '');
   assert.match(plain.stderr, /^isagi: cli_usage_invalid: <runId> must be a positive integer/);
@@ -67,7 +67,7 @@ test('an API failure keeps its code and lifts its reason, request id and data', 
       ),
   });
 
-  const run = await runIsagi(['runs', 'inspect', '9', '--json'], { runtime });
+  const run = await runIsagi(['runs', 'show', '9', '--json'], { runtime });
   assert.equal(run.code, 1);
   assert.deepEqual(onlyJsonDocument(run.stdout), {
     error: {
@@ -79,7 +79,7 @@ test('an API failure keeps its code and lifts its reason, request id and data', 
     },
   });
 
-  const plain = await runIsagi(['runs', 'inspect', '9'], { runtime });
+  const plain = await runIsagi(['runs', 'show', '9'], { runtime });
   assert.equal(plain.stdout, '');
   assert.equal(
     plain.stderr,
@@ -167,11 +167,6 @@ test('targeting refuses a URL with credentials or another scheme, without echoin
 
 test('every command that is not composed issues exactly one request', async () => {
   const composed = new Set([
-    'executions list',
-    'evidence read',
-    'evidence export',
-    'checkpoints inspect',
-    'checkpoints export',
     // Origin resolution reads the workspace snapshot unless --worktree and --surface are given.
     'workflows list',
     'runs launch',
@@ -179,7 +174,10 @@ test('every command that is not composed issues exactly one request', async () =
   for (const spec of commandTable) {
     const id = `${spec.group} ${spec.verb}`;
     if (composed.has(id)) continue;
-    const runtime = fakeRuntime(new Proxy({}, { get: () => () => page }));
+    const runtime = fakeRuntime(
+      new Proxy({}, { get: () => () => page }),
+      new Proxy({}, { get: () => () => new Response('') }),
+    );
     const run = await runIsagi([...minimalArgv(spec), '--json'], { runtime });
     assert.equal(run.code, 0, `${id}: ${run.stdout}${run.stderr}`);
     assert.equal(runtime.calls.length, 1, id);
@@ -193,69 +191,34 @@ test('commands pass their flags to the route they name', async () => {
       'workflows.listRuns',
       [{ workflowKey: 'implement-story', status: 'failed', limit: 5 }],
     ],
+    [['runs', 'show', '4'], 'workflows.getRun', [{ runId: 4 }]],
     [
       ['runs', 'structure', '4', '--artifact-hash', 'sha256:abc'],
       'workflows.getStructure',
       [{ runId: 4 }, { artifactHash: 'sha256:abc' }],
     ],
     [
-      ['runs', 'events', '4', '--cursor', 'c1'],
+      ['runs', 'events', '4', '--cursor', '120', '--limit', '50'],
       'workflows.listEvents',
-      [{ runId: 4 }, { cursor: 'c1' }],
+      [{ runId: 4 }, { cursor: 120, limit: 50 }],
     ],
+    [['runs', 'pause', '4'], 'workflows.pause', [{ runId: 4 }]],
+    [['runs', 'resume', '4'], 'workflows.resume', [{ runId: 4 }]],
     [['runs', 'retry', '4'], 'workflows.retry', [{ runId: 4 }]],
+    [['runs', 'cancel', '4'], 'workflows.cancel', [{ runId: 4 }]],
+    [['executions', 'show', '137'], 'workflows.getExecution', [{ executionId: 137 }]],
     [
-      ['executions', 'inspect', '137', '--run', '42'],
-      'workflows.getExecution',
-      [{ runId: 42, executionId: 137 }],
+      ['operations', 'list', '--run', '42', '--session', '9', '--execution', '137'],
+      'workflows.listOperations',
+      [{ runId: 42 }, { agentSessionId: 9, executionId: 137 }],
     ],
+    [['operations', 'show', '31'], 'workflows.getOperation', [{ operationId: 31 }]],
     [
-      ['attempts', 'list', '--run', '42', '--execution', '137'],
-      'workflows.listAttempts',
-      [{ runId: 42 }, { executionId: 137 }],
-    ],
-    [
-      ['operations', 'inspect', 'op:agent:1', '--run', '42'],
-      'workflows.getOperation',
-      [{ runId: 42, operationKey: 'op:agent:1' }],
-    ],
-    [
-      ['payloads', 'read', 'wpl_9', '--run', '42'],
-      'workflows.getPayload',
-      [{ runId: 42, payloadRef: 'wpl_9' }],
-    ],
-    [
-      [
-        'evidence',
-        'list',
-        '--run',
-        '42',
-        '--execution',
-        '137',
-        '--descendants',
-        '--role',
-        'review-feedback',
-        '--label',
-        'a',
-        '--label',
-        'b',
-      ],
-      'workflows.listEvidence',
-      [
-        { runId: 42 },
-        { executionId: 137, subtree: 'true', role: 'review-feedback', label: ['a', 'b'] },
-      ],
-    ],
-    [
-      ['evidence', 'inspect', 'wev_1', '--run', '42'],
-      'workflows.getEvidence',
-      [{ runId: 42, evidenceKey: 'wev_1' }],
-    ],
-    [
-      ['checkpoints', 'list', '--run', '42', '--execution', '137', '--descendants'],
+      ['checkpoints', 'list', '--run', '42', '--scope', 'plan', '--execution', '137'],
       'workflows.listCheckpoints',
-      [{ runId: 42 }, { executionId: 137, descendants: 'true' }],
+      [{ runId: 42 }, { scope: 'plan', executionId: 137 }],
     ],
+    [['checkpoints', 'show', '5'], 'workflows.getCheckpoint', [{ checkpointId: 5 }]],
   ];
   for (const [argv, endpointId, args] of cases) {
     const runtime = fakeRuntime({ [endpointId]: () => page });
@@ -265,46 +228,11 @@ test('commands pass their flags to the route they name', async () => {
   }
 });
 
-test('executions list starts at the root frame from the run detail and never lists frames', async () => {
-  const runtime = fakeRuntime({
-    'workflows.getRun': () => ({ run: { runId: 42 }, rootFrame: { frameId: 11 } }),
-    'workflows.listFrameExecutions': () => ({ items: [{ executionId: 137 }], nextCursor: null }),
-  });
-  const run = await runIsagi(['executions', 'list', '--run', '42', '--node', 'phase', '--json'], {
-    runtime,
-  });
-  assert.equal(run.code, 0);
-  assert.deepEqual(onlyJsonDocument(run.stdout), {
-    frameId: 11,
-    items: [{ executionId: 137 }],
-    nextCursor: null,
-  });
-  assert.deepEqual(
-    runtime.calls.map((call) => call.endpointId),
-    ['workflows.getRun', 'workflows.listFrameExecutions'],
-  );
-  assert.deepEqual(runtime.calls[1]!.args, [{ runId: 42, frameId: 11 }, { nodeId: 'phase' }]);
-
-  const child = fakeRuntime({ 'workflows.listFrameExecutions': () => page });
-  await runIsagi(['executions', 'list', '--run', '42', '--frame', '12'], { runtime: child });
-  assert.deepEqual(
-    child.calls.map((call) => call.endpointId),
-    ['workflows.listFrameExecutions'],
-  );
-});
-
-test('the CLI-owned error codes are exactly the 13 the CLI documents', () => {
+test('the CLI-owned error codes are exactly the 6 the CLI documents', () => {
   assert.deepEqual([...cliErrorCodeSchema.literals].sort(), [
     'cli_usage_invalid',
-    'content_integrity_mismatch',
-    'export_destination_not_visible',
-    'export_destination_rejected',
-    'export_inventory_conflict',
-    'export_path_conflict',
-    'export_path_unsafe',
     'filesystem_write_failed',
     'origin_unresolved',
-    'output_exists',
     'runtime_response_invalid',
     'runtime_unconfigured',
     'runtime_unreachable',

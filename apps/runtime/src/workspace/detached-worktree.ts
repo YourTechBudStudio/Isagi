@@ -1,5 +1,5 @@
-import { lstatSync, mkdirSync, readdirSync } from 'node:fs';
-import { dirname, isAbsolute, sep } from 'node:path';
+import { mkdirSync, readdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
@@ -7,9 +7,9 @@ import type { WorktreeDestinationIssue } from '@isagi/contracts';
 
 import { diagnosticPhase } from '../diagnostics/phase.js';
 import { Git, type GitCommandError, type GitService, listGitWorktrees } from '../git/index.js';
-import { canonicalizeProspectivePath } from '../paths/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import { directoryAvailability } from './directory-availability.js';
+import { checkNewDirectory } from './new-directory.js';
 import type { ProjectRow } from './types.js';
 import type { WorkspaceRepositoryService } from './workspace.repository.js';
 
@@ -84,13 +84,7 @@ export function createDetachedWorktree(
     Effect.gen(function* () {
       // --- preflight: read-only ---
       const { project, listedPaths } = yield* requireRepository(dependencies, input);
-      const destination = yield* checkDestination(input);
-      yield* refuseInsideCheckout(
-        dependencies.repository,
-        input.projectId,
-        destination,
-        listedPaths,
-      );
+      const destination = yield* checkDestination(dependencies.repository, input, listedPaths);
       yield* verifyCommit(dependencies.git, project, input.commit, destination);
 
       // --- mutation ---
@@ -152,105 +146,26 @@ function requireRepository(
   });
 }
 
-/** Step 2. The path as given is inspected before it is resolved, so a symlink is refused, not followed. */
-function checkDestination(input: DetachedWorktreeInput) {
-  return Effect.gen(function* () {
-    const rejected = (issue: WorktreeDestinationIssue, message: string, path = input.path) =>
-      Effect.fail(destinationRejected(input.projectId, path, issue, message));
-
-    if (!isAbsolute(input.path)) {
-      return yield* rejected('not_absolute', `Destination must be an absolute path: ${input.path}`);
-    }
-
-    const existing = yield* Effect.sync(() => inspect(input.path));
-    switch (existing.kind) {
-      case 'absent':
-      case 'empty_directory':
-        break;
-      case 'not_directory':
-        return yield* rejected('not_directory', `Destination is not a directory: ${input.path}`);
-      case 'not_empty':
-        return yield* rejected('not_empty', `Destination is not empty: ${input.path}`);
-      case 'inaccessible':
-        return yield* rejected('inaccessible', `Destination cannot be inspected: ${input.path}`);
-    }
-
-    const canonical = yield* Effect.sync(() => {
-      try {
-        return canonicalizeProspectivePath(input.path);
-      } catch {
-        return null;
-      }
-    });
-    if (canonical === null) {
-      return yield* rejected('inaccessible', `Destination cannot be resolved: ${input.path}`);
-    }
-    return canonical;
-  });
-}
-
-type DestinationState =
-  | { readonly kind: 'absent' }
-  | { readonly kind: 'empty_directory' }
-  | { readonly kind: 'not_empty' }
-  | { readonly kind: 'not_directory' }
-  | { readonly kind: 'inaccessible' };
-
-function inspect(path: string): DestinationState {
-  try {
-    const stats = lstatSync(path);
-    if (!stats.isDirectory()) return { kind: 'not_directory' };
-    return readdirSync(path).length === 0 ? { kind: 'empty_directory' } : { kind: 'not_empty' };
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { kind: 'absent' }
-      : { kind: 'inaccessible' };
-  }
-}
-
 /**
- * Step 3. A new directory inside a checkout would show up there as untracked content, so every
- * checkout Isagi knows counts, across all projects whatever their status, plus everything Git lists
- * for this project, including worktrees Isagi has not reconciled yet. Both sides of the comparison
- * are canonicalized the same way, so letter case and symlinked parents cannot hide a match.
+ * Steps 2 and 3. The shared new-directory rule (`new-directory.ts`), with everything Git lists for
+ * this project counted as a checkout too, including worktrees Isagi has not reconciled yet.
  */
-function refuseInsideCheckout(
+function checkDestination(
   repository: WorkspaceRepositoryService,
-  projectId: number,
-  destination: string,
+  input: DetachedWorktreeInput,
   listedPaths: readonly string[],
 ) {
-  return Effect.gen(function* () {
-    const projects = yield* repository.listProjects;
-    const worktrees = yield* repository.listWorktrees;
-    const checkouts: readonly { readonly path: string; readonly worktreeId?: number }[] = [
-      ...worktrees.map((worktree) => ({ path: worktree.path, worktreeId: worktree.id })),
-      ...projects.map((project) => ({ path: project.rootPath })),
-      ...listedPaths.map((path) => ({ path })),
-    ];
-
-    for (const checkout of checkouts) {
-      const path = canonicalOrAsStored(checkout.path);
-      if (destination === path || destination.startsWith(path.endsWith(sep) ? path : path + sep)) {
-        return yield* Effect.fail(
-          new DetachedWorktreeError({
-            ...destinationRejectedFields(projectId, destination, 'inside_checkout'),
-            message: `Destination ${destination} is inside the checkout at ${checkout.path}.`,
-            containingWorktreeId: checkout.worktreeId,
-          }),
-        );
-      }
-    }
-  });
-}
-
-/** A checkout that cannot be resolved is compared by the spelling Isagi or Git recorded for it. */
-function canonicalOrAsStored(path: string) {
-  try {
-    return canonicalizeProspectivePath(path);
-  } catch {
-    return path;
-  }
+  return checkNewDirectory(repository, input.path, listedPaths).pipe(
+    Effect.catchTag('NewDirectoryRejected', (rejected) =>
+      Effect.fail(
+        new DetachedWorktreeError({
+          ...destinationRejectedFields(input.projectId, rejected.path, rejected.issue),
+          message: rejected.message,
+          containingWorktreeId: rejected.containingWorktreeId,
+        }),
+      ),
+    ),
+  );
 }
 
 /**
@@ -358,18 +273,6 @@ function register(
       path: row.path,
       head: row.head,
     } satisfies DetachedWorktree;
-  });
-}
-
-function destinationRejected(
-  projectId: number,
-  path: string,
-  issue: WorktreeDestinationIssue,
-  message: string,
-) {
-  return new DetachedWorktreeError({
-    ...destinationRejectedFields(projectId, path, issue),
-    message,
   });
 }
 

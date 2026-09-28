@@ -7,6 +7,7 @@ import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../surfac
 import type { WorkspaceServiceShape } from '../../workspace/index.js';
 import type { WorkspaceRepositoryService } from '../../workspace/workspace.repository.js';
 import type { WorkflowEngineError } from '../errors.js';
+import type { WorkflowContentStoreService } from '../store/content-store.js';
 import type { EventDraft } from '../store/events.js';
 import type { Db } from '../store/rows.js';
 import type { LoadedWorkflowArtifact } from '../structure/loader.js';
@@ -47,6 +48,8 @@ export interface EngineRuntime {
   readonly freshChecks: Set<number>;
   /** Headless processes this process launched, by PTY process id. Lost on restart, by design. */
   readonly headlessProcesses: Map<number, HeadlessProcess>;
+  /** Canonical destinations of checkpoint exports in progress, so two never share one folder. */
+  readonly exportDestinations: Set<string>;
 }
 
 /** Appends an event inside the current transaction. */
@@ -72,6 +75,7 @@ export interface EngineDeps {
   readonly places: PlacesPort;
   readonly agents: AgentPort;
   readonly headless: HeadlessPort;
+  readonly checkpoints: CheckpointsPort;
   readonly internalEvents: InternalRuntimeEventBusService;
 }
 
@@ -90,6 +94,15 @@ export interface PlacesPort {
     'findSurface' | 'listWorkspaceSurfaceMetadata'
   >;
   readonly surfaces: Pick<SurfaceServiceShape, 'getSurfaceDetail' | 'createSinglePaneSurface'>;
+}
+
+/** What checkpoint capture and export need: Git's HEAD, the content store, and new directories. */
+export interface CheckpointsPort {
+  /** The checkout's HEAD commit, or null when the repository has no commits yet. */
+  readonly headCommit: (checkoutPath: string) => Effect.Effect<string | null, unknown>;
+  readonly content: WorkflowContentStoreService;
+  readonly createDetachedWorktree: WorkspaceServiceShape['createDetachedWorktree'];
+  readonly checkNewDirectory: WorkspaceServiceShape['checkNewDirectory'];
 }
 
 export interface AgentPort {

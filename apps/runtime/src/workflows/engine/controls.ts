@@ -140,6 +140,8 @@ export function retry(rt: EngineRuntime, runId: number) {
         retryOf: target.id,
         resultJson: target.resultJson,
         eventJson: userWait ? target.eventJson : null,
+        // A saved checkpoint travels with the result it is part of.
+        checkpointId: target.checkpointId,
       });
       updateRun(db, runId, { status: 'running', errorJson: null, endedAt: null });
       emit({

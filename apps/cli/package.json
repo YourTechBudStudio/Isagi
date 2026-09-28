@@ -5,8 +5,7 @@
   "type": "module",
   "exports": {
     "./commands": "./src/commands/table.ts",
-    "./error-codes": "./src/error-codes.ts",
-    "./export": "./src/checkpoint-export/index.ts"
+    "./error-codes": "./src/error-codes.ts"
   },
   "scripts": {
     "build": "vite build",

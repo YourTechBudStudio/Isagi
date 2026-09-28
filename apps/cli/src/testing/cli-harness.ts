@@ -47,9 +47,13 @@ export function fakeRuntime(
           if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
           return answer(endpoint.id, route(...args));
         })) as unknown as RuntimeApiService['request'],
-      requestContent: ((endpoint: { id: string }, params: Record<string, string | number>) =>
+      requestContent: ((
+        endpoint: { id: string },
+        params: Record<string, string | number>,
+        query?: Record<string, unknown>,
+      ) =>
         Effect.suspend(() => {
-          calls.push({ endpointId: endpoint.id, args: [params] });
+          calls.push({ endpointId: endpoint.id, args: query ? [params, query] : [params] });
           const route = content[endpoint.id];
           if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
           return answer(endpoint.id, route(params));

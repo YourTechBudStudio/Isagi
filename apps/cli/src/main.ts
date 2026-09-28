@@ -4,7 +4,7 @@ import { handlerFor } from './commands/index.js';
 import { parseCommandLine } from './commands/table.js';
 import { CliContext, type CliIo } from './context.js';
 import { CliFailure } from './errors.js';
-import { CommandResult, exitCodeFor, renderFailure, renderResult, renderText } from './output.js';
+import { exitCodeFor, renderFailure, renderResult, renderText } from './output.js';
 import { runtimeApiLayer, type RuntimeApiService } from './runtime-api.js';
 import { resolveRuntimeUrl } from './target.js';
 
@@ -32,7 +32,7 @@ export async function runCli(
   }
   if (parsed.kind === 'usage_error') {
     const failure = CliFailure.of('cli_usage_invalid', parsed.message);
-    await renderFailure(io, failure.document, { json: parsed.global.json, raw: false });
+    await renderFailure(io, failure.document, { json: parsed.global.json, raw: parsed.raw });
     return 2;
   }
 
@@ -54,13 +54,7 @@ export async function runCli(
   const exit = await Effect.runPromiseExit(program);
 
   if (Exit.isSuccess(exit)) {
-    const result = exit.value;
-    if (result instanceof CommandResult) {
-      if (!mode.json && result.text !== undefined) await renderText(io, result.text);
-      else await renderResult(io, result.value, mode.json);
-      return result.exitCode;
-    }
-    if (!mode.raw) await renderResult(io, result, mode.json);
+    if (!mode.raw) await renderResult(io, exit.value, mode.json);
     return 0;
   }
   const failure = Cause.failureOption(exit.cause);

@@ -36,7 +36,6 @@ export interface StringOptionSpec {
   readonly placeholder: string;
   readonly description: string;
   readonly required?: true;
-  readonly multiple?: true;
 }
 
 export interface BooleanOptionSpec {
@@ -58,8 +57,6 @@ export interface CommandSpec {
   readonly summary: string;
   readonly positionals: readonly PositionalSpec[];
   readonly options: Readonly<Record<string, OptionSpec>>;
-  /** Groups of options of which at most one may be given. */
-  readonly exclusive?: readonly (readonly string[])[];
   /** `{ a: 'b' }`: giving `--a` requires `--b`. */
   readonly requires?: Readonly<Record<string, string>>;
   /** `raw` writes bytes to stdout and never a JSON document; `json` prints one document. */
@@ -68,7 +65,7 @@ export interface CommandSpec {
 
 const cursor = {
   type: 'string',
-  value: 'text',
+  value: 'positive_integer',
   placeholder: 'cursor',
   description: "Continue from a previous page's nextCursor.",
 } as const satisfies StringOptionSpec;
@@ -108,6 +105,10 @@ const runIdPositional = [
   { name: 'runId', value: 'positive_integer', placeholder: 'runId' },
 ] as const satisfies readonly PositionalSpec[];
 
+const checkpointIdPositional = [
+  { name: 'checkpointId', value: 'positive_integer', placeholder: 'checkpointId' },
+] as const satisfies readonly PositionalSpec[];
+
 export const commandTable = [
   {
     group: 'workflows',
@@ -116,68 +117,6 @@ export const commandTable = [
     positionals: [],
     options: { worktree: originWorktree, surface: originSurface },
     requires: { worktree: 'surface', surface: 'worktree' },
-    stdout: 'json',
-  },
-  {
-    group: 'runs',
-    verb: 'list',
-    summary: 'List runs, newest first.',
-    positionals: [],
-    options: {
-      workflow: {
-        type: 'string',
-        value: 'text',
-        placeholder: 'workflowKey',
-        description: 'Only runs of this workflow key.',
-      },
-      status: {
-        type: 'string',
-        value: 'run_status',
-        placeholder: 'status',
-        description: 'Only runs in this status.',
-      },
-      cursor,
-      limit,
-    },
-    stdout: 'json',
-  },
-  {
-    group: 'runs',
-    verb: 'inspect',
-    summary: 'Show a run and its root frame.',
-    positionals: runIdPositional,
-    options: {},
-    stdout: 'json',
-  },
-  {
-    group: 'runs',
-    verb: 'versions',
-    summary: 'List the workflow versions (pins) a run has adopted.',
-    positionals: runIdPositional,
-    options: { cursor, limit },
-    stdout: 'json',
-  },
-  {
-    group: 'runs',
-    verb: 'structure',
-    summary: "Show a run's workflow structure at its current pin, or at one artifact hash.",
-    positionals: runIdPositional,
-    options: {
-      'artifact-hash': {
-        type: 'string',
-        value: 'text',
-        placeholder: 'hash',
-        description: 'The pinned artifact hash to describe instead of the current one.',
-      },
-    },
-    stdout: 'json',
-  },
-  {
-    group: 'runs',
-    verb: 'events',
-    summary: "List a run's history events, including pauses and Retry pin adoptions.",
-    positionals: runIdPositional,
-    options: { cursor, limit },
     stdout: 'json',
   },
   {
@@ -220,6 +159,60 @@ export const commandTable = [
   },
   {
     group: 'runs',
+    verb: 'list',
+    summary: 'List runs, newest first.',
+    positionals: [],
+    options: {
+      workflow: {
+        type: 'string',
+        value: 'text',
+        placeholder: 'workflowKey',
+        description: 'Only runs of this workflow key.',
+      },
+      status: {
+        type: 'string',
+        value: 'run_status',
+        placeholder: 'status',
+        description: 'Only runs in this status.',
+      },
+      cursor,
+      limit,
+    },
+    stdout: 'json',
+  },
+  {
+    group: 'runs',
+    verb: 'show',
+    summary: 'Show a run: its summary, inputs, and every graph invocation and execution.',
+    positionals: runIdPositional,
+    options: {},
+    stdout: 'json',
+  },
+  {
+    group: 'runs',
+    verb: 'structure',
+    summary: "Show a run's declared workflow structure, at its current build or at one it used.",
+    positionals: runIdPositional,
+    options: {
+      'artifact-hash': {
+        type: 'string',
+        value: 'text',
+        placeholder: 'hash',
+        description: 'A build the run used, instead of its current one.',
+      },
+    },
+    stdout: 'json',
+  },
+  {
+    group: 'runs',
+    verb: 'events',
+    summary: "List a run's event log: node steps, waits, pauses, code reloads, retries, logs.",
+    positionals: runIdPositional,
+    options: { cursor, limit },
+    stdout: 'json',
+  },
+  {
+    group: 'runs',
     verb: 'pause',
     summary: 'Pause a run.',
     positionals: runIdPositional,
@@ -229,7 +222,7 @@ export const commandTable = [
   {
     group: 'runs',
     verb: 'resume',
-    summary: 'Resume a paused run.',
+    summary: 'Resume a paused run on the latest verified build of its workflow.',
     positionals: runIdPositional,
     options: {},
     stdout: 'json',
@@ -237,7 +230,7 @@ export const commandTable = [
   {
     group: 'runs',
     verb: 'retry',
-    summary: 'Retry a failed run using the latest compatible verified workflow build.',
+    summary: 'Retry a failed run on the latest verified build of its workflow.',
     positionals: runIdPositional,
     options: {},
     stdout: 'json',
@@ -252,62 +245,26 @@ export const commandTable = [
   },
   {
     group: 'executions',
-    verb: 'list',
-    summary: "List one frame's executions; the run's root frame unless --frame is given.",
-    positionals: [],
-    options: {
-      run,
-      frame: {
-        type: 'string',
-        value: 'positive_integer',
-        placeholder: 'frameId',
-        description: 'A child frame to list instead of the root frame.',
-      },
-      node: {
-        type: 'string',
-        value: 'text',
-        placeholder: 'nodeId',
-        description: 'Only executions of this node.',
-      },
-      cursor,
-      limit,
-    },
-    stdout: 'json',
-  },
-  {
-    group: 'executions',
-    verb: 'inspect',
-    summary: 'Show one execution.',
+    verb: 'show',
+    summary:
+      'Show one execution: result, event, decision, state after, error, operations and checkpoint.',
     positionals: [{ name: 'executionId', value: 'positive_integer', placeholder: 'executionId' }],
-    options: { run },
-    stdout: 'json',
-  },
-  {
-    group: 'attempts',
-    verb: 'list',
-    summary: "List an execution's attempts with their pins and timing.",
-    positionals: [],
-    options: {
-      run,
-      execution: {
-        type: 'string',
-        value: 'positive_integer',
-        placeholder: 'executionId',
-        description: 'The execution whose attempts to list.',
-        required: true,
-      },
-      cursor,
-      limit,
-    },
+    options: {},
     stdout: 'json',
   },
   {
     group: 'operations',
     verb: 'list',
-    summary: "List a run's operations (agent turns and other effects).",
+    summary: "List a run's operations in order: the prompts sent and the replies received.",
     positionals: [],
     options: {
       run,
+      session: {
+        type: 'string',
+        value: 'positive_integer',
+        placeholder: 'agentSessionId',
+        description: 'Only operations of this agent session: one conversation.',
+      },
       execution: {
         type: 'string',
         value: 'positive_integer',
@@ -321,144 +278,65 @@ export const commandTable = [
   },
   {
     group: 'operations',
-    verb: 'inspect',
-    summary: 'Show one operation, with usage and native session references when known.',
-    positionals: [{ name: 'operationKey', value: 'text', placeholder: 'operationKey' }],
-    options: { run },
+    verb: 'show',
+    summary: 'Show one operation in full: request, reply, result, usage and timing.',
+    positionals: [{ name: 'operationId', value: 'positive_integer', placeholder: 'operationId' }],
+    options: {},
     stdout: 'json',
   },
   {
-    group: 'payloads',
-    verb: 'read',
-    summary: 'Read one retained payload (inputs, outputs, answers) by its reference.',
-    positionals: [{ name: 'payloadRef', value: 'text', placeholder: 'payloadRef' }],
-    options: { run },
-    stdout: 'json',
-  },
-  {
-    group: 'evidence',
+    group: 'checkpoints',
     verb: 'list',
-    summary: "List a run's evidence metadata.",
+    summary: "List a run's checkpoints, with each scope's file count.",
     positionals: [],
     options: {
       run,
+      scope: {
+        type: 'string',
+        value: 'text',
+        placeholder: 'scope',
+        description: 'Only checkpoints that captured a scope with this name.',
+      },
       execution: {
         type: 'string',
         value: 'positive_integer',
         placeholder: 'executionId',
-        description: 'Only evidence recorded by this execution.',
-      },
-      descendants: {
-        type: 'boolean',
-        description: 'Also include every execution nested beneath --execution.',
-      },
-      role: {
-        type: 'string',
-        value: 'text',
-        placeholder: 'role',
-        description: 'Only evidence with this role.',
-      },
-      label: {
-        type: 'string',
-        value: 'text',
-        placeholder: 'label',
-        description: 'Only evidence carrying this label; repeat for more labels.',
-        multiple: true,
+        description: 'Only the checkpoint this execution saved.',
       },
       cursor,
       limit,
     },
-    requires: { descendants: 'execution' },
     stdout: 'json',
   },
   {
-    group: 'evidence',
-    verb: 'inspect',
-    summary: "Show one evidence record's metadata and source.",
-    positionals: [{ name: 'evidenceKey', value: 'text', placeholder: 'evidenceKey' }],
-    options: { run },
+    group: 'checkpoints',
+    verb: 'show',
+    summary: 'Show a checkpoint: its commit, scopes, captured files and missing markers.',
+    positionals: checkpointIdPositional,
+    options: {},
     stdout: 'json',
   },
   {
-    group: 'evidence',
+    group: 'checkpoints',
     verb: 'read',
-    summary: "Write one evidence record's raw bytes to stdout.",
-    positionals: [{ name: 'evidenceKey', value: 'text', placeholder: 'evidenceKey' }],
-    options: { run },
+    summary: "Write one captured file's bytes to stdout.",
+    positionals: [...checkpointIdPositional, { name: 'path', value: 'text', placeholder: 'path' }],
+    options: {},
     stdout: 'raw',
   },
   {
-    group: 'evidence',
-    verb: 'export',
-    summary: 'Save one evidence record to a new file.',
-    positionals: [{ name: 'evidenceKey', value: 'text', placeholder: 'evidenceKey' }],
-    options: {
-      run,
-      output: {
-        type: 'string',
-        value: 'text',
-        placeholder: 'file',
-        description: 'The file to create, relative to the current directory. Must not exist.',
-        required: true,
-      },
-    },
-    stdout: 'json',
-  },
-  {
-    group: 'checkpoints',
-    verb: 'list',
-    summary: "List a run's checkpoints.",
-    positionals: [],
-    options: {
-      run,
-      execution: {
-        type: 'string',
-        value: 'positive_integer',
-        placeholder: 'executionId',
-        description: 'Only checkpoints saved by this execution.',
-      },
-      descendants: {
-        type: 'boolean',
-        description: 'Also include every execution nested beneath --execution.',
-      },
-      cursor,
-      limit,
-    },
-    requires: { descendants: 'execution' },
-    stdout: 'json',
-  },
-  {
-    group: 'checkpoints',
-    verb: 'inspect',
-    summary: 'Show a checkpoint; --resolved adds its final inventory, --manifest its layers.',
-    positionals: [{ name: 'checkpointId', value: 'text', placeholder: 'checkpointId' }],
-    options: {
-      run,
-      resolved: {
-        type: 'boolean',
-        description: 'Add every page of the resolved inventory (final files and absences).',
-      },
-      manifest: {
-        type: 'boolean',
-        description: 'Add every page of the layer manifest (inspection only).',
-      },
-    },
-    exclusive: [['resolved', 'manifest']],
-    stdout: 'json',
-  },
-  {
     group: 'checkpoints',
     verb: 'export',
-    summary: "Rebuild a checkpoint's files in an empty folder outside every checkout.",
-    positionals: [{ name: 'checkpointId', value: 'text', placeholder: 'checkpointId' }],
+    summary:
+      'Rebuild a checkpoint in a new folder: a detached worktree at its commit, or a plain folder.',
+    positionals: checkpointIdPositional,
     options: {
-      run,
       output: {
         type: 'string',
         value: 'text',
         placeholder: 'dir',
         description:
-          'The export root: absent or empty, and outside every checkout. Relative to the current directory.',
+          'The new folder: absent or empty, and outside every checkout. Relative to the current directory.',
         required: true,
       },
     },
@@ -469,7 +347,7 @@ export const commandTable = [
 type Table = typeof commandTable;
 type Entry = Table[number];
 
-/** `'runs list'`, `'evidence read'`, …: one id per table entry, never a group paired with another group's verb. */
+/** `'runs list'`, `'checkpoints read'`, …: one id per table entry, never a group paired with another group's verb. */
 export type CommandId = IdOf<Entry>;
 
 type IdOf<Spec> = Spec extends {
@@ -497,13 +375,11 @@ type AnyConvertedValue = ConvertedValue<ValueKind>;
 
 type OptionValue<Option> = Option extends BooleanOptionSpec
   ? boolean
-  : Option extends StringOptionSpec & { readonly multiple: true }
-    ? readonly string[]
-    : Option extends StringOptionSpec & { readonly required: true }
-      ? ConvertedValue<Option['value']>
-      : Option extends StringOptionSpec
-        ? ConvertedValue<Option['value']> | undefined
-        : never;
+  : Option extends StringOptionSpec & { readonly required: true }
+    ? ConvertedValue<Option['value']>
+    : Option extends StringOptionSpec
+      ? ConvertedValue<Option['value']> | undefined
+      : never;
 
 /** The validated, converted arguments of one command, typed from its table entry. */
 export interface CommandArguments<Id extends CommandId> {
@@ -531,7 +407,13 @@ export type ParsedCommandLine =
       readonly global: GlobalOptions;
     }
   | { readonly kind: 'help'; readonly text: string }
-  | { readonly kind: 'usage_error'; readonly message: string; readonly global: GlobalOptions };
+  | {
+      readonly kind: 'usage_error';
+      readonly message: string;
+      readonly global: GlobalOptions;
+      /** The refused line named a raw command, whose failures never go to stdout. */
+      readonly raw: boolean;
+    };
 
 const globalOptionSpecs = {
   json: { type: 'boolean' },
@@ -542,8 +424,8 @@ const globalOptionSpecs = {
 /**
  * Parse one `isagi` command line, without touching the network or the filesystem.
  *
- * Every rule the table states — unknown commands and flags, required values, `exclusive` and
- * `requires`, and value kinds — fails here with a usage error, before any request.
+ * Every rule the table states — unknown commands and flags, required values, `requires`, and
+ * value kinds — fails here with a usage error, before any request.
  */
 export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
   const global = scanGlobalOptions(argv);
@@ -575,7 +457,7 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
       strict: true,
     });
   } catch (error) {
-    return usageError(error instanceof Error ? error.message : String(error), global);
+    return usageError(error instanceof Error ? error.message : String(error), global, spec);
   }
 
   const [, , ...positionalValues] = parsed.positionals;
@@ -583,6 +465,7 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
     return usageError(
       `Unexpected argument "${positionalValues[spec.positionals.length]}" for "${spec.group} ${spec.verb}".`,
       global,
+      spec,
     );
   }
 
@@ -590,16 +473,20 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
   for (const [index, positional] of spec.positionals.entries()) {
     const raw = positionalValues[index];
     if (raw === undefined) {
-      return usageError(`"${spec.group} ${spec.verb}" needs <${positional.placeholder}>.`, global);
+      return usageError(
+        `"${spec.group} ${spec.verb}" needs <${positional.placeholder}>.`,
+        global,
+        spec,
+      );
     }
     const converted = convertValue(positional.value, raw);
     if (!converted.ok) {
-      return usageError(`<${positional.placeholder}> ${converted.problem}`, global);
+      return usageError(`<${positional.placeholder}> ${converted.problem}`, global, spec);
     }
     positionals[positional.name] = converted.value;
   }
 
-  const options: Record<string, AnyConvertedValue | boolean | readonly string[] | undefined> = {};
+  const options: Record<string, AnyConvertedValue | boolean | undefined> = {};
   for (const [name, option] of Object.entries(spec.options)) {
     const raw = parsed.values[name];
     if (option.type === 'boolean') {
@@ -607,32 +494,18 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
       continue;
     }
     if (raw === undefined) {
-      if (option.required) return usageError(`--${name} is required.`, global);
-      options[name] = option.multiple ? [] : undefined;
+      if (option.required) return usageError(`--${name} is required.`, global, spec);
+      options[name] = undefined;
       continue;
     }
-    const rawValues = Array.isArray(raw) ? raw : [raw];
-    const converted: AnyConvertedValue[] = [];
-    for (const value of rawValues) {
-      const result = convertValue(option.value, String(value));
-      if (!result.ok) return usageError(`--${name} ${result.problem}`, global);
-      converted.push(result.value);
-    }
-    options[name] = option.multiple ? (converted as string[]) : converted[0];
+    const result = convertValue(option.value, String(raw));
+    if (!result.ok) return usageError(`--${name} ${result.problem}`, global, spec);
+    options[name] = result.value;
   }
 
-  for (const exclusive of spec.exclusive ?? []) {
-    const given = exclusive.filter((name) => isGiven(options[name]));
-    if (given.length > 1) {
-      return usageError(
-        `${given.map((name) => `--${name}`).join(' and ')} cannot be combined.`,
-        global,
-      );
-    }
-  }
   for (const [name, required] of Object.entries(spec.requires ?? {})) {
     if (isGiven(options[name]) && !isGiven(options[required])) {
-      return usageError(`--${name} requires --${required}.`, global);
+      return usageError(`--${name} requires --${required}.`, global, spec);
     }
   }
 
@@ -677,17 +550,10 @@ function commandHelp(spec: CommandSpec): string {
     lines.push('Options:');
     for (const [name, option] of options) {
       const flag = option.type === 'string' ? `--${name} <${option.placeholder}>` : `--${name}`;
-      const notes = [
-        option.type === 'string' && option.required ? 'required' : undefined,
-        option.type === 'string' && option.multiple ? 'repeatable' : undefined,
-      ].filter((note) => note !== undefined);
-      const suffix = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+      const suffix = option.type === 'string' && option.required ? ' (required)' : '';
       lines.push(`  ${flag}  ${option.description}${suffix}`);
     }
     lines.push('');
-  }
-  for (const group of spec.exclusive ?? []) {
-    lines.push(`${group.map((name) => `--${name}`).join(' and ')} are mutually exclusive.`);
   }
   for (const [name, required] of Object.entries(spec.requires ?? {})) {
     lines.push(`--${name} requires --${required}.`);
@@ -705,20 +571,14 @@ function usageLine(spec: CommandSpec): string {
   for (const [name, option] of Object.entries(spec.options)) {
     const flag = option.type === 'string' ? `--${name} <${option.placeholder}>` : `--${name}`;
     const required = option.type === 'string' && option.required;
-    const repeat = option.type === 'string' && option.multiple ? '…' : '';
-    parts.push(required ? flag : `[${flag}]${repeat}`);
+    parts.push(required ? flag : `[${flag}]`);
   }
   return parts.join(' ');
 }
 
 function parseArgsOptions(spec: CommandSpec) {
-  const options: Record<string, { type: 'string' | 'boolean'; multiple?: boolean }> = {};
-  for (const [name, option] of Object.entries(spec.options)) {
-    options[name] =
-      option.type === 'string' && option.multiple
-        ? { type: 'string', multiple: true }
-        : { type: option.type };
-  }
+  const options: Record<string, { type: 'string' | 'boolean' }> = {};
+  for (const [name, option] of Object.entries(spec.options)) options[name] = { type: option.type };
   return options;
 }
 
@@ -813,7 +673,6 @@ function integerOf(raw: string): number | undefined {
 }
 
 function isGiven(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length > 0;
   return value !== undefined && value !== false;
 }
 
@@ -860,10 +719,15 @@ function leadingWords(argv: readonly string[]): [string | undefined, string | un
   return [words[0], words[1]];
 }
 
-function usageError(message: string, global: { json: boolean; runtimeUrl: string | undefined }) {
+function usageError(
+  message: string,
+  global: { json: boolean; runtimeUrl: string | undefined },
+  spec?: CommandSpec,
+) {
   return {
     kind: 'usage_error',
     message,
     global: { json: global.json, runtimeUrl: global.runtimeUrl },
+    raw: spec?.stdout === 'raw',
   } as const;
 }

@@ -485,13 +485,19 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_environment_collision',
   /** Preparing the run's worktree or surface failed. The run records what was created. */
   'workflow_preparation_failed',
-  /** The project a checkpoint export needs is gone, unavailable, or not a Git repository. */
-  'workflow_checkpoint_repository_unavailable',
-  /** Git says the checkpoint's commit no longer exists, so it cannot be exported. */
+  /**
+   * A Git checkpoint's base cannot be used: its project is gone or no longer a Git repository, or
+   * its commit no longer exists (a squashed or discarded commit, a known limitation). The message
+   * says which.
+   */
   'workflow_checkpoint_commit_unavailable',
   /** A checkpoint's saved bytes could not be read. */
   'workflow_checkpoint_content_unavailable',
-  /** Creating the export worktree or writing its files failed after the checks passed. */
+  /**
+   * Creating the export worktree or writing its files failed after something was created. Nothing
+   * is cleaned up; the message names the step, the path and whether the destination has content,
+   * and `worktreeId` is set when a worktree was registered.
+   */
   'workflow_checkpoint_export_failed',
 );
 
@@ -822,6 +828,7 @@ export type WorktreeCommandsRejectionReason = Schema.Schema.Type<
   typeof worktreeCommandsRejectionReasonSchema
 >;
 export type WorkflowRejectionReason = Schema.Schema.Type<typeof workflowRejectionReasonSchema>;
+export type WorkflowRejectionData = Schema.Schema.Type<typeof workflowRejectionDataSchema>;
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;

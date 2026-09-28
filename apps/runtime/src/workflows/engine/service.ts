@@ -1,10 +1,14 @@
 import { Cause, Context, Effect, FiberSet, Layer, type Scope } from 'effect';
 
 import type {
+  ExportWorkflowCheckpointOutput,
+  GetWorkflowCheckpointOutput,
   GetWorkflowExecutionOutput,
   GetWorkflowOperationOutput,
   GetWorkflowRunOutput,
   GetWorkflowStructureOutput,
+  ListWorkflowCheckpointsOutput,
+  ListWorkflowCheckpointsQuery,
   ListWorkflowEventsOutput,
   ListWorkflowEventsQuery,
   ListWorkflowOperationsOutput,
@@ -20,6 +24,7 @@ import { HarnessAdapterRegistry } from '../../agent-sessions/harness/index.js';
 import { AgentSessionArtifacts } from '../../agent-sessions/harness/ledger.js';
 import { HarnessLedgerObserver } from '../../agent-sessions/harness/observer.service.js';
 import { AgentSessionService } from '../../agent-sessions/index.js';
+import { Git } from '../../git/index.js';
 import { HarnessControlPlane } from '../../harness-control-plane/index.js';
 import {
   RuntimeDatabase,
@@ -36,21 +41,27 @@ import {
 import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
 import { WorkspaceService } from '../../workspace/index.js';
 import { WorkspaceRepository } from '../../workspace/workspace.repository.js';
+import { exportCheckpoint } from '../checkpoints/export.js';
+import { openCheckpointFile, type CheckpointFileContent } from '../checkpoints/files.js';
+import { makeCheckpointsPort } from '../checkpoints/port.js';
 import { WorkflowEngineError } from '../errors.js';
 import { makeAgentPort } from '../operations/agents.js';
 import { makeHeadlessPort, settleHeadless } from '../operations/headless.js';
 import { eventDto, runSummaryById } from '../read/mappers.js';
 import {
+  getCheckpointDetail,
   getExecutionDetail,
   getOperationDetail,
   getRunDetail,
   getRunStructure,
   listAttachedSummaries,
+  listRunCheckpoints,
   listRunEvents,
   listRunOperations,
   listRunSummaries,
 } from '../read/reads.js';
 import { errorMessage } from '../state/pure.js';
+import { WorkflowContentStore } from '../store/content-store.js';
 import { appendEvent } from '../store/events.js';
 import { type Db, type EventRow } from '../store/rows.js';
 import { getRun, listRunsWithStatus } from '../store/runs.js';
@@ -115,6 +126,22 @@ export interface WorkflowEngineService {
   readonly getOperation: (
     operationId: number,
   ) => Effect.Effect<GetWorkflowOperationOutput, unknown>;
+  readonly listCheckpoints: (
+    runId: number,
+    query: ListWorkflowCheckpointsQuery,
+  ) => Effect.Effect<ListWorkflowCheckpointsOutput, unknown>;
+  readonly getCheckpoint: (
+    checkpointId: number,
+  ) => Effect.Effect<GetWorkflowCheckpointOutput, unknown>;
+  readonly openCheckpointFile: (
+    checkpointId: number,
+    path: string,
+  ) => Effect.Effect<CheckpointFileContent, unknown>;
+  /** Rebuilds a checkpoint in a new folder or detached worktree. See `checkpoints/export.ts`. */
+  readonly exportCheckpoint: (
+    checkpointId: number,
+    destinationPath: string,
+  ) => Effect.Effect<ExportWorkflowCheckpointOutput, unknown>;
 }
 
 export const WorkflowEngine = Context.GenericTag<WorkflowEngineService>('isagi/WorkflowEngine');
@@ -145,6 +172,11 @@ export const WorkflowEngineLive = Layer.scoped(
           surfaces,
         },
         agents: makeAgentPort({ agents, surfaces, pty, artifacts, observer }),
+        checkpoints: makeCheckpointsPort({
+          git: yield* Git,
+          content: yield* WorkflowContentStore,
+          workspace: workspaceService,
+        }),
         headless: makeHeadlessPort({
           harnesses: yield* HarnessAdapterRegistry,
           controlPlane: yield* HarnessControlPlane,
@@ -246,6 +278,7 @@ export function startEngine(input: {
       },
       freshChecks: new Set(),
       headlessProcesses: new Map<number, HeadlessProcess>(),
+      exportDestinations: new Set<string>(),
     };
 
     /**
@@ -378,6 +411,13 @@ export function startEngine(input: {
         reading('workflow_get_execution', (db) => getExecutionDetail(db, executionId)),
       getOperation: (operationId) =>
         reading('workflow_get_operation', (db) => getOperationDetail(db, operationId)),
+      listCheckpoints: (runId, query) =>
+        reading('workflow_list_checkpoints', (db) => listRunCheckpoints(db, runId, query)),
+      getCheckpoint: (checkpointId) =>
+        reading('workflow_get_checkpoint', (db) => getCheckpointDetail(db, checkpointId)),
+      openCheckpointFile: (checkpointId, path) => openCheckpointFile(rt, checkpointId, path),
+      exportCheckpoint: (checkpointId, destinationPath) =>
+        exportCheckpoint(rt, checkpointId, destinationPath),
     } satisfies EngineHandle;
   });
 }

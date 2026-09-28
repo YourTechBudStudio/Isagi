@@ -67,15 +67,14 @@ test('the requester repeats an array query parameter instead of joining it', asy
   }) as typeof fetch;
 
   await Effect.runPromise(
-    createEndpointRequester(runtimeUrl)(
-      apiEndpoints.workflows.listEvidence,
-      { runId: 7 },
-      { label: ['a,b', 'c'], cursor: undefined },
-    ),
+    createEndpointRequester(runtimeUrl)(apiEndpoints.workflows.listRuns, {
+      workflowKey: ['a,b', 'c'] as never,
+      cursor: undefined,
+    }),
   );
 
   const url = new URL(requestedUrl);
-  assert.deepEqual(url.searchParams.getAll('label'), ['a,b', 'c']);
+  assert.deepEqual(url.searchParams.getAll('workflowKey'), ['a,b', 'c']);
   assert.equal(url.searchParams.has('cursor'), false);
 });
 

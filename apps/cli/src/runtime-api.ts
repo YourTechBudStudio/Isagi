@@ -6,6 +6,7 @@ import {
   requestContent,
   type AnyApiContentEndpoint,
   type AnyApiEndpoint,
+  type ContentQuery,
   type EndpointRequester,
   type RuntimeContentEndpointError,
 } from '@isagi/runtime-client';
@@ -25,6 +26,7 @@ export interface RuntimeApiService {
   readonly requestContent: <Endpoint extends AnyApiContentEndpoint>(
     endpoint: Endpoint,
     params: Record<string, string | number>,
+    query?: ContentQuery,
   ) => Effect.Effect<Response, RuntimeContentEndpointError<Endpoint>>;
 }
 
@@ -35,7 +37,8 @@ export function runtimeApiLayer(runtimeUrl: string): Layer.Layer<RuntimeApiServi
   return Layer.succeed(RuntimeApi, {
     runtimeUrl,
     request: createEndpointRequester(runtimeUrl),
-    requestContent: (endpoint, params) => requestContent(runtimeUrl, endpoint, params),
+    requestContent: (endpoint, params, query) =>
+      requestContent(runtimeUrl, endpoint, params, query),
   });
 }
 
@@ -59,10 +62,11 @@ export function call<Endpoint extends AnyApiEndpoint>(
 export function callContent<Endpoint extends AnyApiContentEndpoint>(
   endpoint: Endpoint,
   params: Record<string, string | number>,
+  query?: ContentQuery,
 ): Effect.Effect<Response, CliFailure, RuntimeApiService> {
   return Effect.flatMap(RuntimeApi, (api) =>
     api
-      .requestContent(endpoint, params)
+      .requestContent(endpoint, params, query)
       .pipe(
         Effect.mapError((error) =>
           fromRuntimeError(error, { endpointId: endpoint.id, runtimeUrl: api.runtimeUrl }),

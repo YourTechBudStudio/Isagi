@@ -214,6 +214,7 @@ export type {
   SurfaceRejectionReason,
   WorktreeCommandsRejectedError,
   WorktreeCommandsRejectionReason,
+  WorkflowRejectionData,
   WorkflowRejectionReason,
   WorkspaceActiveContextRejectedError,
   WorkspaceActiveContextRejectionReason,

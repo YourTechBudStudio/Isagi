@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import { parseCommandLine } from '@isagi/cli/commands';
 import { cliErrorCodeSchema } from '@isagi/cli/error-codes';
-import { exportLimitationSchema, exportStageSchema } from '@isagi/cli/export';
 
 import { isagiDocsPackageFiles } from './isagi-docs.js';
 
@@ -11,8 +10,8 @@ import { isagiDocsPackageFiles } from './isagi-docs.js';
  * The shipped skill and the `isagi` CLI must agree.
  *
  * An agent copies documented command lines verbatim, so every `isagi …` line in a shell example
- * must be one the CLI accepts, and every error code, export stage and export limitation the CLI can
- * print must be explained somewhere an agent reading the CLI references will find it. The rules range
+ * must be one the CLI accepts, and every error code the CLI itself can print must be explained
+ * somewhere an agent reading the CLI references will find it. The rules range
  * over every shipped `references/cli-*.md`, so a new CLI reference is covered without changing this
  * file.
  */
@@ -50,13 +49,6 @@ test('every CLI-owned error code is documented in a CLI reference', () => {
   const text = cliReferences.map(([, source]) => source).join('\n');
   for (const code of cliErrorCodeSchema.literals) {
     assert.ok(text.includes(`\`${code}\``), `no CLI reference documents \`${code}\``);
-  }
-});
-
-test('every export stage and limitation is documented in a CLI reference', () => {
-  const text = cliReferences.map(([, source]) => source).join('\n');
-  for (const literal of [...exportStageSchema.literals, ...exportLimitationSchema.literals]) {
-    assert.ok(text.includes(`\`${literal}\``), `no CLI reference documents \`${literal}\``);
   }
 });
 

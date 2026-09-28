@@ -25,13 +25,7 @@ export const runsHandlers = {
         limit: options.limit,
       }),
     ),
-  'runs inspect': ({ positionals }) => call(workflows.getRun, { runId: positionals.runId }),
-  'runs versions': ({ positionals, options }) =>
-    call(
-      workflows.listVersions,
-      { runId: positionals.runId },
-      compact({ cursor: options.cursor, limit: options.limit }),
-    ),
+  'runs show': ({ positionals }) => call(workflows.getRun, { runId: positionals.runId }),
   'runs structure': ({ positionals, options }) =>
     call(
       workflows.getStructure,
@@ -47,7 +41,7 @@ export const runsHandlers = {
   /**
    * A fresh run. Inputs are read and checked before any request. Placement is sent only when both
    * halves are given; otherwise the workflow's own `environment` hook decides, and the placement
-   * actually used is read later with `runs inspect`.
+   * actually used is read later with `runs show`.
    */
   'runs launch': ({ positionals, options }) =>
     Effect.gen(function* () {

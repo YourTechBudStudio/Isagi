@@ -530,6 +530,8 @@ function fakeWorkspaceService(
     openWorktree: () => Effect.die('openWorktree is not used by workspace API tests'),
     createDetachedWorktree: () =>
       Effect.die('createDetachedWorktree has no workspace route and is not used by API tests'),
+    checkNewDirectory: () =>
+      Effect.die('checkNewDirectory has no workspace route and is not used by API tests'),
     preflightWorktreeCreation: () =>
       Effect.die('preflightWorktreeCreation has no route and is not used by API tests'),
     runWorktreeSetup: () =>

@@ -77,6 +77,7 @@ import {
   type TerminalSessionServiceShape,
 } from './terminal-sessions/index.js';
 import {
+  WorkflowContentStoreLive,
   WorkflowEngineLive,
   WorkflowRegistryLive,
   type WorkflowEngineService,
@@ -222,6 +223,8 @@ const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
 // surfaces through their owning services (ADR 0008).
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(DatabaseLive),
+  Layer.provide(GitLive),
+  Layer.provide(WorkflowContentStoreLive.pipe(Layer.provide(DataDirectoryLive))),
   Layer.provide(WorkflowRegistryLayer),
   Layer.provide(RepositoryLive),
   Layer.provide(WorkspaceServiceLayer),

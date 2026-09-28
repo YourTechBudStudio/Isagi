@@ -1,7 +1,11 @@
 import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Data } from 'effect';
 
-import type { WorkflowLoadFailureReason, WorkflowRejectionReason } from '@isagi/contracts';
+import type {
+  WorkflowLoadFailureReason,
+  WorkflowRejectionReason,
+  WorktreeDestinationIssue,
+} from '@isagi/contracts';
 
 export type WorkflowControl = 'pause' | 'resume' | 'retry' | 'cancel' | 'dismiss' | 'advance';
 
@@ -13,8 +17,7 @@ export type WorkflowControl = 'pause' | 'resume' | 'retry' | 'cancel' | 'dismiss
  * `workflowRejectionDataSchema`.
  */
 export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')<{
-  /** Checkpoint export's destination refusal carries its own required context; phase 03 adds it. */
-  readonly code: Exclude<WorkflowRejectionReason, 'workflow_checkpoint_destination_rejected'>;
+  readonly code: WorkflowRejectionReason;
   readonly message: string;
   readonly workflowKey?: string | undefined;
   readonly workflowRunId?: number | undefined;
@@ -26,6 +29,14 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly executionId?: number | undefined;
   readonly operationId?: number | undefined;
   readonly checkpointId?: number | undefined;
+  /** A checkpoint file path, for `workflow_checkpoint_file_not_found`. */
+  readonly path?: string | undefined;
+  /** The commit a checkpoint names, for `workflow_checkpoint_commit_unavailable`. */
+  readonly commitSha?: string | undefined;
+  /** Required with `workflow_checkpoint_destination_rejected`. */
+  readonly destination?:
+    | { readonly path: string; readonly issue: WorktreeDestinationIssue }
+    | undefined;
   readonly control?: WorkflowControl | undefined;
   readonly workflowLoadFailureReason?: WorkflowLoadFailureReason | undefined;
   readonly workflowSourceDirectory?: string | undefined;

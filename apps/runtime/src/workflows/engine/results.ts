@@ -15,7 +15,12 @@ import type { WaitDeclaration } from '../types.js';
  */
 /** `update` is absent when the node changed nothing, so the saved JSON never holds `undefined`. */
 export type SavedResult =
-  | { readonly type: 'complete'; readonly update?: unknown }
+  | {
+      readonly type: 'complete';
+      readonly update?: unknown;
+      /** Set by a checkpoint node's capture: the checkpoint it saved. */
+      readonly checkpointId?: number;
+    }
   | { readonly type: 'suspend'; readonly update?: unknown; readonly wait: WaitDeclaration };
 
 export function validateOperationResult(value: unknown): PureResult<SavedResult> {

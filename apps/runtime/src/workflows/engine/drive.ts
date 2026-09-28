@@ -1,5 +1,6 @@
 import { Effect, Either } from 'effect';
 
+import { captureCheckpoint } from '../checkpoints/step.js';
 import { makeOperationContext } from '../operations/context.js';
 import { isolate } from '../state/isolation.js';
 import { checkSerializable, errorMessage } from '../state/pure.js';
@@ -66,19 +67,6 @@ function step(rt: EngineRuntime, runId: number): Effect.Effect<boolean, unknown>
       return true;
     }
 
-    if (leaf.nodeKind === 'checkpoint') {
-      // Checkpoint capture arrives with the checkpoint store; until then the node fails honestly.
-      const invocation = yield* rt.read('workflow_read_invocation', (db) =>
-        getInvocation(db, leaf.invocationId),
-      );
-      yield* failStep(rt, run, leaf, {
-        stage: 'checkpoint_capture',
-        message: 'Checkpoint nodes are not implemented yet in this build of Isagi.',
-        ...(invocation ? { graphKey: invocation.graphKey } : {}),
-        nodeId: leaf.nodeId,
-      });
-      return true;
-    }
     if (leaf.nodeKind === 'subgraph') {
       yield* enterSubgraph(rt, artifact.right, runId, leaf);
       return false;
@@ -86,7 +74,8 @@ function step(rt: EngineRuntime, runId: number): Effect.Effect<boolean, unknown>
 
     const result = fromJson<SavedResult>(leaf.resultJson);
     if (result === null) {
-      yield* runNodeFunction(rt, artifact.right, run, leaf);
+      if (leaf.nodeKind === 'checkpoint') yield* captureCheckpoint(rt, artifact.right, run, leaf);
+      else yield* runNodeFunction(rt, artifact.right, run, leaf);
       return false;
     }
     if (result.type === 'complete') {
