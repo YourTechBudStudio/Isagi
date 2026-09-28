@@ -25,7 +25,12 @@ import {
 } from '../../editor-provisioning/test-support.js';
 import { EntityLockLive } from '../../lib/locks/entity-lock.js';
 import { LoopbackPortProbeLive } from '../../lib/net/loopback-port-probe.js';
-import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
+import {
+  DataDirectory,
+  RuntimeDatabase,
+  RuntimeDatabaseLive,
+  type RuntimeDatabaseService,
+} from '../../persistence/index.js';
 import {
   agentSessions,
   ptyProcesses,
@@ -42,11 +47,18 @@ import {
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
 import { SessionLifecycleLive } from '../../session-lifecycle/index.js';
 import {
+  TerminalSessionRepositoryLive,
   TerminalSessionService,
+  TerminalSessionServiceLive,
   type TerminalSessionServiceShape,
 } from '../../terminal-sessions/index.js';
 import { WorkspaceRepository, WorkspaceRepositoryLive } from '../../workspace/index.js';
-import { SurfaceRepositoryLive, SurfaceServiceLive } from '../index.js';
+import {
+  SurfaceRepository,
+  SurfaceRepositoryLive,
+  SurfaceServiceLive,
+  type SurfaceRepositoryService,
+} from '../index.js';
 
 export function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
@@ -267,6 +279,23 @@ export function testLayer(
     readonly decorateEditorService?:
       | ((inner: EditorContextServiceShape) => EditorContextServiceShape)
       | undefined;
+    /**
+     * Use the *real* terminal session service over this harness's database,
+     * wrapped. Race tests use it to suspend startup between creating a session
+     * and binding it, and then read the durable row that really resulted.
+     * Replaces `terminalService`.
+     */
+    readonly decorateTerminalService?:
+      | ((inner: TerminalSessionServiceShape) => TerminalSessionServiceShape)
+      | undefined;
+    /**
+     * Wrap the real surfaces repository. Race tests use it to hand the service
+     * a stale read, standing in for a change that lands between the service's
+     * read and its transaction — a window synchronous SQLite never opens here.
+     */
+    readonly decorateSurfaceRepository?:
+      | ((inner: SurfaceRepositoryService) => SurfaceRepositoryService)
+      | undefined;
   } = {},
 ) {
   mkdirSync(testSessionSocketDirectory(dataRoot), { recursive: true });
@@ -289,25 +318,50 @@ export function testLayer(
     Layer.provide(harnessLedgerObserver),
   );
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
-  const agentService = Layer.succeed(
+  const agentService = Layer.effect(
     AgentSessionService,
-    fakeAgentSessionService(options.agentService),
-  );
-  const terminalService = Layer.succeed(
-    TerminalSessionService,
-    fakeTerminalSessionService(options.terminalService),
-  );
+    Effect.map(RuntimeDatabase, (db) =>
+      recordingAgentSessions(db, fakeAgentSessionService(options.agentService)),
+    ),
+  ).pipe(Layer.provide(database));
   const ptyService = Layer.succeed(PtyService, fakePtyService(options.ptyService));
-  const surfaceRepository = SurfaceRepositoryLive.pipe(
+  const baseSurfaceRepository = SurfaceRepositoryLive.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(attentionProjection),
   );
+  const decorateRepository = options.decorateSurfaceRepository;
+  const surfaceRepository = decorateRepository
+    ? Layer.effect(SurfaceRepository, Effect.map(SurfaceRepository, decorateRepository)).pipe(
+        Layer.provide(baseSurfaceRepository),
+      )
+    : baseSurfaceRepository;
   // One lock value, shared by session lifecycle, the editor service, and the
   // placement path, exactly as `runtime.layer.ts` shares it. Two would make the
   // per-worktree serialization these tests assert vacuous.
   const entityLock = EntityLockLive;
   const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(entityLock));
+  const decorateTerminal = options.decorateTerminalService;
+  const terminalService = decorateTerminal
+    ? Layer.effect(
+        TerminalSessionService,
+        Effect.map(TerminalSessionService, decorateTerminal),
+      ).pipe(
+        Layer.provide(
+          TerminalSessionServiceLive.pipe(
+            Layer.provide(TerminalSessionRepositoryLive.pipe(Layer.provide(database))),
+            Layer.provide(ptyService),
+            Layer.provide(internalRuntimeEventBus),
+            Layer.provide(sessionLifecycle),
+          ),
+        ),
+      )
+    : Layer.effect(
+        TerminalSessionService,
+        Effect.map(RuntimeDatabase, (db) =>
+          recordingTerminalSessions(db, fakeTerminalSessionService(options.terminalService)),
+        ),
+      ).pipe(Layer.provide(database));
   // The editor domain owns creating a context; the surfaces repository only
   // reads and places one. Tests need the former to exercise the latter.
   const editorRepository = EditorContextRepositoryLive.pipe(Layer.provide(database));
@@ -360,6 +414,71 @@ export function testLayer(
   );
 }
 
+/**
+ * A fake's `startFresh` names an id; this makes the durable row for it exist.
+ * Placement refuses a session with no row (the pane's `session_id` has no
+ * foreign key, so the claim checks it), and tests keep choosing their own ids.
+ */
+function recordingAgentSessions(
+  database: RuntimeDatabaseService,
+  service: AgentSessionServiceShape,
+): AgentSessionServiceShape {
+  return {
+    ...service,
+    startFresh: (input) =>
+      service.startFresh(input).pipe(
+        Effect.tap(({ agentSessionId }) =>
+          database.use('test_record_agent_session', (db) => {
+            const now = new Date().toISOString();
+            db.insert(agentSessions)
+              .values({
+                id: agentSessionId,
+                worktreeId: input.worktreeId,
+                harness: input.harness,
+                cwd: input.cwd,
+                activePtyProcessId: null,
+                createdAt: now,
+                updatedAt: now,
+                lastSeenAt: null,
+              })
+              .onConflictDoNothing()
+              .run();
+          }),
+        ),
+      ),
+  };
+}
+
+function recordingTerminalSessions(
+  database: RuntimeDatabaseService,
+  service: TerminalSessionServiceShape,
+): TerminalSessionServiceShape {
+  return {
+    ...service,
+    startFresh: (input) =>
+      service.startFresh(input).pipe(
+        Effect.tap(({ terminalSessionId }) =>
+          database.use('test_record_terminal_session', (db) => {
+            const now = new Date().toISOString();
+            db.insert(terminalSessions)
+              .values({
+                id: terminalSessionId,
+                worktreeId: input.worktreeId,
+                cwd: input.cwd,
+                shellCommand: 'bash',
+                shellArgsJson: '[]',
+                activePtyProcessId: null,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .onConflictDoNothing()
+              .run();
+          }),
+        ),
+      ),
+  };
+}
+
 function fakeAgentSessionService(
   overrides: Partial<AgentSessionServiceShape> = {},
 ): AgentSessionServiceShape {
@@ -370,6 +489,8 @@ function fakeAgentSessionService(
       Effect.die('agent ensureActivePtyProcess is not used by surface service tests'),
     activePtyProcessId: () =>
       Effect.die('agent activePtyProcessId is not used by surface service tests'),
+    stopUnlessPlaced: () =>
+      Effect.die('agent stopUnlessPlaced is not used by surface service tests'),
     ...overrides,
   } satisfies AgentSessionServiceShape;
 }

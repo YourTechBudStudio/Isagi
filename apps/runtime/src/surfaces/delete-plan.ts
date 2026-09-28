@@ -1,12 +1,14 @@
-import { Schema } from 'effect';
+import type { SurfaceLayoutNode } from '@isagi/contracts';
 
-import { surfaceLayoutNodeSchema, type SurfaceLayoutNode } from '@isagi/contracts';
-
-import { prunePaneFromLayout } from './layout.js';
+import { decodeSurfaceLayout, prunePaneFromLayout } from './layout.js';
 import type { SurfaceDeleteTarget } from './types.js';
 
+/**
+ * Removing one pane. It never removes the surface: deleting the last pane leaves an empty surface
+ * (`nextLayout` null), and only an explicit surface delete takes the surface away. That keeps a
+ * surface a workflow run is attached to alive after the run closes its last agent pane.
+ */
 export interface SurfacePaneDeletePlan {
-  readonly deletedSurfaceId: number | null;
   readonly deletedPaneIds: readonly number[];
   readonly nextLayout: SurfaceLayoutNode | null;
 }
@@ -15,40 +17,18 @@ export function planSurfacePaneDelete(
   target: SurfaceDeleteTarget,
   paneId: number,
 ): SurfacePaneDeletePlan {
-  const paneTarget = target.panes.find(({ pane }) => pane.id === paneId);
-  if (!paneTarget) {
-    return {
-      deletedSurfaceId: null,
-      deletedPaneIds: [],
-      nextLayout: decodeLayout(target.surface.layoutJson),
-    };
+  const layout = decodeSurfaceLayout(target.surface.layoutJson);
+  if (!target.panes.some(({ pane }) => pane.id === paneId)) {
+    return { deletedPaneIds: [], nextLayout: layout };
   }
-
-  const remainingPaneCount = target.panes.length - 1;
-  if (remainingPaneCount <= 0) {
-    return deleteSurfacePlan(target);
+  const nextLayout = layout === null ? null : prunePaneFromLayout(layout, paneId);
+  const remainingPaneIds = target.panes
+    .map(({ pane }) => pane.id)
+    .filter((candidate) => candidate !== paneId);
+  // A layout that places none of the remaining panes is corrupt: those panes could never be shown
+  // or reached again. Removing them with the requested one leaves an honest empty surface.
+  if (nextLayout === null && remainingPaneIds.length > 0) {
+    return { deletedPaneIds: [paneId, ...remainingPaneIds], nextLayout: null };
   }
-
-  const nextLayout = prunePaneFromLayout(decodeLayout(target.surface.layoutJson), paneId);
-  if (!nextLayout) {
-    return deleteSurfacePlan(target);
-  }
-
-  return {
-    deletedSurfaceId: null,
-    deletedPaneIds: [paneId],
-    nextLayout,
-  };
-}
-
-function deleteSurfacePlan(target: SurfaceDeleteTarget): SurfacePaneDeletePlan {
-  return {
-    deletedSurfaceId: target.surface.id,
-    deletedPaneIds: target.panes.map(({ pane }) => pane.id),
-    nextLayout: null,
-  };
-}
-
-function decodeLayout(layoutJson: string) {
-  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(layoutJson));
+  return { deletedPaneIds: [paneId], nextLayout };
 }

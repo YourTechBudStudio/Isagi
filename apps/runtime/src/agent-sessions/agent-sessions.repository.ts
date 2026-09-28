@@ -27,6 +27,10 @@ export interface AgentSessionRepositoryService {
     readonly updatedBefore: string;
   }) => Effect.Effect<AgentSessionRow[], DatabaseError>;
   readonly delete: (agentSessionId: number) => Effect.Effect<void, DatabaseError>;
+  /** The pane holding the session, or null. Read the way `listOrphans` reads it. */
+  readonly findPlacement: (
+    agentSessionId: number,
+  ) => Effect.Effect<{ readonly surfaceId: number; readonly paneId: number } | null, DatabaseError>;
 }
 
 export const AgentSessionRepository = Context.GenericTag<AgentSessionRepositoryService>(
@@ -140,6 +144,20 @@ export const AgentSessionRepositoryLive = Layer.effect(
               }),
             ),
           );
+        }),
+      findPlacement: (agentSessionId) =>
+        database.use('find_agent_session_placement', (db) => {
+          const pane = db
+            .select({ surfaceId: surfacePanes.surfaceId, paneId: surfacePanes.id })
+            .from(surfacePanes)
+            .where(
+              and(
+                eq(surfacePanes.sessionKind, 'agent_session'),
+                eq(surfacePanes.sessionId, agentSessionId),
+              ),
+            )
+            .get();
+          return pane ?? null;
         }),
     } satisfies AgentSessionRepositoryService;
   }),

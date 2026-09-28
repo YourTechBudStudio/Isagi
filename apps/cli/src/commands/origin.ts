@@ -10,13 +10,14 @@ import { call, type RuntimeApiService } from '../runtime-api.js';
 /** The worktree and surface a launch or a workflow listing is made from. */
 export interface LaunchOrigin {
   readonly worktreeId: number;
-  readonly surfaceId: number;
+  /** Null when the origin worktree has no surface to launch from. */
+  readonly surfaceId: number | null;
 }
 
 /**
- * The launch origin: `--worktree` and `--surface` when given (the table requires both together);
- * otherwise the worktree whose path is the current directory or its longest prefix at a separator
- * boundary, plus *that worktree's currently focused surface*.
+ * The launch origin: `--worktree` (with `--surface` when given) when passed; otherwise the worktree
+ * whose path is the current directory or its longest prefix at a separator boundary, plus *that
+ * worktree's currently focused surface*, or no surface when none is focused.
  *
  * The focused surface comes from worktree focus in the workspace snapshot, not from the calling
  * process, so it may be some other surface than the caller's own. Callers always echo the origin,
@@ -27,8 +28,8 @@ export function resolveOrigin(flags: {
   readonly surface: number | undefined;
 }): Effect.Effect<LaunchOrigin, CliFailure, RuntimeApiService | CliIo> {
   return Effect.gen(function* () {
-    if (flags.worktree !== undefined && flags.surface !== undefined) {
-      return { worktreeId: flags.worktree, surfaceId: flags.surface };
+    if (flags.worktree !== undefined) {
+      return { worktreeId: flags.worktree, surfaceId: flags.surface ?? null };
     }
     const io = yield* CliContext;
     const cwd = yield* Effect.try({
@@ -36,7 +37,7 @@ export function resolveOrigin(flags: {
       catch: () =>
         CliFailure.of(
           'origin_unresolved',
-          `The current directory ${io.cwd} cannot be resolved; pass --worktree and --surface.`,
+          `The current directory ${io.cwd} cannot be resolved; pass --worktree.`,
           { cwd: io.cwd },
         ),
     });
@@ -57,17 +58,8 @@ export function resolveOrigin(flags: {
       return yield* Effect.fail(
         CliFailure.of(
           'origin_unresolved',
-          `${cwd} is not inside any worktree Isagi knows; pass --worktree and --surface.`,
+          `${cwd} is not inside any worktree Isagi knows; pass --worktree.`,
           { cwd },
-        ),
-      );
-    }
-    if (match.activeSurfaceId === null) {
-      return yield* Effect.fail(
-        CliFailure.of(
-          'origin_unresolved',
-          `Worktree ${match.id} has no focused surface to launch from; pass --worktree and --surface.`,
-          { cwd, worktreeId: match.id },
         ),
       );
     }

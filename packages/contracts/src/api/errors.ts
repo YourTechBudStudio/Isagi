@@ -86,6 +86,8 @@ export const surfaceRejectionReasonSchema = Schema.Literal(
   'session_worktree_mismatch',
   'invalid_surface_title',
   'layout_node_stale',
+  // Starting a surface's first pane when it already has panes.
+  'surface_not_empty',
 );
 
 export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
@@ -416,7 +418,12 @@ const workflowRejectionContextFields = {
   shadowedWorkflowPackageDirectories: Schema.optional(Schema.Array(Schema.String)),
   /** Which way a placement is unusable, for `workflow_placement_invalid`. */
   placementIssue: Schema.optional(
-    Schema.Literal('surface_not_on_worktree', 'worktree_not_in_project', 'invalid_surface_title'),
+    Schema.Literal(
+      'surface_not_on_worktree',
+      'worktree_not_in_project',
+      'invalid_surface_title',
+      'no_current_surface',
+    ),
   ),
   /** What already exists, for `workflow_environment_collision`. */
   collision: Schema.optional(Schema.Literal('branch', 'worktree', 'checkout_path')),

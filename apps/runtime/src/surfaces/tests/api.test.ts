@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 
 import type {
   CreateSurfaceOutput,
+  DeletePaneOutput,
   DeleteSurfaceOutput,
   RenameSurfaceOutput,
   SetSplitWeightsOutput,
@@ -77,10 +78,7 @@ test('surface pane delete route decodes both route params', async () => {
       deleteSurfacePane: (request) =>
         Effect.sync(() => {
           input = request;
-          return {
-            deletedSurfaceId: null,
-            deletedPaneIds: [request.paneId],
-          };
+          return { deletedPaneIds: [request.paneId] };
         }),
     }),
     async (fastify) => {
@@ -88,14 +86,67 @@ test('surface pane delete route decodes both route params', async () => {
         method: 'DELETE',
         url: '/api/v1/surfaces/42/panes/7',
       });
-      const payload = response.json() as { data?: DeleteSurfaceOutput };
+      const payload = response.json() as { data?: DeletePaneOutput };
 
       assert.equal(response.statusCode, 200);
       assert.deepEqual(input, { surfaceId: 42, paneId: 7 });
-      assert.deepEqual(payload.data, {
-        deletedSurfaceId: null,
-        deletedPaneIds: [7],
+      assert.deepEqual(payload.data, { deletedPaneIds: [7] });
+    },
+  );
+});
+
+test('surface start-pane route decodes the new pane and maps a non-empty surface', async () => {
+  let input: Parameters<SurfaceServiceShape['startPane']>[0] | null = null;
+  await withSurfacesApi(
+    fakeSurfaceService({
+      startPane: (request) =>
+        Effect.suspend(() => {
+          input = request;
+          return request.start.newPane.kind === 'terminal_session'
+            ? Effect.fail(
+                new SurfaceError({
+                  code: 'surface_not_empty',
+                  message: 'Surface 42 already has panes.',
+                  surfaceId: request.surfaceId,
+                }),
+              )
+            : Effect.succeed({
+                worktreeId: 1,
+                surfaceId: request.surfaceId,
+                paneId: 9,
+                title: 'Pi',
+              });
+        }),
+    }),
+    async (fastify) => {
+      const started = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/surfaces/42/panes',
+        payload: { newPane: { kind: 'agent_session', harness: 'pi' } },
       });
+      assert.equal(started.statusCode, 200);
+      assert.deepEqual(input, {
+        surfaceId: 42,
+        start: { newPane: { kind: 'agent_session', harness: 'pi' } },
+      });
+      assert.deepEqual((started.json() as { data?: unknown }).data, {
+        worktreeId: 1,
+        surfaceId: 42,
+        paneId: 9,
+        title: 'Pi',
+      });
+
+      const refused = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/surfaces/42/panes',
+        payload: { newPane: { kind: 'terminal_session' } },
+      });
+      const error = refused.json() as {
+        error?: { code?: string; data?: { reason?: string; surfaceId?: number } };
+      };
+      assert.equal(refused.statusCode, 400);
+      assert.equal(error.error?.code, 'surface_rejected');
+      assert.deepEqual(error.error?.data, { reason: 'surface_not_empty', surfaceId: 42 });
     },
   );
 });
@@ -505,11 +556,7 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         deletedSurfaceId: surfaceId,
         deletedPaneIds: [],
       }),
-    deleteSurfacePane: (input) =>
-      Effect.succeed({
-        deletedSurfaceId: null,
-        deletedPaneIds: [input.paneId],
-      }),
+    deleteSurfacePane: (input) => Effect.succeed({ deletedPaneIds: [input.paneId] }),
     createSurface: (input) =>
       Effect.succeed({
         worktreeId: input.worktreeId,
@@ -526,6 +573,13 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         surfaceId: 42,
         paneId: 8,
         title: input.split.newPane.kind === 'agent_session' ? 'Pi 2' : 'Terminal 2',
+      }),
+    startPane: (input) =>
+      Effect.succeed({
+        worktreeId: 1,
+        surfaceId: input.surfaceId,
+        paneId: 9,
+        title: input.start.newPane.kind === 'agent_session' ? 'Claude' : 'Terminal',
       }),
     setSplitWeights: (input) =>
       Effect.succeed({
@@ -566,6 +620,7 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
       }),
     createSinglePaneSurface: () =>
       Effect.die('createSinglePaneSurface is not used by surface API tests'),
+    createEmptySurface: () => Effect.die('createEmptySurface is not used by surface API tests'),
     setWorktreeEnvironmentFocus: (input) =>
       Effect.succeed({
         worktreeId: input.worktreeId,

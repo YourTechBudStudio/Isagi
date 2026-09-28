@@ -129,7 +129,8 @@ export interface WorkflowDefinition<Inputs extends WorkflowInputs, Output> exten
   readonly validate: (origin: WorkflowOrigin, inputs: Inputs) => MaybePromise<void>;
   /**
    * Optional. Chooses the worktree and surface the run executes in. Omitted means the current
-   * worktree and surface. Not called when the caller supplies a placement. Read-only: it may derive
+   * worktree and surface, or a new surface titled after the command when the origin has no surface.
+   * Not called when the caller supplies a placement. Read-only: it may derive
    * names from `inputs` and list rows through `ctx`; it cannot create anything.
    */
   readonly environment?:

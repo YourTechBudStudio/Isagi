@@ -8,6 +8,7 @@ import {
   agentSessionRouteParamsSchema,
   createSurfaceInputSchema,
   createSurfaceOutputSchema,
+  deletePaneOutputSchema,
   deleteSurfaceOutputSchema,
   moveSurfaceOrderInputSchema,
   moveSurfaceOrderOutputSchema,
@@ -22,6 +23,7 @@ import {
   setSplitWeightsOutputSchema,
   setWorktreeEnvironmentFocusInputSchema,
   splitPaneInputSchema,
+  startPaneInputSchema,
   surfaceDetailSchema,
   surfacePaneRouteParamsSchema,
   surfaceRouteParamsSchema,
@@ -78,7 +80,7 @@ export const surfacesEndpoints = {
     method: 'DELETE',
     path: '/surfaces/:surfaceId/panes/:paneId',
     params: surfacePaneRouteParamsSchema,
-    output: deleteSurfaceOutputSchema,
+    output: deletePaneOutputSchema,
     errors: surfaceApiErrorSchema,
   },
   setWorktreeEnvironmentFocus: {
@@ -105,6 +107,15 @@ export const surfacesEndpoints = {
     path: '/worktrees/:worktreeId/pane-splits',
     params: worktreeEnvironmentFocusRouteParamsSchema,
     body: splitPaneInputSchema,
+    output: createSurfaceOutputSchema,
+    errors: surfaceApiErrorSchema,
+  },
+  startPane: {
+    id: 'surfaces.startPane',
+    method: 'POST',
+    path: '/surfaces/:surfaceId/panes',
+    params: surfaceRouteParamsSchema,
+    body: startPaneInputSchema,
     output: createSurfaceOutputSchema,
     errors: surfaceApiErrorSchema,
   },
@@ -165,7 +176,7 @@ export const surfacesEndpoints = {
   >;
   readonly deletePane: ApiEndpoint<
     undefined,
-    typeof deleteSurfaceOutputSchema,
+    typeof deletePaneOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof surfacePaneRouteParamsSchema
   >;
@@ -186,6 +197,12 @@ export const surfacesEndpoints = {
     typeof createSurfaceOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
+  >;
+  readonly startPane: ApiEndpoint<
+    typeof startPaneInputSchema,
+    typeof createSurfaceOutputSchema,
+    typeof surfaceApiErrorSchema,
+    typeof surfaceRouteParamsSchema
   >;
   readonly setSplitWeights: ApiEndpoint<
     typeof setSplitWeightsInputSchema,

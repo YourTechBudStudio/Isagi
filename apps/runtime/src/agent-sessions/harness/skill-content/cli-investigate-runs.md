@@ -84,7 +84,7 @@ Runtime failures keep their code, reason, request ID and diagnostic data. The fa
 | `runtime_unconfigured` | Supply `--runtime-url` or use an Isagi terminal. |
 | `runtime_unreachable` | Check the runtime address and access. For `checkpoints read`, stdout may be truncated. |
 | `runtime_response_invalid` | Report the invalid response with its request context. |
-| `origin_unresolved` | Supply launch `--worktree` and `--surface` together. |
+| `origin_unresolved` | Supply launch `--worktree` (and `--surface` if the origin needs one). |
 | `filesystem_write_failed` | Writing to stdout failed; check the reported `errno`. |
 
 Report retrieved facts and unavailable data explicitly. Choose comparison scope and criteria with the user; workflow keys alone do not establish comparable runs.

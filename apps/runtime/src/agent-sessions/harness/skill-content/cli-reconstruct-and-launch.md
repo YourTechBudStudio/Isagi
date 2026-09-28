@@ -41,7 +41,7 @@ isagi runs launch implement-story --inputs @inputs.json --worktree-placement exi
 isagi runs show 57 --json
 ```
 
-Use the export's `worktreeId` (31 here) as the destination. The origin selects the workflow package and is separate from the destination. By default the origin is the Isagi worktree containing the current directory and its focused surface; pass `--worktree <id> --surface <id>` together to choose it. The origin must belong to the destination's project. A plain-folder export has no worktree ID: add it to Isagi as a folder project before it can be a launch destination.
+Use the export's `worktreeId` (31 here) as the destination. The origin selects the workflow package and is separate from the destination. By default the origin is the Isagi worktree containing the current directory and its focused surface, if it has one; pass `--worktree <id>` (optionally with `--surface <id>`) to choose it. The origin must belong to the destination's project. A plain-folder export has no worktree ID: add it to Isagi as a folder project before it can be a launch destination.
 
 `--inputs` accepts a JSON object or `@file`. The original run's inputs are in `runs show` as `inputs`. Give both placement flags or neither; without them the workflow's `environment` hook decides. See [Workflow environments](workflow-environments.md) for placement choices. Check the new run's status and environment events: a run ID alone does not prove its worktree and surface were prepared.
 

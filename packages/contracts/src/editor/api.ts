@@ -6,6 +6,7 @@ import {
   editorDiagnosticsQuerySchema,
   ensureEditorRuntimeInputSchema,
   ensureEditorRuntimeOutputSchema,
+  openEditorInputSchema,
   openEditorOutputSchema,
   openEditorRouteParamsSchema,
   retryEditorProvisioningOutputSchema,
@@ -13,14 +14,15 @@ import {
 
 export const editorEndpoints = {
   /**
-   * The worktree is the whole input and it is a path parameter, so there is no
-   * request body; a body would only invite a second target.
+   * The worktree is the target and a path parameter. The body only says where a
+   * not-yet-placed editor goes; it never retargets or moves a placed one.
    */
   open: {
     id: 'worktrees.openEditor',
     method: 'POST',
     path: '/worktrees/:worktreeId/editor',
     params: openEditorRouteParamsSchema,
+    body: openEditorInputSchema,
     output: openEditorOutputSchema,
     errors: editorApiErrorSchema,
   },
@@ -64,7 +66,7 @@ export const editorEndpoints = {
   },
 } as const satisfies {
   readonly open: ApiEndpoint<
-    undefined,
+    typeof openEditorInputSchema,
     typeof openEditorOutputSchema,
     typeof editorApiErrorSchema,
     typeof openEditorRouteParamsSchema

@@ -246,3 +246,73 @@ test('a caller placement beats the hook, and a hook that throws is a launch reje
     assert.equal(refused.code, 'workflow_environment_selection_failed');
   });
 });
+
+function plainWorkflow(title: string): AnyWorkflowDefinition {
+  return defineWorkflow({
+    command: () => ({ title }),
+    validate: () => undefined,
+    graph: createGraph<{ n: number }>({
+      key: 'plain',
+      title,
+      init: () => ({ n: 0 }),
+      state: { n: reduce.replace<number>() } as never,
+      entry: 'work',
+      nodes: { work: operation(async () => complete()) },
+      edges: { out: edge({ from: 'work', to: ['done'], choose: () => ({ to: 'done' }) }) },
+      outcomes: { done: outcome({ kind: 'success', output: () => null }) },
+    }) as never,
+  }) as unknown as AnyWorkflowDefinition;
+}
+
+test('a launch with no surface open defaults to a new surface titled after the command', async () => {
+  await withEngine(async (harness) => {
+    harness.registry.publish('plain', plainWorkflow('Tidy up'));
+    const { runId } = await harness.run(
+      harness.engine.launch({
+        workflowKey: 'plain',
+        inputs: {},
+        origin: { worktreeId: 1, surfaceId: null },
+      }),
+    );
+
+    const run = runRow(harness, runId);
+    assert.equal(run.status, 'completed', run.errorJson ?? '');
+    assert.equal(run.originSurfaceId, null);
+    assert.deepEqual(JSON.parse(run.placementJson).request, {
+      worktree: { kind: 'current' },
+      surface: { kind: 'create', title: 'Tidy up' },
+    });
+    assert.ok(harness.places.calls.includes('createSurface Tidy up'));
+    assert.notEqual(run.surfaceId, null);
+    const summary = await harness.run(harness.engine.getRun(runId));
+    assert.equal(summary.run.origin.surfaceId, null);
+  });
+});
+
+test('a launch with no surface open refuses a current surface and a stray pane', async () => {
+  await withEngine(async (harness) => {
+    harness.registry.publish('plain', plainWorkflow('Plain'));
+    const current = await harness.fail(
+      harness.engine.launch({
+        workflowKey: 'plain',
+        inputs: {},
+        origin: { worktreeId: 1, surfaceId: null },
+        placement: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+      }),
+    );
+    assert.ok(current instanceof WorkflowEngineError);
+    assert.equal(current.code, 'workflow_placement_invalid');
+    assert.equal(current.placementIssue, 'no_current_surface');
+
+    const stray = await harness.fail(
+      harness.engine.launch({
+        workflowKey: 'plain',
+        inputs: {},
+        origin: { worktreeId: 1, surfaceId: null, paneId: 4 },
+      }),
+    );
+    assert.ok(stray instanceof WorkflowEngineError);
+    assert.equal(stray.code, 'workflow_launch_context_mismatch');
+    assert.equal(harness.db.select().from(workflowRuns).all().length, 0);
+  });
+});

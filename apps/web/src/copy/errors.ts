@@ -173,6 +173,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       surface_not_found: surfaceGone,
       pane_not_found: "That pane isn't here anymore.",
       invalid_surface_title: "That surface title won't work.",
+      surface_not_empty: 'That surface already has panes. Split one instead.',
     },
   },
   worktree_environment_focus_rejected: {

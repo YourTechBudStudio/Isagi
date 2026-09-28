@@ -12,6 +12,7 @@ import type {
   CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
+  DeletePaneOutput,
   DeleteSurfaceOutput,
   DeleteProjectOutput,
   PaneSessionClaimInput,
@@ -30,6 +31,7 @@ import type {
   EditorDiagnosticsOutput,
   EnsureEditorRuntimeInput,
   EnsureEditorRuntimeOutput,
+  OpenEditorInput,
   OpenEditorOutput,
   PathSuggestOutput,
   RetryEditorProvisioningOutput,
@@ -39,6 +41,7 @@ import type {
   SetSplitWeightsOutput,
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
+  StartPaneInput,
   SurfaceDetail,
   WorktreeEnvironmentFocusOutput,
   WorktreeSetupPreflightOutput,
@@ -264,7 +267,7 @@ export function deleteSurface(surfaceId: number): Effect.Effect<DeleteSurfaceOut
 export function deleteSurfacePane(
   surfaceId: number,
   paneId: number,
-): Effect.Effect<DeleteSurfaceOutput, Error> {
+): Effect.Effect<DeletePaneOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.deleteSurfacePane(surfaceId, paneId)));
 }
 
@@ -289,6 +292,14 @@ export function splitPane(
   input: SplitPaneInput,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.splitPane(worktreeId, input)));
+}
+
+/** Starts the first pane of an empty surface. */
+export function startPane(
+  surfaceId: number,
+  input: StartPaneInput,
+): Effect.Effect<CreateSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.startPane(surfaceId, input)));
 }
 
 export function setSplitWeights(
@@ -466,8 +477,11 @@ export function acceptHarnessPolicy(
   return getClient().pipe(Effect.flatMap((client) => client.acceptHarnessPolicy(input)));
 }
 
-export function openEditor(worktreeId: number): Effect.Effect<OpenEditorOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.openEditor(worktreeId)));
+export function openEditor(
+  worktreeId: number,
+  input: OpenEditorInput,
+): Effect.Effect<OpenEditorOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.openEditor(worktreeId, input)));
 }
 
 export function ensureEditorRuntime(

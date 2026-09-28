@@ -14,6 +14,7 @@ import {
   type EditorDiagnosticsOutput,
   type EnsureEditorRuntimeInput,
   type EnsureEditorRuntimeOutput,
+  type OpenEditorInput,
   type OpenEditorOutput,
   type RefreshInventoryOutput,
   type RetryEditorProvisioningOutput,
@@ -28,7 +29,9 @@ import {
   type SetSplitWeightsOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SplitPaneInput,
+  type StartPaneInput,
   type SurfaceDetail,
+  type DeletePaneOutput,
   type DeleteSurfaceOutput,
   type RenameSurfaceOutput,
   type WorktreeEnvironmentFocusOutput,
@@ -166,7 +169,7 @@ export interface RuntimeClient {
     surfaceId: number,
     paneId: number,
   ) => Effect.Effect<
-    DeleteSurfaceOutput,
+    DeletePaneOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.deletePane>
   >;
   readonly setWorktreeEnvironmentFocus: (
@@ -189,6 +192,13 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     CreateSurfaceOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.splitPane>
+  >;
+  readonly startPane: (
+    surfaceId: number,
+    input: StartPaneInput,
+  ) => Effect.Effect<
+    CreateSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.startPane>
   >;
   readonly setSplitWeights: (
     surfaceId: number,
@@ -443,6 +453,7 @@ export interface RuntimeClient {
   >;
   readonly openEditor: (
     worktreeId: number,
+    input: OpenEditorInput,
   ) => Effect.Effect<OpenEditorOutput, RuntimeEndpointError<typeof apiEndpoints.editor.open>>;
   readonly ensureEditorRuntime: (
     editorContextId: number,
@@ -505,6 +516,7 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.surfaces.createSurface, { worktreeId }, input),
     splitPane: (worktreeId, input) =>
       request(apiEndpoints.surfaces.splitPane, { worktreeId }, input),
+    startPane: (surfaceId, input) => request(apiEndpoints.surfaces.startPane, { surfaceId }, input),
     setSplitWeights: (surfaceId, input) =>
       request(apiEndpoints.surfaces.setSplitWeights, { surfaceId }, input),
     createPaneSession: (worktreeId, input) =>
@@ -593,7 +605,7 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
     refreshInventory: () => request(apiEndpoints.controlPlane.refreshInventory),
     acceptHarnessPolicy: (input) => request(apiEndpoints.controlPlane.acceptPolicy, input),
-    openEditor: (worktreeId) => request(apiEndpoints.editor.open, { worktreeId }),
+    openEditor: (worktreeId, input) => request(apiEndpoints.editor.open, { worktreeId }, input),
     ensureEditorRuntime: (editorContextId, input) =>
       request(apiEndpoints.editor.ensureRuntime, { editorContextId }, input),
     // Params, then query — the argument order `ApiEndpointRequestArgs` derives for

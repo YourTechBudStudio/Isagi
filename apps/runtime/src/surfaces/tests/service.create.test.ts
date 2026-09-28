@@ -102,7 +102,7 @@ test('create surface API slice creates and focuses an initial terminal session',
     assert.equal(output.pane?.sessionKind, 'terminal_session');
     assert.equal(output.pane?.sessionId, 123);
     assert.equal(output.detail.panes[0]?.id, output.created.paneId);
-    assert.equal(output.detail.panes[0]?.session, null);
+    assert.equal(output.detail.panes[0]?.session?.kind, 'terminal_session');
     assert.deepEqual(output.focus, {
       worktreeId: output.created.worktreeId,
       activeSurfaceId: output.created.surfaceId,

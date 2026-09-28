@@ -49,12 +49,12 @@ export const workflowRunControlsSchema = Schema.Struct({
 
 /**
  * Where a run was launched from. Retained as launched, so it may name a worktree, surface, pane or
- * agent session that has since been deleted.
+ * agent session that has since been deleted. `surfaceId` is null for a launch made with no surface.
  */
 export const workflowRunOriginSchema = Schema.Struct({
   worktreeId: positiveInteger,
   worktreePath: nonEmptyString,
-  surfaceId: positiveInteger,
+  surfaceId: Schema.NullOr(positiveInteger),
   paneId: Schema.NullOr(positiveInteger),
   agentSessionId: Schema.NullOr(positiveInteger),
 });
@@ -130,9 +130,13 @@ export const workflowRunDetailSchema = Schema.Struct({
   executions: Schema.Array(workflowExecutionSummarySchema),
 });
 
+/**
+ * Where a launch was made from. `surfaceId` is null when the worktree has no surface open, which is
+ * a normal place to start from: the default placement then creates the run's own surface.
+ */
 export const workflowLaunchOriginSchema = Schema.Struct({
   worktreeId: positiveInteger,
-  surfaceId: positiveInteger,
+  surfaceId: Schema.NullOr(positiveInteger),
   paneId: Schema.optional(Schema.NullOr(positiveInteger)),
   agentSessionId: Schema.optional(Schema.NullOr(positiveInteger)),
 });

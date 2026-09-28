@@ -1,6 +1,7 @@
 export { agentSessionCopy, type PaneRestorePrompt } from './agentSession.js';
 export {
   canvasCopy,
+  emptySurfaceCopy,
   missingProjectCopy,
   ptyCopy,
   surfaceDetailCopy,

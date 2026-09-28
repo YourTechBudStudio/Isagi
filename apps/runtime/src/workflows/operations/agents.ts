@@ -70,7 +70,10 @@ export function makeAgentPort(deps: AgentDeps): AgentPort {
   };
 }
 
-/** Splits a new agent pane off the run's surface, starts it, and sends the seed prompt. */
+/**
+ * Adds a new agent pane to the run's surface — its first pane when the surface is empty, otherwise a
+ * split — starts it, and sends the seed prompt.
+ */
 export function spawnAgentSession(
   deps: AgentDeps,
   input: {
@@ -94,19 +97,22 @@ export function spawnAgentSession(
       phase,
       deps.surfaces.getSurfaceDetail(input.surfaceId),
     );
-    const split = chooseSpawnSplit(surface.layout);
-    const created = yield* diagnosticPhase(
-      'workflow.spawn.split_pane',
-      { ...phase, sourcePaneId: split.sourcePaneId, direction: split.direction },
-      deps.surfaces.splitPane({
-        worktreeId: input.worktreeId,
-        split: {
-          paneId: split.sourcePaneId,
-          direction: split.direction,
-          newPane: { kind: 'agent_session', harness: input.harness },
-        },
-      }),
-    );
+    const newPane = { kind: 'agent_session', harness: input.harness } as const;
+    const split = surface.layout === null ? null : chooseSpawnSplit(surface.layout);
+    const created = yield* split === null
+      ? diagnosticPhase(
+          'workflow.spawn.start_pane',
+          phase,
+          deps.surfaces.startPane({ surfaceId: input.surfaceId, start: { newPane } }),
+        )
+      : diagnosticPhase(
+          'workflow.spawn.split_pane',
+          { ...phase, sourcePaneId: split.sourcePaneId, direction: split.direction },
+          deps.surfaces.splitPane({
+            worktreeId: input.worktreeId,
+            split: { paneId: split.sourcePaneId, direction: split.direction, newPane },
+          }),
+        );
     const detail = yield* deps.surfaces.getSurfaceDetail(created.surfaceId);
     const pane = detail.panes.find((candidate) => candidate.id === created.paneId);
     if (!pane || pane.session?.kind !== 'agent_session') {
@@ -133,6 +139,13 @@ export function spawnAgentSession(
           }),
         ),
     );
+    // A launch starts a process by session id, so a pane closed after the read
+    // above (the person closing the run's surface while its agent starts) would
+    // leave this process running with nowhere to show. Checked after the launch
+    // has recorded the process on the session: a close that commits later sees
+    // that process in its own cleanup, and one that committed earlier is caught
+    // here.
+    yield* requireSpawnPlacement(deps, { ...session, ptyProcessId });
     yield* waitForObserverInitialization(deps.observer, agentSessionId);
     yield* diagnosticPhase(
       'workflow.spawn.await_startup_output',
@@ -174,6 +187,57 @@ export function spawnAgentSession(
     );
     return { agentSessionId, paneId: created.paneId, sentAt, harnessSessionId };
   });
+}
+
+/**
+ * The spawned session must still be in the pane it was created in. Unplaced — its
+ * surface was closed — means nothing will ever show or stop this process, so it
+ * is stopped, and the failure says whether that stop actually happened. Placed
+ * elsewhere — another client claimed it — means the process serves that pane
+ * now: it is left running and only this spawn fails. The decision and the stop
+ * are one locked step in the agent-session domain, so a claim cannot land
+ * between them.
+ */
+function requireSpawnPlacement(
+  deps: AgentDeps,
+  spawned: {
+    readonly surfaceId: number;
+    readonly paneId: number;
+    readonly agentSessionId: number;
+    readonly ptyProcessId: number;
+  },
+) {
+  return Effect.gen(function* () {
+    const outcome = yield* deps.agents.stopUnlessPlaced({
+      agentSessionId: spawned.agentSessionId,
+      ptyProcessId: spawned.ptyProcessId,
+    });
+    switch (outcome.kind) {
+      case 'placed':
+        if (outcome.paneId === spawned.paneId) return;
+        return yield* Effect.fail(
+          new Error(
+            `Agent session ${spawned.agentSessionId} moved to pane ${outcome.paneId} on surface ${outcome.surfaceId} while it was starting; it was left running there.`,
+          ),
+        );
+      case 'stopped':
+        return yield* Effect.fail(
+          new Error(
+            `Surface ${spawned.surfaceId} pane ${spawned.paneId} was closed while agent session ${spawned.agentSessionId} was starting; its process ${spawned.ptyProcessId} was stopped.`,
+          ),
+        );
+      case 'stop_failed':
+        return yield* Effect.fail(
+          new Error(
+            `Surface ${spawned.surfaceId} pane ${spawned.paneId} was closed while agent session ${spawned.agentSessionId} was starting, and its process ${spawned.ptyProcessId} could not be stopped: ${errorText(outcome.cause)}`,
+          ),
+        );
+    }
+  });
+}
+
+function errorText(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Sends a prompt into an existing session. Refused while a turn is in flight. */

@@ -552,7 +552,7 @@ export class FakePlaces {
                 } as never)
               : Effect.fail(new Error(`Surface ${id} was not found.`) as never);
           }),
-        createSinglePaneSurface: (input) =>
+        createEmptySurface: (input) =>
           Effect.suspend(() => {
             this.calls.push(`createSurface ${input.titleBase}`);
             if (this.failSurfaceCreation) {
@@ -560,12 +560,7 @@ export class FakePlaces {
             }
             const id = this.nextSurface++;
             this.saveSurface(id, input.worktreeId, input.titleBase);
-            return Effect.succeed({
-              surfaceId: id,
-              paneId: 100 + id,
-              title: input.titleBase,
-              cwd: '',
-            });
+            return Effect.succeed({ surfaceId: id, title: input.titleBase });
           }),
       },
     };

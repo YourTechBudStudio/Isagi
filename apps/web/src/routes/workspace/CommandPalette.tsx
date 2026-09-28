@@ -118,18 +118,28 @@ export function CommandPalette() {
   const activeSurfaceDetail = useSurfaceDetailQuery(baseCtx.activeSurface?.id ?? null, {
     enabled: open && baseCtx.activeSurface !== null,
   });
-  const workflowLaunchOrigin = useMemo(
-    (): WorkflowLaunchOrigin | null =>
-      baseCtx.activeWorktree && baseCtx.activeSurface && activeSurfaceDetail.data
-        ? workflowOriginFromSurfaceDetail({
-            worktreeId: baseCtx.activeWorktree.id,
-            surfaceId: baseCtx.activeSurface.id,
-            activePaneId: baseCtx.activePaneId,
-            detail: activeSurfaceDetail.data,
-          })
-        : null,
-    [activeSurfaceDetail.data, baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
-  );
+  // A worktree with no surface open is a valid origin: the run then gets its own
+  // surface by default. With a surface open, wait for its detail so the origin
+  // can name the pane and agent session in view.
+  const workflowLaunchOrigin = useMemo((): WorkflowLaunchOrigin | null => {
+    if (!baseCtx.activeWorktree) return null;
+    if (!baseCtx.activeSurface) {
+      return { worktreeId: baseCtx.activeWorktree.id, surfaceId: null };
+    }
+    return activeSurfaceDetail.data
+      ? workflowOriginFromSurfaceDetail({
+          worktreeId: baseCtx.activeWorktree.id,
+          surfaceId: baseCtx.activeSurface.id,
+          activePaneId: baseCtx.activePaneId,
+          detail: activeSurfaceDetail.data,
+        })
+      : null;
+  }, [
+    activeSurfaceDetail.data,
+    baseCtx.activePaneId,
+    baseCtx.activeSurface,
+    baseCtx.activeWorktree,
+  ]);
   const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchOrigin, { enabled: open });
   // A whole-list discovery failure is derived only from the current enabled query
   // state: no launch context or a merely-pending query yields no failure row; a

@@ -1,6 +1,26 @@
-import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
+import { Schema } from 'effect';
+
+import {
+  surfaceLayoutNodeSchema,
+  type SplitPaneDirection,
+  type SurfaceLayoutNode,
+} from '@isagi/contracts';
 
 type InsertSide = 'before' | 'after';
+
+const decodeStoredLayout = Schema.decodeUnknownSync(Schema.NullOr(surfaceLayoutNodeSchema));
+
+/**
+ * A surface's layout as stored in `layout_json`. JSON `null` is an empty surface: a surface with no
+ * panes is a normal, durable state, not a surface waiting to be deleted.
+ */
+export function decodeSurfaceLayout(layoutJson: string): SurfaceLayoutNode | null {
+  return decodeStoredLayout(JSON.parse(layoutJson));
+}
+
+export function encodeSurfaceLayout(layout: SurfaceLayoutNode | null): string {
+  return JSON.stringify(layout);
+}
 
 export function prunePaneFromLayout(
   layout: SurfaceLayoutNode,
@@ -167,7 +187,7 @@ function insertLeafIntoSameAxisSplit(
   };
 }
 
-function leafForPane(paneId: number): SurfaceLayoutNode {
+export function leafForPane(paneId: number): SurfaceLayoutNode {
   return {
     kind: 'leaf',
     nodeId: `pane-${paneId}`,

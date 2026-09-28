@@ -11,11 +11,26 @@ import type { LaunchProject, PlacementSelection } from './types.js';
 
 const decodePlacementRequest = Schema.decodeUnknown(workflowPlacementRequestSchema);
 
-/** The unchanged behaviour of every workflow that says nothing about where it runs. */
-const defaultRequest: WorkflowPlacementRequestDto = {
-  worktree: { kind: 'current' },
-  surface: { kind: 'current' },
-};
+/** Longest title `validateSurfaceTitle` accepts. */
+const surfaceTitleMaxLength = 80;
+
+/**
+ * Where a workflow that says nothing about placement runs: the current worktree and surface. A
+ * launch with no surface open has no current surface, so the run gets its own, titled after the
+ * command.
+ */
+export function defaultPlacementRequest(
+  origin: WorkflowOrigin,
+  commandTitle: string,
+): WorkflowPlacementRequestDto {
+  return {
+    worktree: { kind: 'current' },
+    surface:
+      origin.surfaceId === null
+        ? { kind: 'create', title: commandTitle.trim().slice(0, surfaceTitleMaxLength) }
+        : { kind: 'current' },
+  };
+}
 
 export interface SelectionInput {
   readonly definition: AnyWorkflowDefinition;
@@ -24,13 +39,15 @@ export interface SelectionInput {
   readonly project: LaunchProject;
   readonly inputs: Record<string, unknown>;
   readonly placement: WorkflowPlacementRequestDto | undefined;
+  /** The manifest title `command` returned, which names a default-created surface. */
+  readonly commandTitle: string;
 }
 
 /**
  * Which of the three sources decides this launch's placement.
  *
  * The precedence is deliberate: a caller-supplied `placement` wins, then the author's `environment`
- * hook, then the current/current default. The caller is a person or a CLI saying "put this here",
+ * hook, then the default (`defaultPlacementRequest`). The caller is a person or a CLI saying "put this here",
  * and an override that the workflow could quietly overrule would not be an override.
  *
  * Both non-default sources are decoded through the contract schema before they leave, so a malformed
@@ -59,7 +76,10 @@ export function selectPlacement(
 
   const hook = input.definition.environment;
   if (typeof hook !== 'function') {
-    return Effect.succeed({ source: 'default', request: defaultRequest });
+    return Effect.succeed({
+      source: 'default',
+      request: defaultPlacementRequest(input.origin, input.commandTitle),
+    });
   }
 
   return Effect.gen(function* () {

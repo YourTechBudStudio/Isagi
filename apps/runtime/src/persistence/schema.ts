@@ -381,7 +381,7 @@ export const workflowRuns = sqliteTable(
      */
     originWorktreeId: integer('origin_worktree_id').notNull(),
     originWorktreePath: text('origin_worktree_path').notNull(),
-    originSurfaceId: integer('origin_surface_id').notNull(),
+    originSurfaceId: integer('origin_surface_id'),
     originPaneId: integer('origin_pane_id'),
     originAgentSessionId: integer('origin_agent_session_id'),
     /**

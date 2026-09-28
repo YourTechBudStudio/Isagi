@@ -190,7 +190,7 @@ test('placement values follow their grammar; a surface title keeps every colon',
   }
 });
 
-test('paired flags must be given together', () => {
+test('paired flags must be given together, and --surface needs its --worktree', () => {
   assert.match(
     parsesAsUsageError(['runs', 'launch', 'k', '--worktree-placement', 'current']),
     /--worktree-placement requires --surface-placement/,
@@ -198,10 +198,6 @@ test('paired flags must be given together', () => {
   assert.match(
     parsesAsUsageError(['runs', 'launch', 'k', '--surface-placement', 'current']),
     /--surface-placement requires --worktree-placement/,
-  );
-  assert.match(
-    parsesAsUsageError(['runs', 'launch', 'k', '--worktree', '3']),
-    /--worktree requires --surface/,
   );
   assert.match(
     parsesAsUsageError(['workflows', 'list', '--surface', '3']),

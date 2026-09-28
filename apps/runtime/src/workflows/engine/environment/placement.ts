@@ -51,7 +51,7 @@ export interface PlacementDeps {
 
 export interface ResolvePlacementInput {
   readonly workflowKey: string;
-  readonly origin: WorkflowOrigin & { readonly surfaceId: number };
+  readonly origin: WorkflowOrigin;
   readonly project: LaunchProject;
   readonly selection: PlacementSelection;
 }
@@ -280,20 +280,33 @@ function resolveSurface(
      * origin worktree through `listWorktrees()` and returned it as `existing` therefore passes; a
      * `create` worktree never can, because its surfaces do not exist yet.
      */
-    case 'current':
+    case 'current': {
+      const currentSurfaceId = input.origin.surfaceId;
+      if (currentSurfaceId === null) {
+        return Effect.fail(
+          new WorkflowEngineError({
+            code: 'workflow_placement_invalid',
+            placementIssue: 'no_current_surface',
+            message: `The launch was made with no surface open on worktree ${input.origin.worktreeId}, so there is no current surface to run on.`,
+            workflowKey: input.workflowKey,
+            worktreeId: input.origin.worktreeId,
+          }),
+        );
+      }
       if (resolvedWorktreeId !== input.origin.worktreeId) {
         return Effect.fail(
           new WorkflowEngineError({
             code: 'workflow_placement_invalid',
             placementIssue: 'surface_not_on_worktree',
-            message: `The current surface ${input.origin.surfaceId} is on worktree ${input.origin.worktreeId}, which is not where this run was placed.`,
+            message: `The current surface ${currentSurfaceId} is on worktree ${input.origin.worktreeId}, which is not where this run was placed.`,
             workflowKey: input.workflowKey,
-            surfaceId: input.origin.surfaceId,
+            surfaceId: currentSurfaceId,
             worktreeId: input.origin.worktreeId,
           }),
         );
       }
-      return Effect.succeed({ kind: 'reuse', surfaceId: input.origin.surfaceId });
+      return Effect.succeed({ kind: 'reuse', surfaceId: currentSurfaceId });
+    }
 
     case 'existing':
       return Effect.gen(function* () {

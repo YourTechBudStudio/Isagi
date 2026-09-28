@@ -65,8 +65,23 @@ export const missingProjectCopy = {
   },
 } as const;
 
+/**
+ * A surface with no panes: a new workflow surface before its first agent, or
+ * one whose last pane was closed. The body describes panes only, never activity:
+ * a workflow can be running on this surface before it has any pane to show.
+ */
+export const emptySurfaceCopy = {
+  body: 'No panes here yet.',
+  aside: '// cmd+k works here too',
+  actions: {
+    startAgent: 'Agent session',
+    startTerminal: 'Terminal',
+    openEditor: 'Editor',
+    close: 'Close surface',
+  },
+} as const;
+
 export const ptyCopy = {
-  emptySurface: 'Nothing running here yet. cmd+k to start something.',
   noSession: 'No session',
   attaching: 'Attaching',
   emptyPane: "This pane's empty \u2014 nothing's claimed it yet.",

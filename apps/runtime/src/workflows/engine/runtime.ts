@@ -93,7 +93,7 @@ export interface PlacesPort {
     SurfaceRepositoryService,
     'findSurface' | 'listWorkspaceSurfaceMetadata'
   >;
-  readonly surfaces: Pick<SurfaceServiceShape, 'getSurfaceDetail' | 'createSinglePaneSurface'>;
+  readonly surfaces: Pick<SurfaceServiceShape, 'getSurfaceDetail' | 'createEmptySurface'>;
 }
 
 /** What checkpoint capture and export need: Git's HEAD, the content store, and new directories. */

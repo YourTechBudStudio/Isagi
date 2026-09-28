@@ -148,7 +148,9 @@ function prepare(rt: EngineRuntime, runId: number): Effect.Effect<'ready' | 'sto
     if (surfaceChoice.kind === 'create') {
       if (run.surfaceId === null) {
         const worktreeId = run.worktreeId as number;
-        const surface = yield* places.surfaces.createSinglePaneSurface({
+        // Empty on purpose: the run's first agent becomes its first pane, so no
+        // placeholder pane is ever left behind.
+        const surface = yield* places.surfaces.createEmptySurface({
           worktreeId,
           titleBase: surfaceChoice.title,
         });

@@ -73,23 +73,32 @@ test('the origin is the longest worktree prefix of the cwd, with that worktreeâ€
   assert.deepEqual(onlyJsonDocument(outside.stdout), {
     error: {
       code: 'origin_unresolved',
-      message: `${join(setup.root, 'repo-other')} is not inside any worktree Isagi knows; pass --worktree and --surface.`,
+      message: `${join(setup.root, 'repo-other')} is not inside any worktree Isagi knows; pass --worktree.`,
       data: { cwd: join(setup.root, 'repo-other') },
     },
   });
 });
 
-test('a worktree without a focused surface is origin_unresolved, naming the worktree', async () => {
+test('a worktree without a focused surface is an origin with no surface', async () => {
   const setup = workspace({ featureSurface: null });
   const run = await runIsagi(['runs', 'launch', 'implement-story', '--json'], {
     runtime: setup.runtime,
     cwd: setup.feature,
   });
-  assert.equal(run.code, 1);
-  const { error } = onlyJsonDocument(run.stdout) as { error: { code: string; data: unknown } };
-  assert.equal(error.code, 'origin_unresolved');
-  assert.deepEqual(error.data, { cwd: setup.feature, worktreeId: 11 });
-  assert.ok(!setup.runtime.calls.some((call) => call.endpointId === 'workflows.start'));
+  assert.equal(run.code, 0, run.stdout);
+  const document = onlyJsonDocument(run.stdout) as { origin: unknown };
+  assert.deepEqual(document.origin, { worktreeId: 11, surfaceId: null });
+  assert.ok(setup.runtime.calls.some((call) => call.endpointId === 'workflows.start'));
+});
+
+test('--worktree alone is an origin with no surface', async () => {
+  const setup = workspace();
+  const run = await runIsagi(['workflows', 'list', '--worktree', '10', '--json'], {
+    runtime: setup.runtime,
+    cwd: setup.feature,
+  });
+  assert.equal(run.code, 0, run.stdout);
+  assert.deepEqual(setup.runtime.calls[0]!.args, [{ origin: { worktreeId: 10, surfaceId: null } }]);
 });
 
 test('explicit --worktree and --surface win over the cwd and skip the snapshot', async () => {

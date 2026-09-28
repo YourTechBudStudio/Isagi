@@ -427,6 +427,7 @@ function fakeAgentSessionService(
     get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.succeed(20),
     activePtyProcessId: () => Effect.succeed(20),
+    stopUnlessPlaced: () => Effect.die('stopUnlessPlaced is not used'),
     ...overrides,
   } satisfies AgentSessionServiceShape;
 }

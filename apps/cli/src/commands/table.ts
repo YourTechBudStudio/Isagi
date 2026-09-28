@@ -90,7 +90,7 @@ const originWorktree = {
   value: 'positive_integer',
   placeholder: 'worktreeId',
   description:
-    'Launch origin worktree. Defaults to the worktree containing the current directory; give with --surface.',
+    'Launch origin worktree. Defaults to the worktree containing the current directory. Without --surface the origin has no surface.',
 } as const satisfies StringOptionSpec;
 
 const originSurface = {
@@ -98,7 +98,7 @@ const originSurface = {
   value: 'positive_integer',
   placeholder: 'surfaceId',
   description:
-    "Launch origin surface. Defaults to that worktree's focused surface; give with --worktree.",
+    "Launch origin surface. Defaults to that worktree's focused surface, if any; give with --worktree.",
 } as const satisfies StringOptionSpec;
 
 const runIdPositional = [
@@ -116,7 +116,7 @@ export const commandTable = [
     summary: 'List the workflows that can be launched from an origin worktree.',
     positionals: [],
     options: { worktree: originWorktree, surface: originSurface },
-    requires: { worktree: 'surface', surface: 'worktree' },
+    requires: { surface: 'worktree' },
     stdout: 'json',
   },
   {
@@ -152,7 +152,6 @@ export const commandTable = [
     requires: {
       'worktree-placement': 'surface-placement',
       'surface-placement': 'worktree-placement',
-      worktree: 'surface',
       surface: 'worktree',
     },
     stdout: 'json',

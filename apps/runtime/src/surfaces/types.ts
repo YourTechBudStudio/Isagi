@@ -127,6 +127,37 @@ export interface CreateSinglePaneSurfaceOutput {
   readonly cwd: string;
 }
 
+export interface CreateEmptySurfaceInput {
+  readonly worktreeId: number;
+  readonly titleBase: string;
+}
+
+export interface CreateEmptySurfaceOutput {
+  readonly surfaceId: number;
+  readonly title: string;
+}
+
+export interface StartSurfacePaneInput {
+  readonly surfaceId: number;
+  readonly titleBase: string;
+  /** As `CreateSinglePaneSurfaceInput.initialSession`: only the editor binds this way. */
+  readonly initialSession?:
+    | { readonly kind: 'editor_context'; readonly sessionId: number }
+    | undefined;
+}
+
+/** Returned rather than thrown: a refusal is expected and must not read as a database fault. */
+export type StartSurfacePaneResult =
+  | {
+      readonly status: 'started';
+      readonly worktreeId: number;
+      readonly surfaceId: number;
+      readonly paneId: number;
+      readonly title: string;
+    }
+  | { readonly status: 'surface_not_found' }
+  | { readonly status: 'surface_not_empty'; readonly worktreeId: number };
+
 export interface SplitSurfacePaneInput {
   readonly surfaceId: number;
   readonly sourcePaneId: number;
@@ -159,7 +190,16 @@ export interface RenameSurfaceOutput {
   readonly title: string;
 }
 
+/**
+ * What a delete actually removed, read inside its transaction. The session
+ * bindings on these rows are the ones cleanup must act on: a session bound
+ * after the caller last looked is here, where a pre-read capture would miss it.
+ */
 export interface DeleteSurfaceRowsOutput {
   readonly deletedSurfaceId: number | null;
-  readonly deletedPaneIds: readonly number[];
+  readonly deletedPanes: readonly SurfacePaneRow[];
+}
+
+export interface DeletePaneRowsOutput {
+  readonly deletedPanes: readonly SurfacePaneRow[];
 }

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c96186fc-f3ab-40ad-923c-7e499a68bb45",
+  "id": "25655171-c383-428f-8105-cfcb153f7eac",
   "prevId": "48c5c2a1-8d7f-492b-a7a4-830bfebe054c",
   "tables": {
     "agent_sessions": {
@@ -1360,7 +1360,7 @@
           "name": "origin_surface_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "origin_pane_id": {

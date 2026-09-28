@@ -37,7 +37,7 @@ test('opening an editor for a fresh worktree commits context, surface, pane, and
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const opened = yield* surfaces.openEditor({ worktreeId });
+        const opened = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         return {
           worktreeId,
           opened,
@@ -71,7 +71,7 @@ test('open starts no process: the editor runtime is strictly on demand', async (
     const state = await Effect.runPromise(
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
-        yield* (yield* SurfaceService).openEditor({ worktreeId });
+        yield* (yield* SurfaceService).openEditor({ worktreeId, intoSurfaceId: null });
         return yield* counts();
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -89,7 +89,7 @@ test('a second open converges on the same placement after the surface is renamed
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const first = yield* surfaces.openEditor({ worktreeId });
+        const first = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         // Identity is the row and placement is resolved by id, so a mutable
         // title and a changed order are invisible to the second open.
         yield* surfaces.renameSurface({ surfaceId: first.surfaceId, title: 'Renamed editor' });
@@ -99,7 +99,7 @@ test('a second open converges on the same placement after the surface is renamed
           surfaceId: first.surfaceId,
           beforeSurfaceId: null,
         });
-        const second = yield* surfaces.openEditor({ worktreeId });
+        const second = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         return { first, second, state: yield* counts() };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -120,12 +120,12 @@ test('an unplaced context is re-placed onto a new surface without creating a sec
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const first = yield* surfaces.openEditor({ worktreeId });
+        const first = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         // Deleting the surface removes placement; the durable context survives
         // unplaced, which is a normal repairable state rather than garbage.
         yield* surfaces.deleteSurface(first.surfaceId);
         const afterDelete = yield* counts();
-        const second = yield* surfaces.openEditor({ worktreeId });
+        const second = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         return { first, second, afterDelete, state: yield* counts() };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -149,7 +149,10 @@ test('two concurrent opens produce exactly one context and one surface', async (
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
         const [first, second] = yield* Effect.all(
-          [surfaces.openEditor({ worktreeId }), surfaces.openEditor({ worktreeId })],
+          [
+            surfaces.openEditor({ worktreeId, intoSurfaceId: null }),
+            surfaces.openEditor({ worktreeId, intoSurfaceId: null }),
+          ],
           { concurrency: 'unbounded' },
         );
         return { first, second, state: yield* counts() };
@@ -190,7 +193,9 @@ test('an unprovisioned runtime refuses before any row is written', async () => {
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const result = yield* Effect.either(surfaces.openEditor({ worktreeId }));
+        const result = yield* Effect.either(
+          surfaces.openEditor({ worktreeId, intoSurfaceId: null }),
+        );
         return { result, state: yield* counts() };
       }).pipe(Effect.provide(testLayer(dataRoot, { editorProvisioning: 'unavailable' }))),
     );
@@ -211,7 +216,9 @@ test('an unknown worktree is rejected as worktree_not_found', async () => {
       Effect.gen(function* () {
         yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const result = yield* Effect.either(surfaces.openEditor({ worktreeId: 987_654 }));
+        const result = yield* Effect.either(
+          surfaces.openEditor({ worktreeId: 987_654, intoSurfaceId: null }),
+        );
         return { result, state: yield* counts() };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );

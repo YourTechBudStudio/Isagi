@@ -7,7 +7,7 @@ import type {
   AddProjectOutput,
   ApiError,
   CreateSurfaceOutput,
-  DeleteSurfaceOutput,
+  DeletePaneOutput,
   Project,
   RenameSurfaceOutput,
   ClientSettingsOutput,
@@ -48,10 +48,7 @@ const renameSurfaceOutput = {
   title: 'Terminal',
 } satisfies RenameSurfaceOutput;
 
-const deleteSurfaceOutput = {
-  deletedSurfaceId: 7,
-  deletedPaneIds: [11],
-} satisfies DeleteSurfaceOutput;
+const deletePaneOutput = { deletedPaneIds: [11] } satisfies DeletePaneOutput;
 
 const createSurfaceOutput = {
   worktreeId: 10,
@@ -173,7 +170,7 @@ test('runtime client calls surface title and delete endpoints', async () => {
       method: init?.method ?? 'GET',
       body: String(init?.body ?? ''),
     });
-    const data = requests.length === 1 ? renameSurfaceOutput : deleteSurfaceOutput;
+    const data = requests.length === 1 ? renameSurfaceOutput : deletePaneOutput;
     return Promise.resolve(
       new Response(JSON.stringify({ data, meta: { requestId: `req-${requests.length}` } }), {
         status: 200,
@@ -186,7 +183,7 @@ test('runtime client calls surface title and delete endpoints', async () => {
     surfaceId: 7,
     title: 'Terminal',
   });
-  assert.deepEqual(await Effect.runPromise(client.deleteSurfacePane(7, 11)), deleteSurfaceOutput);
+  assert.deepEqual(await Effect.runPromise(client.deleteSurfacePane(7, 11)), deletePaneOutput);
 
   assert.deepEqual(requests, [
     {
@@ -460,7 +457,7 @@ function captureRequest(data: unknown) {
   return captured;
 }
 
-test('runtime client opens an editor by worktree path parameter, with no body', async () => {
+test('runtime client opens an editor by worktree path parameter, naming where an unplaced one goes', async () => {
   const captured = captureRequest({
     worktreeId: 10,
     surfaceId: 501,
@@ -468,12 +465,13 @@ test('runtime client opens an editor by worktree path parameter, with no body', 
     editorContextId: 7,
   });
 
-  const output = await Effect.runPromise(createRuntimeClient('http://runtime.test').openEditor(10));
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').openEditor(10, { intoSurfaceId: 501 }),
+  );
 
   assert.equal(captured.url, 'http://runtime.test/api/v1/worktrees/10/editor');
   assert.equal(captured.method, 'POST');
-  // The worktree is the whole input; a body would only invite a second target.
-  assert.equal(captured.body, null);
+  assert.deepEqual(JSON.parse(captured.body ?? 'null'), { intoSurfaceId: 501 });
   assert.deepEqual(output, { worktreeId: 10, surfaceId: 501, paneId: 601, editorContextId: 7 });
 });
 

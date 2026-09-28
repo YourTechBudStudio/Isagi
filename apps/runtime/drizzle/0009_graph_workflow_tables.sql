@@ -117,7 +117,7 @@ CREATE TABLE `workflow_runs` (
 	`placement_json` text NOT NULL,
 	`origin_worktree_id` integer NOT NULL,
 	`origin_worktree_path` text NOT NULL,
-	`origin_surface_id` integer NOT NULL,
+	`origin_surface_id` integer,
 	`origin_pane_id` integer,
 	`origin_agent_session_id` integer,
 	`worktree_id` integer,

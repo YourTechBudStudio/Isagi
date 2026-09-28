@@ -62,7 +62,7 @@ export function launch(
           message: errorMessage(cause),
           workflowKey: input.workflowKey,
           worktreeId: origin.worktreeId,
-          surfaceId: origin.surfaceId,
+          surfaceId: origin.surfaceId ?? undefined,
         }),
     });
     yield* Effect.tryPromise({
@@ -84,6 +84,7 @@ export function launch(
         project,
         inputs: input.inputs,
         placement: input.placement,
+        commandTitle: manifest.title,
       },
     );
     const resolved = yield* resolvePlacement(
@@ -234,11 +235,14 @@ function requireProject(
 /**
  * The origin, resolved against live rows: where the person launched from, including the pane and
  * agent session they had in view. Descriptive only; it never places work.
+ *
+ * A launch from a worktree with no surface open has a null surface, and then no pane or agent
+ * session either: those only exist on a surface.
  */
 function buildOrigin(
   rt: EngineRuntime,
   origin: WorkflowLaunchOrigin,
-): Effect.Effect<WorkflowOrigin & { readonly surfaceId: number }, unknown> {
+): Effect.Effect<WorkflowOrigin, unknown> {
   return Effect.gen(function* () {
     const worktree = yield* rt.deps.places.workspace.findWorktree(origin.worktreeId);
     if (!worktree) {
@@ -250,14 +254,36 @@ function buildOrigin(
         }),
       );
     }
-    const surface = yield* rt.deps.places.surfaces.getSurfaceDetail(origin.surfaceId).pipe(
+    if (origin.surfaceId === null) {
+      const stray = origin.paneId ?? origin.agentSessionId ?? null;
+      if (stray !== null) {
+        return yield* Effect.fail(
+          new WorkflowEngineError({
+            code: 'workflow_launch_context_mismatch',
+            message: 'A pane or agent session was supplied without the surface it belongs to.',
+            worktreeId: worktree.id,
+            paneId: origin.paneId ?? undefined,
+            agentSessionId: origin.agentSessionId ?? undefined,
+          }),
+        );
+      }
+      return {
+        worktreeId: worktree.id,
+        worktreePath: worktree.path,
+        surfaceId: null,
+        paneId: null,
+        agentSessionId: null,
+      };
+    }
+    const originSurfaceId = origin.surfaceId;
+    const surface = yield* rt.deps.places.surfaces.getSurfaceDetail(originSurfaceId).pipe(
       Effect.mapError(
         (cause) =>
           new WorkflowEngineError({
             code: 'surface_not_found',
             message: errorMessage(cause),
             worktreeId: origin.worktreeId,
-            surfaceId: origin.surfaceId,
+            surfaceId: originSurfaceId,
           }),
       ),
     );

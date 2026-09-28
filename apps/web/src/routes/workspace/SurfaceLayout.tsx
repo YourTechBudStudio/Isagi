@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { SurfaceDetail, SurfaceLayoutNode, SurfacePane } from '@isagi/contracts';
 
-import { ptyCopy } from '../../copy/index.js';
 import { activatePane, syncActivePaneFromSurfaceDetail } from '../../lib/workspace/activation.js';
 import {
   resolveActivePaneId,
@@ -11,6 +10,7 @@ import {
 } from '../../lib/workspace/model.js';
 import { setSplitWeightsFromSurface } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { EmptySurface } from './EmptySurface.js';
 
 const MIN_PANE_SIZE_PX = 160;
 
@@ -99,17 +99,14 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
     }
   }, [detail.id, layoutDiagnostics]);
 
-  if (detail.panes.length === 0) {
-    return (
-      <div className="grid h-full place-items-center rounded-md border border-line/20 bg-elevated/50 backdrop-blur-sm">
-        <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptySurface}</span>
-      </div>
-    );
+  const layout = detail.layout;
+  if (layout === null || detail.panes.length === 0) {
+    return <EmptySurface worktreeId={detail.worktreeId} surfaceId={detail.id} />;
   }
 
   const startDrag = (input: DragState) => {
     dragState.current = input;
-    setLocalLayout(detail.layout);
+    setLocalLayout(layout);
   };
   const moveDrag = (event: PointerEvent<HTMLElement>) => {
     const drag = dragState.current;
@@ -126,7 +123,7 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
     });
     dragState.current = { ...drag, latestWeights: nextWeights };
     setLocalLayout(
-      (layout) => setWeightsInLayout(layout ?? detail.layout, drag.nodeId, nextWeights) ?? layout,
+      (current) => setWeightsInLayout(current ?? layout, drag.nodeId, nextWeights) ?? current,
     );
   };
   const endDrag = () => {
@@ -300,7 +297,7 @@ interface DragState {
  * divider geometry as container fractions. Weights are treated as proportions of
  * their split; a degenerate (all-zero) split falls back to equal shares.
  */
-function computeLayoutGeometry(layout: SurfaceLayoutNode): {
+function computeLayoutGeometry(layout: SurfaceLayoutNode | null): {
   readonly paneRects: ReadonlyMap<number, Rect>;
   readonly dividers: readonly DividerGeom[];
 } {
@@ -337,7 +334,7 @@ function computeLayoutGeometry(layout: SurfaceLayoutNode): {
     });
   };
 
-  walk(layout, { x: 0, y: 0, w: 1, h: 1 });
+  if (layout) walk(layout, { x: 0, y: 0, w: 1, h: 1 });
   return { paneRects, dividers };
 }
 
@@ -390,7 +387,7 @@ function roundWeight(weight: number) {
 }
 
 function collectLayoutDiagnostics(
-  layout: SurfaceLayoutNode,
+  layout: SurfaceLayoutNode | null,
   panes: readonly SurfacePane[],
 ): {
   readonly missingPaneIds: readonly number[];
@@ -400,12 +397,13 @@ function collectLayoutDiagnostics(
   const missingPaneIds: number[] = [];
   const paneIds = new Set(panes.map((pane) => pane.id));
 
-  visitLayoutLeaves(layout, (paneId) => {
-    placedPaneIds.add(paneId);
-    if (!paneIds.has(paneId)) {
-      missingPaneIds.push(paneId);
-    }
-  });
+  if (layout)
+    visitLayoutLeaves(layout, (paneId) => {
+      placedPaneIds.add(paneId);
+      if (!paneIds.has(paneId)) {
+        missingPaneIds.push(paneId);
+      }
+    });
 
   return {
     missingPaneIds,

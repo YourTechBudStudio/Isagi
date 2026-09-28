@@ -10,6 +10,7 @@ import { clearToasts } from '../../toast/index.js';
 import type { WorkspaceData } from '../model.js';
 import {
   commitAddProjectSuccess,
+  commitDeletePaneSuccess,
   commitDeleteSurfaceSuccess,
   commitDeleteWorktreeSuccess,
   commitLaunchSessionSuccess,
@@ -224,7 +225,7 @@ test('delete surface success refetches workspace and clears only stale local ove
   assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
 });
 
-test('delete pane success clears only the deleted pane override', async () => {
+test('delete pane success clears only the deleted pane override and keeps the surface', async () => {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
   client.setQueryData(surfaceDetailQueryKey(501), { id: 501 });
   useWorkspaceStore.setState({
@@ -232,14 +233,11 @@ test('delete pane success clears only the deleted pane override', async () => {
     activePaneBySurfaceId: { 501: 601 },
   });
 
-  await commitDeleteSurfaceSuccess(client, {
+  await commitDeletePaneSuccess(client, {
     worktreeId: 10,
     surfaceId: 501,
     paneId: 601,
-    output: {
-      deletedSurfaceId: null,
-      deletedPaneIds: [601],
-    },
+    output: { deletedPaneIds: [601] },
     fetchWorkspaceData: async () => ({
       projects: [
         project({

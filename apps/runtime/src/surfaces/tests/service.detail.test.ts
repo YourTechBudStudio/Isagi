@@ -21,7 +21,7 @@ test('an editor pane projects the editor context beside its placement', async ()
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const opened = yield* surfaces.openEditor({ worktreeId });
+        const opened = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         const repository = yield* EditorContextRepository;
         const ptyProcessId = yield* insertEditorPtyProcess();
         yield* repository.markAttemptInProgress(opened.editorContextId);
@@ -68,7 +68,7 @@ test('an editor pane whose context row vanished projects a null session, like it
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const opened = yield* surfaces.openEditor({ worktreeId });
+        const opened = yield* surfaces.openEditor({ worktreeId, intoSurfaceId: null });
         const database = yield* RuntimeDatabase;
         // The binding outlives the row only if something deleted it out from
         // under the pane; the projection must not throw when it happens.

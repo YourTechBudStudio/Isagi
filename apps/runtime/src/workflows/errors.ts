@@ -46,6 +46,7 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
     | 'surface_not_on_worktree'
     | 'worktree_not_in_project'
     | 'invalid_surface_title'
+    | 'no_current_surface'
     | undefined;
   readonly collision?: 'branch' | 'worktree' | 'checkout_path' | undefined;
   readonly branch?: string | undefined;

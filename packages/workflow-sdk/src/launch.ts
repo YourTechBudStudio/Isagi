@@ -102,11 +102,14 @@ export type WorkflowInputs = Record<string, unknown>;
 /**
  * Where a run was launched from. Descriptive: it may reference a pane or agent session the person
  * has since closed, and it is never used to place work.
+ *
+ * `surfaceId` is null when the launch was made from a worktree with no surface open. A `current`
+ * surface choice is then refused at launch, and the default placement creates the run's own surface.
  */
 export interface WorkflowOrigin {
   readonly worktreeId: number;
   readonly worktreePath: string;
-  readonly surfaceId: number;
+  readonly surfaceId: number | null;
   readonly paneId?: number | null | undefined;
   readonly agentSessionId?: number | null | undefined;
 }
@@ -159,7 +162,10 @@ export type WorkflowWorktreeChoice =
   | { readonly kind: 'existing'; readonly worktreeId: number }
   | { readonly kind: 'create'; readonly branch: string; readonly fromRef: string };
 
-/** Which surface the run attaches to. An `existing` surface already busy with a run is refused. */
+/**
+ * Which surface the run attaches to. An `existing` surface already busy with a run is refused, and
+ * `current` is refused when the origin has no surface.
+ */
 export type WorkflowSurfaceChoice =
   | { readonly kind: 'current' }
   | { readonly kind: 'existing'; readonly surfaceId: number }

@@ -1,6 +1,6 @@
 # Choose a workflow environment
 
-Use the optional `environment(ctx, inputs)` hook to choose the workflow's destination worktree and surface. The origin records where it was launched. Without a caller override or hook, destination is current/current as captured at launch; switching the UI does not retarget it. Consult the installed SDK's `launch.d.ts` for types.
+Use the optional `environment(ctx, inputs)` hook to choose the workflow's destination worktree and surface. The origin records where it was launched; its `surfaceId` is null when the worktree had no surface open. Without a caller override or hook, destination is current/current as captured at launch, or the current worktree plus a new surface titled after the command when the origin has no surface; switching the UI does not retarget it. Consult the installed SDK's `launch.d.ts` for types.
 
 ## Placement
 
@@ -11,7 +11,7 @@ Both axes are required:
 | Worktree | `{ kind: 'current' }`, `{ kind: 'existing', worktreeId }`, `{ kind: 'create', branch, fromRef }` |
 | Surface | `{ kind: 'current' }`, `{ kind: 'existing', surfaceId }`, `{ kind: 'create', title }` |
 
-Existing resources must belong to the launch project, and the surface must belong to the selected worktree and be free of an attached run. A new worktree requires a new surface. Folder projects support reuse and surface creation, but cannot create Git worktrees.
+Existing resources must belong to the launch project, and the surface must belong to the selected worktree and be free of an attached run. A `current` surface is refused (`no_current_surface`) when the origin has none. A new worktree requires a new surface. Folder projects support reuse and surface creation, but cannot create Git worktrees.
 
 Creation requires a new branch name and resolvable `fromRef`; the resolved commit is fixed before preparation. A branch collision fails rather than implying reuse. Select existing resources by ID; surface titles are labels and duplicates receive a numeric suffix.
 
@@ -45,11 +45,11 @@ A second launch with that ticket requests another creation and can collide. To r
 
 ## Ordering and overrides
 
-Precedence is caller `placement`, then `environment`, then current/current. A caller override skips the selector, while input and placement validation still run. The order is `command → validate → selection → prepare → init`. Root `init(destination, parameters)` runs after preparation; a graph invocation that already exists is not initialized again on Retry. Subgraphs inherit the root destination.
+Precedence is caller `placement`, then `environment`, then the default (current/current, or current worktree plus a new surface when the origin has no surface). A caller override skips the selector, while input and placement validation still run. The order is `command → validate → selection → prepare → init`. Root `init(destination, parameters)` runs after preparation; a graph invocation that already exists is not initialized again on Retry. Subgraphs inherit the root destination.
 
 A run starts `preparing`. Its summary's `placement` holds what was requested (`request`), who decided it (`source`: `override`, `selector` or `default`), and the commit a new worktree's `fromRef` resolved to (`baseCommit`); `worktreeId`, `surfaceId` and `setupDone` hold what preparation has actually produced so far. A returned run ID alone does not prove preparation succeeded: a failure leaves the run `failed` with an error at stage `environment`.
 
-Preparation runs these steps, saving each result on the run and appending an environment event as it finishes: create the worktree (`worktree_created`), run its setup hooks (`setup_finished` or `setup_failed`, with their output), create the surface (`surface_created`). A failure appends `preparation_failed`.
+Preparation runs these steps, saving each result on the run and appending an environment event as it finishes: create the worktree (`worktree_created`), run its setup hooks (`setup_finished` or `setup_failed`, with their output), create the surface (`surface_created`). A created surface starts empty; the first agent the run starts becomes its first pane. Closing a surface's last pane leaves the surface empty rather than deleting it, so a run keeps its surface after its agents close. A failure appends `preparation_failed`.
 
 ## Failed preparation
 
