@@ -46,7 +46,7 @@ export const parseReview = (origin: WorkflowOrigin): ReviewParameters => ({
 
 Read [Workflow environments](workflow-environments.md) to choose or create the destination with `placement`, use caller placement overrides, and handle preparation failures.
 
-Compose substantial workflows hierarchically:
+Strongly prefer composing workflows in three or more levels, so no single graph becomes an intimidating wall of tiny steps:
 
 | Perspective | Responsibility                              | Example                                        |
 | ----------- | ------------------------------------------- | ---------------------------------------------- |
@@ -54,7 +54,9 @@ Compose substantial workflows hierarchically:
 | Logical     | A coherent process and its policy           | Implement, review, and revise within a budget  |
 | Operational | Concrete work, waits, and result collection | An agent turn followed by reading its response |
 
-These are responsibilities, not exactly three wrappers. Keep a tiny workflow flat; add nesting for meaningful ownership, reuse, or recovery boundaries. For example, a business graph invokes a review-loop graph, which composes writer and reviewer graphs and returns a decision the business graph understands.
+These are responsibilities, not exactly three wrappers, and a tiny workflow can stay flat. The aim is easy comprehension: the root graph reads like a plan, and clicking a subgraph node reveals the next level of detail. For example, a business graph invokes a review-loop graph, which composes writer and reviewer graphs and returns a decision the business graph understands.
+
+Name graphs and nodes for the person watching the run, not for the code. A `title` says in plain words what happens at that level ("Implement phase", "Review changes", not "sendPromptAndCollect"), and a `label` callback adds the specific instance ("Implement phase 2: auth"). Each graph should make sense on its own without opening its children.
 
 Use `subgraph({ graph, parameters, onResult })` to register a child. `parameters(parentState)` passes inputs; `onResult(parentState, result)` maps its published output through the parent's reducers. Both are pure and synchronous. The result includes `outcomeId`, `outcomeKind`, `reason`, and typed `output`. The parent's edge then receives a `subgraph` event. Keep the parent contract focused on meaningful results rather than the child's handles or private state.
 
@@ -66,7 +68,7 @@ Graph keys and node, edge, and outcome IDs match `[A-Za-z][A-Za-z0-9_-]{0,63}`. 
 
 An `operation(async (ctx, state) => ...)` performs work and returns `complete({ update })` or `suspend({ update, wait })`. `complete` finishes this node visit, not the workflow. A wait is a durable declaration returned with `suspend`, not a Promise to await. A `suspend`'s update is applied together with the edge's update, in one step, once the event arrives; until then the graph's state does not include it.
 
-Write each operation as its preparation, then **one** side effect, then return: one prompt, one headless launch, or one pane to close. A second effect belongs in its own node. Reads such as `getConversationHistory` are preparation, not effects. File snapshots belong in [checkpoint](workflow-checkpoints.md) nodes.
+Write each operation as its preparation, then **one** side effect, then return: one prompt, one headless launch, or one pane to close. A second effect belongs in its own node. Reads such as `getConversationHistory` are preparation, not effects. File snapshots belong in [checkpoint](workflow-checkpoints.md) nodes. These small nodes belong at the operational level; group them into logical subgraphs as described in [Graph structure and composition](#graph-structure-and-composition).
 
 | Wait                                  | Delivered event                                                 |
 | ------------------------------------- | --------------------------------------------------------------- |
