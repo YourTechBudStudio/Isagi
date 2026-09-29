@@ -88,7 +88,7 @@ function bundleSource(input: { readonly graphKey: string; readonly nodes: string
 export default {
   ...brand('workflow'),
   command: () => ({ title: 'Packaged workflow' }),
-  validate: () => {},
+  parse: () => ({}),
   graph: {
     ...brand('graph'),
     key: '${input.graphKey}',
@@ -112,10 +112,10 @@ const operationNodes = `{ work: { ...brand('operation-node'), run: async () => (
 
 const artifact = bundleSource({ graphKey: 'packaged-workflow', nodes: operationNodes });
 
-/** A checkpoint bundle whose `prepare` would throw if loading ever evaluated it. */
+/** A checkpoint bundle whose `plan` would throw if loading ever evaluated it. */
 const checkpointArtifact = bundleSource({
   graphKey: 'checkpoint-workflow',
-  nodes: `{ work: { ...brand('checkpoint-node'), title: 'Save the plan', prepare: () => { throw new Error('prepare ran during load'); } } }`,
+  nodes: `{ work: { ...brand('checkpoint-node'), title: 'Save the plan', plan: () => { throw new Error('plan ran during load'); } } }`,
 });
 
 /** A bundle whose entry node is not declared: structurally invalid, with a locating diagnostic. */
@@ -573,7 +573,7 @@ test('loads a checkpoint bundle and reports a checkpoint node descriptor', async
     const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
     await writePackage(join(workflows, 'checkpointed'), checkpointArtifact);
 
-    // Loading describes the structure without running author code: `prepare` runs only when a
+    // Loading describes the structure without running author code: `plan` runs only when a
     // run visits the node.
     const loaded = await Effect.runPromise(discoverAndLoad(registry, 'checkpointed'));
     assert.deepEqual(loaded.descriptor.graphs[0]?.nodes, [

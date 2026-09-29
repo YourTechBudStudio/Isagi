@@ -18,12 +18,15 @@ import { normalizeCheckpointPlan } from './plan.js';
  * A checkpoint node's one side-effecting step, the counterpart of running an operation's function.
  *
  * ```text
- * plan    = prepare(state)                     pure; stage checkpoint_prepare on failure
+ * plan    = plan(state)                        pure; stage checkpoint_plan on failure
  * commit  = HEAD of the run's checkout         null for a folder project or an unborn repository
  * scopes  = exact copies into the content store; stage checkpoint_capture on failure
  * in ONE transaction: insert the checkpoint, save { type: 'complete', update: {}, checkpointId }
- *                     as the result, set checkpoint_id and the title, append checkpoint_captured
+ *                     as the result, set checkpoint_id, append checkpoint_captured
  * ```
+ *
+ * The checkpoint is named like any other node: its static title (else its id), plus the label the
+ * execution captured when it was created. Capture never renames the execution.
  *
  * The saved result then routes like any completed operation, and a Retry copies it rather than
  * capturing again. A failure saves nothing, so a Retry captures again.
@@ -46,7 +49,7 @@ export function captureCheckpoint(
 
     if (!invocation || !node || node.isagiKind !== 'checkpoint-node') {
       return yield* fail(
-        'checkpoint_prepare',
+        'checkpoint_plan',
         `Node '${leaf.nodeId}' is not a checkpoint node in this build.`,
       );
     }
@@ -57,16 +60,14 @@ export function captureCheckpoint(
       );
     }
 
-    const prepared = evaluatePure({
-      what: `checkpoint '${leaf.nodeId}' prepare`,
-      run: () => node.prepare(isolate(fromJson(invocation.stateJson))),
+    const planned = evaluatePure({
+      what: `checkpoint '${leaf.nodeId}' plan`,
+      run: () => node.plan(isolate(fromJson(invocation.stateJson))),
     });
-    if (!prepared.ok) return yield* fail('checkpoint_prepare', prepared.message);
-    const plan = normalizeCheckpointPlan(prepared.value, {
-      nodeId: leaf.nodeId,
-      title: node.title,
-    });
-    if (!plan.ok) return yield* fail('checkpoint_prepare', plan.message);
+    if (!planned.ok) return yield* fail('checkpoint_plan', planned.message);
+    const plan = normalizeCheckpointPlan(planned.value);
+    if (!plan.ok) return yield* fail('checkpoint_plan', plan.message);
+    const title = node.title?.trim() || leaf.nodeId;
 
     const captured = yield* Effect.either(
       Effect.gen(function* () {
@@ -106,22 +107,20 @@ export function captureCheckpoint(
       const checkpoint = insertCheckpoint(db, {
         runId: run.id,
         executionId: leaf.id,
-        title: plan.value.title,
+        title,
+        label: execution.label,
         commitSha: captured.right.commitSha,
         scopes: captured.right.scopes,
       });
       const result: SavedResult = { type: 'complete', update: {}, checkpointId: checkpoint.id };
-      updateExecution(db, leaf.id, {
-        resultJson: toJson(result),
-        checkpointId: checkpoint.id,
-        label: plan.value.title,
-      });
+      updateExecution(db, leaf.id, { resultJson: toJson(result), checkpointId: checkpoint.id });
+      const name = execution.label === null ? title : `${title} · ${execution.label}`;
       emit({
         runId: run.id,
         executionId: leaf.id,
         category: 'node',
         kind: 'checkpoint_captured',
-        message: `${plan.value.title}: checkpoint ${checkpoint.id} saved`,
+        message: `${name}: checkpoint ${checkpoint.id} saved`,
         data: { checkpointId: checkpoint.id },
       });
     });

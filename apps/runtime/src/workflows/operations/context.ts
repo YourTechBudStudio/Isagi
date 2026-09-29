@@ -98,12 +98,11 @@ export function makeOperationContext(
 
   const context: OperationContext = {
     destination: where,
-    worktreePath: where.worktreePath,
-    invocation: {
+    execution: {
       runId: run.id,
-      invocationId: execution.invocationId,
+      graphInvocationId: execution.invocationId,
       executionId: execution.id,
-      kind: execution.retryOf === null ? 'initial' : 'retry',
+      attempt: execution.retryOf === null ? 'initial' : 'retry',
     },
 
     spawnAgentSession: (input) =>

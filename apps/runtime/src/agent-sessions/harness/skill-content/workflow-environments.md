@@ -1,6 +1,6 @@
 # Choose a workflow environment
 
-Use the optional `environment(ctx, inputs)` hook to choose the workflow's destination worktree and surface. The origin records where it was launched; its `surfaceId` is null when the worktree had no surface open. Without a caller override or hook, destination is current/current as captured at launch, or the current worktree plus a new surface titled after the command when the origin has no surface; switching the UI does not retarget it. Consult the installed SDK's `launch.d.ts` for types.
+Use the optional `placement(ctx, parameters)` hook to choose the workflow's destination worktree and surface. The origin records where it was launched; its `surfaceId` is null when the worktree had no surface open. Without a caller override or hook, destination is current/current as captured at launch, or the current worktree plus a new surface titled after the command when the origin has no surface; switching the UI does not retarget it. Consult the installed SDK's `launch.d.ts` for types.
 
 ## Placement
 
@@ -19,23 +19,23 @@ Creation requires a new branch name and resolvable `fromRef`; the resolved commi
 
 The context exposes `origin`, `project: { id, name, kind }`, `listWorktrees()`, and `listSurfaces({ worktreeId })`. Await discovery inside the hook, then return a placement. Reads can lag the filesystem and do not reserve resources; preparation validates the selection. Keep the hook to discovery and deterministic computation. Perform agent work in graph operations.
 
-This example assumes `validate` checks that `ticket` is a positive integer string:
+This example assumes `parse` checks that `ticket` is a positive integer string:
 
 ```ts
 import type {
-  WorkflowEnvironmentContext,
+  WorkflowPlacementContext,
   WorkflowPlacementRequest,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
-export function environment(
-  ctx: WorkflowEnvironmentContext,
-  inputs: { readonly ticket: string },
+export function placement(
+  ctx: WorkflowPlacementContext,
+  parameters: { readonly ticket: string },
 ): WorkflowPlacementRequest {
-  const title = `Ticket ${inputs.ticket}`;
+  const title = `Ticket ${parameters.ticket}`;
   return {
     worktree: ctx.project.kind === 'folder'
       ? { kind: 'current' }
-      : { kind: 'create', branch: `ticket-${inputs.ticket}`, fromRef: 'HEAD' },
+      : { kind: 'create', branch: `ticket-${parameters.ticket}`, fromRef: 'HEAD' },
     surface: { kind: 'create', title },
   };
 }
@@ -45,7 +45,7 @@ A second launch with that ticket requests another creation and can collide. To r
 
 ## Ordering and overrides
 
-Precedence is caller `placement`, then `environment`, then the default (current/current, or current worktree plus a new surface when the origin has no surface). A caller override skips the selector, while input and placement validation still run. The order is `command → validate → selection → prepare → init`. Root `init(destination, parameters)` runs after preparation; a graph invocation that already exists is not initialized again on Retry. Subgraphs inherit the root destination.
+Precedence is a placement the caller passes with the launch, then the workflow's `placement` hook, then the default (current/current, or current worktree plus a new surface when the origin has no surface). A caller override skips the selector, while input and placement validation still run. The order is `command → parse → placement → preparation → init`. Root `init(destination, parameters)` runs after preparation; a graph invocation that already exists is not initialized again on Retry. Subgraphs inherit the root destination.
 
 A run starts `preparing`. Its summary's `placement` holds what was requested (`request`), who decided it (`source`: `override`, `selector` or `default`), and the commit a new worktree's `fromRef` resolved to (`baseCommit`); `worktreeId`, `surfaceId` and `setupDone` hold what preparation has actually produced so far. A returned run ID alone does not prove preparation succeeded: a failure leaves the run `failed` with an error at stage `environment`.
 
@@ -53,7 +53,7 @@ Preparation runs these steps, saving each result on the run and appending an env
 
 ## Failed preparation
 
-Retry runs preparation again and skips every step whose result is already saved, so it creates the worktree from the recorded base commit even if the ref has moved, and never creates a second one. Editing `environment` does not relocate that run. Created resources remain after failure or cancellation; the run's environment events say exactly what was created. Setup reruns until it succeeds, so hooks must tolerate partial prior execution. A `current` or `existing` surface that was deleted fails preparation again: a run never replaces a surface it did not create. See [Project config](config-project.md) for setup and trust.
+Retry runs preparation again and skips every step whose result is already saved, so it creates the worktree from the recorded base commit even if the ref has moved, and never creates a second one. Editing `placement` does not relocate that run. Created resources remain after failure or cancellation; the run's environment events say exactly what was created. Setup reruns until it succeeds, so hooks must tolerate partial prior execution. A `current` or `existing` surface that was deleted fails preparation again: a run never replaces a surface it did not create. See [Project config](config-project.md) for setup and trust.
 
 Resolve trust, occupancy, or collision failures before Retry. Missing worktrees/surfaces, a surface on the wrong worktree, or a deleted origin may require a fresh launch with valid placement. Pause and Resume are unavailable during preparation; interrupted preparation fails on restart and uses Retry for recovery. Cancel does not roll back resources or stop an in-flight setup hook.
 

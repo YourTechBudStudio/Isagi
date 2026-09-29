@@ -6,7 +6,7 @@ import { WorkflowEngineError } from '../../errors.js';
 import { errorMessage } from '../../state/pure.js';
 import type { AnyWorkflowDefinition } from '../../structure/loader.js';
 import type { WorkflowOrigin } from '../../types.js';
-import { makeEnvironmentContext, type DiscoveryDeps } from './discovery.js';
+import { makePlacementContext, type DiscoveryDeps } from './discovery.js';
 import type { LaunchProject, PlacementSelection } from './types.js';
 
 const decodePlacementRequest = Schema.decodeUnknown(workflowPlacementRequestSchema);
@@ -37,7 +37,8 @@ export interface SelectionInput {
   readonly workflowKey: string;
   readonly origin: WorkflowOrigin;
   readonly project: LaunchProject;
-  readonly inputs: Record<string, unknown>;
+  /** What `parse` returned at launch. */
+  readonly parameters: unknown;
   readonly placement: WorkflowPlacementRequestDto | undefined;
   /** The manifest title `command` returned, which names a default-created surface. */
   readonly commandTitle: string;
@@ -46,9 +47,10 @@ export interface SelectionInput {
 /**
  * Which of the three sources decides this launch's placement.
  *
- * The precedence is deliberate: a caller-supplied `placement` wins, then the author's `environment`
- * hook, then the default (`defaultPlacementRequest`). The caller is a person or a CLI saying "put this here",
- * and an override that the workflow could quietly overrule would not be an override.
+ * The precedence is deliberate: a placement the caller supplies with the launch wins, then the
+ * workflow's own `placement` hook, then the default (`defaultPlacementRequest`). The caller is a
+ * person or a CLI saying "put this here", and an override that the workflow could quietly overrule
+ * would not be an override.
  *
  * Both non-default sources are decoded through the contract schema before they leave, so a malformed
  * placement is a launch rejection the person sees immediately rather than a failed run.
@@ -74,7 +76,7 @@ export function selectPlacement(
     );
   }
 
-  const hook = input.definition.environment;
+  const hook = input.definition.placement;
   if (typeof hook !== 'function') {
     return Effect.succeed({
       source: 'default',
@@ -83,12 +85,12 @@ export function selectPlacement(
   }
 
   return Effect.gen(function* () {
-    const { context, close } = makeEnvironmentContext(deps, {
+    const { context, close } = makePlacementContext(deps, {
       origin: input.origin,
       project: input.project,
     });
     const raw = yield* Effect.tryPromise({
-      try: async () => hook(context, input.inputs),
+      try: async () => hook(context, input.parameters),
       catch: selectionFailed(input.workflowKey),
     }).pipe(Effect.ensuring(Effect.sync(close)));
 
@@ -108,7 +110,7 @@ export function selectPlacement(
 function selectionFailed(workflowKey: string) {
   return (cause: unknown) =>
     new WorkflowEngineError({
-      code: 'workflow_environment_selection_failed',
+      code: 'workflow_placement_failed',
       message: errorMessage(cause),
       workflowKey,
     });

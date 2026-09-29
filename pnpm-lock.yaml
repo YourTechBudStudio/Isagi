@@ -245,7 +245,7 @@ importers:
         specifier: ^24.10.1
         version: 24.12.4
       '@yourtechbudstudio/isagi-workflow-verifier':
-        specifier: workspace:0.1.0
+        specifier: workspace:0.1.1
         version: link:../workflow-verifier
       tsx:
         specifier: ^4.21.0
@@ -319,7 +319,7 @@ importers:
         specifier: ^24.10.1
         version: 24.12.4
       '@yourtechbudstudio/isagi-workflow-sdk':
-        specifier: workspace:0.1.0
+        specifier: workspace:0.1.1
         version: link:../workflow-sdk
       tsx:
         specifier: ^4.21.0

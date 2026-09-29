@@ -2,14 +2,14 @@ import { createHash } from 'node:crypto';
 
 /**
  * The single structural inspection algorithm, shared by the verifier CLI, the runtime loader, and
- * tests. It is pure: it never calls `init`, `run`, `choose`, `parameters`, `onResult`, `output`, or
- * `label`. It only reads plain data off an already-imported module object.
+ * tests. It is pure: it never calls `init`, `run`, `choose`, `parameters`, `onResult`, `output`,
+ * `plan`, or `label`. It only reads plain data off an already-imported module object.
  *
  * Importing a bundle still executes trusted module-level JavaScript. This is a structural contract
  * check, not sandboxed static analysis of untrusted source.
  */
 
-export const workflowStructureDescriptorVersion = 1 as const;
+export const workflowStructureDescriptorVersion = 2 as const;
 
 /**
  * The contract version this release understands. `compatibility.test.ts` binds it to the SDK's
@@ -20,7 +20,7 @@ export const workflowStructureDescriptorVersion = 1 as const;
  * local leaves the packed verifier — which authors may install as a standalone CLI — free of a
  * runtime SDK resolution.
  */
-const recognizedContractVersion = 4;
+const recognizedContractVersion = 5;
 
 const limits = {
   graphs: 512,
@@ -32,7 +32,7 @@ const limits = {
 
 export interface WorkflowStructureDescriptor {
   readonly descriptorVersion: typeof workflowStructureDescriptorVersion;
-  readonly workflowContractVersion: 4;
+  readonly workflowContractVersion: 5;
   readonly rootGraphKey: string;
   /** Sorted by key, so one structure always canonicalizes to the same bytes. */
   readonly graphs: readonly GraphDescriptor[];
@@ -42,7 +42,6 @@ export interface GraphDescriptor {
   readonly key: string;
   readonly title: string;
   readonly description?: string;
-  readonly intent?: 'business' | 'logical' | 'operational';
   readonly stateFields: readonly string[];
   readonly entry: string;
   readonly nodes: readonly NodeDescriptor[];
@@ -92,7 +91,6 @@ export type StructureDiagnosticCode =
   | 'missing_callback'
   | 'invalid_identifier'
   | 'missing_title'
-  | 'invalid_intent'
   | 'missing_init'
   | 'invalid_state_field'
   | 'empty_state'
@@ -207,18 +205,18 @@ export function describeWorkflowModule(moduleNamespace: unknown): StructureResul
       field: 'command',
     });
   }
-  if (typeof workflow.validate !== 'function') {
-    diagnostics.add('missing_callback', 'The workflow definition needs a validate() function.', {
-      field: 'validate',
+  if (typeof workflow.parse !== 'function') {
+    diagnostics.add('missing_callback', 'The workflow definition needs a parse() function.', {
+      field: 'parse',
     });
   }
-  // Declared but malformed, not absent: `environment` is optional, so only a present non-function
+  // Declared but malformed, not absent: `placement` is optional, so only a present non-function
   // is a defect. A workflow that omits it is placed in the current worktree and surface.
-  if (workflow.environment !== undefined && typeof workflow.environment !== 'function') {
+  if (workflow.placement !== undefined && typeof workflow.placement !== 'function') {
     diagnostics.add(
       'missing_callback',
-      "The workflow definition's environment must be a function when present.",
-      { field: 'environment' },
+      "The workflow definition's placement must be a function when present.",
+      { field: 'placement' },
     );
   }
 
@@ -487,18 +485,6 @@ function validateGraph(graph: Unknown, diagnostics: Diagnostics): void {
       at({ field: 'title' }),
     );
   }
-  if (
-    graph.intent !== undefined &&
-    graph.intent !== 'business' &&
-    graph.intent !== 'logical' &&
-    graph.intent !== 'operational'
-  ) {
-    diagnostics.add(
-      'invalid_intent',
-      `Graph intent ${JSON.stringify(graph.intent)} must be "business", "logical", or "operational" when present.`,
-      at({ field: 'intent' }),
-    );
-  }
   if (typeof graph.init !== 'function') {
     diagnostics.add('missing_init', 'A graph needs an init() function.', at({ field: 'init' }));
   }
@@ -647,16 +633,16 @@ function validateNode(
     return;
   }
   if (isBranded(node, 'checkpoint-node')) {
-    // A checkpoint has no `label`: its instance title comes from what `prepare` returns at run
-    // time, so the label rule does not reach it. `prepare` is only checked to be a function; the
-    // verifier never calls it, because what a visit captures depends on state it does not have.
-    if (typeof node.prepare !== 'function') {
+    // `plan` is only checked to be a function; the verifier never calls it, because what a visit
+    // captures depends on state it does not have.
+    if (typeof node.plan !== 'function') {
       diagnostics.add(
         'missing_callback',
-        `Checkpoint node "${id}" needs a prepare() function.`,
+        `Checkpoint node "${id}" needs a plan() function.`,
         at({ nodeId: id }),
       );
     }
+    requireOptionalLabel(node, id, diagnostics, at);
     return;
   }
   diagnostics.add(
@@ -897,7 +883,6 @@ function describeGraph(graph: Unknown): GraphDescriptor {
     key: String(graph.key),
     title: String(graph.title),
     ...optional('description', graph.description),
-    ...describeIntent(graph.intent),
     stateFields: Object.keys(state).sort(compare),
     entry: String(graph.entry),
     nodes: Object.keys(nodes)
@@ -910,14 +895,6 @@ function describeGraph(graph: Unknown): GraphDescriptor {
       .sort(compare)
       .map((id) => describeOutcome(id, outcomes[id] as Unknown)),
   };
-}
-
-function describeIntent(
-  value: unknown,
-): { readonly intent: 'business' | 'logical' | 'operational' } | {} {
-  return value === 'business' || value === 'logical' || value === 'operational'
-    ? { intent: value }
-    : {};
 }
 
 function describeNode(id: string, node: Unknown): NodeDescriptor {
@@ -976,7 +953,6 @@ export function canonicalizeDescriptor(descriptor: WorkflowStructureDescriptor):
       key: graph.key,
       title: graph.title,
       ...optional('description', graph.description),
-      ...optional('intent', graph.intent),
       stateFields: graph.stateFields,
       entry: graph.entry,
       nodes: graph.nodes.map((node) => ({

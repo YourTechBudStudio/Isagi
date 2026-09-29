@@ -1,7 +1,14 @@
 import { Effect, Either } from 'effect';
 
 import { errorMessage } from '../state/pure.js';
-import { fromJson, now, toJson, type RunPlacement, type RunRow } from '../store/rows.js';
+import {
+  fromJson,
+  now,
+  storedParameters,
+  toJson,
+  type RunPlacement,
+  type RunRow,
+} from '../store/rows.js';
 import { getRun, updateRun } from '../store/runs.js';
 import { findRootInvocation } from '../store/tree.js';
 import { applyEntry, applyFailure, computeEntry } from './chain.js';
@@ -200,7 +207,8 @@ function enterRoot(rt: EngineRuntime, runId: number): Effect.Effect<void, unknow
         ? computeEntry(root, {
             destination,
             depth: 0,
-            parameters: () => ({ ok: true, value: fromJson(current.inputsJson) }),
+            // What `parse` returned at launch, never re-derived from the inputs.
+            parameters: () => ({ ok: true, value: storedParameters(current.parametersJson) }),
           })
         : ({
             ok: false,

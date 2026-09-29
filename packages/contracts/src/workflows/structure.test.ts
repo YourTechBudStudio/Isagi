@@ -63,7 +63,7 @@ function describeOrThrow(graph: unknown): WorkflowStructureDescriptor {
   const result = describeWorkflowModule({
     default: defineWorkflow({
       command: () => ({ title: 'Test' }),
-      validate: () => {},
+      parse: () => ({ note: 'hello' }),
       graph: graph as never,
     }),
   });
@@ -76,7 +76,6 @@ function leaf(key: string) {
   return createGraph<State, {}, { readonly note: string }, string>({
     key,
     title: key,
-    intent: 'operational',
     init: (_destination, parameters) => ({ note: parameters.note }),
     state: { note: reduce.replace<string>() },
     entry: 'act',
@@ -102,7 +101,6 @@ test('a descriptor produced by the real extractor decodes through the contracts 
   const root = createGraph<State, {}, { readonly note: string }, string>({
     key: 'Root',
     title: 'Root',
-    intent: 'business',
     init: (_destination, parameters) => ({ note: parameters.note }),
     state: { note: reduce.replace<string>() },
     entry: 'nested',
@@ -127,12 +125,11 @@ test('a descriptor produced by the real extractor decodes through the contracts 
     decoded.graphs.map((graph) => graph.key),
     ['Child', 'Root'],
   );
-  assert.equal(decoded.graphs[1]?.intent, 'business');
   assert.deepEqual(decoded.graphs[0]?.edges[0]?.to, ['done', 'act']);
   assert.equal(decoded.graphs[1]?.nodes[0]?.kind, 'subgraph');
 });
 
-test('a checkpoint descriptor decodes with its static metadata and no caption', () => {
+test('a checkpoint descriptor decodes with its static metadata only', () => {
   const descriptor = describeOrThrow(
     createGraph<State, {}, { readonly note: string }, string>({
       key: 'WithCheckpoint',
@@ -140,7 +137,13 @@ test('a checkpoint descriptor decodes with its static metadata and no caption', 
       init: (_destination, parameters) => ({ note: parameters.note }),
       state: { note: reduce.replace<string>() },
       entry: 'save',
-      nodes: { save: checkpoint({ title: 'Save notes', prepare: () => ({ capture: [] }) }) },
+      nodes: {
+        save: checkpoint({
+          title: 'Save notes',
+          label: (state) => state.note,
+          plan: () => ({ capture: [] }),
+        }),
+      },
       edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
       outcomes: { done: outcome({ kind: 'success', output: (s) => s.note }) },
     }),
@@ -154,19 +157,19 @@ test('a checkpoint descriptor decodes with its static metadata and no caption', 
 
 test('the schema rejects a descriptor from an unsupported contract or descriptor version', () => {
   const valid = {
-    descriptorVersion: 1,
-    workflowContractVersion: 4,
+    descriptorVersion: 2,
+    workflowContractVersion: 5,
     rootGraphKey: 'Root',
     graphs: [],
   };
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workflowStructureDescriptorSchema)(valid));
   assert.throws(() =>
-    Schema.decodeUnknownSync(workflowStructureDescriptorSchema)({ ...valid, descriptorVersion: 2 }),
+    Schema.decodeUnknownSync(workflowStructureDescriptorSchema)({ ...valid, descriptorVersion: 1 }),
   );
   assert.throws(() =>
     Schema.decodeUnknownSync(workflowStructureDescriptorSchema)({
       ...valid,
-      workflowContractVersion: 3,
+      workflowContractVersion: 4,
     }),
   );
 });
@@ -180,7 +183,6 @@ test('the contracts diagnostic codes are exactly the codes the verifier can emit
     'missing_callback',
     'invalid_identifier',
     'missing_title',
-    'invalid_intent',
     'missing_init',
     'invalid_state_field',
     'empty_state',
@@ -218,7 +220,7 @@ test('the contracts diagnostic codes are exactly the codes the verifier can emit
   // Assignable both ways: neither set may gain a member the other lacks.
   const mirrored: readonly WorkflowStructureDiagnosticCode[] = verifierCodes;
   const back: readonly StructureDiagnosticCode[] = mirrored;
-  assert.equal(back.length, 39);
+  assert.equal(back.length, 38);
 
   for (const code of verifierCodes) {
     assert.equal(Schema.decodeUnknownSync(workflowStructureDiagnosticCodeSchema)(code), code);

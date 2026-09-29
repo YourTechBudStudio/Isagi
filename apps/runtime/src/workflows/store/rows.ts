@@ -53,6 +53,15 @@ export function fromJson<T>(text: string | null): T | null {
   return text === null ? null : (JSON.parse(text) as T);
 }
 
+/**
+ * A run's root parameters as its stored `parameters_json` holds them: what placement and the root
+ * graph's `init` both receive. A stored null is handed over as `undefined`, as a subgraph's is.
+ */
+export function storedParameters(parametersJson: string): unknown {
+  const parameters = fromJson<unknown>(parametersJson);
+  return parameters === null ? undefined : parameters;
+}
+
 /** Both a nullable value and an absent one, stored as SQL `NULL`. */
 export function toNullableJson(value: unknown): string | null {
   return value === undefined || value === null ? null : JSON.stringify(value);

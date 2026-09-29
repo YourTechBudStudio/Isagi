@@ -466,7 +466,6 @@ export function applyFailure(
 }
 
 function nodeLabel(node: AnyGraphNode, state: unknown): string | null {
-  if (node.isagiKind === 'checkpoint-node') return null;
   return captureLabel(node.label as ((argument: never) => unknown) | undefined, state);
 }
 

@@ -1,19 +1,18 @@
 /**
  * Checkpoint plans: what one visit to a checkpoint node saves.
  *
- * A checkpoint's `prepare` returns a plan. The runtime records the destination's current Git commit
- * (none for a folder project or a repository with no commits yet) and an exact copy of exactly the
- * scopes the plan names. Nothing is inherited from earlier checkpoints: a scope the plan omits is
- * simply not part of this checkpoint, so capture everything a rebuild needs. A scope whose path does
- * not exist is recorded as missing, and exporting the checkpoint makes it absent.
+ * A checkpoint node's `plan(state)` returns one of these. The runtime records the destination's
+ * current Git commit (none for a folder project or a repository with no commits yet) and an exact
+ * copy of exactly the scopes the plan names. Nothing is inherited from earlier checkpoints: a scope
+ * the plan omits is simply not part of this checkpoint, so capture everything a rebuild needs. A
+ * scope whose path does not exist is recorded as missing, and exporting the checkpoint makes it
+ * absent.
  *
  * `scope` is a stable name for listing and comparing snapshots of the same thing across visits (for
- * example every `plan` snapshot of a run).
+ * example every `decisions` snapshot of a run).
  */
 
 export interface CheckpointPlan {
-  /** Instance title. Defaults to the node's `title`, then its id. Trimmed, non-empty, ≤ 512 chars. */
-  readonly title?: string | undefined;
   /**
    * Zero or more scopes; at most 64, and no two may overlap. An empty plan records only the commit.
    */

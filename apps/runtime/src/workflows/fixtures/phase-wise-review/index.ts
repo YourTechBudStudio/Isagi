@@ -12,7 +12,6 @@ import {
   type AgentSessionHandle,
   type HeadlessOperationResult,
   type NodeEvent,
-  type WorkflowInputs,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 import { latestAssistantText } from '../authoring.js';
@@ -76,7 +75,6 @@ export const ReviewRoundGraph = createGraph<
 >({
   key: 'review-round',
   title: 'Review round',
-  intent: 'operational',
   label: (parameters) => `phase ${parameters.phase}, round ${parameters.round}`,
   init: (_destination, parameters) => ({
     phase: parameters.phase,
@@ -186,7 +184,6 @@ export const PhaseGraph = createGraph<
 >({
   key: 'phase',
   title: 'Phase',
-  intent: 'logical',
   label: (parameters) => `phase ${parameters.phase}`,
   init: (_destination, parameters) => ({
     phase: parameters.phase,
@@ -375,18 +372,22 @@ export interface PhasePlanOutput {
   readonly commits: readonly string[];
 }
 
+export interface PhasePlanParameters {
+  readonly phases: number;
+  readonly reviewLimit: number;
+}
+
 export const PhasePlanGraph = createGraph<
   PhasePlanState,
   { readonly phaseIndex: number; readonly commits: string },
-  WorkflowInputs,
+  PhasePlanParameters,
   PhasePlanOutput
 >({
   key: 'phase-plan',
   title: 'Phase-wise plan',
-  intent: 'business',
-  init: (_destination, inputs) => ({
-    phases: Number(inputs.phases ?? 1),
-    reviewLimit: Number(inputs.reviewLimit ?? 1),
+  init: (_destination, parameters) => ({
+    phases: parameters.phases,
+    reviewLimit: parameters.reviewLimit,
     phaseIndex: 0,
     commits: [],
   }),
@@ -442,6 +443,19 @@ export const phaseWiseReviewWorkflow = defineWorkflow({
     description: 'Implement a plan phase by phase, reviewing, verifying and committing each.',
     inputs: [{ kind: 'text', key: 'phases', label: 'How many phases' }],
   }),
-  validate: () => undefined,
+  parse: (_origin, inputs): PhasePlanParameters => ({
+    phases: positiveInteger(inputs.phases, 'phases'),
+    reviewLimit: positiveInteger(inputs.reviewLimit, 'reviewLimit'),
+  }),
   graph: PhasePlanGraph,
 });
+
+/** A launch answer that must be a whole number of at least 1; absent means 1. */
+function positiveInteger(value: unknown, key: string): number {
+  if (value === undefined) return 1;
+  const parsed = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(parsed) || parsed < 1 || String(value).trim() === '') {
+    throw new Error(`${key} must be a whole number of at least 1.`);
+  }
+  return parsed;
+}

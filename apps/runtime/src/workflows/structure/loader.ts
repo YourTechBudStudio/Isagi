@@ -55,7 +55,7 @@ export interface LoadedWorkflowArtifact {
 // The loader is contract-checked, not type-checked: it inspects bundles compiled against their own
 // copy of the SDK, so the author's real parameter and state types are gone by the time these
 // objects arrive. `describeWorkflowModule` is what establishes the shape.
-export type AnyWorkflowDefinition = WorkflowDefinition<Record<string, unknown>, unknown>;
+export type AnyWorkflowDefinition = WorkflowDefinition<unknown, unknown>;
 export type AnyGraphDefinition = GraphDefinition<unknown, unknown, unknown, unknown>;
 
 /** The versions a freshly verified build recorded in its manifest, stored on its artifact row. */

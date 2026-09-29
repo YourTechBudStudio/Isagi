@@ -368,7 +368,10 @@ export const workflowRuns = sqliteTable(
       .notNull()
       .references(() => workflowArtifacts.hash),
     status: text('status', { enum: workflowRunStatusSchema.literals }).notNull(),
+    /** The raw launch answers, kept for display and relaunch. Nothing re-derives parameters from them. */
     inputsJson: text('inputs_json').notNull(),
+    /** What the workflow's `parse` returned at launch: the root graph's parameters. */
+    parametersJson: text('parameters_json').notNull(),
     /**
      * `{ source, request, baseCommit }`: the placement that was asked for, who decided it, and the
      * commit a `create` worktree's `fromRef` resolved to at launch. Preparation and Retry use
@@ -553,7 +556,10 @@ export const workflowCheckpoints = sqliteTable(
     executionId: integer('execution_id')
       .notNull()
       .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+    /** The checkpoint node's static title, else its node id. */
     title: text('title').notNull(),
+    /** The execution's captured dynamic label, when the node declares one that produced a name. */
+    label: text('label'),
     commitSha: text('commit_sha'),
     scopesJson: text('scopes_json').notNull(),
     createdAt: text('created_at').notNull(),

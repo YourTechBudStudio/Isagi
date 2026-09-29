@@ -1,7 +1,7 @@
 import { useWorkflowCheckpoint } from '../../../lib/workspace/workflow/queries.js';
 import { checkpointCommitLabel, checkpointScopeNames } from './checkpoint-view.js';
 import { inspectorCopy } from './copy.js';
-import { checkpointFilesTabKey, type DockCheckpoint, type DockRow } from './dock.js';
+import { checkpointFilesTabKey, labelRow, type DockCheckpoint, type DockRow } from './dock.js';
 import { Fields } from './DockFields.js';
 import { formatClock } from './timing.js';
 
@@ -50,6 +50,7 @@ function SavedCheckpoint({
   if (checkpoint) {
     rows.push(
       { label: 'title', value: checkpoint.title },
+      labelRow(checkpoint.label),
       { label: 'commit', value: checkpointCommitLabel(checkpoint.commitSha) },
       { label: 'scopes', value: checkpointScopeNames(checkpoint.scopes) },
       {

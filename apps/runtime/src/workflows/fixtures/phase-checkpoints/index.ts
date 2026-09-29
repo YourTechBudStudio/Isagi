@@ -37,19 +37,22 @@ interface PhaseState {
 }
 
 export interface PhaseCheckpointsVariant {
-  /** Replaces `save`'s `prepare`, for the failure and plan-shape cases. */
-  readonly savePrepare?: (state: PhaseState) => unknown;
+  /** Replaces `save`'s `plan`, for the failure and plan-shape cases. */
+  readonly savePlan?: (state: PhaseState) => unknown;
+  /** Replaces `save`'s `label`; `null` declares none. */
+  readonly saveLabel?: ((state: PhaseState) => string) | null;
   /** Registers `save` as an operation instead: a changed node kind a Retry must refuse. */
   readonly saveAsOperation?: boolean;
 }
 
-export const phasePrepare = (state: PhaseState): CheckpointPlan => ({
-  title: `Phase ${state.phase} saved`,
+export const phasePlan = (state: PhaseState): CheckpointPlan => ({
   capture: [
     { scope: `phase-${state.phase}`, directory: `scratch/phase-${state.phase}` },
     { scope: 'decisions', file: 'decisions.md' },
   ],
 });
+
+export const phaseLabel = (state: PhaseState): string => `Phase ${state.phase} saved`;
 
 const SealGraph = createGraph<{ readonly sealed: boolean }, {}, {}, null>({
   key: 'finalize',
@@ -61,7 +64,7 @@ const SealGraph = createGraph<{ readonly sealed: boolean }, {}, {}, null>({
     seal: checkpoint({
       title: 'Seal',
       description: 'Everything under scratch, as the run leaves it.',
-      prepare: () => ({ capture: [{ scope: 'all', directory: 'scratch' }] }),
+      plan: () => ({ capture: [{ scope: 'all', directory: 'scratch' }] }),
     }),
   },
   edges: { 'seal-out': edge({ from: 'seal', to: ['sealed'], choose: () => ({ to: 'sealed' }) }) },
@@ -73,9 +76,9 @@ export function makePhaseCheckpointsWorkflow(variant: PhaseCheckpointsVariant = 
     ? operation<PhaseState, {}>(async () => complete({}), { title: 'Save the phase' })
     : checkpoint<PhaseState>({
         title: 'Save the phase',
-        prepare:
-          (variant.savePrepare as ((state: PhaseState) => CheckpointPlan) | undefined) ??
-          phasePrepare,
+        label: variant.saveLabel === null ? undefined : (variant.saveLabel ?? phaseLabel),
+        plan:
+          (variant.savePlan as ((state: PhaseState) => CheckpointPlan) | undefined) ?? phasePlan,
       });
 
   const root = createGraph<PhaseState, {}, Record<string, unknown>, number>({
@@ -88,16 +91,22 @@ export function makePhaseCheckpointsWorkflow(variant: PhaseCheckpointsVariant = 
       write: operation(
         async (ctx, state) => {
           const phase = state.phase + 1;
-          const directory = join(ctx.worktreePath, 'scratch', `phase-${phase}`);
+          const directory = join(ctx.destination.worktreePath, 'scratch', `phase-${phase}`);
           await mkdir(directory, { recursive: true });
           await writeFile(join(directory, 'plan.md'), `# Phase ${phase}\n`);
           if (phase === 1) await writeFile(join(directory, 'draft.md'), 'rough notes\n');
           else {
-            await rm(join(ctx.worktreePath, 'scratch', `phase-${phase - 1}`, 'draft.md'), {
-              force: true,
-            });
+            await rm(
+              join(ctx.destination.worktreePath, 'scratch', `phase-${phase - 1}`, 'draft.md'),
+              {
+                force: true,
+              },
+            );
           }
-          await appendFile(join(ctx.worktreePath, 'decisions.md'), `- phase ${phase}\n`);
+          await appendFile(
+            join(ctx.destination.worktreePath, 'decisions.md'),
+            `- phase ${phase}\n`,
+          );
           return complete({ update: { phase } });
         },
         { title: 'Write the phase' },
@@ -124,7 +133,7 @@ export function makePhaseCheckpointsWorkflow(variant: PhaseCheckpointsVariant = 
 
   return defineWorkflow({
     command: () => ({ title: 'Phase checkpoints' }),
-    validate: () => {},
+    parse: () => ({}),
     graph: root,
   });
 }

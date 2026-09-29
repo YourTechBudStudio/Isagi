@@ -46,7 +46,7 @@ const workflowErrorStageHeadlines = {
   edge: "This workflow's routing code threw.",
   graph_output: "A graph's outcome code threw.",
   subgraph_on_result: "A subgraph's result couldn't be mapped back.",
-  checkpoint_prepare: "A checkpoint couldn't work out what to capture.",
+  checkpoint_plan: "A checkpoint couldn't work out what to capture.",
   checkpoint_capture: "A checkpoint couldn't capture its files.",
 } as const satisfies Record<WorkflowErrorStage, string>;
 

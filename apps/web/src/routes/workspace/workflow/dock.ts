@@ -55,6 +55,13 @@ export type DockRow = DockField | { readonly gap: true };
 
 export const gap: DockRow = { gap: true };
 
+/** A captured label as a field, with a dim dash when there is none, wherever the dock shows one. */
+export function labelRow(label: string | null): DockField {
+  return label === null
+    ? { label: 'label', value: '—', tone: 'dim' }
+    : { label: 'label', value: label };
+}
+
 /**
  * A tab in the Data column: a recorded JSON value, or a checkpoint's files.
  *
@@ -251,11 +258,7 @@ function executionView(
     const position = visits.findIndex((visit) => visit.executionId === execution.executionId);
     recorded.push({ label: 'visit', value: `${position + 1} of ${visits.length}` });
   }
-  recorded.push(
-    execution.label === null
-      ? { label: 'label', value: '—', tone: 'dim' }
-      : { label: 'label', value: execution.label },
-  );
+  recorded.push(labelRow(execution.label));
   recorded.push({
     label: 'status',
     value: execution.status,

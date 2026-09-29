@@ -96,7 +96,10 @@ export interface WorkflowCommandManifest {
 
 export type WorkflowUserInputAnswers = Record<string, string | readonly string[] | boolean>;
 
-/** Validated launch inputs. These become the root graph's parameters with no further mapping. */
+/**
+ * The raw launch answers, keyed by each command input's `key`. They are unvalidated: only `parse`
+ * receives them, and it turns them into the root graph's parameters.
+ */
 export type WorkflowInputs = Record<string, unknown>;
 
 /**
@@ -111,6 +114,7 @@ export interface WorkflowOrigin {
   readonly worktreePath: string;
   readonly surfaceId: number | null;
   readonly paneId?: number | null | undefined;
+  /** The agent session the workflow was launched from, if any. */
   readonly agentSessionId?: number | null | undefined;
 }
 
@@ -122,15 +126,15 @@ export interface WorkflowDestination {
 }
 
 /**
- * What the optional `environment` hook may read while choosing where a run is placed.
+ * What the optional `placement` hook may read while choosing where a run is placed.
  *
  * Project-scoped: it lists only the launch project's worktrees and their surfaces. It reads rows as
  * they are recorded without reconciling them against Git or the filesystem, so a listed worktree may
  * already be gone by the time preparation runs. Listing is never a reservation — nothing here holds,
  * locks or claims a resource, and every choice is re-validated at launch and re-checked during
- * preparation. The context is closed once `environment()` returns; a call made after that rejects.
+ * preparation. The context is closed once `placement()` returns; a call made after that rejects.
  */
-export interface WorkflowEnvironmentContext {
+export interface WorkflowPlacementContext {
   readonly origin: WorkflowOrigin;
   readonly project: { readonly id: number; readonly name: string; readonly kind: 'git' | 'folder' };
   listWorktrees(): Promise<readonly WorkflowWorktreeSummary[]>;

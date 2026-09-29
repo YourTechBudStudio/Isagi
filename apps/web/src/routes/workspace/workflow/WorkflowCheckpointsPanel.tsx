@@ -12,6 +12,7 @@ import {
   resolveCheckpointSelection,
 } from './checkpoint-view.js';
 import { inspectorCopy } from './copy.js';
+import { LabelSuffix } from './LabelSuffix.js';
 import { verticalIndex } from './list-navigation.js';
 import { formatClock } from './timing.js';
 import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
@@ -168,7 +169,10 @@ function CheckpointItem({
         }`}
       />
       <span className="min-w-0">
-        <span className="block truncate text-[13px] text-fg">{item.title}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="truncate text-[13px] text-fg">{item.title}</span>
+          <LabelSuffix label={item.label} />
+        </span>
         <span className="mt-0.5 block font-mono text-[10.5px] text-fg-subtle">
           {formatClock(item.createdAt)} · {checkpointCommitLabel(item.commitSha)}
         </span>

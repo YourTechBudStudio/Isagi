@@ -39,13 +39,13 @@ test('owns source inclusion and reserved path policy', () => {
 test('parses and canonically serializes manifest format 2', () => {
   const manifest = {
     manifestVersion: 2,
-    workflowContractVersion: 4,
-    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
-    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
+    workflowContractVersion: 5,
+    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.1' },
+    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.1' },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
     structure: {
-      descriptorVersion: 1,
+      descriptorVersion: 2,
       sha256: 'c'.repeat(64),
       rootGraphKey: 'Minimal',
       graphCount: 1,
@@ -62,12 +62,12 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
   // structure that artifact declares.
   const { structure, ...withoutStructure } = {
     manifestVersion: 2,
-    workflowContractVersion: 4,
-    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
-    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
+    workflowContractVersion: 5,
+    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.1' },
+    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.1' },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
-    structure: { descriptorVersion: 1, sha256: 'c'.repeat(64), rootGraphKey: 'M', graphCount: 1 },
+    structure: { descriptorVersion: 2, sha256: 'c'.repeat(64), rootGraphKey: 'M', graphCount: 1 },
   };
   void structure;
   assert.throws(() => parseWorkflowBuildManifest(withoutStructure), /missing fields: structure/);
@@ -76,26 +76,26 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
 test('the structure block is parsed with exact keys and checked values', () => {
   const base = {
     manifestVersion: 2,
-    workflowContractVersion: 4,
-    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
-    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
+    workflowContractVersion: 5,
+    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.1' },
+    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.1' },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
-    structure: { descriptorVersion: 1, sha256: 'c'.repeat(64), rootGraphKey: 'M', graphCount: 1 },
+    structure: { descriptorVersion: 2, sha256: 'c'.repeat(64), rootGraphKey: 'M', graphCount: 1 },
   };
   const withStructure = (structure: Record<string, unknown>) =>
     parseWorkflowBuildManifest({ ...base, structure });
 
   assert.throws(
     () => parseWorkflowBuildManifest({ ...base, workflowContractVersion: 3 }),
-    /Unsupported workflowContractVersion 3; this verifier supports 4/,
+    /Unsupported workflowContractVersion 3; this verifier supports 5/,
   );
   assert.throws(
     () => withStructure({ ...base.structure, extra: 1 }),
     /structure has unexpected fields: extra/,
   );
   assert.throws(
-    () => withStructure({ ...base.structure, descriptorVersion: 2 }),
+    () => withStructure({ ...base.structure, descriptorVersion: 1 }),
     /Unsupported structure\.descriptorVersion/,
   );
   assert.throws(

@@ -3,43 +3,33 @@ import test from 'node:test';
 
 import { normalizeCheckpointPlan } from './plan.js';
 
-const node = { nodeId: 'save', title: 'Save' };
-
 function refusal(plan: unknown): string {
-  const result = normalizeCheckpointPlan(plan, node);
+  const result = normalizeCheckpointPlan(plan);
   assert.equal(result.ok, false, `expected ${JSON.stringify(plan)} to be refused`);
   return result.ok ? '' : result.message;
 }
 
-test('a plan is normalized: paths cleaned, exclusions sorted and deduplicated, title defaulted', () => {
-  const result = normalizeCheckpointPlan(
-    {
-      capture: [
-        { scope: 'notes', directory: './notes/', exclude: ['b', 'a', 'a/'] },
-        { scope: 'tool', file: 'bin\\tool.sh' },
-      ],
-    },
-    node,
-  );
+test('a plan is normalized: paths cleaned, exclusions sorted and deduplicated', () => {
+  const result = normalizeCheckpointPlan({
+    capture: [
+      { scope: 'notes', directory: './notes/', exclude: ['b', 'a', 'a/'] },
+      { scope: 'tool', file: 'bin\\tool.sh' },
+    ],
+  });
   assert.deepEqual(result, {
     ok: true,
     value: {
-      title: 'Save',
       scopes: [
         { scope: 'notes', kind: 'directory', path: 'notes', exclude: ['a', 'b'] },
         { scope: 'tool', kind: 'file', path: 'bin/tool.sh', exclude: [] },
       ],
     },
   });
-  assert.deepEqual(normalizeCheckpointPlan({ capture: [] }, { nodeId: 'n' }), {
-    ok: true,
-    value: { title: 'n', scopes: [] },
-  });
+  assert.deepEqual(normalizeCheckpointPlan({ capture: [] }), { ok: true, value: { scopes: [] } });
 });
 
 test('every rule refuses rather than repairs', () => {
   assert.match(refusal(null), /capture/);
-  assert.match(refusal({ title: ' ', capture: [] }), /title/);
   assert.match(refusal({ capture: [{ scope: 'a', directory: 'x', file: 'y' }] }), /exactly one/);
   assert.match(refusal({ capture: [{ scope: 'Bad', directory: 'x' }] }), /must match/);
   assert.match(

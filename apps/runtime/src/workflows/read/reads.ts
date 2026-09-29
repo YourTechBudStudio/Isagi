@@ -57,6 +57,7 @@ export function getRunDetail(db: Db, runId: number): GetWorkflowRunOutput {
   return {
     run: runSummary(db, run),
     inputs: fromJson<Record<string, unknown>>(run.inputsJson),
+    parameters: fromJson<unknown>(run.parametersJson),
     invocations: listInvocations(db, runId).map(invocationDto),
     executions: listExecutions(db, runId).map(executionSummaryDto),
   };

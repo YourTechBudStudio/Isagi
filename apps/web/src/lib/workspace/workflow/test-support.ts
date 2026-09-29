@@ -162,6 +162,7 @@ export function workflowRunDetailFixture(
   return {
     run: workflowSummaryFixture(),
     inputs: {},
+    parameters: {},
     invocations: [workflowInvocationFixture()],
     executions: [],
     ...overrides,
@@ -176,6 +177,7 @@ export function workflowCheckpointSummaryFixture(
     runId: 1,
     executionId: 1,
     title: 'Plan saved',
+    label: null,
     commitSha: 'a'.repeat(40),
     createdAt: at,
     scopes: [
@@ -193,6 +195,7 @@ export function workflowCheckpointFixture(
     runId: 1,
     executionId: 1,
     title: 'Plan saved',
+    label: null,
     commitSha: 'a'.repeat(40),
     createdAt: at,
     scopes: [

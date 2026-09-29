@@ -83,7 +83,7 @@ test('the receipt binds the descriptor version the structure module produces', (
   // other would let a receipt certify a descriptor shape this release does not produce.
   const manifest: WorkflowBuildManifest = {
     manifestVersion: 2,
-    workflowContractVersion: 4,
+    workflowContractVersion: 5,
     sdk: { name: workflowSdkPackage, version: workflowSdkVersion },
     verifier: { name: workflowVerifierPackage, version: workflowVerifierVersion },
     source: { sha256: 'a'.repeat(64) },
@@ -112,7 +112,11 @@ test('the structure module recognizes registrations the shipped SDK constructs',
     outcomes: { done: outcome({ kind: 'success', output: (state) => state.note }) },
   });
   const result = describeWorkflowModule({
-    default: defineWorkflow({ command: () => ({ title: 'B' }), validate: () => {}, graph }),
+    default: defineWorkflow({
+      command: () => ({ title: 'B' }),
+      parse: () => ({ note: 'bound' }),
+      graph,
+    }),
   });
   assert.ok(result.ok, 'the shipped SDK must be recognized by the shipped structure module');
 });

@@ -54,6 +54,9 @@ test('a saved checkpoint replaces Operations with what it saved', async ({ page 
 
   const column = checkpointColumn(page);
   await expect(column).toContainText(`#${FULL}`);
+  // The node's own title, and the label this visit captured.
+  await expect(column).toContainText('Save completed phase');
+  await expect(column).toContainText('Phase 2');
   await expect(column).toContainText('git · a41c9e2');
   await expect(column).toContainText('design, implementation, decisions, reviews (missing)');
   await expect(column).toContainText('4 scopes · 10 files');
@@ -208,6 +211,8 @@ test('the Checkpoints tab lists every checkpoint, moves the dock, and keeps its 
   await expect(item(FULL)).toHaveAttribute('aria-selected', 'true');
   await expect(item(SMALL)).toHaveAttribute('aria-selected', 'false');
   await expect(item(FULL)).toContainText('design, implementation, decisions, reviews (missing)');
+  await expect(item(SMALL)).toContainText('Save completed phase');
+  await expect(item(SMALL)).toContainText('Phase 1');
 
   // Choosing one moves the dock to the execution that saved it.
   await item(SMALL).click();

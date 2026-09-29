@@ -53,8 +53,10 @@ const checkpointFields = {
   checkpointId: positiveInteger,
   runId: positiveInteger,
   executionId: positiveInteger,
-  /** The instance title `prepare` returned, or the node's static title, or its id. */
+  /** The checkpoint node's static title, or its id. */
   title: nonEmptyString,
+  /** The execution's dynamic label, captured when the visit started; null when there is none. */
+  label: Schema.NullOr(Schema.String),
   commitSha: Schema.NullOr(commitShaSchema),
   createdAt: nonEmptyString,
 };

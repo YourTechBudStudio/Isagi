@@ -3,8 +3,8 @@ import { Effect } from 'effect';
 import type { SurfaceRepositoryService } from '../../../surfaces/index.js';
 import type { WorkspaceRepositoryService } from '../../../workspace/workspace.repository.js';
 import type {
-  WorkflowEnvironmentContext,
   WorkflowOrigin,
+  WorkflowPlacementContext,
   WorkflowSurfaceSummary,
   WorkflowWorktreeSummary,
 } from '../../types.js';
@@ -16,7 +16,7 @@ export interface DiscoveryDeps {
 }
 
 /**
- * What the author's `environment` hook may read while choosing where a run is placed.
+ * What the author's `placement` hook may read while choosing where a run is placed.
  *
  * Three properties define it, and each is load-bearing:
  *
@@ -29,38 +29,38 @@ export interface DiscoveryDeps {
  * because nothing here holds anything: every choice is statically validated at launch and re-checked
  * per step during preparation.
  *
- * **Closed when the hook returns.** A context retained past `environment()` would let author code
+ * **Closed when the hook returns.** A context retained past `placement()` would let author code
  * read rows at an arbitrary later moment, outside the launch it belongs to, which is neither
  * meaningful nor something the launch can account for. Every call after `close()` rejects, the same
  * posture `operation_context_closed` takes for operation contexts.
  *
- * There is deliberately no timeout and no sandbox. `command` and `validate` have neither, adding one
+ * There is deliberately no timeout and no sandbox. `command` and `parse` have neither, adding one
  * only here would be inconsistent, and the loader cannot enforce that author code performs no IO of
  * its own. The achievable guarantee is a narrow context plus documentation, and the shipped skill
  * reference says so.
  */
-export function makeEnvironmentContext(
+export function makePlacementContext(
   deps: DiscoveryDeps,
   input: { readonly origin: WorkflowOrigin; readonly project: LaunchProject },
-): { readonly context: WorkflowEnvironmentContext; readonly close: () => void } {
+): { readonly context: WorkflowPlacementContext; readonly close: () => void } {
   let closed = false;
 
   /**
    * The bridge author code sees.
    *
-   * Promise-shaped for the same reason `command` and `validate` are: the SDK surface is Tier 0
+   * Promise-shaped for the same reason `command` and `parse` are: the SDK surface is Tier 0
    * plain TypeScript and no Effect concept crosses it.
    */
   const bridge = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
     if (closed) {
       return Promise.reject(
-        new Error('The environment context is closed once environment() has returned.'),
+        new Error('The placement context is closed once placement() has returned.'),
       );
     }
     return Effect.runPromise(effect as Effect.Effect<A, unknown, never>);
   };
 
-  const context: WorkflowEnvironmentContext = {
+  const context: WorkflowPlacementContext = {
     origin: input.origin,
     project: { id: input.project.id, name: input.project.name, kind: input.project.kind },
     listWorktrees: () =>

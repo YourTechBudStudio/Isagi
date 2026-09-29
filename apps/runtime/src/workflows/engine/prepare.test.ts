@@ -34,8 +34,8 @@ const environmentEvents = (harness: EngineHarness, runId: number) =>
 function inNewWorktree(seen: string[]): AnyWorkflowDefinition {
   return defineWorkflow({
     command: () => ({ title: 'Isolated' }),
-    validate: () => undefined,
-    environment: () => ({
+    parse: (_origin, inputs) => inputs,
+    placement: () => ({
       worktree: { kind: 'create', branch: 'feature', fromRef: 'main' },
       surface: { kind: 'create', title: 'Feature' },
     }),
@@ -50,7 +50,7 @@ function inNewWorktree(seen: string[]): AnyWorkflowDefinition {
       entry: 'work',
       nodes: {
         work: operation(async (ctx: OperationContext) => {
-          seen.push(`work in ${ctx.worktreePath}`);
+          seen.push(`work in ${ctx.destination.worktreePath}`);
           return complete();
         }),
       },
@@ -132,7 +132,7 @@ test('Retry of a preparation whose existing surface was deleted fails again, and
       'plain',
       defineWorkflow({
         command: () => ({ title: 'Plain' }),
-        validate: () => undefined,
+        parse: (_origin, inputs) => inputs,
         graph: createGraph<{ n: number }>({
           key: 'plain',
           title: 'Plain',
@@ -198,8 +198,8 @@ test('a caller placement beats the hook, and a hook that throws is a launch reje
       'placed',
       defineWorkflow({
         command: () => ({ title: 'Placed' }),
-        validate: () => undefined,
-        environment: async (ctx) => {
+        parse: (_origin, inputs) => inputs,
+        placement: async (ctx) => {
           hookCalls += 1;
           if (hookThrows) throw new Error('no idea where to run');
           const worktrees = await ctx.listWorktrees();
@@ -243,14 +243,15 @@ test('a caller placement beats the hook, and a hook that throws is a launch reje
       }),
     );
     assert.ok(refused instanceof WorkflowEngineError);
-    assert.equal(refused.code, 'workflow_environment_selection_failed');
+    assert.equal(refused.code, 'workflow_placement_failed');
+    assert.equal(refused.message, 'no idea where to run');
   });
 });
 
 function plainWorkflow(title: string): AnyWorkflowDefinition {
   return defineWorkflow({
     command: () => ({ title }),
-    validate: () => undefined,
+    parse: (_origin, inputs) => inputs,
     graph: createGraph<{ n: number }>({
       key: 'plain',
       title,

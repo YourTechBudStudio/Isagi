@@ -33,7 +33,7 @@ export const workflowErrorStageSchema = Schema.Literal(
   'edge',
   'graph_output',
   'subgraph_on_result',
-  'checkpoint_prepare',
+  'checkpoint_plan',
   'checkpoint_capture',
 );
 

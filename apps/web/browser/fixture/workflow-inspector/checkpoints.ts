@@ -30,8 +30,8 @@ const createdBase = Date.now() - 120_000;
 const at = (seconds: number) => new Date(createdBase + seconds * 1000).toISOString();
 
 export const checkpointDescriptor: WorkflowStructureDescriptorDto = {
-  descriptorVersion: 1,
-  workflowContractVersion: 4,
+  descriptorVersion: 2,
+  workflowContractVersion: 5,
   rootGraphKey: CHECKPOINT_ROOT_GRAPH,
   graphs: [
     {
@@ -149,7 +149,8 @@ const checkpoints: ReadonlyMap<number, WorkflowCheckpointDto> = new Map([
       checkpointId: CHECKPOINT_SMALL,
       runId: 0,
       executionId: CHECKPOINT_SMALL_EXECUTION,
-      title: 'Phase 1',
+      title: 'Save completed phase',
+      label: 'Phase 1',
       commitSha: '9e02b17'.padEnd(40, '0'),
       createdAt: at(10),
       scopes: [scope('design', 'directory', 'scratch/story/design', smallFiles)],
@@ -161,7 +162,8 @@ const checkpoints: ReadonlyMap<number, WorkflowCheckpointDto> = new Map([
       checkpointId: CHECKPOINT_FULL,
       runId: 0,
       executionId: CHECKPOINT_FULL_EXECUTION,
-      title: 'Phase 2',
+      title: 'Save completed phase',
+      label: 'Phase 2',
       commitSha: 'a41c9e2'.padEnd(40, '0'),
       createdAt: at(40),
       scopes: [

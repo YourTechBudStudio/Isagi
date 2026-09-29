@@ -462,7 +462,10 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'agent_session_not_on_surface',
   'workflow_launch_context_mismatch',
   'workflow_command_failed',
-  'workflow_inputs_rejected',
+  /** The workflow's `parse` threw. The message is the author's, verbatim. */
+  'workflow_parse_rejected',
+  /** The workflow's `parse` returned parameters that cannot be stored. The message names the path. */
+  'workflow_parameters_invalid',
   /** A surface holds at most one attached run. See `activeWorkflowRunId`. */
   'workflow_surface_busy',
   'workflow_run_not_found',
@@ -477,8 +480,8 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_user_input_invalid',
   /** Retry could not refresh the agent session's turns to re-check its wait. */
   'workflow_agent_observation_unavailable',
-  /** The workflow's `environment` hook threw, or returned a value the placement schema refuses. */
-  'workflow_environment_selection_failed',
+  /** The workflow's `placement` hook threw, or returned a value the placement schema refuses. */
+  'workflow_placement_failed',
   /** The requested placement does not describe a usable destination. See `placementIssue`. */
   'workflow_placement_invalid',
   /** A folder project maintains its own single environment, so it has no worktrees to create. */

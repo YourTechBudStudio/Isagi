@@ -35,7 +35,7 @@ const executions = (harness: EngineHarness, runId: number) =>
 const workflow = (graph: unknown): AnyWorkflowDefinition =>
   defineWorkflow({
     command: () => ({ title: 'Test workflow' }),
-    validate: () => undefined,
+    parse: (_origin, inputs) => inputs,
     graph: graph as never,
   }) as unknown as AnyWorkflowDefinition;
 

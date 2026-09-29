@@ -41,7 +41,7 @@ function moduleFor(graph: unknown) {
   return {
     default: defineWorkflow({
       command: () => ({ title: 'Test' }),
-      validate: () => {},
+      parse: () => ({ note: 'hello' }),
       graph: graph as never,
     }),
   };
@@ -71,7 +71,7 @@ function brokenGraph(overrides: Record<string, unknown>) {
 test('a valid module produces a descriptor at the current descriptor and contract versions', () => {
   const descriptor = describeOrThrow(leafGraph('Root'));
   assert.equal(descriptor.descriptorVersion, workflowStructureDescriptorVersion);
-  assert.equal(descriptor.workflowContractVersion, 4);
+  assert.equal(descriptor.workflowContractVersion, 5);
   assert.equal(descriptor.rootGraphKey, 'Root');
   assert.deepEqual(
     descriptor.graphs.map((graph) => graph.key),
@@ -89,52 +89,56 @@ test('a missing or unbranded default export is invalid_export, not a crash', () 
 
 test('a bundle built against another contract reports the real cause', () => {
   const result = describeWorkflowModule({
-    default: { isagiContract: 3, isagiKind: 'workflow', command() {}, validate() {} },
+    default: { isagiContract: 3, isagiKind: 'workflow', command() {}, parse() {} },
   });
   assert.equal(result.ok, false);
   assert.equal(result.ok ? null : result.diagnostics[0]?.code, 'unsupported_contract');
   assert.match(
     result.ok ? '' : (result.diagnostics[0]?.message ?? ''),
-    /contract version 3; this release supports version 4/,
+    /contract version 3; this release supports version 5/,
   );
 });
 
-test('a workflow missing command or validate names the missing callback', () => {
+test('a workflow missing command or parse names the missing callback', () => {
   const workflow = defineWorkflow({
     command: () => ({ title: 'Test' }),
-    validate: () => {},
-    graph: leafGraph('Root') as never,
+    parse: () => ({ note: 'hello' }),
+    graph: leafGraph('Root'),
   });
-  const result = describeWorkflowModule({
-    default: { ...workflow, validate: undefined },
-  });
-  assert.equal(result.ok, false);
-  assert.ok(!result.ok && result.diagnostics.some((d) => d.code === 'missing_callback'));
+  for (const field of ['command', 'parse']) {
+    const result = describeWorkflowModule({ default: { ...workflow, [field]: undefined } });
+    assert.equal(result.ok, false);
+    const diagnostics = result.ok ? [] : result.diagnostics;
+    assert.deepEqual(
+      diagnostics.map((d) => [d.code, d.at.field]),
+      [['missing_callback', field]],
+    );
+  }
 });
 
-test('environment is optional, and a declared one must be a function', () => {
+test('placement is optional, and a declared one must be a function', () => {
   const workflow = defineWorkflow({
     command: () => ({ title: 'Test' }),
-    validate: () => {},
-    graph: leafGraph('Root') as never,
+    parse: () => ({ note: 'hello' }),
+    graph: leafGraph('Root'),
   });
 
   // Absent: the run is placed in the current worktree and surface, and nothing is diagnosed.
   assert.equal(describeWorkflowModule({ default: workflow }).ok, true);
 
   assert.equal(
-    describeWorkflowModule({ default: { ...workflow, environment: () => ({}) } }).ok,
+    describeWorkflowModule({ default: { ...workflow, placement: () => ({}) } }).ok,
     true,
   );
 
   const malformed = describeWorkflowModule({
-    default: { ...workflow, environment: 'current' },
+    default: { ...workflow, placement: 'current' },
   });
   assert.equal(malformed.ok, false);
   const diagnostics = malformed.ok ? [] : malformed.diagnostics;
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0]?.code, 'missing_callback');
-  assert.equal(diagnostics[0]?.at.field, 'environment');
+  assert.equal(diagnostics[0]?.at.field, 'placement');
 });
 
 test('a workflow whose graph is not a graph is rejected before any walk', () => {
@@ -142,8 +146,8 @@ test('a workflow whose graph is not a graph is rejected before any walk', () => 
     default: {
       ...defineWorkflow({
         command: () => ({ title: 'T' }),
-        validate: () => {},
-        graph: leafGraph('R') as never,
+        parse: () => ({ note: 'hello' }),
+        graph: leafGraph('R'),
       }),
       graph: { key: 'NotAGraph' },
     },
@@ -159,7 +163,6 @@ test('a workflow whose graph is not a graph is rejected before any walk', () => 
 const ruleCases: readonly (readonly [StructureDiagnosticCode, Record<string, unknown>])[] = [
   ['invalid_identifier', { key: '1nvalid' }],
   ['missing_title', { title: '' }],
-  ['invalid_intent', { intent: 'aspirational' }],
   ['missing_init', { init: 'not a function' }],
   ['invalid_state_field', { state: { note: { reduce: () => '' } } }],
   ['empty_state', { state: {} }],
@@ -404,7 +407,8 @@ test('two different graphs claiming one key is duplicate_graph_key', () => {
 // ---------------------------------------------------------------------------
 
 test('a checkpoint node verifies and describes only its static metadata', () => {
-  let prepared = 0;
+  let planned = 0;
+  let labelled = 0;
   const graph = createGraph<State, {}, { readonly note: string }, string>({
     key: 'WithCheckpoint',
     title: 'With checkpoint',
@@ -415,8 +419,12 @@ test('a checkpoint node verifies and describes only its static metadata', () => 
       save: checkpoint({
         title: 'Save notes',
         description: 'After review.',
-        prepare: () => {
-          prepared += 1;
+        label: (state) => {
+          labelled += 1;
+          return state.note;
+        },
+        plan: () => {
+          planned += 1;
           return { capture: [{ scope: 'notes', directory: 'notes' }] };
         },
       }),
@@ -424,28 +432,43 @@ test('a checkpoint node verifies and describes only its static metadata', () => 
     edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
     outcomes: { done: outcome({ kind: 'success', output: (state) => state.note }) },
   });
-  // It must not fail invalid_label: a checkpoint's instance title comes from `prepare`, not a label.
   const descriptor = describeOrThrow(graph);
   assert.deepEqual(descriptor.graphs[0]!.nodes, [
     { id: 'save', kind: 'checkpoint', title: 'Save notes', description: 'After review.' },
   ]);
   assert.doesNotMatch(canonicalizeDescriptor(descriptor), /caption/);
-  assert.equal(prepared, 0, 'verification never evaluates prepare');
+  assert.equal(planned, 0, 'verification never evaluates plan');
+  assert.equal(labelled, 0, 'verification never evaluates label');
 });
 
-test('a checkpoint without a prepare function is refused', () => {
+test('a checkpoint without a plan function is refused', () => {
   const graph = createGraph<State, {}, { readonly note: string }, string>({
     key: 'WithCheckpoint',
     title: 'With checkpoint',
     init: (_destination, parameters) => ({ note: parameters.note }),
     state: { note: reduce.replace<string>() },
     entry: 'save',
-    nodes: { save: checkpoint({ prepare: () => ({ capture: [] }) }) },
+    nodes: { save: checkpoint({ plan: () => ({ capture: [] }) }) },
     edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
     outcomes: { done: outcome({ kind: 'success', output: (state) => state.note }) },
   });
-  const withoutPrepare = { ...graph, nodes: { save: { ...graph.nodes.save, prepare: undefined } } };
-  assert.deepEqual(codesFor(withoutPrepare), ['missing_callback']);
+  const withoutPlan = { ...graph, nodes: { save: { ...graph.nodes.save, plan: undefined } } };
+  assert.deepEqual(codesFor(withoutPlan), ['missing_callback']);
+});
+
+test('a checkpoint label must be a function when present', () => {
+  const graph = createGraph<State, {}, { readonly note: string }, string>({
+    key: 'WithCheckpoint',
+    title: 'With checkpoint',
+    init: (_destination, parameters) => ({ note: parameters.note }),
+    state: { note: reduce.replace<string>() },
+    entry: 'save',
+    nodes: { save: checkpoint({ plan: () => ({ capture: [] }) }) },
+    edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
+    outcomes: { done: outcome({ kind: 'success', output: (state) => state.note }) },
+  });
+  const withTextLabel = { ...graph, nodes: { save: { ...graph.nodes.save, label: 'Save' } } };
+  assert.deepEqual(codesFor(withTextLabel), ['invalid_label']);
 });
 
 // ---------------------------------------------------------------------------
@@ -485,7 +508,6 @@ test('canonicalization omits absent optional keys rather than writing null', () 
   const canonical = canonicalizeDescriptor(describeOrThrow(leafGraph('Root')));
   assert.doesNotMatch(canonical, /null/);
   assert.doesNotMatch(canonical, /"description"/);
-  assert.doesNotMatch(canonical, /"intent"/);
 });
 
 test('a structural change changes the hash', () => {
@@ -740,7 +762,7 @@ test('extraction reads registration data without invoking any author callback', 
     invoked.push(name);
     throw new Error(`${name} was invoked during extraction`);
   };
-  const branded = (kind: string) => ({ isagiContract: 4, isagiKind: kind });
+  const branded = (kind: string) => ({ isagiContract: 5, isagiKind: kind });
 
   const child = {
     ...branded('graph'),
@@ -789,7 +811,8 @@ test('extraction reads registration data without invoking any author callback', 
     default: {
       ...branded('workflow'),
       command: trap('command'),
-      validate: trap('validate'),
+      parse: trap('parse'),
+      placement: trap('placement'),
       graph: root,
     },
   });

@@ -32,7 +32,7 @@ import { withEngine, type EngineHarness } from './test-support.js';
 const workflow = (graph: unknown): AnyWorkflowDefinition =>
   defineWorkflow({
     command: () => ({ title: 'Test workflow' }),
-    validate: () => undefined,
+    parse: (_origin, inputs) => inputs,
     graph: graph as never,
   }) as unknown as AnyWorkflowDefinition;
 
@@ -132,13 +132,13 @@ test('Retry after fixing an edge re-runs the edge with the new code and not the 
 
 test('Retry after a node function threw runs it again in a new row that knows it is a retry', async () => {
   await withEngine(async (harness) => {
-    const kinds: string[] = [];
+    const seen: OperationContext['execution'][] = [];
     let throws = true;
     harness.registry.publish(
       'one',
       oneStep({
         work: async (ctx) => {
-          kinds.push(ctx.invocation.kind);
+          seen.push(ctx.execution);
           if (throws) throw new Error('not yet');
         },
       }),
@@ -157,10 +157,23 @@ test('Retry after a node function threw runs it again in a new row that knows it
     throws = false;
     await harness.run(harness.engine.retry(runId));
     assert.equal(runRow(harness, runId).status, 'completed');
-    assert.deepEqual(kinds, ['initial', 'retry']);
     const rows = executions(harness, runId);
     assert.equal(rows[1]!.retryOf, failed!.id);
     assert.equal(rows[1]!.visitIndex, failed!.visitIndex);
+    assert.deepEqual(seen, [
+      {
+        runId,
+        graphInvocationId: failed!.invocationId,
+        executionId: failed!.id,
+        attempt: 'initial',
+      },
+      {
+        runId,
+        graphInvocationId: failed!.invocationId,
+        executionId: rows[1]!.id,
+        attempt: 'retry',
+      },
+    ]);
   });
 });
 

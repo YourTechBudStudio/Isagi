@@ -8,9 +8,9 @@ import type {
 import type {
   WorkflowCommandManifest,
   WorkflowDestination,
-  WorkflowEnvironmentContext,
   WorkflowInputs,
   WorkflowOrigin,
+  WorkflowPlacementContext,
   WorkflowPlacementRequest,
 } from './launch.js';
 import type { GraphNode } from './nodes.js';
@@ -86,8 +86,6 @@ export interface GraphDefinition<State, Resolved, Parameters, Output> extends Wo
   readonly key: WorkflowGraphKey;
   readonly title: string;
   readonly description?: string | undefined;
-  /** Descriptive only. Nothing in validation or execution reads it, and it implies no nesting rule. */
-  readonly intent?: 'business' | 'logical' | 'operational' | undefined;
   /** Optional dynamic display name, captured once at graph entry. Pure, synchronous, never identity. */
   readonly label?: ((parameters: Parameters) => string) | undefined;
   /** Synchronous and destination-scoped. It never runs again to migrate an existing graph invocation's state. */
@@ -123,25 +121,39 @@ export function createGraph<
   return { ...brand('graph'), ...definition };
 }
 
-export interface WorkflowDefinition<Inputs extends WorkflowInputs, Output> extends WorkflowBrand {
+/**
+ * A launchable workflow. At launch, `parse` runs once and `placement` (when declared) runs after
+ * it; the root graph is entered with the parameters `parse` returned. The same graph can also be
+ * invoked as a subgraph, where the parent's `parameters` mapping supplies the same `Parameters`.
+ */
+export interface WorkflowDefinition<Parameters, Output> extends WorkflowBrand {
   readonly isagiKind: 'workflow';
   readonly command: (origin: WorkflowOrigin) => MaybePromise<WorkflowCommandManifest>;
-  readonly validate: (origin: WorkflowOrigin, inputs: Inputs) => MaybePromise<void>;
+  /**
+   * Turns a launch into the root graph's parameters. It receives where the run was launched from
+   * and the raw form answers, checks them, and returns the parameters. Throwing refuses the launch,
+   * and the thrown message is shown to the person as written. It runs once per launch; the value
+   * it returns is stored with the run and must be JSON-serializable.
+   */
+  readonly parse: (origin: WorkflowOrigin, inputs: WorkflowInputs) => MaybePromise<Parameters>;
   /**
    * Optional. Chooses the worktree and surface the run executes in. Omitted means the current
    * worktree and surface, or a new surface titled after the command when the origin has no surface.
-   * Not called when the caller supplies a placement. Read-only: it may derive
-   * names from `inputs` and list rows through `ctx`; it cannot create anything.
+   * Not called when the caller supplies a placement. Read-only: it may derive names from the parsed
+   * `parameters` and list rows through `ctx`; it cannot create anything.
    */
-  readonly environment?:
-    | ((ctx: WorkflowEnvironmentContext, inputs: Inputs) => MaybePromise<WorkflowPlacementRequest>)
+  readonly placement?:
+    | ((
+        ctx: WorkflowPlacementContext,
+        parameters: NoInfer<Parameters>,
+      ) => MaybePromise<WorkflowPlacementRequest>)
     | undefined;
-  /** The root graph. Its parameters type *is* `Inputs`: validated launch inputs need no mapping. */
-  readonly graph: GraphDefinition<any, any, Inputs, Output>;
+  /** The root graph. Its parameters are exactly what `parse` returns. */
+  readonly graph: GraphDefinition<any, any, Parameters, Output>;
 }
 
-export function defineWorkflow<Inputs extends WorkflowInputs, Output>(
-  definition: Omit<WorkflowDefinition<Inputs, Output>, keyof WorkflowBrand>,
-): WorkflowDefinition<Inputs, Output> {
+export function defineWorkflow<Parameters, Output>(
+  definition: Omit<WorkflowDefinition<Parameters, Output>, keyof WorkflowBrand>,
+): WorkflowDefinition<Parameters, Output> {
   return { ...brand('workflow'), ...definition };
 }

@@ -26,7 +26,7 @@ test('every registration constructor brands its result', () => {
   assert.ok(isWorkflowBranded(noteGraph.nodes.ack, 'operation-node'));
   assert.ok(isWorkflowBranded(noteGraph.edges.fromAck, 'edge'));
   assert.ok(isWorkflowBranded(noteGraph.outcomes.done, 'outcome'));
-  assert.ok(isWorkflowBranded(checkpoint({ prepare: () => ({ capture: [] }) }), 'checkpoint-node'));
+  assert.ok(isWorkflowBranded(checkpoint({ plan: () => ({ capture: [] }) }), 'checkpoint-node'));
   assert.ok(
     isWorkflowBranded(
       subgraph({
@@ -69,32 +69,34 @@ test('constructors preserve the author-declared destination order and optional m
   );
 });
 
-test('a checkpoint carries a pure prepare and static metadata, not a display-name callback', () => {
-  const prepare = (state: State) => ({
-    title: state.note,
+test('a checkpoint carries a pure plan, an optional label, and static metadata', () => {
+  const plan = (_state: State) => ({
     capture: [{ scope: 'notes', directory: 'notes', exclude: undefined }],
   });
-  const node = checkpoint({ prepare, title: 'Save notes', description: 'After review.' });
-  assert.equal(node.prepare, prepare);
+  const label = (state: State) => state.note;
+  const node = checkpoint({ plan, label, title: 'Save notes', description: 'After review.' });
+  assert.equal(node.plan, plan);
+  assert.equal(node.label, label);
   assert.equal(node.title, 'Save notes');
   assert.equal(node.description, 'After review.');
-  assert.equal('label' in node, false);
-  assert.equal('caption' in node, false);
+  assert.equal(checkpoint({ plan }).label, undefined);
 });
 
 test('defineWorkflow brands the definition and keeps the launch surface callable', async () => {
-  const workflow = defineWorkflow<{ readonly note: string }, string>({
+  const workflow = defineWorkflow({
     command: () => ({ title: 'Note', inputs: [{ kind: 'text', key: 'note', label: 'Note' }] }),
-    validate: (_origin, inputs) => {
-      if (!inputs.note) throw new Error('note is required.');
+    parse: (_origin, inputs) => {
+      if (typeof inputs.note !== 'string' || !inputs.note) throw new Error('note is required.');
+      return { note: inputs.note };
     },
     graph: noteGraph,
   });
+  const origin = { worktreeId: 1, worktreePath: '/w', surfaceId: 1 };
   assert.ok(isWorkflowBranded(workflow, 'workflow'));
-  assert.equal(
-    (await workflow.command({ worktreeId: 1, worktreePath: '/w', surfaceId: 1 })).title,
-    'Note',
-  );
+  assert.equal((await workflow.command(origin)).title, 'Note');
+  assert.deepEqual(await workflow.parse(origin, { note: 'hello' }), { note: 'hello' });
+  assert.throws(() => workflow.parse(origin, { note: '' }), /note is required/);
+  assert.equal(workflow.placement, undefined);
   assert.equal(workflow.graph, noteGraph);
 });
 

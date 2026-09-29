@@ -23,7 +23,7 @@ Resume and Retry refuse, leaving the run unchanged, when the latest build no lon
 Retry adds an execution that points at the failed one (`retry_of`) and copies what it already had:
 
 - a saved result: the node function does not run again, and the pure steps run with the new code, which is how a fixed edge, reducer or outcome is repaired;
-- no saved result (the function threw, or was cut off by a restart): the function runs again, and `ctx.invocation.kind` is `'retry'`;
+- no saved result (the function threw, or was cut off by a restart): the function runs again, and `ctx.execution.attempt` is `'retry'`;
 - an agent-turn wait: re-checked after refreshing the session's observation, with the latest-turn rule, so a turn the person ran by hand after the failure counts.
 
 There is no reuse of earlier side effects. A function that runs again sends its prompts and launches its jobs again, so keep each node to its preparation plus **one** side effect.

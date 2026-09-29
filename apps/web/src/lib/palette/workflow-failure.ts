@@ -13,7 +13,7 @@ import {
   workflowEnvironmentCreatedLine,
   workflowErrorStageHeadline,
 } from '../../copy/index.js';
-import { classifyRuntimeFailure } from '../runtime/classify.js';
+import { classifyRuntimeFailure, type ClassifiedRuntimeFailure } from '../runtime/classify.js';
 import { compactHomePath } from '../workspace/selectors.js';
 import type { CommandErrorContent, CommandOutcome, WorkflowFailurePresentation } from './types.js';
 
@@ -102,7 +102,8 @@ export function workflowFailurePresentation(error: unknown): WorkflowFailurePres
  * revalidation. Body is the reason-specific runtime-client sentence; the
  * diagnostic carries structured package/source paths for API failures and the
  * endpoint for decode failures, and is omitted for transport/unknown failures
- * where it would only repeat the body.
+ * where it would only repeat the body. A refusal from the workflow's `parse` gets its own
+ * title; its message, like every workflow-authored message, is quoted in the diagnostic.
  *
  * Scope note: workflow start currently only produces runtime-client failures
  * (API/transport/decode/unknown), never a palette `UserVisibleError`. A future
@@ -110,11 +111,25 @@ export function workflowFailurePresentation(error: unknown): WorkflowFailurePres
  * rather than relying on the `unknown` fallback below.
  */
 export function workflowStartFailureContent(error: unknown): CommandErrorContent {
-  return runtimeFailureContent(error, paletteCopy.workflows.startFailed.title);
+  const classified = classifyRuntimeFailure(error);
+  const refused =
+    classified.kind === 'api' &&
+    Schema.is(workflowRejectedErrorSchema)(classified.apiError) &&
+    classified.apiError.data.reason === 'workflow_parse_rejected';
+  const title = refused
+    ? paletteCopy.workflows.startRefused.title
+    : paletteCopy.workflows.startFailed.title;
+  return classifiedFailureContent(classified, title);
 }
 
 function runtimeFailureContent(error: unknown, title: string): CommandErrorContent {
-  const classified = classifyRuntimeFailure(error);
+  return classifiedFailureContent(classifyRuntimeFailure(error), title);
+}
+
+function classifiedFailureContent(
+  classified: ClassifiedRuntimeFailure,
+  title: string,
+): CommandErrorContent {
   const label = paletteCopy.workflows.startFailed.diagnosticLabel;
 
   if (classified.kind === 'api') {

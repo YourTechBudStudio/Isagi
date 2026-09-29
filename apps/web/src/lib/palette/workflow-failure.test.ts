@@ -25,11 +25,15 @@ import {
 
 const failure = paletteCopy.workflows.failure;
 
-function workflowRejected(data: Record<string, unknown>, requestId = 'req-1'): ApiError {
+function workflowRejected(
+  data: Record<string, unknown>,
+  requestId = 'req-1',
+  message = 'diagnostic message',
+): ApiError {
   return {
     code: 'workflow_rejected',
     status: 500,
-    message: 'diagnostic message',
+    message,
     requestId,
     data,
   } as ApiError;
@@ -129,6 +133,65 @@ test('start failure keeps structured paths for API errors', () => {
   assert.ok(content.diagnostic?.detail.includes('Shadowed package: /lower/release'));
   assert.ok(content.diagnostic?.detail.includes('request req-start'));
 });
+
+test("a workflow's launch refusal keeps fixed copy and quotes its message in the diagnostic", () => {
+  const refusal = "Launch this from an agent's pane.\n  (It drives the agent you launch it from.)";
+  const apiError = workflowRejected(
+    { reason: 'workflow_parse_rejected' },
+    'req-parse',
+    `  ${refusal}\n`,
+  );
+  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+
+  assert.equal(content.title, paletteCopy.workflows.startRefused.title);
+  assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
+  assert.ok(!content.body?.includes('agent'));
+  // Verbatim, inner whitespace and all: only the ends are trimmed.
+  assert.equal(
+    content.diagnostic?.detail,
+    `Workflow message: ${refusal}\n\nworkflow_rejected · request req-parse`,
+  );
+});
+
+test('a launch refusal with no message keeps the plain diagnostic line', () => {
+  const apiError = workflowRejected({ reason: 'workflow_parse_rejected' }, 'req-parse', '   ');
+  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+
+  assert.equal(content.title, paletteCopy.workflows.startRefused.title);
+  assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
+  assert.equal(content.diagnostic?.detail, 'workflow_rejected · request req-parse');
+});
+
+test('parameters parse could not store keep a fixed body and put the runtime message in the diagnostic', () => {
+  const message =
+    "The workflow's parse returned a value that cannot be stored at parameters.when: a Date.";
+  const apiError = workflowRejected({ reason: 'workflow_parameters_invalid' }, 'req-p', message);
+  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+
+  assert.equal(content.title, paletteCopy.workflows.startFailed.title);
+  assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
+  assert.ok(!content.body?.includes(message));
+  assert.equal(
+    content.diagnostic?.detail,
+    `Runtime message: ${message}\n\nworkflow_rejected · request req-p`,
+  );
+});
+
+for (const reason of ['workflow_command_failed', 'workflow_placement_failed'] as const) {
+  test(`${reason} keeps its fixed body and quotes the workflow's message only as a diagnostic`, () => {
+    const message = 'origin.worktreeId is not a worktree I know';
+    const apiError = workflowRejected({ reason }, 'req-hook', message);
+    const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+
+    assert.equal(content.title, paletteCopy.workflows.startFailed.title);
+    assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
+    assert.ok(!content.body?.includes(message));
+    assert.equal(
+      content.diagnostic?.detail,
+      `Workflow message: ${message}\n\nworkflow_rejected · request req-hook`,
+    );
+  });
+}
 
 test('start failure omits the diagnostic for transport and unknown, frames endpoint for decode', () => {
   const transport = workflowStartFailureContent(new RuntimeTransportError('down', null));

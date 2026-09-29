@@ -41,21 +41,28 @@ interface SaveState {
   readonly saved: boolean;
 }
 
-/** One checkpoint node routed to one outcome; `choose` lets a test fail the pure step after it. */
-function checkpointWorkflow(prepare: () => CheckpointPlan, choose: () => { to: 'done' }) {
+/**
+ * One checkpoint node routed to one outcome; `choose` lets a test fail the pure step after it, and
+ * `label` is the node's dynamic label, if any.
+ */
+function checkpointWorkflow(
+  plan: () => CheckpointPlan,
+  choose: () => { to: 'done' },
+  label?: () => string,
+) {
   const graph = createGraph<SaveState, {}, {}, null>({
     key: 'save',
     title: 'Save',
     init: () => ({ saved: false }),
     state: { saved: reduce.replace<boolean>() },
     entry: 'save',
-    nodes: { save: checkpoint({ title: 'Save', prepare }) },
+    nodes: { save: checkpoint({ title: 'Save', plan, label }) },
     edges: { 'save-out': edge({ from: 'save', to: ['done'], choose }) },
     outcomes: { done: outcome({ kind: 'success', output: () => null }) },
   });
   return defineWorkflow({
     command: () => ({ title: 'Checkpoint' }),
-    validate: () => {},
+    parse: () => ({}),
     graph,
   }) as unknown as AnyWorkflowDefinition;
 }
@@ -140,7 +147,6 @@ test('a checkpoint copies exactly its scopes, and export rebuilds them exactly',
       'exact',
       checkpointWorkflow(
         () => ({
-          title: 'Exact',
           capture: [
             { scope: 'notes', directory: 'notes', exclude: ['cache'] },
             { scope: 'tool', file: 'tool.sh' },
@@ -149,6 +155,7 @@ test('a checkpoint copies exactly its scopes, and export rebuilds them exactly',
           ],
         }),
         () => ({ to: 'done' }),
+        () => 'Exact',
       ),
     );
     assert.equal(run.status, 'completed', JSON.stringify(run.error));
@@ -157,7 +164,8 @@ test('a checkpoint copies exactly its scopes, and export rebuilds them exactly',
     assert.equal(listed.items.length, 1);
     const summary = listed.items[0]!;
     assert.equal(summary.commitSha, commit);
-    assert.equal(summary.title, 'Exact');
+    assert.equal(summary.title, 'Save', "the node's static title");
+    assert.equal(summary.label, 'Exact', 'the label captured when the execution was created');
     assert.deepEqual(
       summary.scopes.map((scope) => [scope.scope, scope.missing, scope.fileCount]),
       [
@@ -187,14 +195,14 @@ test('a checkpoint copies exactly its scopes, and export rebuilds them exactly',
       checkpointId: detail.checkpointId,
     });
     assert.equal(execution.execution.label, 'Exact');
+    assert.equal(detail.label, 'Exact');
     const events = await harness.run(harness.engine.listEvents(runId, {}));
-    assert.ok(
-      events.items.some(
-        (event) =>
-          event.kind === 'checkpoint_captured' &&
-          (event.data as { checkpointId: number }).checkpointId === detail.checkpointId,
-      ),
+    const captured = events.items.find(
+      (event) =>
+        event.kind === 'checkpoint_captured' &&
+        (event.data as { checkpointId: number }).checkpointId === detail.checkpointId,
     );
+    assert.equal(captured?.message, `Save · Exact: checkpoint ${detail.checkpointId} saved`);
 
     const file = await harness.run(
       harness.engine.openCheckpointFile(detail.checkpointId, 'notes/plan.md'),
@@ -335,10 +343,8 @@ test('two checkpoints of one scope differ as the files did, and --scope lists bo
       entry: 'save',
       nodes: {
         save: checkpoint({
-          prepare: (state) => ({
-            title: `Round ${state.round}`,
-            capture: [{ scope: 'plan', directory: 'plan' }],
-          }),
+          label: (state) => `Round ${state.round}`,
+          plan: () => ({ capture: [{ scope: 'plan', directory: 'plan' }] }),
         }),
       },
       edges: {
@@ -366,7 +372,7 @@ test('two checkpoints of one scope differ as the files did, and --scope lists bo
       'rounds',
       defineWorkflow({
         command: () => ({ title: 'Rounds' }),
-        validate: () => {},
+        parse: () => ({}),
         graph: definition,
       }) as unknown as AnyWorkflowDefinition,
     );
@@ -411,7 +417,8 @@ test('a folder project records no commit and exports into a plain folder', async
     assert.equal(run.status, 'completed', JSON.stringify(run.error));
     const [saved] = harness.db.select().from(workflowCheckpoints).all();
     assert.equal(saved!.commitSha, null);
-    assert.equal(saved!.title, 'Save', "the node's static title is the default");
+    assert.equal(saved!.title, 'Save', "the node's static title");
+    assert.equal(saved!.label, null, 'a checkpoint without a label stores none');
 
     await withExportRoot(async (exportRoot) => {
       const exported = await harness.run(
@@ -489,6 +496,7 @@ test('Retry after a failed capture captures again; Retry after a later failure d
           if (edgeThrows) throw new Error('edge broke');
           return { to: 'done' };
         },
+        () => 'Heal',
       ),
     );
     assert.equal(run.status, 'failed');
@@ -505,6 +513,8 @@ test('Retry after a failed capture captures again; Retry after a later failure d
     assert.equal(afterCapture.error?.stage, 'edge');
     const captured = harness.db.select().from(workflowCheckpoints).all();
     assert.equal(captured.length, 1);
+    // Captured by the retried execution, which carries the label its failed attempt captured.
+    assert.equal(captured[0]!.label, 'Heal');
 
     // Retry copies the saved result: no second capture, even though the files changed.
     write(root, 'out/result.md', 'changed\n');
@@ -517,10 +527,35 @@ test('Retry after a failed capture captures again; Retry after a later failure d
     assert.equal(saves.length, 3);
     assert.equal(saves[2]!.retryOf, saves[1]!.executionId);
     assert.equal(saves[2]!.checkpointId, captured[0]!.id);
+    assert.deepEqual(
+      saves.map((save) => save.label),
+      ['Heal', 'Heal', 'Heal'],
+    );
   });
 });
 
-test('an invalid plan fails with stage checkpoint_prepare and names the problem', async () => {
+test('a checkpoint label that throws is null and never fails the run', async () => {
+  await withEngine(async (harness) => {
+    commitRepository(harness.worktreePath, { 'a.txt': 'a\n' });
+    const { run } = await launchAndSettle(
+      harness,
+      'unlabelled',
+      checkpointWorkflow(
+        () => ({ capture: [{ scope: 'a', file: 'a.txt' }] }),
+        () => ({ to: 'done' }),
+        () => {
+          throw new Error('no label');
+        },
+      ),
+    );
+    assert.equal(run.status, 'completed', JSON.stringify(run.error));
+    const [saved] = harness.db.select().from(workflowCheckpoints).all();
+    assert.equal(saved!.title, 'Save');
+    assert.equal(saved!.label, null);
+  });
+});
+
+test('an invalid plan fails with stage checkpoint_plan and names the problem', async () => {
   await withEngine(async (harness) => {
     commitRepository(harness.worktreePath, { 'a.txt': 'a\n' });
     const { run } = await launchAndSettle(
@@ -532,7 +567,7 @@ test('an invalid plan fails with stage checkpoint_prepare and names the problem'
       ),
     );
     assert.equal(run.status, 'failed');
-    assert.equal(run.error?.stage, 'checkpoint_prepare');
+    assert.equal(run.error?.stage, 'checkpoint_plan');
     assert.match(run.error?.message ?? '', /relative path inside the checkout/);
   });
 });

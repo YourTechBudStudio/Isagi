@@ -17,8 +17,8 @@ type State = { readonly round: number };
 
 export const savePlan = checkpoint<State>({
   title: 'Save the plan',
-  prepare: (state) => ({
-    title: `Plan, round ${state.round}`,
+  label: (state) => `round ${state.round}`,
+  plan: () => ({
     capture: [
       { scope: 'plan', directory: 'work/plan', exclude: ['drafts'] },
       { scope: 'decisions', file: 'decisions.md' },
@@ -27,7 +27,7 @@ export const savePlan = checkpoint<State>({
 });
 ```
 
-Register one outgoing edge, as for an operation; the checkpoint leaves graph state unchanged. `prepare(state)` is pure and synchronous and runs only when the node is visited. Consult the installed SDK's `checkpoints.d.ts` and `nodes.d.ts` for fields and limits.
+Register one outgoing edge, as for an operation; the checkpoint leaves graph state unchanged. `plan(state)` is pure and synchronous and runs only when the node is visited. Consult the installed SDK's `checkpoints.d.ts` and `nodes.d.ts` for fields and limits.
 
 Paths are relative to the run's checkout root and use `/`; absolute paths, `..` and `.git` paths are refused. Directory scopes accept scope-relative `exclude` paths, without globs. Scopes in one plan cannot overlap. An empty `capture` list records only the commit.
 
@@ -44,7 +44,7 @@ Paths are relative to the run's checkout root and use `/`; absolute paths, `..` 
 
 ## Failures and Retry
 
-A plan that breaks a rule fails the execution with stage `checkpoint_prepare`; a filesystem or Git problem while copying fails it with stage `checkpoint_capture`. Either way nothing is saved. Read the message, fix the plan or the checkout, then Retry: the capture runs again.
+A plan that breaks a rule fails the execution with stage `checkpoint_plan`; a filesystem or Git problem while copying fails it with stage `checkpoint_capture`. Either way nothing is saved. Read the message, fix the plan or the checkout, then Retry: the capture runs again.
 
 Once a checkpoint is saved it is part of the execution's result. A Retry of a later failure (the edge after it, for example) reuses that checkpoint and never captures again, even if the files have changed since.
 

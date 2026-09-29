@@ -56,6 +56,10 @@ export const paletteCopy = {
       title: 'Workflow did not start.',
       diagnosticLabel: 'Runtime detail',
     },
+    // The workflow's own `parse` turned the launch down. Its words are quoted in the diagnostic.
+    startRefused: {
+      title: "Can't start this from here.",
+    },
     // Preparing an environment creates a worktree and runs setup hooks, which takes
     // real time. The panel names the work rather than performing patience; the
     // retry hint differs only in saying that nothing is being created a second time.

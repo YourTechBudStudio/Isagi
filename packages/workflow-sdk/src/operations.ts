@@ -197,13 +197,14 @@ export interface WorkflowHeadlessAgentInput extends WorkflowPromptInput {
   readonly timeoutMs?: number | undefined;
 }
 
-export interface OperationInvocation {
+/** Which execution of an operation node a callback is running for. */
+export interface OperationExecution {
   readonly runId: number;
   /** The graph invocation this visit belongs to: one entry into a graph or subgraph. */
-  readonly invocationId: number;
+  readonly graphInvocationId: number;
   readonly executionId: number;
   /** `retry` when this execution was created by an explicit Retry of a failed or interrupted one. */
-  readonly kind: 'initial' | 'retry';
+  readonly attempt: 'initial' | 'retry';
 }
 
 /**
@@ -219,6 +220,9 @@ export interface OperationInvocation {
  * small: do the preparation, perform **one** side effect, and return. A second effect belongs in its
  * own node, and file snapshots belong in checkpoint nodes.
  *
+ * `destination` is the worktree and surface the run's work is placed in; `execution` identifies
+ * this execution and whether it is a Retry.
+ *
  * `getConversationHistory` reads the session's latest conversation.
  *
  * `log` and `setUiFeedback` are recorded in the run's event log. A log written before a callback
@@ -226,8 +230,7 @@ export interface OperationInvocation {
  */
 export interface OperationContext {
   readonly destination: WorkflowDestination;
-  readonly worktreePath: string;
-  readonly invocation: OperationInvocation;
+  readonly execution: OperationExecution;
   readonly spawnAgentSession: (
     input: WorkflowPromptInput & {
       readonly harness: WorkflowAgentHarness;

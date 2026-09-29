@@ -125,7 +125,10 @@ export const workflowRunSummarySchema = Schema.Struct({
  */
 export const workflowRunDetailSchema = Schema.Struct({
   run: workflowRunSummarySchema,
+  /** The raw launch answers. */
   inputs: workflowInputsSchema,
+  /** What the workflow's `parse` returned at launch: the root graph's parameters. */
+  parameters: Schema.Unknown,
   invocations: Schema.Array(workflowGraphInvocationSchema),
   executions: Schema.Array(workflowExecutionSummarySchema),
 });
@@ -182,7 +185,7 @@ export const startWorkflowInputSchema = Schema.Struct({
   inputs: Schema.optional(workflowInputsSchema),
   origin: workflowLaunchOriginSchema,
   /**
-   * An explicit destination, which takes precedence over the workflow's own `environment` hook.
+   * An explicit destination, which takes precedence over the workflow's own `placement` hook.
    * Absent means the hook decides, and absent hook means the current worktree and surface. An
    * override bypasses selection, never validation.
    */

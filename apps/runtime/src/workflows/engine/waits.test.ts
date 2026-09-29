@@ -33,7 +33,7 @@ const executions = (harness: EngineHarness, runId: number) =>
 function spawnAndWait(seen: NodeEvent[]): AnyWorkflowDefinition {
   return defineWorkflow({
     command: () => ({ title: 'Agent' }),
-    validate: () => undefined,
+    parse: (_origin, inputs) => inputs,
     graph: createGraph<{ n: number }>({
       key: 'agent',
       title: 'Agent',

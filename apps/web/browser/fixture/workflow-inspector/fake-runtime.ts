@@ -109,7 +109,7 @@ export function installFakeRuntime(): InspectorRuntimeControls {
         workflowKey: world.summary.workflowKey,
         sdkVersion: '0.1.0',
         verifierVersion: '0.1.0',
-        contractVersion: 4,
+        contractVersion: 5,
         firstSeenAt: at(0),
         descriptor: descriptorFor(artifactHash),
       });

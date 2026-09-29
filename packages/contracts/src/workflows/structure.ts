@@ -24,7 +24,6 @@ export const workflowStructureDiagnosticCodeSchema = Schema.Literal(
   'missing_callback',
   'invalid_identifier',
   'missing_title',
-  'invalid_intent',
   'missing_init',
   'invalid_state_field',
   'empty_state',
@@ -115,9 +114,6 @@ export const workflowGraphDescriptorSchema = Schema.Struct({
   key: nonEmptyString,
   title: nonEmptyString,
   description: Schema.optionalWith(Schema.String, { exact: true }),
-  intent: Schema.optionalWith(Schema.Literal('business', 'logical', 'operational'), {
-    exact: true,
-  }),
   stateFields: Schema.Array(nonEmptyString),
   entry: nonEmptyString,
   nodes: Schema.Array(workflowNodeDescriptorSchema),
@@ -126,8 +122,8 @@ export const workflowGraphDescriptorSchema = Schema.Struct({
 });
 
 export const workflowStructureDescriptorSchema = Schema.Struct({
-  descriptorVersion: Schema.Literal(1),
-  workflowContractVersion: Schema.Literal(4),
+  descriptorVersion: Schema.Literal(2),
+  workflowContractVersion: Schema.Literal(5),
   rootGraphKey: nonEmptyString,
   graphs: Schema.Array(workflowGraphDescriptorSchema),
 });

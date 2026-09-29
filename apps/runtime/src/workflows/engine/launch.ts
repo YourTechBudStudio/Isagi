@@ -8,8 +8,8 @@ import type {
 } from '@isagi/contracts';
 
 import { WorkflowEngineError } from '../errors.js';
-import { errorMessage } from '../state/pure.js';
-import { toJson, type RunPlacement } from '../store/rows.js';
+import { checkSerializable, errorMessage } from '../state/pure.js';
+import { storedParameters, toJson, type RunPlacement } from '../store/rows.js';
 import { findRunOnSurface, insertRun } from '../store/runs.js';
 import type { WorkflowCommandManifest, WorkflowOrigin } from '../types.js';
 import { projectContext, resolveLatestBuild } from './builds.js';
@@ -22,10 +22,15 @@ import type { EngineRuntime } from './runtime.js';
 /**
  * Starting a run.
  *
- * Load → origin → project → `command` → `validate` → placement (select, then validate against live
- * rows) → create the run. Every step before the last leaves no row behind: a workflow that cannot
- * load, an origin that is gone, a manifest that throws, refused inputs and an impossible placement
- * are launch rejections, not failed runs.
+ * Load → origin → project → `command` → `parse` → placement (select, then validate against live
+ * rows) → create the run → preparation. Every step before the run exists leaves no row behind: a
+ * workflow that cannot load, an origin that is gone, a manifest that throws, a `parse` that refuses
+ * or returns unstorable parameters, and an impossible placement are launch rejections, not failed
+ * runs.
+ *
+ * `parse` runs exactly once per run, here. The parameters it returns are stored on the run and are
+ * the only thing placement, preparation, its Retry and the root graph's `init` ever see of the
+ * launch; the raw inputs are kept for display and relaunch only.
  *
  * The run is created `preparing` with whatever is already known (a current or existing worktree
  * and surface). Preparation, the root graph's `init` and driving then continue in the background,
@@ -35,7 +40,7 @@ export interface LaunchInput {
   readonly workflowKey: string;
   readonly inputs: Record<string, unknown>;
   readonly origin: WorkflowLaunchOrigin;
-  /** A caller's explicit placement. It beats the workflow's `environment` hook. */
+  /** A caller's explicit placement. It beats the workflow's `placement` hook. */
   readonly placement?: WorkflowPlacementRequestDto | undefined;
 }
 
@@ -65,15 +70,17 @@ export function launch(
           surfaceId: origin.surfaceId ?? undefined,
         }),
     });
-    yield* Effect.tryPromise({
-      try: async () => definition.validate(origin, input.inputs),
+    const parsed = yield* Effect.tryPromise({
+      try: async () => definition.parse(origin, input.inputs),
       catch: (cause) =>
         new WorkflowEngineError({
-          code: 'workflow_inputs_rejected',
+          code: 'workflow_parse_rejected',
           message: errorMessage(cause),
           workflowKey: input.workflowKey,
         }),
     });
+    // Serialized once: placement, the stored row and the root graph's `init` all see this value.
+    const parametersJson = yield* storableParameters(parsed, input.workflowKey);
 
     const selection = yield* selectPlacement(
       { workspace: places.workspace, surfaceRepository: places.surfaceRepository },
@@ -82,7 +89,7 @@ export function launch(
         workflowKey: input.workflowKey,
         origin,
         project,
-        inputs: input.inputs,
+        parameters: storedParameters(parametersJson),
         placement: input.placement,
         commandTitle: manifest.title,
       },
@@ -113,6 +120,7 @@ export function launch(
         artifactHash: build.artifactHash,
         status: 'preparing',
         inputsJson: toJson(input.inputs),
+        parametersJson,
         placementJson: toJson(placement),
         originWorktreeId: origin.worktreeId,
         originWorktreePath: origin.worktreePath,
@@ -148,6 +156,29 @@ export function launch(
     rt.fork(prepareAndStart(rt, created.run.id), 'workflow preparation');
     return { runId: created.run.id, workflowKey: input.workflowKey };
   });
+}
+
+/**
+ * The parameters `parse` returned, checked the way a subgraph's parameters are and serialized for
+ * the run: a value JSON cannot hold is refused before anything exists. `undefined` is stored as
+ * null, as it is for a subgraph. A refusal here is the author's defect rather than the person's
+ * launch being turned down, so it has its own reason.
+ */
+function storableParameters(
+  value: unknown,
+  workflowKey: string,
+): Effect.Effect<string, WorkflowEngineError> {
+  const parameters = value ?? null;
+  const unserializable = checkSerializable(parameters, 'parameters');
+  return unserializable === null
+    ? Effect.succeed(toJson(parameters))
+    : Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_parameters_invalid',
+          message: `The workflow's parse ${unserializable}`,
+          workflowKey,
+        }),
+      );
 }
 
 /** One discoverable workflow, as the launch palette sees it. */

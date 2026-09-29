@@ -7,7 +7,7 @@
  * This is the only place the whole chain is exercised against a genuinely built package:
  *
  *   scaffold → pack/install → typecheck/test/build → verify → registry load → engine launch →
- *   environment preparation → root init → suspend at `user_continue`
+ *   parse → environment preparation → root init → suspend at `user_continue`
  *
  * Run it from the repo root:
  *   pnpm --dir apps/runtime exec tsx scripts/prove-workflow-authoring.mts
@@ -132,7 +132,7 @@ async function main() {
     // 6. Import the standalone artifact directly.
     const artifact = await import(pathToFileURL(join(workflowDir, 'dist/index.js')).href);
     const workflow = artifact.default;
-    for (const name of ['command', 'validate'])
+    for (const name of ['command', 'parse'])
       if (typeof workflow?.[name] !== 'function') throw new Error(`artifact missing ${name}()`);
     // Follows the release constant rather than a literal, so a contract bump never leaves this
     // proof asserting the version it replaced.
@@ -145,16 +145,25 @@ async function main() {
       );
     if (workflow?.graph?.isagiKind !== 'graph')
       throw new Error('artifact default export carries no root graph');
-    const directManifest = await workflow.command({
+    const directOrigin = {
       worktreeId: 0,
       worktreePath: workflowDir,
       surfaceId: 0,
       paneId: null,
       agentSessionId: null,
-    });
+    };
+    const directManifest = await workflow.command(directOrigin);
     if (directManifest.title !== 'Minimal workflow')
       throw new Error(`unexpected artifact title: ${directManifest.title}`);
-    log('import', `standalone artifact command title = ${directManifest.title}`);
+    const directParameters = await workflow.parse(directOrigin, { note: 'proof' });
+    if (directParameters?.note !== 'proof')
+      throw new Error(
+        `artifact parse() returned unexpected parameters: ${JSON.stringify(directParameters)}`,
+      );
+    log(
+      'import',
+      `standalone artifact command title = ${directManifest.title}, parse() = ${JSON.stringify(directParameters)}`,
+    );
 
     if (packageOnly) {
       process.stdout.write(
@@ -239,6 +248,9 @@ async function proveEngineLaunch(
     if (detail.run.artifactHash !== artifactHash) {
       throw new Error('the run does not use the build the registry verified');
     }
+    if (JSON.stringify(detail.parameters) !== JSON.stringify({ note: 'proof' })) {
+      throw new Error(`the run stored unexpected parameters: ${JSON.stringify(detail.parameters)}`);
+    }
     if (detail.run.current?.wait?.kind !== 'user_continue') {
       throw new Error(
         `the run is not parked on its user gate: ${JSON.stringify(detail.run.current)}`,
@@ -249,7 +261,8 @@ async function proveEngineLaunch(
     }
     log(
       'engine-run',
-      `root state ${JSON.stringify(detail.invocations[0]?.state)}; run ${runId} is waiting at` +
+      `parameters ${JSON.stringify(detail.parameters)}; root state` +
+        ` ${JSON.stringify(detail.invocations[0]?.state)}; run ${runId} is waiting at` +
         ` ${detail.run.current.nodeId} for the user to continue`,
     );
   } finally {

@@ -23,9 +23,28 @@ Follow an explicit target path; these are discovery defaults. [Global config](co
 
 ## Graph structure and composition
 
-`defineWorkflow({ command, validate, environment, graph })` pairs a launch form with a root graph; `environment` is optional. `command(origin)` declares text, select, multi-select, or confirm inputs; keep it usable without optional surface/pane/session context (`origin.surfaceId` is null when launched from a worktree with no surface open). `validate(origin, inputs)` checks launch inputs. Those inputs become the root graph's parameters. Each graph's pure synchronous `init(destination, parameters)` creates its private state once; initialization is not a migration hook. Destination determines where work is placed; origin describes where the user launched it.
+`defineWorkflow({ command, parse, placement, graph })` pairs a launch form with a root graph; `placement` is optional. `command(origin)` declares text, select, multi-select, or confirm inputs; keep it usable without optional surface/pane/session context (`origin.surfaceId` is null when launched from a worktree with no surface open). `parse(origin, inputs)` checks the launch inputs and returns the root graph's parameters; it may be async, and throwing refuses the launch with that message shown to the person. `origin.agentSessionId` is the agent the workflow was launched from, if any. Each graph's pure synchronous `init(destination, parameters)` creates its private state once; initialization is not a migration hook. Destination is where work is placed; origin is where the user launched it from.
 
-Read [Workflow environments](workflow-environments.md) to choose or create the destination with `environment`, use caller placement overrides, and handle preparation failures.
+```ts
+import type { WorkflowInputs, WorkflowOrigin } from '@yourtechbudstudio/isagi-workflow-sdk';
+
+type PlanParameters = { readonly plan: string; readonly plannerSessionId: number };
+type ReviewParameters = { readonly fixerSessionId: number | null };
+
+// Requires the launching agent. Annotate the return type with the root graph's parameters.
+export const parsePlan = (origin: WorkflowOrigin, inputs: WorkflowInputs): PlanParameters => {
+  if (origin.agentSessionId == null) throw new Error('Launch this from the planner agent pane.');
+  if (typeof inputs.plan !== 'string' || inputs.plan === '') throw new Error('Choose a plan.');
+  return { plan: inputs.plan, plannerSessionId: origin.agentSessionId };
+};
+
+// Uses the launching agent only if there is one.
+export const parseReview = (origin: WorkflowOrigin): ReviewParameters => ({
+  fixerSessionId: origin.agentSessionId ?? null,
+});
+```
+
+Read [Workflow environments](workflow-environments.md) to choose or create the destination with `placement`, use caller placement overrides, and handle preparation failures.
 
 Compose substantial workflows hierarchically:
 
@@ -35,7 +54,7 @@ Compose substantial workflows hierarchically:
 | Logical     | A coherent process and its policy           | Implement, review, and revise within a budget  |
 | Operational | Concrete work, waits, and result collection | An agent turn followed by reading its response |
 
-These are responsibilities, not exactly three wrappers. Keep a tiny workflow flat; add nesting for meaningful ownership, reuse, or recovery boundaries. Optional `intent` metadata describes the perspective without enforcing behavior. For example, a business graph invokes a review-loop graph, which composes writer and reviewer graphs and returns a decision the business graph understands.
+These are responsibilities, not exactly three wrappers. Keep a tiny workflow flat; add nesting for meaningful ownership, reuse, or recovery boundaries. For example, a business graph invokes a review-loop graph, which composes writer and reviewer graphs and returns a decision the business graph understands.
 
 Use `subgraph({ graph, parameters, onResult })` to register a child. `parameters(parentState)` passes inputs; `onResult(parentState, result)` maps its published output through the parent's reducers. Both are pure and synchronous. The result includes `outcomeId`, `outcomeKind`, `reason`, and typed `output`. The parent's edge then receives a `subgraph` event. Keep the parent contract focused on meaningful results rather than the child's handles or private state.
 

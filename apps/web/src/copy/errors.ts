@@ -23,7 +23,8 @@ import { workflowLoadFailureReasonCopyOrFallback } from './workflows.js';
 // User-facing copy for runtime failures. The runtime and contracts emit stable
 // error codes (plus dry, diagnostic-only `message` strings for logs and bug
 // reports); every word a person actually reads is authored here, keyed off those
-// codes. Nothing in this file is rendered from a runtime-supplied string.
+// codes. A runtime-supplied string never becomes primary copy here; it appears
+// only as framed detail inside a diagnostic.
 
 // Shared phrasings so the same fact reads the same way wherever it surfaces.
 const projectGone = "That project isn't on Isagi's list anymore.";
@@ -204,7 +205,10 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       agent_session_not_on_surface: "That agent session isn't on this surface.",
       workflow_launch_context_mismatch: "That pane and agent session don't match.",
       workflow_command_failed: "That workflow couldn't describe itself, so Isagi can't start it.",
-      workflow_inputs_rejected: "Those answers didn't pass the workflow's checks.",
+      // The fallback body only: the palette shows the workflow's own refusal when it gave one.
+      workflow_parse_rejected:
+        'The workflow turned this launch down. Its reason is in the details.',
+      workflow_parameters_invalid: "This workflow returned launch parameters Isagi can't store.",
       // Destination wording: the busy surface is the one the run was aimed at, which is not
       // necessarily the one the person is looking at.
       workflow_surface_busy: 'That surface already has a workflow on it. Dismiss that one first.',
@@ -220,7 +224,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
         "Those answers didn't go through. Check the fields and try again.",
       workflow_agent_observation_unavailable:
         "Isagi couldn't refresh that agent session, so the retry didn't change the run.",
-      workflow_environment_selection_failed:
+      workflow_placement_failed:
         "This workflow couldn't decide where to run, so nothing was started.",
       workflow_placement_invalid: "That isn't a place this workflow can run.",
       workflow_worktree_creation_unsupported: folderProjectNoWorktrees,
@@ -381,13 +385,26 @@ export const runtimeErrorCopy = {
 } as const;
 
 /**
+ * The launch failures whose `message` is worth quoting: the workflow's own `command`, `parse` or
+ * `placement` code threw it (verbatim), or the runtime named the parameter path `parse` got wrong.
+ * Every other reason's message repeats what the body already says.
+ */
+const messageSourceByReason: Partial<Record<WorkflowRejectionReason, string>> = {
+  workflow_command_failed: 'Workflow message',
+  workflow_parse_rejected: 'Workflow message',
+  workflow_placement_failed: 'Workflow message',
+  workflow_parameters_invalid: 'Runtime message',
+};
+
+/**
  * Structured diagnostic detail for a workflow rejection: framed absolute source
  * and package paths above the stable `code · request` line. Paths are diagnostic
  * facts, never primary copy. Sections are omitted (not left as empty labels) when
  * their optional contract fields are absent, and shadowed-package order is
- * preserved. A non-`workflow_rejected` error (or one carrying no path fields)
- * degrades to the plain `code · request` line. Rendered in a `whitespace-pre-wrap`
- * mono panel, so newlines are meaningful.
+ * preserved. A launch failure whose message is worth quoting adds it as a framed
+ * line (see `messageSourceByReason`). A non-`workflow_rejected` error (or one
+ * carrying none of these) degrades to the plain `code · request` line. Rendered
+ * in a `whitespace-pre-wrap` mono panel, so newlines are meaningful.
  */
 export function apiErrorDiagnostic(apiError: ApiError): string {
   const lines: string[] = [];
@@ -414,6 +431,9 @@ export function apiErrorDiagnostic(apiError: ApiError): string {
     if ('destinationPath' in data) {
       lines.push(`Destination: ${data.destinationPath} (${data.destinationIssue})`);
     }
+    const messageSource = messageSourceByReason[data.reason];
+    const message = apiError.message.trim();
+    if (messageSource && message) lines.push(`${messageSource}: ${message}`);
   }
   const trailing = runtimeErrorCopy.diagnostic(apiError);
   return lines.length > 0 ? `${lines.join('\n')}\n\n${trailing}` : trailing;

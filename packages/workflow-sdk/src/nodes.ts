@@ -90,22 +90,22 @@ export function subgraph<ParentState, ParentUpdates, ChildParameters, ChildOutpu
  * plus an exact copy of exactly the scopes the plan names. Nothing is inherited from earlier
  * checkpoints, and a missing path is recorded as missing.
  *
- * `prepare` is pure and synchronous: it receives a frozen copy of the graph invocation's state and
- * returns the plan for this visit. It runs only when the node is visited, never during verification or
- * inspection. A checkpoint leaves state unchanged and routes along its single edge.
- *
- * A checkpoint has no dynamic `label`: its instance title comes from the plan `prepare` returns,
- * then this node's static `title`, then its id.
+ * `plan` is pure and synchronous: it receives a frozen copy of the graph invocation's state and
+ * returns what this visit captures. It runs only when the node is visited, never during
+ * verification or inspection. A checkpoint leaves state unchanged and routes along its single edge.
  */
 export interface CheckpointNode<State> extends WorkflowBrand {
   readonly isagiKind: 'checkpoint-node';
   readonly title?: string | undefined;
   readonly description?: string | undefined;
-  readonly prepare: (state: State) => CheckpointPlan;
+  /** Optional dynamic display name, captured once when this visit's execution row is created. */
+  readonly label?: ((state: State) => string) | undefined;
+  readonly plan: (state: State) => CheckpointPlan;
 }
 
 export function checkpoint<State>(spec: {
-  readonly prepare: (state: State) => CheckpointPlan;
+  readonly plan: (state: State) => CheckpointPlan;
+  readonly label?: ((state: State) => string) | undefined;
   readonly title?: string | undefined;
   readonly description?: string | undefined;
 }): CheckpointNode<State> {
@@ -113,6 +113,7 @@ export function checkpoint<State>(spec: {
     ...brand('checkpoint-node'),
     title: spec.title,
     description: spec.description,
-    prepare: spec.prepare,
+    label: spec.label,
+    plan: spec.plan,
   };
 }

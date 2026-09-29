@@ -99,8 +99,8 @@ export function descriptorFor(artifactHash: string): WorkflowStructureDescriptor
   if (artifactHash === CHECKPOINT_PIN) return checkpointDescriptor;
   const withSignOff = artifactHash === PIN_TWO;
   return {
-    descriptorVersion: 1,
-    workflowContractVersion: 4,
+    descriptorVersion: 2,
+    workflowContractVersion: 5,
     rootGraphKey: 'release',
     graphs: [
       {
@@ -807,6 +807,7 @@ function finish(
     detail: {
       run: summary,
       inputs: { story: 'release 0.1.0' },
+      parameters: { story: 'release 0.1.0' },
       invocations: [...builder.invocations].sort(
         (left, right) => left.invocationId - right.invocationId,
       ),

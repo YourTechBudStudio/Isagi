@@ -40,7 +40,7 @@ export const runsHandlers = {
     ),
   /**
    * A fresh run. Inputs are read and checked before any request. Placement is sent only when both
-   * halves are given; otherwise the workflow's own `environment` hook decides, and the placement
+   * halves are given; otherwise the workflow's own `placement` hook decides, and the placement
    * actually used is read later with `runs show`.
    */
   'runs launch': ({ positionals, options }) =>

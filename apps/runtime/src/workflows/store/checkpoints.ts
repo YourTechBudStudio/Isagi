@@ -17,7 +17,10 @@ export function insertCheckpoint(
   row: {
     readonly runId: number;
     readonly executionId: number;
+    /** The node's static title, else its id. */
     readonly title: string;
+    /** The execution's captured label. */
+    readonly label: string | null;
     readonly commitSha: string | null;
     readonly scopes: readonly CheckpointScope[];
   },
@@ -28,6 +31,7 @@ export function insertCheckpoint(
       runId: row.runId,
       executionId: row.executionId,
       title: row.title,
+      label: row.label,
       commitSha: row.commitSha,
       scopesJson: toJson(row.scopes),
       createdAt: now(),

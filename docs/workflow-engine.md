@@ -10,7 +10,7 @@ This overview explains the subsystem's model and guarantees. Concrete authoring 
 
 ## Graphs and runs
 
-A workflow combines its launch inputs and validation with a root graph. Graphs declare operations, checkpoints, nested graphs, routing edges, and completion outcomes. Each graph invocation owns private state; pure per-field reducers apply updates, and mappings pass parameters into children and completed outputs back to parents. Graph execution is sequential, with explicit waits for external work or human input.
+A workflow parses its launch inputs into the parameters of a root graph. Graphs declare operations, checkpoints, nested graphs, routing edges, and completion outcomes. Each graph invocation owns private state; pure per-field reducers apply updates, and mappings pass parameters into children and completed outputs back to parents. Graph execution is sequential, with explicit waits for external work or human input.
 
 Operations perform work and can complete immediately or return an explicit wait. Pure routing edges consume the resulting event and choose a declared destination. An exception in a node function, reducer, edge or mapping fails that execution; an agent reporting failure is an event the graph can handle through ordinary routing. A failed step changes no graph state.
 

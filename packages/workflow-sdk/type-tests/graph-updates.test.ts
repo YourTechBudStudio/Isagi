@@ -123,7 +123,6 @@ const childGraph = createGraph<
 const goodGraph = createGraph<ReviewState, ReviewUpdates, ReviewParameters, string>({
   key: 'Review',
   title: 'Review',
-  intent: 'logical',
   label: (parameters) => parameters.documentPath,
   init: reviewInit,
   state: reviewState,

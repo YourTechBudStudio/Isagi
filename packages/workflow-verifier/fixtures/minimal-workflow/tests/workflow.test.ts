@@ -12,7 +12,7 @@ import workflow, { MinimalGraph } from '../src/index.js';
 // The minimal workflow never touches ctx, so an empty cast is enough. A real workflow's test would
 // stub the ctx verbs its callbacks call (spawnAgentSession, runHeadlessAgent, ...).
 const origin: WorkflowOrigin = { worktreeId: 1, worktreePath: '/tmp/wt', surfaceId: 1 };
-const placement = { worktreeId: 1, worktreePath: '/tmp/wt', surfaceId: 1 };
+const destination = { worktreeId: 1, worktreePath: '/tmp/wt', surfaceId: 1 };
 const ctx = {} as unknown as OperationContext;
 
 function operationNode(id: string) {
@@ -30,19 +30,24 @@ test('command advertises the run and its single text input', async () => {
   );
 });
 
-test('validate rejects an empty note', () => {
-  assert.throws(() => workflow.validate(origin, { note: '' }), /non-empty string/);
+test('parse turns the form answers into the graph parameters and rejects an empty note', async () => {
+  assert.deepEqual(await workflow.parse(origin, { note: 'ship it' }), { note: 'ship it' });
+  assert.deepEqual(await workflow.parse(origin, {}), { note: 'hello' });
+  assert.throws(() => workflow.parse(origin, { note: '' }), /non-empty string/);
 });
 
 test('init copies the note into serializable state', () => {
-  assert.deepEqual(MinimalGraph.init(placement, { note: 'ship it' }), {
+  assert.deepEqual(MinimalGraph.init(destination, { note: 'ship it' }), {
     note: 'ship it',
     acknowledged: false,
   });
 });
 
 test('the entry node suspends on a user-continue wait', async () => {
-  const result = await operationNode('askForAck').run(ctx, MinimalGraph.init(placement, {}));
+  const result = await operationNode('askForAck').run(
+    ctx,
+    MinimalGraph.init(destination, { note: 'hello' }),
+  );
   assert.equal(result.type, 'suspend');
   assert.deepEqual(result.type === 'suspend' ? result.wait : undefined, {
     kind: 'user_continue',
@@ -52,7 +57,7 @@ test('the entry node suspends on a user-continue wait', async () => {
 
 test('its router sends the delivered wait to the node that records it', () => {
   assert.deepEqual(
-    MinimalGraph.edges.fromAskForAck!.choose(MinimalGraph.init(placement, {}), {
+    MinimalGraph.edges.fromAskForAck!.choose(MinimalGraph.init(destination, { note: 'hello' }), {
       kind: 'user_continue',
     }),
     { to: 'recordAck' },
@@ -60,7 +65,10 @@ test('its router sends the delivered wait to the node that records it', () => {
 });
 
 test('recording the acknowledgement updates only the field it names', async () => {
-  const result = await operationNode('recordAck').run(ctx, MinimalGraph.init(placement, {}));
+  const result = await operationNode('recordAck').run(
+    ctx,
+    MinimalGraph.init(destination, { note: 'hello' }),
+  );
   assert.equal(result.type, 'complete');
   assert.deepEqual(result.update, { acknowledged: true });
 });
@@ -80,6 +88,6 @@ test('every declared destination is a node or an outcome in this graph', () => {
     ...Object.keys(MinimalGraph.outcomes),
   ]);
   for (const router of Object.values(MinimalGraph.edges)) {
-    for (const destination of router.to) assert.ok(declared.has(destination), destination);
+    for (const target of router.to) assert.ok(declared.has(target), target);
   }
 });

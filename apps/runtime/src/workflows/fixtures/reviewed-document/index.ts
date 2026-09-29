@@ -11,7 +11,6 @@ import {
   suspend,
   wait,
   type HeadlessOperationResult,
-  type WorkflowInputs,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 /**
@@ -65,7 +64,6 @@ export interface ReviewOutput {
 export const ReviewGraph = createGraph<ReviewState, {}, ReviewParameters, ReviewOutput>({
   key: 'review',
   title: 'Review',
-  intent: 'operational',
   label: (parameters) => `review round ${parameters.round}`,
   init: (_destination, parameters) => ({
     draft: parameters.draft,
@@ -191,7 +189,6 @@ export const ReviewedDocumentGraph = createGraph<
 >({
   key: 'reviewed-document',
   title: 'Reviewed document',
-  intent: 'logical',
   label: (parameters) => `document: ${parameters.topic}`,
   init: (_destination, parameters) => ({
     topic: parameters.topic,
@@ -354,19 +351,22 @@ export interface StoryGraphVariant {
   readonly deliveredReadsMissingSummary?: boolean;
 }
 
+export interface StoryParameters {
+  readonly topic: string;
+}
+
 /** The root: one nested document, and a person to ask when the machinery runs out of options. */
 export function makeStoryGraph(variant: StoryGraphVariant = {}) {
   return createGraph<
     StoryState,
     {},
-    WorkflowInputs,
+    StoryParameters,
     { readonly decision: string; readonly document: DocumentOutput | null }
   >({
     key: 'story',
     title: 'Reviewed document story',
-    intent: 'business',
-    init: (_destination, inputs) => ({
-      topic: typeof inputs.topic === 'string' ? inputs.topic : 'an unnamed topic',
+    init: (_destination, parameters) => ({
+      topic: parameters.topic,
       document: null,
       decision: null,
     }),
@@ -455,10 +455,11 @@ export function makeReviewedDocumentWorkflow(variant: StoryGraphVariant = {}) {
       description: 'Write a document, have it judged and reviewed, and revise it.',
       inputs: [{ kind: 'text', key: 'topic', label: 'Topic' }],
     }),
-    validate: (_origin, inputs) => {
+    parse: (_origin, inputs): StoryParameters => {
       if (typeof inputs.topic !== 'string' || inputs.topic.length === 0) {
         throw new Error('A topic is required.');
       }
+      return { topic: inputs.topic };
     },
     graph: makeStoryGraph(variant),
   });

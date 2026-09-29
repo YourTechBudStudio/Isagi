@@ -80,7 +80,7 @@ test('reads and live events match the wire contracts', async () => {
       'contracts',
       defineWorkflow({
         command: () => ({ title: 'Contracts' }),
-        validate: () => undefined,
+        parse: (_origin, inputs) => inputs,
         graph: graph as never,
       }) as unknown as AnyWorkflowDefinition,
     );

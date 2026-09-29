@@ -52,7 +52,7 @@ acceptModifiers(broadModifiers);
 type SpawnAgentSessionInput = Parameters<OperationContext['spawnAgentSession']>[0];
 type SendAgentPromptInput = Parameters<OperationContext['sendAgentPrompt']>[0];
 type RunHeadlessAgentInput = Parameters<OperationContext['runHeadlessAgent']>[0];
-type WorkflowInvocationKind = OperationContext['invocation']['kind'];
+type WorkflowExecutionAttempt = OperationContext['execution']['attempt'];
 
 const spawnWithModifiers = {
   harness: 'codex',
@@ -80,7 +80,7 @@ const commandModifier = {
   name: 'isagi-docs',
 } satisfies WorkflowCommandModifier;
 
-const retryInvocation = 'retry' satisfies WorkflowInvocationKind;
+const retryAttempt = 'retry' satisfies WorkflowExecutionAttempt;
 
 void modifierOnly;
 void promptOnly;
@@ -89,4 +89,4 @@ void sendWithPrompt;
 void sendWithModifiers;
 void headlessWithPromptAndModifiers;
 void commandModifier;
-void retryInvocation;
+void retryAttempt;

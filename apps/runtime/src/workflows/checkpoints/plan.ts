@@ -4,10 +4,10 @@ import { pureFailure, type PureResult } from '../state/pure.js';
 import { isPlainObject } from '../state/reducers.js';
 
 /**
- * Normalization of the plan a checkpoint's `prepare` returned.
+ * Normalization of the plan a checkpoint's `plan` returned.
  *
  * Pure: it runs before anything touches the filesystem, so an author mistake fails the execution
- * (stage `checkpoint_prepare`) with a message naming the field. The value is untrusted, so only the
+ * (stage `checkpoint_plan`) with a message naming the field. The value is untrusted, so only the
  * fields a plan has are read, each is type-checked, and an optional field set to `undefined` counts
  * as absent. Every rule refuses rather than repairs: a silently dropped scope or exclusion would
  * save something other than what the author asked for.
@@ -23,29 +23,16 @@ export interface NormalizedScope {
 }
 
 export interface NormalizedCheckpointPlan {
-  readonly title: string;
   readonly scopes: readonly NormalizedScope[];
 }
 
-export const checkpointTitleMaxLength = 512;
 export const checkpointMaxScopes = 64;
 export const checkpointMaxExclusions = 64;
 const scopeNamePattern = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-export function normalizeCheckpointPlan(
-  value: unknown,
-  node: { readonly nodeId: string; readonly title?: string | undefined },
-): PureResult<NormalizedCheckpointPlan> {
+export function normalizeCheckpointPlan(value: unknown): PureResult<NormalizedCheckpointPlan> {
   if (!isPlainObject(value) || !Array.isArray(value.capture)) {
     return pureFailure('A checkpoint plan must be an object with a `capture` array.');
-  }
-
-  // The default chain is held to the same bound, so a static title too long to store is refused.
-  const rawTitle = value.title === undefined ? node.title?.trim() || node.nodeId : value.title;
-  if (typeof rawTitle !== 'string') return pureFailure('The plan `title` must be a string.');
-  const title = rawTitle.trim();
-  if (title.length === 0 || title.length > checkpointTitleMaxLength) {
-    return pureFailure(`The plan title must be 1–${checkpointTitleMaxLength} characters.`);
   }
 
   const capture: readonly unknown[] = value.capture;
@@ -118,7 +105,7 @@ export function normalizeCheckpointPlan(
       }
     }
   }
-  return { ok: true, value: { title, scopes } };
+  return { ok: true, value: { scopes } };
 }
 
 /** `a` contains `b` when they are equal or `b` lies beneath `a`. */

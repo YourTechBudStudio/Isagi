@@ -109,7 +109,7 @@ export const workflowPlacementRequestSchema: Schema.Schema<WorkflowPlacementRequ
 
 /**
  * Who decided the placement. `override` is a caller supplying `placement` on the launch request,
- * `selector` is the workflow's own `environment` hook, `default` is current/current when neither is
+ * `selector` is the workflow's own `placement` hook, `default` is current/current when neither is
  * present. A caller beats the hook, which beats the default.
  */
 export const workflowPlacementSourceSchema = Schema.Literal('default', 'selector', 'override');

@@ -328,7 +328,7 @@ function workflowTables(client: BetterSqlite.Database) {
   ).map((row) => row.name);
 }
 
-/** What `0008` + `0009` must leave behind, whether the database is new or upgraded. */
+/** What `0008` through `0011` must leave behind, whether the database is new or upgraded. */
 function assertGraphWorkflowSchema(client: BetterSqlite.Database) {
   assert.deepEqual(workflowTables(client), [...GRAPH_WORKFLOW_TABLES]);
   const runtimeIdentity = client
@@ -339,6 +339,8 @@ function assertGraphWorkflowSchema(client: BetterSqlite.Database) {
     assert.equal(hasColumn(client, table, 'creation_key'), false, `${table}.creation_key`);
   }
   assert.equal(hasColumn(client, 'workflow_runs', 'project_id'), true);
+  assert.equal(hasColumn(client, 'workflow_runs', 'parameters_json'), true);
+  assert.equal(hasColumn(client, 'workflow_checkpoints', 'label'), true);
   assert.deepEqual(client.pragma('foreign_key_check'), []);
 }
 
@@ -457,6 +459,153 @@ const UNRELATED_COLUMNS = {
   worktrees: [],
   worktree_surfaces: [],
 } as const satisfies Record<string, readonly string[]>;
+
+/** The migration set as it stood before launch `parse` stored parameters on the run. */
+const PRE_PARSE_TAGS = [
+  ...PRE_GRAPH_WORKFLOW_TAGS,
+  '0008_drop_old_workflow_tables',
+  '0009_graph_workflow_tables',
+] as const;
+
+const RUN_SCOPED_WORKFLOW_TABLES = [
+  'workflow_checkpoints',
+  'workflow_events',
+  'workflow_executions',
+  'workflow_graph_invocations',
+  'workflow_operations',
+  'workflow_runs',
+] as const;
+
+function rowCount(client: BetterSqlite.Database, table: string): number {
+  return (client.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number })
+    .count;
+}
+
+/**
+ * Proves `0010` clears every run-scoped workflow row before `0011` adds `workflow_runs`'s NOT NULL
+ * `parameters_json`, which SQLite can only add to an empty table. Builds are kept: they are
+ * content-addressed and reachable only through a run, so with no runs they are simply unused.
+ */
+test('the launch-parse migrations clear workflow runs, keep builds and add the new columns', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-launch-parse-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
+
+  try {
+    const client = new BetterSqlite(dataDirectory.paths.databasePath);
+    let seeded: ReturnType<typeof readHistoricalRows<keyof typeof UNRELATED_COLUMNS>>;
+    try {
+      client.pragma('foreign_keys = ON');
+      migrate(drizzle(client), {
+        migrationsFolder: historicalMigrationsFolder(dataRoot, PRE_PARSE_TAGS),
+      });
+      const at = '2026-01-01T00:00:00.000Z';
+      const project = client
+        .prepare(
+          `INSERT INTO projects (name, root_path, status, created_at, updated_at, last_seen_at, missing_reason)
+           VALUES ('isagi', '/repo/isagi', 'present', ?, ?, NULL, NULL)`,
+        )
+        .run(at, at);
+      const worktree = client
+        .prepare(
+          `INSERT INTO worktrees (project_id, path, branch, head, created_at, updated_at, first_seen_at, last_seen_at)
+           VALUES (?, '/repo/isagi', 'main', 'abc', ?, ?, ?, NULL)`,
+        )
+        .run(project.lastInsertRowid, at, at, at);
+      const surface = client
+        .prepare(
+          `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, created_at, updated_at)
+           VALUES (?, 'Main', '{}', 0, ?, ?)`,
+        )
+        .run(worktree.lastInsertRowid, at, at);
+      client
+        .prepare(
+          `INSERT INTO workflow_artifacts (hash, workflow_key, sdk_version, verifier_version, contract_version, structure_json, first_seen_at)
+           VALUES (?, 'old', '0.1.0', '0.1.0', 4, '{"descriptorVersion":1}', ?)`,
+        )
+        .run('a'.repeat(64), at);
+      // One row in every run-scoped table, attached to a kept surface, so the clearing has
+      // something to remove on each and a foreign key into kept data to release.
+      const run = client
+        .prepare(
+          `INSERT INTO workflow_runs (
+             project_id, workflow_key, title, artifact_hash, status, inputs_json, placement_json,
+             origin_worktree_id, origin_worktree_path, surface_id, created_at, updated_at
+           ) VALUES (?, 'old', 'Old', ?, 'running', '{}', '{}', ?, '/repo/isagi', ?, ?, ?)`,
+        )
+        .run(
+          project.lastInsertRowid,
+          'a'.repeat(64),
+          worktree.lastInsertRowid,
+          surface.lastInsertRowid,
+          at,
+          at,
+        );
+      const invocation = client
+        .prepare(
+          `INSERT INTO workflow_graph_invocations (run_id, graph_key, depth, parameters_json, state_json, status, started_at)
+           VALUES (?, 'root', 0, '{}', '{}', 'running', ?)`,
+        )
+        .run(run.lastInsertRowid, at);
+      const execution = client
+        .prepare(
+          `INSERT INTO workflow_executions (run_id, invocation_id, node_id, node_kind, visit_index, artifact_hash, status, started_at)
+           VALUES (?, ?, 'save', 'checkpoint', 0, ?, 'completed', ?)`,
+        )
+        .run(run.lastInsertRowid, invocation.lastInsertRowid, 'a'.repeat(64), at);
+      client
+        .prepare(
+          `INSERT INTO workflow_operations (run_id, execution_id, seq, kind, request_json, status, started_at)
+           VALUES (?, ?, 0, 'close_pane', '{}', 'completed', ?)`,
+        )
+        .run(run.lastInsertRowid, execution.lastInsertRowid, at);
+      client
+        .prepare(
+          `INSERT INTO workflow_events (run_id, execution_id, at, category, kind, message)
+           VALUES (?, ?, ?, 'run', 'run_launched', 'Launched')`,
+        )
+        .run(run.lastInsertRowid, execution.lastInsertRowid, at);
+      client
+        .prepare(
+          `INSERT INTO workflow_checkpoints (run_id, execution_id, title, scopes_json, created_at)
+           VALUES (?, ?, 'Old title', '[]', ?)`,
+        )
+        .run(run.lastInsertRowid, execution.lastInsertRowid, at);
+      for (const table of RUN_SCOPED_WORKFLOW_TABLES) {
+        assert.equal(rowCount(client, table), 1, `seeded ${table}`);
+      }
+      seeded = readHistoricalRows(client, UNRELATED_COLUMNS);
+    } finally {
+      client.close();
+    }
+
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* RuntimeDatabase;
+        return yield* db.use('test_open_upgraded_database', (connection) =>
+          connection.select().from(workflowRuns).all(),
+        );
+      }).pipe(Effect.provide(database)),
+    );
+
+    const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      assertGraphWorkflowSchema(inspect);
+      for (const table of RUN_SCOPED_WORKFLOW_TABLES) {
+        assert.equal(rowCount(inspect, table), 0, `cleared ${table}`);
+      }
+      assert.equal(rowCount(inspect, 'workflow_artifacts'), 1, 'builds are kept');
+      assert.deepEqual(readHistoricalRows(inspect, UNRELATED_COLUMNS), seeded);
+      assert.equal(seeded.worktree_surfaces.length, 1);
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
 
 /**
  * Proves the project-kind migration (`0007`) upgrades a database created before

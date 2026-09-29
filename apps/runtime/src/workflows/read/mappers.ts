@@ -190,6 +190,7 @@ export function checkpointDto(row: CheckpointRow): WorkflowCheckpointDto {
     runId: row.runId,
     executionId: row.executionId,
     title: row.title,
+    label: row.label,
     commitSha: row.commitSha,
     createdAt: row.createdAt,
     scopes: fromJson<CheckpointScope[]>(row.scopesJson),

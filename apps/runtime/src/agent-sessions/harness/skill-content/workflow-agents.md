@@ -49,7 +49,6 @@ type Output = Pick<State, 'messages' | 'failure'>;
 export const AgentTurn = createGraph<State, {}, Parameters, Output>({
   key: 'AgentTurn',
   title: 'Ask agent and collect response',
-  intent: 'operational',
   init: (_destination, parameters) => ({ ...parameters, messages: [], failure: null }),
   state: {
     agentSessionId: reduce.replace<number>(),

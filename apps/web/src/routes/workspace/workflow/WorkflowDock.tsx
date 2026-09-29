@@ -14,6 +14,7 @@ import {
 } from './dock.js';
 import { Fields } from './DockFields.js';
 import { dockMaxHeight, dockMinHeight } from './format.js';
+import { LabelSuffix } from './LabelSuffix.js';
 import type { InspectorSelection } from './selection.js';
 import { formatClock } from './timing.js';
 import { WorkflowCheckpointColumn } from './WorkflowCheckpointColumn.js';
@@ -402,9 +403,7 @@ function ChildExecutionButton({
       >
         {child.nodeId}
       </span>
-      {child.label && (
-        <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{child.label}</span>
-      )}
+      <LabelSuffix label={child.label} />
       <span
         className={`ml-auto flex-none font-mono text-[10.5px] ${toneClass(statusTone(child.status))}`}
       >

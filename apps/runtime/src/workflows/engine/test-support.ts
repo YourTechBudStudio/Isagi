@@ -261,7 +261,7 @@ export class FakeRegistry implements WorkflowRegistryService {
     const artifact = describeWorkflowArtifact({ default: definition }, hash, { workflowKey });
     const published: PublishedWorkflowArtifact = {
       ...artifact,
-      versions: { sdkVersion: '0.1.0', verifierVersion: '0.1.0', contractVersion: 4 },
+      versions: { sdkVersion: '0.1.0', verifierVersion: '0.1.0', contractVersion: 5 },
     };
     this.latest.set(workflowKey, published);
     this.byHash.set(hash, artifact);
@@ -323,6 +323,11 @@ export class FakePlaces {
     number,
     { readonly id: number; readonly worktreeId: number; readonly title: string }
   >();
+  /** Agent panes by surface, as `getSurfaceDetail` reports them to the launch origin check. */
+  readonly agentPanes = new Map<
+    number,
+    { readonly paneId: number; readonly agentSessionId: number }[]
+  >();
   readonly refs = new Map<string, string>([['main', 'a'.repeat(40)]]);
   readonly calls: string[] = [];
   /** What the next worktree setup reports: the one in `openWorktree`, then each rerun. */
@@ -355,6 +360,16 @@ export class FakePlaces {
     const id = this.nextSurface++;
     this.saveSurface(id, worktreeId, `Surface ${id}`);
     return id;
+  }
+
+  /** Puts an agent session's pane on a surface, so a launch can name it as its origin. */
+  addAgentPane(surfaceId: number, agentSessionId: number): number {
+    const paneId = 2000 + agentSessionId;
+    this.agentPanes.set(surfaceId, [
+      ...(this.agentPanes.get(surfaceId) ?? []),
+      { paneId, agentSessionId },
+    ]);
+    return paneId;
   }
 
   deleteSurface(surfaceId: number): void {
@@ -547,7 +562,10 @@ export class FakePlaces {
             return surface
               ? Effect.succeed({
                   ...surface,
-                  panes: [],
+                  panes: (this.agentPanes.get(id) ?? []).map((pane) => ({
+                    id: pane.paneId,
+                    session: { kind: 'agent_session', agentSession: { id: pane.agentSessionId } },
+                  })),
                   layout: { kind: 'leaf', paneId: 1 },
                 } as never)
               : Effect.fail(new Error(`Surface ${id} was not found.`) as never);
@@ -596,6 +614,20 @@ export class FakeAgents {
     private readonly clock: FakeClock,
     private readonly bus: InternalRuntimeEventBusService,
   ) {}
+
+  /** An agent session that already exists, such as the one a workflow is launched from. */
+  addSession(harness: WorkflowAgentHarness = 'claude'): number {
+    const agentSessionId = this.nextSession++;
+    this.sessions.set(agentSessionId, {
+      harness,
+      alive: true,
+      edges: [],
+      replies: new Map(),
+      nextSeq: 1,
+      openSeq: null,
+    });
+    return agentSessionId;
+  }
 
   port(): AgentPort {
     return {

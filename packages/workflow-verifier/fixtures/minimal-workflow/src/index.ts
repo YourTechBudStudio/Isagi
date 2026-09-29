@@ -22,21 +22,18 @@ type State = {
   readonly acknowledged: boolean;
 };
 
-type Inputs = {
-  readonly note?: unknown;
+type Parameters = {
+  readonly note: string;
 };
-
-type Parameters = Inputs;
 
 // Exported so the package's own tests can exercise the graph directly. The runtime only ever
 // reads the default export.
 export const MinimalGraph = createGraph<State, {}, Parameters, { readonly note: string }>({
   key: 'Minimal',
   title: 'Minimal workflow',
-  intent: 'business',
   // init is synchronous and runs once per graph invocation. It never runs again to migrate state.
   init: (_destination, parameters): State => ({
-    note: parseNote(parameters.note),
+    note: parameters.note,
     acknowledged: false,
   }),
   // Every state field declares how an update is applied. Omitting a field leaves it unchanged.
@@ -77,9 +74,9 @@ export const MinimalGraph = createGraph<State, {}, Parameters, { readonly note: 
   },
 });
 
-// `environment` is optional. Omitting it places the run in the current worktree and surface; declare
+// `placement` is optional. Omitting it places the run in the current worktree and surface; declare
 // it to choose a different one.
-export default defineWorkflow<Inputs, { readonly note: string }>({
+export default defineWorkflow({
   command: () => ({
     title: 'Minimal workflow',
     description: 'A starter workflow that pauses for the user, then completes.',
@@ -92,10 +89,9 @@ export default defineWorkflow<Inputs, { readonly note: string }>({
       },
     ],
   }),
-  // Validated launch inputs become the root graph's parameters with no further mapping.
-  validate: (_origin, inputs) => {
-    parseNote(inputs.note);
-  },
+  // parse checks the raw form answers and returns the root graph's parameters. Throwing refuses
+  // the launch, and the message is shown to the person as written.
+  parse: (_origin, inputs): Parameters => ({ note: parseNote(inputs.note) }),
   graph: MinimalGraph,
 });
 

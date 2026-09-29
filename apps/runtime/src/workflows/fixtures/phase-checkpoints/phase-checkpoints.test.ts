@@ -41,11 +41,16 @@ test('every checkpoint node records a self-contained checkpoint and the run comp
 
     const listed = await harness.run(harness.engine.listCheckpoints(runId, {}));
     assert.deepEqual(
-      listed.items.map((item) => [item.title, item.commitSha, item.scopes.map((s) => s.scope)]),
+      listed.items.map((item) => [
+        item.title,
+        item.label,
+        item.commitSha,
+        item.scopes.map((s) => s.scope),
+      ]),
       [
-        ['Phase 1 saved', head, ['phase-1', 'decisions']],
-        ['Phase 2 saved', head, ['phase-2', 'decisions']],
-        ['Seal', head, ['all']],
+        ['Save the phase', 'Phase 1 saved', head, ['phase-1', 'decisions']],
+        ['Save the phase', 'Phase 2 saved', head, ['phase-2', 'decisions']],
+        ['Seal', null, head, ['all']],
       ],
     );
     const decisions = await harness.run(

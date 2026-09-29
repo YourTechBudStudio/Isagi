@@ -39,7 +39,7 @@ export function descriptorFixture(
   graphs: readonly WorkflowGraphDescriptorDto[],
   rootGraphKey = graphs[0]?.key ?? 'root',
 ): WorkflowStructureDescriptorDto {
-  return { descriptorVersion: 1, workflowContractVersion: 4, rootGraphKey, graphs };
+  return { descriptorVersion: 2, workflowContractVersion: 5, rootGraphKey, graphs };
 }
 
 /** A run view assembled from real DTOs, exactly as `useWorkflowRunView` builds one. */
@@ -55,6 +55,7 @@ export function runViewFixture(input: {
     {
       run: input.summary ?? workflowSummaryFixture({ runId }),
       inputs: {},
+      parameters: {},
       invocations: input.invocations ?? [rootInvocation()],
       executions: input.executions ?? [],
     },

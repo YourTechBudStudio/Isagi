@@ -15,7 +15,7 @@ test('an ordinary closed bundle passes', () => {
   assert.ok(
     isClosed(`
       const graph = { key: 'Root' };
-      export default { command() { return { title: 'Root' }; }, validate() {}, graph };
+      export default { command() { return { title: 'Root' }; }, parse() {}, graph };
     `),
   );
 });

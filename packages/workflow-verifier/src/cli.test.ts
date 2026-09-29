@@ -43,9 +43,9 @@ const structureFile = 'dist/isagi-workflow-structure.json';
 function artifact(options: { readonly checkpoint?: boolean; readonly graphKey?: string } = {}) {
   const key = options.graphKey ?? 'Minimal';
   const node = options.checkpoint
-    ? `{ ...brand('checkpoint-node'), title: 'Save notes', prepare: () => { throw new Error('prepare ran during verification'); } }`
+    ? `{ ...brand('checkpoint-node'), title: 'Save notes', plan: () => { throw new Error('plan ran during verification'); }, label: () => { throw new Error('label ran during verification'); } }`
     : `{ ...brand('operation-node'), run: async () => ({ ...brand('operation-result'), type: 'complete' }) }`;
-  return `const brand = (kind) => ({ isagiContract: 4, isagiKind: kind });
+  return `const brand = (kind) => ({ isagiContract: 5, isagiKind: kind });
 const graph = {
   ...brand('graph'),
   key: ${JSON.stringify(key)},
@@ -60,7 +60,7 @@ const graph = {
 export default {
   ...brand('workflow'),
   command() { return { title: 'Minimal workflow', inputs: [] }; },
-  validate() {},
+  parse() { return {}; },
   graph,
 };
 `;
@@ -148,7 +148,7 @@ test('the structure description is written, and the receipt names its hash', asy
   assert.equal(descriptor.descriptorVersion, workflowStructureDescriptorVersion);
 });
 
-test('a checkpoint bundle verifies and gets a receipt without running prepare', async () => {
+test('a checkpoint bundle verifies and gets a receipt without running plan or label', async () => {
   const root = await fixture(artifact({ checkpoint: true }));
   await verifyWorkflow(root);
   const manifest = parseWorkflowBuildManifestJson(await readFile(join(root, receiptFile), 'utf8'));
@@ -164,7 +164,7 @@ test('a failed verification removes a receipt an earlier success left behind', a
   await verifyWorkflow(root);
   assert.ok(!(await missing(root, receiptFile)));
   // The artifact now declares a structure the verifier rejects.
-  await writeFile(join(root, 'dist/index.js'), 'export default { command() {}, validate() {} };');
+  await writeFile(join(root, 'dist/index.js'), 'export default { command() {}, parse() {} };');
   await assert.rejects(verifyWorkflow(root), /failed the artifact check/);
   assert.ok(
     await missing(root, receiptFile),
@@ -192,10 +192,10 @@ test('structural diagnostics name the code and the location', async () => {
 });
 
 test('a contract-version-3 bundle reports the real cause and never loads', async () => {
-  const root = await fixture(artifact().replaceAll('isagiContract: 4', 'isagiContract: 3'));
+  const root = await fixture(artifact().replaceAll('isagiContract: 5', 'isagiContract: 3'));
   await assert.rejects(verifyWorkflow(root), (error: Error) => {
     assert.match(error.message, /\[unsupported_contract\]/);
-    assert.match(error.message, /contract version 3; this release supports version 4/);
+    assert.match(error.message, /contract version 3; this release supports version 5/);
     return true;
   });
 });
@@ -342,8 +342,8 @@ test('the generated descriptor is regenerated from the bundle, never read back a
   await writeFile(
     join(root, structureFile),
     `${JSON.stringify({
-      descriptorVersion: 1,
-      workflowContractVersion: 4,
+      descriptorVersion: 2,
+      workflowContractVersion: 5,
       rootGraphKey: 'Impostor',
       graphs: [
         {

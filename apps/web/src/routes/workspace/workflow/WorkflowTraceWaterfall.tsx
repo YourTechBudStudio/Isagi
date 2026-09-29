@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { inspectorCopy } from './copy.js';
+import { LabelSuffix } from './LabelSuffix.js';
 import { verticalIndex } from './list-navigation.js';
 import { selectionEquals, type InspectorSelection } from './selection.js';
 import { formatDuration } from './timing.js';
@@ -305,9 +306,7 @@ function Row({
             #{row.visitIndex + 1}
           </span>
         )}
-        {row.label && (
-          <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.label}</span>
-        )}
+        <LabelSuffix label={row.label} />
         {row.retryOf !== null && (
           <span
             data-retry-of={row.retryOf}
@@ -499,9 +498,7 @@ function InvocationRow({
         <span className="flex-none font-mono text-[10.5px] tracking-[0.06em] text-fg-subtle uppercase">
           graph
         </span>
-        {row.label && (
-          <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.label}</span>
-        )}
+        <LabelSuffix label={row.label} />
         <span className="ml-auto flex-none font-mono text-[11.5px] text-fg-muted">
           {formatDuration(elapsedOf(row, now))}
         </span>
