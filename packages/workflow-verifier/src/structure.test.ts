@@ -15,6 +15,7 @@ import {
 
 import {
   canonicalizeDescriptor,
+  checkCommandManifest,
   describeWorkflowModule,
   hashDescriptor,
   workflowStructureDescriptorVersion,
@@ -891,4 +892,58 @@ test('a cycle is reported without attempting a depth verdict over a non-DAG', ()
   const codes = codesFor(self);
   assert.ok(codes.includes('recursive_graph_containment'));
   assert.equal(codes.includes('containment_too_deep'), false);
+});
+
+test('a well-formed command() manifest has no problems', () => {
+  assert.deepEqual(checkCommandManifest({ title: 'Minimal workflow' }), []);
+  assert.deepEqual(
+    checkCommandManifest({
+      title: 'Minimal workflow',
+      description: 'Does one thing.',
+      inputs: [
+        { kind: 'text', key: 'goal', label: 'Goal' },
+        { kind: 'select', key: 'mode', label: 'Mode', options: [{ value: 'fast' }] },
+        { kind: 'multi-select', key: 'tags', label: 'Tags', options: [] },
+        { kind: 'confirm', key: 'sure', label: 'Sure?' },
+      ],
+    }),
+    [],
+  );
+});
+
+test('a command() result that is not a manifest object is one problem', () => {
+  assert.deepEqual(checkCommandManifest(undefined), [
+    'command() must return a manifest object; it returned undefined.',
+  ]);
+  assert.deepEqual(checkCommandManifest([]), [
+    'command() must return a manifest object; it returned an array.',
+  ]);
+});
+
+test('command() manifest problems name the field and the input by index and key', () => {
+  assert.deepEqual(
+    checkCommandManifest({
+      title: '',
+      description: 3,
+      inputs: [
+        null,
+        { kind: 'slider', key: 'level', label: '' },
+        { kind: 'select', key: 'mode', label: 'Mode' },
+        { kind: 'multi-select', key: '', label: 'Tags', options: [{ value: 1 }] },
+      ],
+    }),
+    [
+      'command() must return a manifest with a non-empty string title; found string.',
+      'command() manifest description must be a string when present; found number.',
+      'command() inputs[0] must be an input object; found null.',
+      'command() inputs[1] (key "level") has kind "slider"; expected "text", "select", "multi-select", or "confirm".',
+      'command() inputs[1] (key "level") needs a non-empty string label.',
+      'command() inputs[2] (key "mode") is a select input and needs an options array.',
+      'command() inputs[3] needs a non-empty string key.',
+      'command() inputs[3] options[0] needs a string value.',
+    ],
+  );
+  assert.deepEqual(checkCommandManifest({ title: 'T', inputs: {} }), [
+    'command() manifest inputs must be an array when present; found object.',
+  ]);
 });

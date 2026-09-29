@@ -207,7 +207,6 @@ test('the contracts diagnostic codes are exactly the codes the verifier can emit
     'too_many_edges',
     'too_many_outcomes',
     'containment_too_deep',
-    'deferred_executable_dependency',
     'graph_missing',
     'subgraph_registration_changed',
     'node_missing',
@@ -220,7 +219,7 @@ test('the contracts diagnostic codes are exactly the codes the verifier can emit
   // Assignable both ways: neither set may gain a member the other lacks.
   const mirrored: readonly WorkflowStructureDiagnosticCode[] = verifierCodes;
   const back: readonly StructureDiagnosticCode[] = mirrored;
-  assert.equal(back.length, 38);
+  assert.equal(back.length, 37);
 
   for (const code of verifierCodes) {
     assert.equal(Schema.decodeUnknownSync(workflowStructureDiagnosticCodeSchema)(code), code);

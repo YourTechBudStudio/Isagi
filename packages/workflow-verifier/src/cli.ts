@@ -14,9 +14,8 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
-import { scanDeferredExecutableDependencies } from './closed-bundle.js';
 import {
   hashArtifact,
   hashWorkflowInputs,
@@ -32,7 +31,6 @@ import {
   type WorkflowBuildManifest,
 } from './receipt.js';
 import {
-  canonicalizeDescriptor,
   hashDescriptor,
   type StructureDiagnostic,
   type WorkflowStructureDescriptor,
@@ -137,9 +135,9 @@ function terminateTree(pid: number | undefined): void {
 }
 
 /**
- * The verifier front-runs the runtime loader: every gate here mirrors a check the Isagi runtime
- * performs before importing a workflow, so failures surface at authoring time instead of load
- * time. Quality gates (typecheck, tests) are deliberately absent — they are the author's
+ * The verifier front-runs the runtime loader: its gates mirror the checks the Isagi runtime
+ * performs before importing a workflow, and it also checks the command() manifest, so failures
+ * surface at authoring time instead of load or launch time. Quality gates (typecheck, tests) are deliberately absent — they are the author's
  * responsibility and do not affect whether the runtime can load the artifact.
  */
 export async function verifyWorkflow(
@@ -156,17 +154,7 @@ export async function verifyWorkflow(
   const sourceHash = hashWorkflowInputs(await readSourceInputs(root));
   const artifactPath = join(root, 'dist', 'index.js');
   const artifactBytes = await readArtifact(artifactPath);
-  requireClosedBundle(artifactBytes);
   const descriptor = await validateArtifact(root, artifactPath, runner);
-  const structureHash = hashDescriptor(descriptor);
-
-  // The structure file is written for every structurally valid bundle, so an author always has a
-  // machine-readable description of what they built.
-  await writeAtomic(
-    join(root, 'dist', 'isagi-workflow-structure.json'),
-    `${canonicalizeDescriptor(descriptor)}\n`,
-    'the workflow structure description',
-  );
 
   const manifest: WorkflowBuildManifest = {
     manifestVersion: workflowBuildManifestVersion,
@@ -177,12 +165,11 @@ export async function verifyWorkflow(
     artifact: { entry: 'dist/index.js', sha256: hashArtifact(artifactBytes) },
     structure: {
       descriptorVersion: descriptor.descriptorVersion,
-      sha256: structureHash,
+      sha256: hashDescriptor(descriptor),
       rootGraphKey: descriptor.rootGraphKey,
       graphCount: descriptor.graphs.length,
     },
   };
-  // The receipt is written last, so a receipt never exists without its structure description.
   await writeAtomic(
     join(root, 'dist', 'isagi-workflow-build.json'),
     serializeWorkflowBuildManifest(manifest),
@@ -205,14 +192,6 @@ async function removeStaleReceipt(root: string): Promise<void> {
       `Could not remove the previous build receipt ${receiptPath(root)}: ${message(cause)}`,
     );
   }
-}
-
-function requireClosedBundle(artifactBytes: Buffer): void {
-  const diagnostics = scanDeferredExecutableDependencies(artifactBytes.toString('utf8'));
-  if (diagnostics.length === 0) return;
-  throw new VerificationError(
-    `dist/index.js is not a closed bundle. One artifact hash must pin one executable structure, so everything the artifact runs has to be inside it:\n${formatDiagnostics(diagnostics)}`,
-  );
 }
 
 function formatDiagnostics(diagnostics: readonly StructureDiagnostic[]): string {
@@ -354,8 +333,8 @@ async function readArtifact(path: string): Promise<Buffer> {
 /**
  * Imports the built artifact in an isolated child process the way the runtime loader will, reads
  * its declared structure, and checks the exported workflow definition and its command() manifest.
- * The child reports through a result file rather than stdout, so workflow code that logs during
- * import or command() cannot corrupt the report.
+ * The child (`validate-artifact.ts`) reports through a result file rather than stdout, so workflow
+ * code that logs during import or command() cannot corrupt the report.
  */
 async function validateArtifact(
   root: string,
@@ -367,15 +346,10 @@ async function validateArtifact(
     const isolatedArtifact = join(isolatedRoot, 'index.mjs');
     await writeFile(isolatedArtifact, await readFile(artifact));
     const resultPath = join(isolatedRoot, 'result.json');
-    const validatorPath = join(isolatedRoot, 'validate.mjs');
-    await writeFile(
-      validatorPath,
-      validatorSource(isolatedArtifact, resultPath, root, structureModulePath()),
-    );
     try {
       await runner({
         command: process.execPath,
-        args: [validatorPath],
+        args: [validatorPath(), isolatedArtifact, resultPath, root],
         cwd: isolatedRoot,
         timeoutMs: 10_000,
       });
@@ -417,58 +391,12 @@ async function validateArtifact(
 }
 
 /**
- * The installed structure module, resolved as a real file URL so a packed installation works
- * outside this monorepo. The validator child is a plain Node process, so it imports this path
- * directly; CLI integration tests therefore run against the built CLI, whose sibling is `dist`.
+ * The installed validation child (`validate-artifact.ts`), resolved as a real file path next to
+ * this module so a packed installation works outside this monorepo. CLI integration tests therefore
+ * run against the built CLI, whose sibling is `dist`.
  */
-function structureModulePath(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), 'structure.js');
-}
-
-function validatorSource(
-  artifactPath: string,
-  resultPath: string,
-  worktreePath: string,
-  structurePath: string,
-): string {
-  return [
-    `import { writeFileSync } from 'node:fs';`,
-    `const finish = (report) => { writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(report)); process.exit(0); };`,
-    `const describe = (value) => (Array.isArray(value) ? 'an array' : value === null ? 'null' : typeof value);`,
-    `const cause = (error) => String((error && error.stack) || error);`,
-    `let structure;`,
-    `try { structure = await import(${JSON.stringify(pathToFileURL(structurePath).href)}); }`,
-    `catch (error) { finish({ ok: false, error: 'The verifier could not load its own structure module:\\n' + cause(error) }); }`,
-    `let artifact;`,
-    `try { artifact = await import(${JSON.stringify(pathToFileURL(artifactPath).href)}); }`,
-    `catch (error) { finish({ ok: false, error: 'Importing the bundle threw before any workflow definition could be read:\\n' + cause(error) }); }`,
-    `const result = structure.describeWorkflowModule(artifact);`,
-    `if (!result.ok) finish({ ok: false, error: 'The bundle does not declare a valid workflow structure.', diagnostics: result.diagnostics });`,
-    `const workflow = artifact.default;`,
-    `let manifest;`,
-    `try { manifest = await workflow.command({ worktreeId: 0, worktreePath: ${JSON.stringify(worktreePath)}, surfaceId: null, paneId: null, agentSessionId: null }); }`,
-    `catch (error) { finish({ ok: false, error: 'command() threw when called with a minimal origin. command() must succeed without optional surface, pane or agent-session context.\\n' + cause(error) }); }`,
-    `const problems = [];`,
-    `if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) problems.push('command() must return a manifest object; it returned ' + describe(manifest) + '.');`,
-    `else {`,
-    `  if (typeof manifest.title !== 'string' || !manifest.title) problems.push('command() must return a manifest with a non-empty string title; found ' + describe(manifest.title) + '.');`,
-    `  if (manifest.description !== undefined && typeof manifest.description !== 'string') problems.push('command() manifest description must be a string when present; found ' + describe(manifest.description) + '.');`,
-    `  if (manifest.inputs !== undefined && !Array.isArray(manifest.inputs)) problems.push('command() manifest inputs must be an array when present; found ' + describe(manifest.inputs) + '.');`,
-    `  for (const [index, input] of (Array.isArray(manifest.inputs) ? manifest.inputs : []).entries()) {`,
-    `    const where = 'inputs[' + index + ']' + (input && typeof input.key === 'string' && input.key ? ' (key "' + input.key + '")' : '');`,
-    `    if (!input || typeof input !== 'object') { problems.push('command() ' + where + ' must be an input object; found ' + describe(input) + '.'); continue; }`,
-    `    if (!['text', 'select', 'multi-select', 'confirm'].includes(input.kind)) problems.push('command() ' + where + ' has kind ' + JSON.stringify(input.kind) + '; expected "text", "select", "multi-select", or "confirm".');`,
-    `    if (typeof input.key !== 'string' || !input.key) problems.push('command() ' + where + ' needs a non-empty string key.');`,
-    `    if (typeof input.label !== 'string' || !input.label) problems.push('command() ' + where + ' needs a non-empty string label.');`,
-    `    if (input.kind === 'select' || input.kind === 'multi-select') {`,
-    `      if (!Array.isArray(input.options)) problems.push('command() ' + where + ' is a ' + input.kind + ' input and needs an options array.');`,
-    `      else for (const [optionIndex, option] of input.options.entries()) if (!option || typeof option.value !== 'string') problems.push('command() ' + where + ' options[' + optionIndex + '] needs a string value.');`,
-    `    }`,
-    `  }`,
-    `}`,
-    `finish(problems.length ? { ok: false, error: problems.join('\\n') } : { ok: true, descriptor: result.descriptor });`,
-    ``,
-  ].join('\n');
+function validatorPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'validate-artifact.js');
 }
 
 async function exists(path: string): Promise<boolean> {

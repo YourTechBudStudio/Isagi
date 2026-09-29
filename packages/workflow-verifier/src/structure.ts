@@ -115,7 +115,6 @@ export type StructureDiagnosticCode =
   | 'too_many_edges'
   | 'too_many_outcomes'
   | 'containment_too_deep'
-  | 'deferred_executable_dependency'
   // Saved-position validation (§6.4): a pinned structure that no longer fits the position a
   // run is parked at. Reported through the same diagnostic shape, so they share the set.
   | 'graph_missing'
@@ -256,6 +255,73 @@ export function describeWorkflowModule(moduleNamespace: unknown): StructureResul
       .sort((left, right) => compare(left.key, right.key)),
   };
   return { ok: true, descriptor };
+}
+
+const commandInputKinds: readonly unknown[] = ['text', 'select', 'multi-select', 'confirm'];
+
+/** Reads a property the way `value?.[name]` does, including off primitives, without a shape cast. */
+function propertyOf(value: unknown, name: string): unknown {
+  return value === null || value === undefined ? undefined : Reflect.get(Object(value), name);
+}
+
+/**
+ * Checks the manifest a workflow's `command()` returned: a non-empty title, an optional string
+ * description, and optional well-formed launch inputs. Returns one message per problem, and none
+ * when the manifest is valid. Like `describeWorkflowModule`, it only reads plain data; calling
+ * `command()` is the caller's job.
+ */
+export function checkCommandManifest(manifest: unknown): readonly string[] {
+  if (!isObject(manifest) || Array.isArray(manifest)) {
+    return [`command() must return a manifest object; it returned ${describeValue(manifest)}.`];
+  }
+  const problems: string[] = [];
+  if (typeof manifest.title !== 'string' || !manifest.title) {
+    problems.push(
+      `command() must return a manifest with a non-empty string title; found ${describeValue(manifest.title)}.`,
+    );
+  }
+  if (manifest.description !== undefined && typeof manifest.description !== 'string') {
+    problems.push(
+      `command() manifest description must be a string when present; found ${describeValue(manifest.description)}.`,
+    );
+  }
+  if (manifest.inputs !== undefined && !Array.isArray(manifest.inputs)) {
+    problems.push(
+      `command() manifest inputs must be an array when present; found ${describeValue(manifest.inputs)}.`,
+    );
+  }
+  const inputs: readonly unknown[] = Array.isArray(manifest.inputs) ? manifest.inputs : [];
+  for (const [index, input] of inputs.entries()) {
+    const key = propertyOf(input, 'key');
+    const where = `inputs[${index}]${typeof key === 'string' && key ? ` (key "${key}")` : ''}`;
+    if (!isObject(input)) {
+      problems.push(`command() ${where} must be an input object; found ${describeValue(input)}.`);
+      continue;
+    }
+    if (!commandInputKinds.includes(input.kind)) {
+      problems.push(
+        `command() ${where} has kind ${JSON.stringify(input.kind)}; expected "text", "select", "multi-select", or "confirm".`,
+      );
+    }
+    if (typeof input.key !== 'string' || !input.key) {
+      problems.push(`command() ${where} needs a non-empty string key.`);
+    }
+    if (typeof input.label !== 'string' || !input.label) {
+      problems.push(`command() ${where} needs a non-empty string label.`);
+    }
+    if (input.kind === 'select' || input.kind === 'multi-select') {
+      if (!Array.isArray(input.options)) {
+        problems.push(`command() ${where} is a ${input.kind} input and needs an options array.`);
+      } else {
+        for (const [optionIndex, option] of input.options.entries()) {
+          if (typeof propertyOf(option, 'value') !== 'string') {
+            problems.push(`command() ${where} options[${optionIndex}] needs a string value.`);
+          }
+        }
+      }
+    }
+  }
+  return problems;
 }
 
 /**

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import test from 'node:test';
@@ -14,7 +14,11 @@ import {
   workflowVerifierPackage,
   workflowVerifierVersion,
 } from './receipt.js';
-import { hashDescriptor, workflowStructureDescriptorVersion } from './structure.js';
+import {
+  hashDescriptor,
+  workflowStructureDescriptorVersion,
+  type WorkflowStructureDescriptor,
+} from './structure.js';
 
 /**
  * The CLI is exercised through its **built** entry, because its validation child is a plain Node
@@ -29,10 +33,9 @@ const { runProcess, verifyWorkflow } = (await import(
 
 const canonicalFixture = resolve(import.meta.dirname, '../fixtures/minimal-workflow');
 const receiptFile = 'dist/isagi-workflow-build.json';
-const structureFile = 'dist/isagi-workflow-structure.json';
 
 /**
- * A closed, hand-written artifact in the shape a built bundle has: plain-data brands, no imports.
+ * A hand-written artifact in the shape a built bundle has: plain-data brands, no imports.
  *
  * Writing it by hand keeps these tests independent of esbuild. The real build pipeline — and
  * everything downstream of it, up to a run suspended at its user gate — is proven separately by
@@ -140,22 +143,35 @@ test('a different structure produces a different structure hash', async () => {
   );
 });
 
-test('the structure description is written, and the receipt names its hash', async () => {
-  const root = await fixture();
-  await verifyWorkflow(root);
-  const descriptor = JSON.parse(await readFile(join(root, structureFile), 'utf8'));
-  assert.equal(descriptor.rootGraphKey, 'Minimal');
-  assert.equal(descriptor.descriptorVersion, workflowStructureDescriptorVersion);
-});
-
 test('a checkpoint bundle verifies and gets a receipt without running plan or label', async () => {
   const root = await fixture(artifact({ checkpoint: true }));
   await verifyWorkflow(root);
   const manifest = parseWorkflowBuildManifestJson(await readFile(join(root, receiptFile), 'utf8'));
-  assert.equal(manifest.structure.rootGraphKey, 'Minimal');
-  const descriptor = JSON.parse(await readFile(join(root, structureFile), 'utf8'));
-  assert.deepEqual(descriptor.graphs[0].nodes, [
-    { id: 'act', kind: 'checkpoint', title: 'Save notes' },
+  const expected: WorkflowStructureDescriptor = {
+    descriptorVersion: workflowStructureDescriptorVersion,
+    workflowContractVersion: 5,
+    rootGraphKey: 'Minimal',
+    graphs: [
+      {
+        key: 'Minimal',
+        title: 'Minimal workflow',
+        stateFields: ['note'],
+        entry: 'act',
+        nodes: [{ id: 'act', kind: 'checkpoint', title: 'Save notes' }],
+        edges: [{ id: 'fromAct', from: 'act', to: ['done'] }],
+        outcomes: [{ id: 'done', kind: 'success' }],
+      },
+    ],
+  };
+  assert.equal(manifest.structure.sha256, hashDescriptor(expected));
+});
+
+test('verification writes the build receipt and no other file', async () => {
+  const root = await fixture();
+  await verifyWorkflow(root);
+  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), [
+    'index.js',
+    'isagi-workflow-build.json',
   ]);
 });
 
@@ -172,11 +188,20 @@ test('a failed verification removes a receipt an earlier success left behind', a
   );
 });
 
-test('a bundle that is not closed is rejected before the artifact is imported', async () => {
+test('a bundle that still imports a package fails in the isolated validation directory', async () => {
+  // The validation child imports a copy of dist/index.js from an empty temporary directory, so a
+  // package the bundle did not inline cannot resolve there even when the workflow package has it.
   const root = await fixture(`import 'some-package';\n${artifact()}`);
+  const installed = join(root, 'node_modules/some-package');
+  await mkdir(installed, { recursive: true });
+  await writeFile(
+    join(installed, 'package.json'),
+    JSON.stringify({ name: 'some-package', type: 'module', main: 'index.js' }),
+  );
+  await writeFile(join(installed, 'index.js'), 'export {};\n');
   await assert.rejects(verifyWorkflow(root), (error: Error) => {
-    assert.match(error.message, /not a closed bundle/);
-    assert.match(error.message, /still imports "some-package"/);
+    assert.match(error.message, /Importing the bundle threw/);
+    assert.match(error.message, /some-package/);
     return true;
   });
   assert.ok(await missing(root, receiptFile));
@@ -331,51 +356,6 @@ test('a failed verification removes a receipt even when package.json cannot be r
   await writeFile(join(root, 'package.json'), '{ not json');
   await assert.rejects(verifyWorkflow(root), /package\.json contains invalid JSON/);
   assert.ok(await missing(root, receiptFile));
-});
-
-test('the generated descriptor is regenerated from the bundle, never read back as an input', async () => {
-  const root = await fixture();
-  await verifyWorkflow(root);
-  const trusted = await readFile(join(root, structureFile), 'utf8');
-
-  // Replace it with a different, perfectly valid descriptor describing another graph entirely.
-  await writeFile(
-    join(root, structureFile),
-    `${JSON.stringify({
-      descriptorVersion: 2,
-      workflowContractVersion: 5,
-      rootGraphKey: 'Impostor',
-      graphs: [
-        {
-          key: 'Impostor',
-          title: 'Impostor',
-          stateFields: ['note'],
-          entry: 'act',
-          nodes: [{ id: 'act', kind: 'operation' }],
-          edges: [{ id: 'fromAct', from: 'act', to: ['done'] }],
-          outcomes: [{ id: 'done', kind: 'success' }],
-        },
-      ],
-    })}\n`,
-  );
-
-  await verifyWorkflow(root);
-  const regenerated = await readFile(join(root, structureFile), 'utf8');
-  assert.equal(regenerated, trusted, 'the descriptor is re-derived from the artifact');
-
-  // The receipt certifies the extracted descriptor, so the substituted file had no authority.
-  const manifest = parseWorkflowBuildManifestJson(await readFile(join(root, receiptFile), 'utf8'));
-  assert.equal(manifest.structure.rootGraphKey, 'Minimal');
-  assert.equal(manifest.structure.sha256, hashDescriptor(JSON.parse(regenerated)));
-});
-
-test('an unparseable descriptor file is replaced rather than failing verification', async () => {
-  const root = await fixture();
-  await verifyWorkflow(root);
-  const trusted = await readFile(join(root, structureFile), 'utf8');
-  await writeFile(join(root, structureFile), 'not json at all');
-  await verifyWorkflow(root);
-  assert.equal(await readFile(join(root, structureFile), 'utf8'), trusted);
 });
 
 test('a bundle whose graph key is unusable is refused and gets no receipt', async () => {

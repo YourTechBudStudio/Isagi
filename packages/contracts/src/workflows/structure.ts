@@ -48,7 +48,6 @@ export const workflowStructureDiagnosticCodeSchema = Schema.Literal(
   'too_many_edges',
   'too_many_outcomes',
   'containment_too_deep',
-  'deferred_executable_dependency',
   // Reload validation, reported when Resume or Retry is refused because the latest build no
   // longer fits where the run is parked.
   'graph_missing',
