@@ -86,15 +86,23 @@ export type DeclaredElement =
       readonly descriptor: WorkflowOutcomeDescriptorDto;
     };
 
-/** One arrow. Edges are drawn as their own element, so every link has an edge element at one end. */
+/**
+ * One arrow, from a node straight to one of its router's destinations.
+ *
+ * The verifier guarantees exactly one edge routes from each node, so a node and its router are drawn
+ * as one thing: the router is a knob on the node, not a card of its own, and the arrow carries which
+ * router owns it.
+ */
 export interface DeclaredLink {
   readonly id: string;
+  /** The node the router routes from. */
   readonly fromKey: string;
   readonly toKey: string;
   /** The registration whose graph both ends belong to. Null for the root graph. */
   readonly containerKey: string | null;
-  /** The declared destination this link carries, for a link out of an edge element. */
-  readonly destinationId: string | null;
+  /** The declared destination this arrow carries. */
+  readonly destinationId: string;
+  /** The edge element that owns this arrow. */
   readonly edgeKey: string;
 }
 
@@ -102,7 +110,12 @@ export interface DeclaredTopology {
   readonly rootGraphKey: string;
   readonly elements: ReadonlyMap<string, DeclaredElement>;
   readonly links: readonly DeclaredLink[];
-  /** Element keys registered directly inside a container, in declared order. */
+  /** Each node's router: node key → the key of the one edge element routing from it. */
+  readonly routerOf: ReadonlyMap<string, string>;
+  /**
+   * Drawn element keys registered directly inside a container, in declared order: nodes and
+   * outcomes. Edge elements are in `elements` but are not drawn as nodes, so they are not here.
+   */
   readonly childrenOf: ReadonlyMap<string | null, readonly string[]>;
   /** The entry node of each registration, so "where does this graph start" is answerable. */
   readonly entryOf: ReadonlyMap<string | null, string>;
@@ -116,6 +129,7 @@ export function buildTopology(descriptor: WorkflowStructureDescriptorDto): Decla
   );
   const elements = new Map<string, DeclaredElement>();
   const links: DeclaredLink[] = [];
+  const routerOf = new Map<string, string>();
   const childrenOf = new Map<string | null, string[]>();
   const entryOf = new Map<string | null, string>();
   const unresolvedGraphs: { nodeKey: string; graphKey: string }[] = [];
@@ -167,19 +181,10 @@ export function buildTopology(descriptor: WorkflowStructureDescriptorDto): Decla
         depth,
         descriptor: edge,
       });
-      children.push(key);
 
       const sourceKey = keyOf('node', edge.from);
-      if (elements.has(sourceKey)) {
-        links.push({
-          id: `${sourceKey}->${key}`,
-          fromKey: sourceKey,
-          toKey: key,
-          containerKey,
-          destinationId: null,
-          edgeKey: key,
-        });
-      }
+      if (!elements.has(sourceKey)) continue;
+      routerOf.set(sourceKey, key);
       for (const destination of edge.to) {
         // A destination names a node or an outcome in the same graph; the verifier has already
         // refused anything else, so a lookup that misses here means the descriptor disagrees with
@@ -194,7 +199,7 @@ export function buildTopology(descriptor: WorkflowStructureDescriptorDto): Decla
         if (toKey === null) continue;
         links.push({
           id: `${key}->${toKey}`,
-          fromKey: key,
+          fromKey: sourceKey,
           toKey,
           containerKey,
           destinationId: destination,
@@ -223,6 +228,7 @@ export function buildTopology(descriptor: WorkflowStructureDescriptorDto): Decla
     rootGraphKey: descriptor.rootGraphKey,
     elements,
     links,
+    routerOf,
     childrenOf,
     entryOf,
     unresolvedGraphs,

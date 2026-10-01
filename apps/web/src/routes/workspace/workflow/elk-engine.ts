@@ -45,8 +45,18 @@ interface ElkNode {
   x?: number;
   y?: number;
   layoutOptions?: Record<string, string>;
+  ports?: ElkPort[];
   children?: ElkNode[];
   edges?: ElkEdge[];
+}
+
+interface ElkPort {
+  id: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  layoutOptions?: Record<string, string>;
 }
 
 interface ElkEdge {
@@ -97,6 +107,25 @@ export function createElkEngine(): LayoutEngine {
   };
 }
 
+/**
+ * Every node enters on its left and leaves on its right.
+ *
+ * A router is drawn as a knob on its node's output port, so "the router is on the right" has to be
+ * a property of the layout rather than a hope about it. Fixing each side to a port does that: back
+ * edges and self-loops route around cards instead of pulling the exit round to the left.
+ */
+const inPort = (id: string) => `${id}#in`;
+const outPort = (id: string) => `${id}#out`;
+
+const portsOf = (id: string): Pick<ElkNode, 'ports'> => ({
+  ports: [
+    { id: inPort(id), layoutOptions: { 'elk.port.side': 'WEST' } },
+    { id: outPort(id), layoutOptions: { 'elk.port.side': 'EAST' } },
+  ],
+});
+
+const portOptions = { 'elk.portConstraints': 'FIXED_SIDE' };
+
 /** Only ids, sizes and containment. Nothing that could carry a status or a timestamp. */
 function toElk(request: LayoutRequest): ElkNode {
   const edgesByContainer = new Map<string | null, ElkEdge[]>();
@@ -115,20 +144,28 @@ function toElk(request: LayoutRequest): ElkNode {
     const container = containerOf.get(edge.source) ?? null;
     let bucket = edgesByContainer.get(container);
     if (!bucket) edgesByContainer.set(container, (bucket = []));
-    bucket.push({ id: edge.id, sources: [edge.source], targets: [edge.target] });
+    bucket.push({ id: edge.id, sources: [outPort(edge.source)], targets: [inPort(edge.target)] });
   }
 
   const node = (source: LayoutNodeRequest): ElkNode =>
     source.children
       ? {
           id: source.id,
-          ...(source.padding === undefined
-            ? {}
-            : { layoutOptions: { 'elk.padding': source.padding } }),
+          layoutOptions:
+            source.padding === undefined
+              ? portOptions
+              : { ...portOptions, 'elk.padding': source.padding },
+          ...portsOf(source.id),
           children: source.children.map(node),
           edges: edgesByContainer.get(source.id) ?? [],
         }
-      : { id: source.id, width: source.width, height: source.height };
+      : {
+          id: source.id,
+          width: source.width,
+          height: source.height,
+          layoutOptions: portOptions,
+          ...portsOf(source.id),
+        };
 
   return {
     id: 'root',
@@ -146,6 +183,8 @@ function toResult(request: LayoutRequest, laid: ElkNode): LayoutResult {
     for (const child of node.children ?? []) {
       const x = offsetX + (child.x ?? 0);
       const y = offsetY + (child.y ?? 0);
+      // Port positions are relative to their node, and a port has a size of its own.
+      const port = child.ports?.find((candidate) => candidate.id === outPort(child.id));
       nodes.push({
         id: child.id,
         x,
@@ -154,6 +193,12 @@ function toResult(request: LayoutRequest, laid: ElkNode): LayoutResult {
         height: child.height ?? 0,
         depth,
         isBox: (child.children?.length ?? 0) > 0,
+        out: port
+          ? {
+              x: x + (port.x ?? 0) + (port.width ?? 0) / 2,
+              y: y + (port.y ?? 0) + (port.height ?? 0) / 2,
+            }
+          : undefined,
       });
       if (child.children?.length) walk(child, x, y, depth + 1);
     }
@@ -161,6 +206,7 @@ function toResult(request: LayoutRequest, laid: ElkNode): LayoutResult {
       for (const section of edge.sections ?? []) {
         edges.push({
           id: edge.id,
+          depth,
           points: [section.startPoint, ...(section.bendPoints ?? []), section.endPoint].map(
             (point) => ({ x: point.x + offsetX, y: point.y + offsetY }),
           ),

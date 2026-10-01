@@ -60,21 +60,25 @@ test('an address round-trips through its key', () => {
   });
 });
 
-test('edges become their own elements, with links on both sides', () => {
+test('a router is an element, not a drawn node, and its arrows run node → destination', () => {
   const topology = buildTopology(descriptorFixture([reviewGraph], 'review'));
   const edgeKey = addressKey({ path: [], kind: 'edge', id: 'after-check' });
+  const checkKey = addressKey({ path: [], kind: 'node', id: 'check' });
   assert.equal(topology.elements.get(edgeKey)?.kind, 'edge');
+  assert.ok(!topology.childrenOf.get(null)?.includes(edgeKey), 'routers are not drawn as nodes');
+  assert.equal(topology.routerOf.get(checkKey), edgeKey);
 
-  const intoEdge = topology.links.filter((link) => link.toKey === edgeKey);
-  assert.equal(intoEdge.length, 1, 'exactly one arrow reaches the edge function');
-  assert.equal(intoEdge[0]?.destinationId, null);
-
-  const outOfEdge = topology.links.filter((link) => link.fromKey === edgeKey);
+  const owned = topology.links.filter((link) => link.edgeKey === edgeKey);
+  assert.ok(
+    owned.every((link) => link.fromKey === checkKey),
+    'every arrow starts at the node',
+  );
   assert.deepEqual(
-    outOfEdge.map((link) => link.destinationId).sort(),
+    owned.map((link) => link.destinationId).sort(),
     ['accepted', 'draft'],
     'every declared destination gets an arrow, outcomes included',
   );
+  assert.ok(!topology.links.some((link) => link.toKey === edgeKey), 'nothing points at a router');
 });
 
 test('containment expands to every depth', () => {

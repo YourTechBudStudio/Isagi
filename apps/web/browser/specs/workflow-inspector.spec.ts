@@ -667,7 +667,7 @@ test('a build reloaded while the inspector is open redraws it, executions unchan
   await expect(viewport.locator('[data-element]').first()).toBeVisible();
   await expect(viewport.locator('[data-element="::node:sign-off"]')).toHaveCount(0);
 
-  const takenBefore = await viewport.locator('path:not([stroke-dasharray])').count();
+  const takenBefore = await viewport.locator('path[data-taken="true"]').count();
   expect(takenBefore).toBeGreaterThan(0);
 
   await page.locator('[data-action="reload-build"]').click();
@@ -679,27 +679,38 @@ test('a build reloaded while the inspector is open redraws it, executions unchan
   );
   // Edges the run actually took are still drawn as taken on the build now on screen.
   await expect
-    .poll(async () => viewport.locator('path:not([stroke-dasharray])').count())
+    .poll(async () => viewport.locator('path[data-taken="true"]').count())
     .toBeGreaterThan(0);
 });
 
-test('double-clicking a visit pip selects that execution without opening its graph', async ({
+test("a node's router is a knob on its right edge, and selects the decision it made", async ({
   page,
 }) => {
   await open(page, 'done');
   const viewport = canvas(page);
-  await viewport.locator('[data-element="::node:first-pass"] [data-node-key]').dblclick();
-  const read = viewport.locator('[data-element="first-pass::node:read"]');
-  await expect(read).toBeVisible();
+  const card = viewport.locator('[data-element="::node:collect"]');
+  const knob = viewport.locator('[data-router="::edge:after-collect"]');
+  await expect(knob).toBeVisible();
+  await expect(viewport.locator('[data-element="::edge:after-collect"]')).toHaveCount(0);
 
-  // `read` ran twice and its second run was retried: three pips, the Retry named as one.
-  const pip = read.getByRole('button', { name: 'Visit 2, execution 110, retry of 105' });
-  await expect(pip).toBeVisible();
-  await pip.dblclick();
+  // The arrows out of a node start at its knob, so the knob sits on the card's right edge whatever
+  // the graph's loops do to the layout.
+  const cardBox = (await card.boundingBox())!;
+  const knobBox = (await knob.boundingBox())!;
+  expect(Math.abs(knobBox.x + knobBox.width / 2 - (cardBox.x + cardBox.width))).toBeLessThan(2);
 
-  await expect(details(page)).toContainText('visit 2');
-  await expect(dialog(page).locator('[data-dock-column="Recorded"]')).toContainText('retry of');
-  await expect(viewport.locator('[data-element="first-pass::node:read"]')).toHaveCount(1);
+  // Start with the keyboard on another node, so a knob that kept focus to itself would leave Enter
+  // and Space acting on the wrong node.
+  await viewport.locator('[data-element="::node:triage"] [data-node-key]').click();
+  await knob.click();
+  await expect(details(page)).toContainText('collect');
+
+  // The knob is not a stop of its own: its node takes focus, and the keyboard carries on from there.
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute('data-node-key') ?? null))
+    .toBe('::node:collect');
+  await page.keyboard.press('Enter');
+  await expect(details(page)).toContainText('collect');
 });
 
 test('Declared is navigable and expandable from the keyboard, four levels down', async ({
@@ -824,8 +835,8 @@ test('a layout answer that is no longer the shape being asked about cannot commi
 });
 
 test('a first layout failure is stated, and a later shape recovers', async ({ page }) => {
-  // Opened once so the run's tree has already landed and the shape is settled; otherwise a node
-  // crossing the pip threshold is a real shape change and the relayout legitimately recovers.
+  // Opened once so the run's tree has already landed and the shape is settled before the layout is
+  // made to fail.
   await open(page, 'done');
   await canvas(page).locator('[data-element]').first().waitFor();
   await page.keyboard.press('Escape');
@@ -893,10 +904,12 @@ test('a build that renames nothing still redraws the graph', async ({ page }) =>
   await open(page, 'done');
   await expect(canvas(page).locator('[data-element]').first()).toBeVisible();
 
-  // `after-second` keeps its id across the two builds and changes where it can go. A layout identity
-  // summarising element keys would have been identical, and the old geometry would have stayed.
+  // `after-second` keeps its id across the two builds and changes where it can go: the later build
+  // puts `sign-off` between `second-pass` and `shipped`, so `shipped` has to move one layer right. A
+  // layout identity summarising element keys would have been identical, and the old geometry would
+  // have stayed.
   const before = await canvas(page)
-    .locator('[data-element="::edge:after-second"]')
+    .locator('[data-element="::outcome:shipped"]')
     .evaluate((node) => node.getBoundingClientRect().x);
 
   await page.keyboard.press('Escape');
@@ -907,21 +920,19 @@ test('a build that renames nothing still redraws the graph', async ({ page }) =>
   await expect
     .poll(async () =>
       canvas(page)
-        .locator('[data-element="::edge:after-second"]')
+        .locator('[data-element="::outcome:shipped"]')
         .evaluate((node) => node.getBoundingClientRect().x),
     )
     .not.toBe(before);
 });
 
-test('a graph opens and closes from anywhere on its card, not just its header strip', async ({
-  page,
-}) => {
+test('a graph opens and closes from anywhere on its card, not just its name', async ({ page }) => {
   await open(page, 'done');
   const viewport = canvas(page);
   const box = viewport.locator('[data-element="::node:first-pass"]');
   await expect(box).toBeVisible();
 
-  // The body below the header strip — the part that used to do nothing.
+  // The bottom of the card, well away from its name.
   const card = (await box.boundingBox())!;
   const body = { x: card.x + card.width / 2, y: card.y + card.height - 12 };
 

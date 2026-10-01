@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { codeReloads, operationKinds, pauseBands, retries, waitTimings } from './history.js';
+import { codeReloads, pauseBands, retries, waitTimings } from './history.js';
 import { workflowEventFixture as event } from './test-support.js';
 
 test('a pause band runs from run_paused to the resume or cancel that ended it', () => {
@@ -40,34 +40,4 @@ test('a wait starts at node_waiting and ends at its first delivery', () => {
   ]);
   assert.deepEqual(timings.get(4), { waitingAt: 'a', deliveredAt: 'b' });
   assert.deepEqual(timings.get(5), { waitingAt: 'c', deliveredAt: null });
-});
-
-test('operation kinds are collected once per execution', () => {
-  const kinds = operationKinds([
-    event({
-      eventId: 1,
-      kind: 'operation_started',
-      executionId: 4,
-      data: { operationId: 1, kind: 'spawn_agent' },
-    }),
-    event({
-      eventId: 2,
-      kind: 'operation_started',
-      executionId: 4,
-      data: { operationId: 2, kind: 'send_prompt' },
-    }),
-    event({
-      eventId: 3,
-      kind: 'operation_started',
-      executionId: 4,
-      data: { operationId: 3, kind: 'send_prompt' },
-    }),
-    event({
-      eventId: 4,
-      kind: 'operation_finished',
-      executionId: 4,
-      data: { operationId: 3, kind: 'run_headless' },
-    }),
-  ]);
-  assert.deepEqual(kinds.get(4), ['spawn_agent', 'send_prompt']);
 });

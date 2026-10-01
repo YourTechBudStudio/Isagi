@@ -65,9 +65,5 @@ export function routingEdgeKey(
   execution: WorkflowExecutionSummaryDto,
 ): string | null {
   if (execution.routedTo === null || topology === null) return null;
-  const nodeKey = executionAddressKey(view, execution);
-  const link = topology.links.find(
-    (candidate) => candidate.fromKey === nodeKey && candidate.destinationId === null,
-  );
-  return link?.edgeKey ?? null;
+  return topology.routerOf.get(executionAddressKey(view, execution)) ?? null;
 }

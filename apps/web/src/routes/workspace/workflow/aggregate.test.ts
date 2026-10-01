@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { workflowEventFixture } from '../../../lib/workspace/workflow/test-support.js';
 import { aggregateVisits } from './aggregate.js';
 import {
   clockAt,
@@ -110,23 +109,16 @@ test('two registrations of one graph keep two separate histories', () => {
   assert.equal(second.status, 'failed');
 });
 
-test('a subgraph registration counts the executions inside it, and only inside it', () => {
-  const aggregation = aggregateVisits({ view: twoRegistrations(), topology, now });
-  assert.equal(aggregation.byElement.get(key([], 'node', 'first'))!.nestedExecutionCount, 1);
-  assert.equal(aggregation.byElement.get(key([], 'node', 'second'))!.nestedExecutionCount, 1);
-});
-
 test('an edge is taken only where a recorded routing decision says so', () => {
   const aggregation = aggregateVisits({ view: twoRegistrations(), topology, now });
   const links = topology.links.filter((link) => aggregation.takenLinks.has(link.id));
-  // first → after-first → second, and inside `first`: draft → after-draft → ok.
+  // first → second, and inside `first`: draft → ok. Each arrow goes straight from a node to the
+  // destination its router chose.
   assert.deepEqual(
-    links.map((link) => link.toKey).sort(),
+    links.map((link) => `${link.fromKey} -> ${link.toKey}`).sort(),
     [
-      key(['first'], 'edge', 'after-draft'),
-      key(['first'], 'outcome', 'ok'),
-      key([], 'edge', 'after-first'),
-      key([], 'node', 'second'),
+      `${key(['first'], 'node', 'draft')} -> ${key(['first'], 'outcome', 'ok')}`,
+      `${key([], 'node', 'first')} -> ${key([], 'node', 'second')}`,
     ].sort(),
   );
   // `second` is running and has not routed, so its edge is not taken even though it ran.
@@ -160,28 +152,4 @@ test('a node that failed and was retried successfully reads as completed', () =>
   const first = aggregateVisits({ view, topology, now }).byElement.get(key([], 'node', 'first'))!;
   assert.equal(first.status, 'completed');
   assert.equal(first.visits.length, 2);
-});
-
-test('operation kinds come from the operation events of the node’s executions', () => {
-  const view = runViewFixture({
-    executions: [visit({ executionId: 1, nodeId: 'first' })],
-    events: [
-      workflowEventFixture({
-        eventId: 1,
-        executionId: 1,
-        category: 'node',
-        kind: 'operation_started',
-        data: { operationId: 1, kind: 'send_prompt' },
-      }),
-      workflowEventFixture({
-        eventId: 2,
-        executionId: 1,
-        category: 'node',
-        kind: 'operation_started',
-        data: { operationId: 2, kind: 'send_prompt' },
-      }),
-    ],
-  });
-  const first = aggregateVisits({ view, topology, now }).byElement.get(key([], 'node', 'first'))!;
-  assert.deepEqual(first.operationKinds, ['send_prompt']);
 });

@@ -1,6 +1,6 @@
-import type { WorkflowExecutionSummaryDto, WorkflowOperationKind } from '@isagi/contracts';
+import type { WorkflowExecutionSummaryDto } from '@isagi/contracts';
 
-import { operationKinds, waitTimings } from '../../../lib/workspace/workflow/history.js';
+import { waitTimings } from '../../../lib/workspace/workflow/history.js';
 import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import { executionAddressKey, routingEdgeKey } from './ancestry.js';
 import { executionTiming, intervalDuration, isOpen } from './timing.js';
@@ -27,10 +27,6 @@ export interface ElementAggregate {
   /** Total time across executions, and whether any is still going. */
   readonly durationMs: number;
   readonly open: boolean;
-  /** Which kinds of side effect these executions performed. */
-  readonly operationKinds: readonly WorkflowOperationKind[];
-  /** For a subgraph registration: how many executions happened inside its invocations. */
-  readonly nestedExecutionCount: number;
   /** Destinations a routing decision actually chose, for an edge element. */
   readonly chosenDestinations: readonly string[];
   /** For an edge element: the executions whose routing went through it, in start order. */
@@ -51,8 +47,6 @@ const emptyAggregate = (key: string): ElementAggregate => ({
   status: 'unvisited',
   durationMs: 0,
   open: false,
-  operationKinds: [],
-  nestedExecutionCount: 0,
   chosenDestinations: [],
   routedBy: [],
 });
@@ -79,11 +73,9 @@ export function aggregateVisits(input: {
 }): VisitAggregation {
   const { view, topology, now } = input;
   const waits = waitTimings(view.events);
-  const kinds = operationKinds(view.events);
 
   const members = new Map<string, WorkflowExecutionSummaryDto[]>();
   const routings = new Map<string, WorkflowExecutionSummaryDto[]>();
-  const nested = new Map<string, number>();
   const push = <T>(map: Map<string, T[]>, key: string, value: T) => {
     const list = map.get(key);
     if (list) list.push(value);
@@ -96,18 +88,6 @@ export function aggregateVisits(input: {
     push(members, executionAddressKey(view, execution), execution);
     const edgeKey = routingEdgeKey(view, topology, execution);
     if (edgeKey !== null) push(routings, edgeKey, execution);
-
-    // Every enclosing subgraph registration counts this execution.
-    let invocationId: number | null = execution.invocationId;
-    for (let hops = 0; invocationId !== null && hops < 64; hops += 1) {
-      const parentId: number | null = view.invocations.get(invocationId)?.parentExecutionId ?? null;
-      const parent: WorkflowExecutionSummaryDto | undefined =
-        parentId === null ? undefined : view.executions.get(parentId);
-      if (!parent) break;
-      const parentKey = executionAddressKey(view, parent);
-      nested.set(parentKey, (nested.get(parentKey) ?? 0) + 1);
-      invocationId = parent.invocationId;
-    }
   }
 
   const keys = new Set<string>([...members.keys(), ...routings.keys()]);
@@ -134,14 +114,10 @@ export function aggregateVisits(input: {
     }
     let durationMs = 0;
     let open = false;
-    const used: WorkflowOperationKind[] = [];
     for (const visit of visits) {
       const timing = executionTiming(visit, waits.get(visit.executionId));
       durationMs += intervalDuration(timing.total, now) ?? 0;
       if (isOpen(timing.total)) open = true;
-      for (const kind of kinds.get(visit.executionId) ?? []) {
-        if (!used.includes(kind)) used.push(kind);
-      }
     }
     byElement.set(key, {
       key,
@@ -149,8 +125,6 @@ export function aggregateVisits(input: {
       status: rollUpStatus(visits),
       durationMs,
       open,
-      operationKinds: used,
-      nestedExecutionCount: nested.get(key) ?? 0,
       chosenDestinations: chosen,
       routedBy: routed,
     });
@@ -159,11 +133,7 @@ export function aggregateVisits(input: {
   const takenLinks = new Set<string>();
   if (topology) {
     for (const link of topology.links) {
-      const edge = byElement.get(link.edgeKey);
-      if (link.destinationId === null) {
-        // Source → edge: taken once any execution of the source node has routed.
-        if ((routings.get(link.edgeKey)?.length ?? 0) > 0) takenLinks.add(link.id);
-      } else if (edge?.chosenDestinations.includes(link.destinationId)) {
+      if (byElement.get(link.edgeKey)?.chosenDestinations.includes(link.destinationId)) {
         takenLinks.add(link.id);
       }
     }
