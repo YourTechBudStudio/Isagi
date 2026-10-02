@@ -77,19 +77,19 @@ export function latestTurn(target: AgentTurnTarget, edges: readonly TurnEdge[]):
   return { kind: 'delivered', event: turnEvent(terminal), turn };
 }
 
-/** Whether any turn is open in the session: a send into a busy session is refused. */
+/**
+ * Whether the session's latest turn is still open: a send into a busy session is refused.
+ *
+ * The same latest-turn rule as waits. Older turns never count, so a turn the harness never ended in
+ * a conversation the person has since replaced (an interrupt, then `/clear`) cannot hold the
+ * session busy.
+ */
 export function hasInFlightTurn(edges: readonly TurnEdge[]): boolean {
-  const open = new Map<string, number | null>();
-  for (const edge of edges) {
-    if (edge.type === 'turn_started') {
-      open.set(edge.harnessSessionId, typeof edge.seq === 'number' ? edge.seq : null);
-      continue;
-    }
-    const seq = open.get(edge.harnessSessionId);
-    if (seq === undefined) continue;
-    if (typeof edge.seq !== 'number' || edge.seq === seq) open.delete(edge.harnessSessionId);
-  }
-  return open.size > 0;
+  const latest = edges
+    .filter((edge): edge is StartEdge => edge.type === 'turn_started')
+    .sort(byRecordedAt)
+    .at(-1);
+  return latest !== undefined && terminalFor(latest, edges) === null;
 }
 
 /**

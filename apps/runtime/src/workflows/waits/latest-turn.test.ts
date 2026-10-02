@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { latestTurn, type TurnEdge } from './latest-turn.js';
+import { hasInFlightTurn, latestTurn, type TurnEdge } from './latest-turn.js';
 
 const target = { agentSessionId: 7, sentAt: '2026-01-01T00:00:10.000Z' };
 
@@ -99,4 +99,32 @@ test('a session that died mid-turn is delivered as interrupted', () => {
 test('another session never answers the wait', () => {
   const other: TurnEdge = { ...start(1, 11), agentSessionId: 8 };
   assert.deepEqual(latestTurn(target, [other]), { kind: 'waiting', started: false });
+});
+
+test('only the latest turn decides whether the session is busy', () => {
+  const inConversation = (edge: TurnEdge, harnessSessionId: string): TurnEdge => ({
+    ...edge,
+    harnessSessionId,
+  });
+  assert.equal(hasInFlightTurn([]), false);
+  assert.equal(hasInFlightTurn([start(1, 5)]), true);
+  assert.equal(hasInFlightTurn([start(1, 5), end(1, 6)]), false);
+  assert.equal(hasInFlightTurn([start(1, 5), fail(1, 6, 'session_died')]), false);
+  // A turn left open in a replaced conversation (an interrupt, then `/clear`) no longer counts.
+  assert.equal(
+    hasInFlightTurn([
+      inConversation(start(1, 5), 'old'),
+      inConversation(start(1, 8), 'new'),
+      inConversation(end(1, 9), 'new'),
+    ]),
+    false,
+  );
+  assert.equal(
+    hasInFlightTurn([
+      inConversation(start(1, 5), 'old'),
+      inConversation(end(1, 6), 'old'),
+      inConversation(start(1, 8), 'new'),
+    ]),
+    true,
+  );
 });

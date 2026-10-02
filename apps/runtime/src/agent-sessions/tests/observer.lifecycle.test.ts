@@ -19,7 +19,6 @@ import { Effect } from 'effect';
 import { RuntimeDatabase } from '../../persistence/index.js';
 import { agentSessions, ptyProcesses } from '../../persistence/schema.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { hasInFlightTurn, latestTurn } from '../../workflows/waits/latest-turn.js';
 import {
   HarnessLedgerObserver,
   pollHarnessLedgerObserverForTest,
@@ -602,18 +601,8 @@ test('a superseded Codex thread stops driving attention after a live thread swit
 
     assert.equal(result.attention, 'waiting');
     assert.equal(result.metadata.harnessSessionId, 'new-session');
-    // History from the superseded thread is retained, and its open turn can no longer hold the
-    // session busy.
-    assert.deepEqual(
-      result.edges
-        .filter((edge) => edge.harnessSessionId === 'old-session')
-        .map((edge) => [edge.type, 'reason' in edge ? edge.reason : null]),
-      [
-        ['turn_started', null],
-        ['turn_failed', 'conversation_switched'],
-      ],
-    );
-    assert.equal(hasInFlightTurn(result.edges), false);
+    // History from the superseded thread is retained, only its attention is dropped.
+    assert.ok(result.edges.some((edge) => edge.harnessSessionId === 'old-session'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -711,47 +700,6 @@ test('an ephemeral Codex side session cannot replace the resumable thread or hid
   }
 });
 
-test("an unconfirmed Codex thread cannot fail the confirmed thread's open turn", async () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-unconfirmed-switch-'));
-  const rollout = join(root, 'confirmed-native-rollout.jsonl');
-  try {
-    await seedActiveAgentSession(root, 'codex');
-    writeFileSync(
-      rollout,
-      `${codexEntry('session_meta', 0, { id: 'confirmed-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-1' })}\n`,
-    );
-    prepareArtifacts(root, 'confirmed-session', [
-      ledgerRecord('codex', 'confirmed-session', 'SessionStart', 0, {
-        session_id: 'confirmed-session',
-        transcript_path: rollout,
-      }),
-    ]);
-
-    const edges = await Effect.runPromise(
-      Effect.gen(function* () {
-        const observer = yield* HarnessLedgerObserver;
-        // A newer thread names itself in metadata but never gains a native rollout.
-        prepareArtifacts(root, 'unconfirmed-session', [
-          ledgerRecord('codex', 'unconfirmed-session', 'SessionStart', 3, {
-            session_id: 'unconfirmed-session',
-            transcript_path: null,
-          }),
-        ]);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        return yield* observer.getTurnEdges(10);
-      }).pipe(Effect.provide(testLayer(root))),
-    );
-
-    assert.deepEqual(
-      edges.map((edge) => [edge.harnessSessionId, edge.type]),
-      [['confirmed-session', 'turn_started']],
-    );
-    assert.equal(hasInFlightTurn(edges), true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test('Codex reports degraded attention when no active stream gains a native rollout', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-unresolved-'));
   try {
@@ -831,221 +779,6 @@ test('Codex recovery publishes a completed turn even when a newer recovered turn
     rmSync(root, { recursive: true, force: true });
   }
 });
-
-const claudePrompt = (id: string, seq: number) =>
-  ledgerRecord('claude', id, 'UserPromptSubmit', seq, { prompt_id: `${id}-${seq}` });
-const claudeStop = (id: string, seq: number, openedSeq: number) =>
-  ledgerRecord('claude', id, 'Stop', seq, {
-    prompt_id: `${id}-${openedSeq}`,
-    background_tasks: [],
-  });
-
-test('Claude: a turn left open in a replaced conversation fails and frees the session', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-claude-switch-'));
-  try {
-    await seedActiveAgentSession(root, 'claude');
-    // The person interrupts a turn (no terminal hook) and starts a new conversation in the pane.
-    prepareArtifacts(root, 'old-conversation', [claudePrompt('old-conversation', 0)]);
-    const sentAt = time(0);
-    const live = await Effect.runPromise(
-      Effect.gen(function* () {
-        const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const failures = yield* bus.subscribe({ types: ['turn_failed'] });
-        assert.equal(hasInFlightTurn(yield* observer.getTurnEdges(10)), true);
-
-        // Metadata names the new conversation before it records anything: nothing is failed yet.
-        const path = prepareArtifacts(root, 'new-conversation', []);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        assert.equal(hasInFlightTurn(yield* observer.getTurnEdges(10)), true);
-
-        appendFileSync(
-          path,
-          `${claudePrompt('new-conversation', 2)}\n${claudeStop('new-conversation', 3, 2)}\n`,
-        );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        const published = yield* failures.take;
-        yield* failures.unsubscribe;
-        return {
-          published,
-          edges: yield* observer.getTurnEdges(10),
-          attention: yield* observer.getAttention(10),
-        };
-      }).pipe(Effect.provide(testLayer(root))),
-    );
-
-    assert.equal(hasInFlightTurn(live.edges), false);
-    assert.equal(live.attention, 'waiting');
-    assert.deepEqual(
-      live.edges.map((edge) => [
-        edge.harnessSessionId,
-        edge.type,
-        edge.seq,
-        edge.recordedAt,
-        'reason' in edge ? edge.reason : null,
-      ]),
-      [
-        ['old-conversation', 'turn_started', 0, time(0), null],
-        ['old-conversation', 'turn_failed', 0, time(2), 'conversation_switched'],
-        ['new-conversation', 'turn_started', 0, time(2), null],
-        ['new-conversation', 'turn_ended', 0, time(3), null],
-      ],
-    );
-    assert.deepEqual(
-      [live.published.type, 'reason' in live.published ? live.published.reason : null],
-      ['turn_failed', 'conversation_switched'],
-    );
-
-    // A wait on the old conversation's turn is answered instead of waiting forever.
-    const oldOnly = live.edges.filter((edge) => edge.harnessSessionId === 'old-conversation');
-    const delivered = latestTurn({ agentSessionId: 10, sentAt }, oldOnly);
-    assert.ok(delivered.kind === 'delivered');
-    assert.deepEqual(delivered.event, {
-      kind: 'agent_turn',
-      outcome: 'failed',
-      recordedAt: time(2),
-      reason: 'conversation_switched',
-    });
-
-    const replay = await Effect.runPromise(
-      Effect.gen(function* () {
-        const observer = yield* HarnessLedgerObserver;
-        return yield* observer.getTurnEdges(10);
-      }).pipe(Effect.provide(testLayer(root))),
-    );
-    // Replay discovers conversations in directory order; each conversation's edges must match.
-    const byConversation = (edges: typeof replay) =>
-      Object.groupBy(edges, (edge) => edge.harnessSessionId);
-    assert.deepEqual(byConversation(replay), byConversation(live.edges));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('Claude: a late Stop for the replaced conversation ends its turn instead', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-claude-switch-late-'));
-  try {
-    await seedActiveAgentSession(root, 'claude');
-    const oldPath = prepareArtifacts(root, 'old-conversation', [
-      claudePrompt('old-conversation', 0),
-    ]);
-    const edges = await Effect.runPromise(
-      Effect.gen(function* () {
-        const observer = yield* HarnessLedgerObserver;
-        prepareArtifacts(root, 'new-conversation', [claudePrompt('new-conversation', 2)]);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        assert.equal(
-          (yield* observer.getTurnEdges(10)).some(
-            (edge) => edge.type === 'turn_failed' && edge.reason === 'conversation_switched',
-          ),
-          true,
-        );
-        appendFileSync(oldPath, `${claudeStop('old-conversation', 3, 0)}\n`);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        return yield* observer.getTurnEdges(10);
-      }).pipe(Effect.provide(testLayer(root))),
-    );
-    assert.deepEqual(
-      edges
-        .filter((edge) => edge.harnessSessionId === 'old-conversation')
-        .map((edge) => [edge.type, edge.seq]),
-      [
-        ['turn_started', 0],
-        ['turn_ended', 0],
-      ],
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('Claude: resuming the replaced conversation makes its turns its own again', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-claude-switch-back-'));
-  try {
-    await seedActiveAgentSession(root, 'claude');
-    const oldPath = prepareArtifacts(root, 'old-conversation', [
-      claudePrompt('old-conversation', 0),
-    ]);
-    const edges = await Effect.runPromise(
-      Effect.gen(function* () {
-        const observer = yield* HarnessLedgerObserver;
-        prepareArtifacts(root, 'new-conversation', [
-          claudePrompt('new-conversation', 1),
-          claudeStop('new-conversation', 2, 1),
-        ]);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        writeMetadata(root, 'old-conversation');
-        appendFileSync(oldPath, `${claudePrompt('old-conversation', 3)}\n`);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
-        return yield* observer.getTurnEdges(10);
-      }).pipe(Effect.provide(testLayer(root))),
-    );
-    assert.deepEqual(
-      edges
-        .filter((edge) => edge.harnessSessionId === 'old-conversation')
-        .map((edge) => [edge.type, edge.seq, 'reason' in edge ? edge.reason : null]),
-      [
-        ['turn_started', 0, null],
-        ['turn_failed', 0, 'new_start_supersedes'],
-        ['turn_started', 1, null],
-      ],
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-const switchKeepsTurnCases = [
-  {
-    harness: 'opencode',
-    start: (id: string, seq: number) =>
-      ledgerRecord('opencode', id, 'session.status', seq, openCodeStatus('busy', seq)),
-    end: (id: string, seq: number) =>
-      ledgerRecord('opencode', id, 'session.status', seq, openCodeStatus('idle', seq)),
-  },
-  {
-    harness: 'pi',
-    start: (id: string, seq: number) =>
-      ledgerRecord('pi', id, 'agent_start', seq, { context: { hasPendingMessages: null } }),
-    end: (id: string, seq: number) =>
-      ledgerRecord('pi', id, 'agent_end', seq, { context: { hasPendingMessages: false } }),
-  },
-] as const;
-
-for (const harness of switchKeepsTurnCases) {
-  test(`${harness.harness}: a switched-away conversation keeps its turn until it reports its end`, async () => {
-    const root = mkdtempSync(join(tmpdir(), `isagi-observer-${harness.harness}-switch-`));
-    try {
-      await seedActiveAgentSession(root, harness.harness);
-      const oldPath = prepareArtifacts(root, 'old-conversation', [
-        harness.start('old-conversation', 0),
-      ]);
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const observer = yield* HarnessLedgerObserver;
-          prepareArtifacts(root, 'new-conversation', [
-            harness.start('new-conversation', 1),
-            harness.end('new-conversation', 2),
-          ]);
-          yield* pollHarnessLedgerObserverForTest(observer, 10);
-          const afterSwitch = yield* observer.getTurnEdges(10);
-          appendFileSync(oldPath, `${harness.end('old-conversation', 3)}\n`);
-          yield* pollHarnessLedgerObserverForTest(observer, 10);
-          return { afterSwitch, afterEnd: yield* observer.getTurnEdges(10) };
-        }).pipe(Effect.provide(testLayer(root))),
-      );
-      // This harness still ends the old turn itself, so the switch alone is no evidence.
-      assert.equal(hasInFlightTurn(result.afterSwitch), true);
-      assert.equal(
-        result.afterSwitch.some((edge) => edge.type === 'turn_failed'),
-        false,
-      );
-      assert.equal(hasInFlightTurn(result.afterEnd), false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-}
 
 test('malformed and incomplete lines do not hide a later valid lifecycle record', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-observer-lines-'));
@@ -1610,11 +1343,6 @@ function prepareArtifacts(
   records: readonly string[],
   agentSessionId = 10,
 ) {
-  writeMetadata(root, harnessSessionId, agentSessionId);
-  return prepareLedger(root, harnessSessionId, records, agentSessionId);
-}
-
-function writeMetadata(root: string, harnessSessionId: string, agentSessionId = 10) {
   const directory = join(root, 'sessions', 'agent-sessions', String(agentSessionId));
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   writeFileSync(
@@ -1626,6 +1354,7 @@ function writeMetadata(root: string, harnessSessionId: string, agentSessionId = 
     })}\n`,
     { mode: 0o600 },
   );
+  return prepareLedger(root, harnessSessionId, records, agentSessionId);
 }
 
 function prepareLedger(

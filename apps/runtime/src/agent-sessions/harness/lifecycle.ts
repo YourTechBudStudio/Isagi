@@ -24,11 +24,7 @@ export type HarnessTurnEdge =
       readonly harnessSessionId: string;
       readonly seq: number | null;
       readonly recordedAt: string;
-      readonly reason:
-        | 'session_died'
-        | 'harness_error'
-        | 'new_start_supersedes'
-        | 'conversation_switched';
+      readonly reason: 'session_died' | 'harness_error' | 'new_start_supersedes';
     };
 
 export interface ActiveHarnessTurn {

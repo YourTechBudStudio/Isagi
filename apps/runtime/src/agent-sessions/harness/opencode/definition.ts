@@ -37,8 +37,6 @@ export const openCodeHarnessDefinition = {
     reduce: ({ records }) => reduceOpenCodeLifecycle(records),
     openingRecordedAt: ({ records }, seq) =>
       records.find((record) => record.seq === seq)?.recordedAt ?? null,
-    // A switched-away root session keeps running and still reports its own idle status.
-    switchAbandonsOpenTurn: false,
   },
   conversation: { read: readOpenCodeConversation },
   observation: {

@@ -1,10 +1,6 @@
 import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
 
-import {
-  activeCodexStreamCandidates,
-  selectConfirmedCodexPrimary,
-  type CodexStreamCandidate,
-} from './codex/identity.js';
+import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';
 import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
 import { harnessDefinition } from './definitions.js';
 import type { AgentSessionHarnessMetadataRead } from './ledger.js';
@@ -117,33 +113,18 @@ export function projectAgentObserverState(input: {
       stickyFailures,
     };
   }
-  const harness = input.harness;
-  const definition = harnessDefinition(harness);
-  const selectedHarnessSessionId = selectedMetadataHarnessSessionId(input.state.metadata);
-  const codexCandidates =
-    harness === 'codex'
-      ? activeCodexStreamCandidates(recordsByHarnessSessionId, input.activePtyProcessId)
-      : [];
-  // The conversation the person is talking to, which attention describes. Codex follows the same
-  // confirmed primary the observer promotes into metadata. Superseded conversations (`/clear`, an
-  // in-process thread switch) keep their history and lifecycle edges, but their state must not keep
-  // the session pinned to `working` or `error`.
-  const currentHarnessSessionId =
-    harness === 'codex'
-      ? selectConfirmedCodexPrimary({
-          candidates: codexCandidates,
-          confirmedHarnessSessionIds: input.state.confirmedCodexHarnessSessionIds,
-          currentHarnessSessionId: selectedHarnessSessionId,
-        })
-      : selectedHarnessSessionId;
-  const streams = [...streamIds].map((harnessSessionId) => {
+  const definition = harnessDefinition(input.harness);
+
+  for (const harnessSessionId of streamIds) {
     const records = currentIncarnationRecords(
       recordsByHarnessSessionId.get(harnessSessionId) ?? [],
     );
     const codexRecords = currentIncarnationRecords(
       input.state.codexRecordsByHarnessSessionId.get(harnessSessionId) ?? [],
     );
-    const lifecycle = reduceHarnessLifecycle({ harness, records, codexRecords });
+    const lifecycle = reduceHarnessLifecycle({ harness: input.harness, records, codexRecords });
+    diagnostics.push(...lifecycle.diagnostics);
+    let streamAttention = lifecycle.attention;
     const observed = lifecycleTurnEdges({
       lifecycle,
       openingRecordedAt: (seq) =>
@@ -153,24 +134,6 @@ export function projectAgentObserverState(input: {
       agentSessionId: input.agentSessionId,
       harnessSessionId,
     }));
-    return { harnessSessionId, lifecycle, observed };
-  });
-  const currentTurnStarts = definition.lifecycle.switchAbandonsOpenTurn
-    ? (
-        streams.find((stream) => stream.harnessSessionId === currentHarnessSessionId)?.observed ??
-        []
-      )
-        .filter((edge) => edge.type === 'turn_started')
-        .map((edge) => edge.recordedAt)
-        .sort()
-    : [];
-
-  for (const { harnessSessionId, lifecycle, observed } of streams) {
-    diagnostics.push(...lifecycle.diagnostics);
-    let streamAttention = lifecycle.attention;
-    // Derived from records on every projection rather than kept sticky: a terminal that does
-    // arrive for the old turn is the truth, and replay recomputes the same edge.
-    const switched: ObservedHarnessTurnEdge[] = [];
 
     if (lifecycle.activeTurn && activeTurnIsDead(lifecycle.activeTurn, input)) {
       const failure: ObservedHarnessTurnEdge = {
@@ -183,27 +146,11 @@ export function projectAgentObserverState(input: {
       };
       stickyFailures.set(turnKey(harnessSessionId, lifecycle.activeTurn.seq), failure);
       streamAttention = 'error';
-    } else if (lifecycle.activeTurn && harnessSessionId !== currentHarnessSessionId) {
-      // The person moved the live process to another conversation while this turn was open, and
-      // the harness never reports an end for it (an interrupt, then `/clear`). Once the current
-      // conversation starts a turn of its own, this one can no longer end.
-      const openedAt = lifecycle.activeTurn.recordedAt;
-      const switchedAt = currentTurnStarts.find((startedAt) => startedAt >= openedAt);
-      if (switchedAt !== undefined) {
-        switched.push({
-          type: 'turn_failed',
-          agentSessionId: input.agentSessionId,
-          harnessSessionId,
-          seq: lifecycle.activeTurn.seq,
-          recordedAt: switchedAt,
-          reason: 'conversation_switched',
-        });
-      }
     }
     const currentSticky = [...stickyFailures.values()].filter(
       (edge) => edge.harnessSessionId === harnessSessionId,
     );
-    edges.push(...mergeStickyFailures(observed, [...switched, ...currentSticky]));
+    edges.push(...mergeStickyFailures(observed, currentSticky));
     if (currentSticky.length > 0 && lifecycle.activeTurn === null) {
       const latestFailureSeq = Math.max(
         ...currentSticky.map((failure) => (typeof failure.seq === 'number' ? failure.seq : -1)),
@@ -217,14 +164,20 @@ export function projectAgentObserverState(input: {
     attentionByHarnessSessionId.set(harnessSessionId, streamAttention);
   }
 
-  const attention = currentHarnessSessionId
-    ? (attentionByHarnessSessionId.get(currentHarnessSessionId) ?? 'idle')
-    : harness === 'codex'
-      ? unresolvedCodexAttention({
-          candidates: codexCandidates,
+  const selectedHarnessSessionId = selectedMetadataHarnessSessionId(input.state.metadata);
+  const attention =
+    input.harness === 'codex'
+      ? codexAttention({
+          recordsByHarnessSessionId,
+          attentionByHarnessSessionId,
+          activePtyProcessId: input.activePtyProcessId,
+          selectedHarnessSessionId,
+          confirmedHarnessSessionIds: input.state.confirmedCodexHarnessSessionIds,
           locatorMissCounts: input.state.codexLocatorMissCounts,
         })
-      : 'idle';
+      : selectedHarnessSessionId
+        ? (attentionByHarnessSessionId.get(selectedHarnessSessionId) ?? 'idle')
+        : 'idle';
   const marker = markerString([
     metadataMarker(input.state.metadata),
     input.activePtyProcessId,
@@ -279,17 +232,42 @@ export function markerString(value: unknown) {
 
 const CODEX_MISSING_NATIVE_ARTIFACT_GRACE_POLLS = 2;
 
-function unresolvedCodexAttention(input: {
-  readonly candidates: readonly CodexStreamCandidate[];
+function codexAttention(input: {
+  readonly recordsByHarnessSessionId: ReadonlyMap<string, readonly HarnessObservationRecord[]>;
+  readonly attentionByHarnessSessionId: ReadonlyMap<string, AttentionState>;
+  readonly activePtyProcessId: number | null;
+  readonly selectedHarnessSessionId: string | null;
+  readonly confirmedHarnessSessionIds: ReadonlySet<string>;
   readonly locatorMissCounts: ReadonlyMap<string, number>;
 }): AttentionState {
-  return input.candidates.some(
-    (candidate) =>
-      (input.locatorMissCounts.get(candidate.harnessSessionId) ?? 0) >=
-      CODEX_MISSING_NATIVE_ARTIFACT_GRACE_POLLS,
-  )
-    ? 'error'
-    : 'idle';
+  const activeCandidates = activeCodexStreamCandidates(
+    input.recordsByHarnessSessionId,
+    input.activePtyProcessId,
+  );
+  // Attention describes the thread the user is currently talking to, so it must
+  // follow the same primary selection the observer uses to promote resumable
+  // identity. Superseded threads (`/clear`, an in-process thread switch) keep
+  // their history and lifecycle edges, but their terminal state must not keep
+  // the session pinned to `working` or `error`.
+  const primaryHarnessSessionId = selectConfirmedCodexPrimary({
+    candidates: activeCandidates,
+    confirmedHarnessSessionIds: input.confirmedHarnessSessionIds,
+    currentHarnessSessionId: input.selectedHarnessSessionId,
+  });
+  if (primaryHarnessSessionId) {
+    return input.attentionByHarnessSessionId.get(primaryHarnessSessionId) ?? 'idle';
+  }
+  const unresolvedIds = activeCandidates.map((candidate) => candidate.harnessSessionId);
+  if (
+    unresolvedIds.some(
+      (harnessSessionId) =>
+        (input.locatorMissCounts.get(harnessSessionId) ?? 0) >=
+        CODEX_MISSING_NATIVE_ARTIFACT_GRACE_POLLS,
+    )
+  ) {
+    return 'error';
+  }
+  return 'idle';
 }
 
 function selectedMetadataHarnessSessionId(metadata: AgentSessionHarnessMetadataRead) {

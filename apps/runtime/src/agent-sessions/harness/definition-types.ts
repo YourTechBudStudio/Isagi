@@ -120,13 +120,6 @@ export interface HarnessDefinition {
       },
       seq: number,
     ) => string | null;
-    /**
-     * Whether moving the live process to another conversation can leave a turn open forever,
-     * because the harness reports no end for it. When true, such a turn fails with
-     * `conversation_switched` once the current conversation starts a turn of its own. Harnesses
-     * that always end the old turn, or keep it running after a switch, leave it alone.
-     */
-    readonly switchAbandonsOpenTurn: boolean;
   };
   readonly conversation: {
     readonly read: (

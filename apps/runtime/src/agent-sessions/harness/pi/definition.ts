@@ -50,8 +50,6 @@ export const piHarnessDefinition = {
     reduce: ({ records }) => reducePiLifecycle(records),
     openingRecordedAt: ({ records }, seq) =>
       records.find((record) => record.seq === seq)?.recordedAt ?? null,
-    // Pi aborts the current session, which ends its turn, before switching, forking or starting anew.
-    switchAbandonsOpenTurn: false,
   },
   conversation: { read: readPiConversation },
   observation: {
