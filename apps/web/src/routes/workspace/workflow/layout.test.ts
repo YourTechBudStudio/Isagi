@@ -98,16 +98,26 @@ test('only serializable topology crosses the worker boundary', () => {
   assert.deepEqual(Object.keys(request).sort(), ['edges', 'identity', 'nodes']);
 });
 
-test('an operation node reserves its visit strip from the first layout', () => {
+test('cards reserve one size each, and routers reserve none', () => {
   const request = buildLayoutRequest({ topology, identity: 'x', expanded: new Set() });
   const writer = request.nodes.find((node) => node.id === writerKey);
   // One size, whatever the run records: a node that grew on its second visit would have to be laid
   // out again, and "a new visit moves nothing" would stop being true.
   assert.equal(writer?.height, nodeSize.operation.height);
-  assert.equal(
-    Object.values(nodeSize).filter((size) => size.height === nodeSize.operation.height).length,
-    1,
-    'there is no second operation size to drift back to',
+  assert.deepEqual(nodeSize.checkpoint, nodeSize.operation);
+  assert.deepEqual(nodeSize.collapsedSubgraph, nodeSize.operation);
+  assert.ok(!('edge' in nodeSize), 'a router is a knob on its node, not a card');
+  assert.ok(
+    request.nodes.every((node) => !node.id.includes('::edge:')),
+    'no router reaches the layout as a node',
+  );
+  assert.deepEqual(
+    request.edges.map((edge) => [edge.source, edge.target]),
+    [
+      [writerKey, reviewerKey],
+      [reviewerKey, addressKey({ path: [], kind: 'outcome', id: 'shipped' })],
+    ],
+    'arrows run node → destination',
   );
 });
 
@@ -117,8 +127,6 @@ test('the drawn order is one order, and a collapsed box contributes itself alone
     writerKey,
     reviewerKey,
     addressKey({ path: [], kind: 'outcome', id: 'shipped' }),
-    addressKey({ path: [], kind: 'edge', id: 'after-writer' }),
-    addressKey({ path: [], kind: 'edge', id: 'after-reviewer' }),
   ]);
 
   const opened = drawnOrder(topology, new Set([reviewerKey]));

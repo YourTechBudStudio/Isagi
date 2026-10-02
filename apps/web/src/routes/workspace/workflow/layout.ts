@@ -4,7 +4,7 @@ import type { DeclaredElement, DeclaredTopology } from './topology.js';
  * What goes to the layout worker, and what may cause a relayout.
  *
  * Positions depend on the shape alone: which elements exist under the current build, how they are
- * connected, and which subgraph boxes are open. Status, timers, selection, visit pips and operation
+ * connected, and which subgraph boxes are open. Status, timers, selection, visit counts and operation
  * settlement change with every transition and move nothing — a live run that relayouts on every step
  * visibly twitches, and a person loses their place several times a minute.
  *
@@ -42,11 +42,18 @@ export interface LaidOutNode {
   readonly height: number;
   readonly depth: number;
   readonly isBox: boolean;
+  /**
+   * The centre of the node's output port, in absolute coordinates: where its router's knob sits and
+   * every arrow out of it starts. Always on the node's right edge.
+   */
+  readonly out?: { readonly x: number; readonly y: number } | undefined;
 }
 
 export interface LaidOutEdge {
   readonly id: string;
   readonly points: readonly { readonly x: number; readonly y: number }[];
+  /** The depth of the graph this arrow belongs to, numbered as that graph's own nodes are. */
+  readonly depth: number;
 }
 
 export interface LayoutResult {
@@ -61,28 +68,22 @@ export interface LayoutResult {
  * Reserved sizes, so a node's box never changes with its contents.
  *
  * This is what keeps the "no relayout on a status change" rule true rather than merely intended: if
- * a node grew when its second visit added a pip, the graph would have to be laid out again to stay
- * correct, and every promise above would quietly become false. Dense contents scroll or clip inside
- * a fixed frame instead.
+ * a node grew when a second visit arrived or its name gained a meta line, the graph would have to be
+ * laid out again to stay correct, and every promise above would quietly become false. A card's name
+ * wraps onto a second line and its meta line is always reserved, whether or not anything is in it.
+ *
+ * Routers have no size: a router is a knob on its node's output port, not a card of its own.
  */
 export const nodeSize = {
-  /**
-   * One size, with the visit strip reserved whether or not there are pips in it yet.
-   *
-   * A node that grew when its second visit arrived would have to be laid out again to stay correct,
-   * and "a new visit moves nothing" would quietly stop being true — on a looping graph, several
-   * times a minute. The strip is reserved from the first layout and its contents scroll inside it.
-   */
-  operation: { width: 256, height: 122 },
-  edge: { width: 272, height: 104 },
-  outcome: { width: 168, height: 56 },
-  /** Taller than a step: a closed graph reserves the same header strip an open one has. */
-  collapsedSubgraph: { width: 272, height: 112 },
-  checkpoint: { width: 256, height: 88 },
+  /** Steps, checkpoints and closed graphs share one card, so the kind never reshapes the graph. */
+  operation: { width: 264, height: 78 },
+  checkpoint: { width: 264, height: 78 },
+  collapsedSubgraph: { width: 264, height: 78 },
+  outcome: { width: 164, height: 46 },
 } as const;
 
 /** The header strip a box reserves for its own name, above its children. */
-export const boxPadding = '[top=54,left=20,bottom=20,right=20]';
+export const boxPadding = '[top=62,left=28,bottom=28,right=28]';
 
 /**
  * The identity of a drawing.
@@ -125,7 +126,7 @@ export function buildLayoutRequest(input: {
     const nodes: LayoutNodeRequest[] = [];
     for (const key of children) {
       const element = topology.elements.get(key);
-      if (!element) continue;
+      if (!element || element.kind === 'edge') continue;
       const isExpandedBox =
         element.kind === 'node' &&
         element.descriptor.kind === 'subgraph' &&
@@ -155,11 +156,10 @@ export function buildLayoutRequest(input: {
 }
 
 /** Reserved from the descriptor alone, so nothing a run records can change a node's box. */
-export function reservedSize(element: DeclaredElement): {
+function reservedSize(element: Exclude<DeclaredElement, { readonly kind: 'edge' }>): {
   readonly width: number;
   readonly height: number;
 } {
-  if (element.kind === 'edge') return nodeSize.edge;
   if (element.kind === 'outcome') return nodeSize.outcome;
   if (element.descriptor.kind === 'subgraph') return nodeSize.collapsedSubgraph;
   if (element.descriptor.kind === 'checkpoint') return nodeSize.checkpoint;

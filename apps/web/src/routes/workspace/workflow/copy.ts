@@ -29,13 +29,8 @@ export const inspectorCopy = {
   absentFromCurrentBuild:
     "This node isn't in the build the run is on now. What it recorded is still here.",
   notVisited: 'not visited',
-  // A checkpoint node's one line, from its executions and nothing else.
+  // The tag a checkpoint card wears in the slot a duration leaves free.
   checkpointKind: 'checkpoint',
-  checkpointCapturing: 'capturing…',
-  checkpointFailed: 'capture failed',
-  checkpointCaptured: 'captured',
-  checkpointCaptures: (count: number) => `${count} captures`,
-  checkpointNothingSaved: 'nothing saved',
 
   // Recorded column
   stillOpen: 'still open',
@@ -60,7 +55,6 @@ export const inspectorCopy = {
   childExecutions: 'Executions inside this graph',
   notVisitedNoOperations: 'Nothing has run here yet.',
   noOperations: 'No side effects recorded.',
-  noOperationsShort: 'no side effects',
   operationsLoading: 'Reading this step’s operations…',
   operationsFailed: "Isagi couldn't read this step's operations.",
   operationsRetry: 'Try again',
@@ -152,6 +146,10 @@ export const inspectorCopy = {
   graphEmpty: 'This build declares no nodes.',
   subgraphUnresolved: (graphKey: string) =>
     `${graphKey} isn't in this build, so its contents can't be drawn.`,
+  // The card's short form of `subgraphUnresolved`, which it carries as a tooltip.
+  subgraphMissing: 'graph missing',
+  // A node's router, drawn as the knob on its right edge.
+  routerKnob: 'Routing decision',
   zoomIn: 'Zoom in',
   zoomOut: 'Zoom out',
   fit: 'Fit',

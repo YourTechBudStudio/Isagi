@@ -1,4 +1,4 @@
-import type { WorkflowEventDto, WorkflowOperationKind } from '@isagi/contracts';
+import type { WorkflowEventDto } from '@isagi/contracts';
 
 /**
  * Facts that live only in a run's event log, derived for the Trace.
@@ -99,34 +99,6 @@ export function waitTimings(events: readonly WorkflowEventDto[]): ReadonlyMap<nu
     }
   }
   return timings;
-}
-
-/**
- * Which kinds of side effect each execution performed, from its `operation_started` events, so the
- * Declared canvas can say what a node called without reading every execution's detail.
- */
-export function operationKinds(
-  events: readonly WorkflowEventDto[],
-): ReadonlyMap<number, readonly WorkflowOperationKind[]> {
-  const kinds = new Map<number, WorkflowOperationKind[]>();
-  for (const event of events) {
-    if (event.kind !== 'operation_started' || event.executionId === null) continue;
-    const kind = asRecord(event.data)?.['kind'];
-    if (!isOperationKind(kind)) continue;
-    const list = kinds.get(event.executionId) ?? [];
-    if (!list.includes(kind)) list.push(kind);
-    kinds.set(event.executionId, list);
-  }
-  return kinds;
-}
-
-function isOperationKind(value: unknown): value is WorkflowOperationKind {
-  return (
-    value === 'spawn_agent' ||
-    value === 'send_prompt' ||
-    value === 'run_headless' ||
-    value === 'close_pane'
-  );
 }
 
 /** An execution's own events, in order: what the dock lists as its history. */

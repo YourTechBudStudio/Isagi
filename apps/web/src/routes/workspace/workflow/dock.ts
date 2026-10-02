@@ -207,10 +207,8 @@ function declaredFields(
     if (descriptor.kind === 'subgraph') {
       rows.push(gap, { label: 'invokes', value: descriptor.graphKey });
     }
-    const outgoing = topology?.links.find(
-      (link) => link.fromKey === element.key && link.destinationId === null,
-    );
-    const edge = outgoing ? topology?.elements.get(outgoing.toKey) : undefined;
+    const routerKey = topology?.routerOf.get(element.key);
+    const edge = routerKey === undefined ? undefined : topology?.elements.get(routerKey);
     if (edge?.kind === 'edge') {
       rows.push(gap, { label: 'edge', value: edge.descriptor.id });
       rows.push({ label: 'to', value: edge.descriptor.to.join(', ') });

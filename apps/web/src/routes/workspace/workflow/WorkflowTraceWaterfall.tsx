@@ -109,7 +109,7 @@ export function WorkflowTraceWaterfall({
     [rows, selection],
   );
 
-  // A selection made anywhere else — a pip on Declared, a keyboard move — must be visible here, even
+  // A selection made anywhere else — a node on Declared, a keyboard move — must be visible here, even
   // when its row is outside the window that is currently mounted.
   useEffect(() => {
     if (selectedIndex < 0) return;

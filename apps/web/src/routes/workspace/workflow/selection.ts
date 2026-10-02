@@ -42,7 +42,7 @@ export function selectedExecutionId(
       return selection.executionId;
     case 'element':
       // A declared element with visits selects its latest one, which is what a person means by
-      // clicking a node that has run more than once without choosing a pip.
+      // clicking a node that has run more than once.
       return visitsOf(view, selection.key).at(-1)?.executionId ?? null;
     case 'invocation':
       return null;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { elementAggregate, type ElementAggregate, type VisitAggregation } from './aggregate.js';
 import { inspectorCopy } from './copy.js';
@@ -13,7 +13,7 @@ import type { InspectorSelection } from './selection.js';
 import { formatDuration } from './timing.js';
 import { ancestorKeys, type DeclaredElement, type DeclaredTopology } from './topology.js';
 import { useGraphLayout, type LayoutEngineFactory } from './useGraphLayout.js';
-import { CheckpointKindTag, CheckpointSubline } from './WorkflowCheckpointNode.js';
+import { CheckpointKindTag } from './WorkflowCheckpointNode.js';
 
 /**
  * The graph of the build the run is on right now, with where it is now drawn on it.
@@ -65,6 +65,8 @@ export function WorkflowDeclaredCanvas({
         topology={topology}
         aggregation={aggregation}
         result={layout.result}
+        requestIdentity={request.identity}
+        artifactHash={artifactHash}
         liveKey={liveKey}
         selection={selection}
         onSelect={onSelect}
@@ -102,6 +104,8 @@ function Viewport({
   topology,
   aggregation,
   result,
+  requestIdentity,
+  artifactHash,
   liveKey,
   selection,
   onSelect,
@@ -110,7 +114,11 @@ function Viewport({
 }: {
   readonly topology: DeclaredTopology;
   readonly aggregation: VisitAggregation;
+  /** The latest committed drawing. While a new shape is laid out, this is still the previous one. */
   readonly result: LayoutResult | null;
+  /** The shape being asked for now; `result` is settled only once its identity matches. */
+  readonly requestIdentity: string;
+  readonly artifactHash: string;
   readonly liveKey: string | null;
   readonly selection: InspectorSelection | null;
   readonly onSelect: (selection: InspectorSelection) => void;
@@ -120,8 +128,51 @@ function Viewport({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState({ x: 40, y: 30, k: 1 });
   const [dragging, setDragging] = useState(false);
-  const fittedRef = useRef<string | null>(null);
+  /** The build last fitted to the canvas. */
+  const fittedHashRef = useRef<string | null>(null);
+  /** Where a toggled graph sat on screen, to put it back there once its new drawing lands. */
+  const anchorRef = useRef<{
+    readonly key: string;
+    readonly screenX: number;
+    readonly screenY: number;
+    readonly identity: string;
+  } | null>(null);
+  /**
+   * Set when the latest press turned into a pan, until the next press begins.
+   *
+   * Both the click it ends with and any double-click it completes are swallowed, so a drag neither
+   * selects a card nor opens a graph.
+   */
+  const pannedRef = useRef(false);
+  /** Ends the press in progress, if any. */
+  const endPressRef = useRef<(() => void) | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+
+  /**
+   * The node whose paths are traced: every arrow into and out of it stands out, the rest step back.
+   *
+   * Local to the canvas rather than read from the selection. The inspector always has something
+   * selected — it opens on the live execution — and a graph that dimmed itself on opening would hide
+   * the taken path it exists to show. A click on a card or knob traces that node, and a click on
+   * empty canvas lets it go.
+   */
+  const [tracedKey, setTracedKey] = useState<string | null>(null);
+  const tracedLinks = useMemo(() => {
+    if (tracedKey === null || !result?.nodes.some((node) => node.id === tracedKey)) return null;
+    return new Set(
+      topology.links
+        .filter((link) => link.fromKey === tracedKey || link.toKey === tracedKey)
+        .map((link) => link.id),
+    );
+  }, [result, topology, tracedKey]);
+
+  const selectAndTrace = useCallback(
+    (next: InspectorSelection, key: string) => {
+      onSelect(next);
+      setTracedKey(key);
+    },
+    [onSelect],
+  );
 
   /**
    * Which element the keyboard is on, as a roving tab stop.
@@ -192,6 +243,18 @@ function Viewport({
     });
   }, [result]);
 
+  /**
+   * Hands keyboard focus to a drawn node, which makes it the tab stop through its own `onFocus`.
+   *
+   * A knob is not a stop of its own, so a click on one gives focus to its node: Enter and Space then
+   * act on the node whose router was just clicked, not on whichever node had focus before.
+   */
+  const focusNode = useCallback((key: string) => {
+    canvasRef.current
+      ?.querySelector<HTMLElement>(`[data-node-key="${cssEscape(key)}"]`)
+      ?.focus({ preventScroll: true });
+  }, []);
+
   const focusLive = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !result || liveKey === null) return;
@@ -204,31 +267,130 @@ function Viewport({
     }));
   }, [liveKey, result]);
 
-  // Fit once per shape, never on a status change: a graph that re-centred itself every time a node
-  // finished would move under the reader several times a minute.
-  useEffect(() => {
-    if (!result || fittedRef.current === result.identity) return;
-    fittedRef.current = result.identity;
-    fit();
-  }, [fit, result]);
+  /**
+   * Opens or closes a graph without losing your place.
+   *
+   * The single path for a double-click and for Space. The graph's top-left is remembered on screen
+   * and put back there once the new drawing lands, at the same zoom, so the part of the workflow you
+   * were looking at stays under you instead of the whole canvas re-centring.
+   */
+  const toggleExpanded = useCallback(
+    (key: string) => {
+      const node = result?.nodes.find((candidate) => candidate.id === key);
+      anchorRef.current =
+        result && node
+          ? {
+              key,
+              screenX: view.x + node.x * view.k,
+              screenY: view.y + node.y * view.k,
+              identity: result.identity,
+            }
+          : null;
+      onToggleExpanded(key);
+    },
+    [onToggleExpanded, result, view],
+  );
 
+  // Only a drawing of the shape being asked for may move the camera. The layout hook keeps the
+  // previous drawing up while the next is laid out, and fitting or anchoring to that would place the
+  // camera for a shape that is about to disappear.
+  const settled = result !== null && result.identity === requestIdentity ? result : null;
+
+  // Fit once per build, never on a status change or an expand: a graph that re-centred itself every
+  // time a node finished would move under the reader several times a minute.
   useEffect(() => {
-    if (!dragging) return;
-    const onMove = (event: PointerEvent) => {
-      setView((current) => ({
-        ...current,
-        x: current.x + event.movementX,
-        y: current.y + event.movementY,
-      }));
+    if (settled === null) return;
+    const anchor = anchorRef.current;
+    const anchorDue = anchor !== null && anchor.identity !== settled.identity;
+    // An anchor is spent by the first new drawing after its toggle, whether or not it applies, so it
+    // can never fire on some later, unrelated layout.
+    if (anchorDue) anchorRef.current = null;
+
+    // A new build wins over an anchor: it is a different graph, and the old position means nothing.
+    if (fittedHashRef.current !== artifactHash) {
+      fittedHashRef.current = artifactHash;
+      fit();
+      return;
+    }
+    if (!anchorDue) return;
+    const node = settled.nodes.find((candidate) => candidate.id === anchor.key);
+    if (!node) return;
+    setView((current) => ({
+      ...current,
+      x: anchor.screenX - node.x * current.k,
+      y: anchor.screenY - node.y * current.k,
+    }));
+  }, [artifactHash, fit, settled]);
+
+  /**
+   * A press anywhere is a click until it has moved more than a few pixels, and a pan after that.
+   *
+   * Cards never move. A press that became a pan swallows the click it ends with, so dragging across
+   * a card does not select it.
+   */
+  const startPress = useCallback((event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    endPressRef.current?.();
+    pannedRef.current = false;
+    const start = { x: event.clientX, y: event.clientY };
+    let last: { x: number; y: number } | null = null;
+
+    const onMove = (move: PointerEvent) => {
+      if (last === null) {
+        if (Math.hypot(move.clientX - start.x, move.clientY - start.y) <= PAN_THRESHOLD) return;
+        last = start;
+        pannedRef.current = true;
+        setDragging(true);
+      }
+      const dx = move.clientX - last.x;
+      const dy = move.clientY - last.y;
+      last = { x: move.clientX, y: move.clientY };
+      setView((current) => ({ ...current, x: current.x + dx, y: current.y + dy }));
     };
-    const onUp = () => setDragging(false);
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
+    const end = () => {
       window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      endPressRef.current = null;
+      setDragging(false);
     };
-  }, [dragging]);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    endPressRef.current = end;
+  }, []);
+
+  useEffect(() => () => endPressRef.current?.(), []);
+
+  // Native, because React's wheel listener is passive and cannot stop the page from scrolling or
+  // the browser from zooming on a pinch.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      // A trackpad pinch arrives as a wheel with ctrlKey; ctrl/⌘ + wheel zooms the same way.
+      if (event.ctrlKey || event.metaKey) {
+        const bounds = canvas.getBoundingClientRect();
+        const px = event.clientX - bounds.left;
+        const py = event.clientY - bounds.top;
+        setView((current) => {
+          const k = clampZoom(current.k * Math.exp(-event.deltaY * 0.01));
+          const ratio = k / current.k;
+          // Keep the graph point under the cursor where it is.
+          return { k, x: px - (px - current.x) * ratio, y: py - (py - current.y) * ratio };
+        });
+      } else {
+        setView((current) => ({
+          ...current,
+          x: current.x - event.deltaX,
+          y: current.y - event.deltaY,
+        }));
+      }
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   return (
     <>
@@ -236,9 +398,7 @@ function Viewport({
         <div className="ml-auto flex items-center gap-1.5">
           <ZoomButton
             label={inspectorCopy.zoomOut}
-            onClick={() =>
-              setView((current) => ({ ...current, k: Math.max(0.25, current.k / 1.2) }))
-            }
+            onClick={() => setView((current) => ({ ...current, k: clampZoom(current.k / 1.2) }))}
           >
             −
           </ZoomButton>
@@ -247,9 +407,7 @@ function Viewport({
           </span>
           <ZoomButton
             label={inspectorCopy.zoomIn}
-            onClick={() =>
-              setView((current) => ({ ...current, k: Math.min(2.5, current.k * 1.2) }))
-            }
+            onClick={() => setView((current) => ({ ...current, k: clampZoom(current.k * 1.2) }))}
           >
             +
           </ZoomButton>
@@ -267,7 +425,7 @@ function Viewport({
       <div
         ref={canvasRef}
         data-testid="declared-canvas"
-        className={`relative min-h-0 flex-1 touch-none overflow-hidden ${
+        className={`relative min-h-0 flex-1 touch-none overflow-hidden select-none ${
           dragging ? 'cursor-grabbing' : 'cursor-grab'
         }`}
         onKeyDown={(event) => {
@@ -283,29 +441,35 @@ function Viewport({
           else if (event.key === 'End') move(order.length - 1);
           else if (event.key === 'Enter') {
             const element = topology.elements.get(order[index]!);
-            if (element) onSelect(selectionFor(element, aggregation));
+            if (element) selectAndTrace(selectionFor(element, aggregation), element.key);
           } else if (event.key === ' ' || event.key === 'Spacebar') {
             // The same path a double-click takes, so keyboard expansion and pointer expansion ask
             // for exactly one drawing rather than two that have to agree.
             const key = order[index]!;
             const element = topology.elements.get(key);
             if (element?.kind === 'node' && element.descriptor.kind === 'subgraph') {
-              onToggleExpanded(key);
+              toggleExpanded(key);
             }
           } else {
             return;
           }
           event.preventDefault();
         }}
-        onPointerDown={(event) => {
-          if (event.target === event.currentTarget) setDragging(true);
+        onPointerDown={startPress}
+        onClickCapture={(event) => {
+          // A click from the keyboard has no press behind it, so an earlier pan cannot eat it.
+          if (!pannedRef.current || event.detail === 0) return;
+          event.stopPropagation();
+          event.preventDefault();
         }}
-        onWheel={(event) => {
-          if (!event.ctrlKey && !event.metaKey && Math.abs(event.deltaY) < 1) return;
-          setView((current) => ({
-            ...current,
-            k: Math.min(2.5, Math.max(0.25, current.k * (event.deltaY > 0 ? 0.92 : 1.08))),
-          }));
+        onClick={(event) => {
+          // Anything that is not a control is empty canvas, an open graph's background included.
+          if (!(event.target as Element).closest('button')) setTracedKey(null);
+        }}
+        onDoubleClickCapture={(event) => {
+          if (!pannedRef.current) return;
+          event.stopPropagation();
+          event.preventDefault();
         }}
       >
         <div
@@ -314,74 +478,45 @@ function Viewport({
           data-testid="declared-viewport"
         >
           {result && (
-            <svg
-              width={result.width}
-              height={result.height}
-              className="pointer-events-none absolute top-0 left-0 overflow-visible"
-              aria-hidden
-            >
-              <defs>
-                <marker
-                  id="workflow-arrow"
-                  viewBox="0 0 8 8"
-                  refX="7"
-                  refY="4"
-                  markerWidth="6.5"
-                  markerHeight="6.5"
-                  orient="auto"
-                >
-                  <path d="M0,0 L8,4 L0,8 z" fill="var(--color-blue)" />
-                </marker>
-                <marker
-                  id="workflow-arrow-untaken"
-                  viewBox="0 0 8 8"
-                  refX="7"
-                  refY="4"
-                  markerWidth="6.5"
-                  markerHeight="6.5"
-                  orient="auto"
-                >
-                  <path d="M0,0 L8,4 L0,8 z" fill="var(--color-line)" />
-                </marker>
-              </defs>
-              {result.edges.map((edge, index) => {
-                const taken = aggregation.takenLinks.has(edge.id);
-                return (
-                  <path
-                    key={`${edge.id}-${index}`}
-                    d={roundedPath(edge.points)}
-                    fill="none"
-                    stroke={taken ? 'var(--color-blue)' : 'var(--color-line)'}
-                    strokeWidth={taken ? 1.8 : 1.3}
-                    strokeDasharray={taken ? undefined : '4 4'}
-                    opacity={taken ? 1 : 0.55}
-                    markerEnd={`url(#${taken ? 'workflow-arrow' : 'workflow-arrow-untaken'})`}
-                  />
-                );
-              })}
-            </svg>
+            <ArrowLayers
+              edges={result.edges}
+              takenLinks={aggregation.takenLinks}
+              tracedLinks={tracedLinks}
+            />
           )}
 
           {result?.nodes.map((node) => {
             const element = topology.elements.get(node.id);
             if (!element) return null;
+            const routerKey = topology.routerOf.get(node.id);
+            const nodeAggregate = elementAggregate(aggregation, node.id);
             return (
-              <GraphNode
-                key={node.id}
-                element={element}
-                aggregate={elementAggregate(aggregation, node.id)}
-                now={aggregation.now}
-                box={node}
-                live={liveKey === node.id}
-                selected={isSelected(selection, node.id, aggregation)}
-                selection={selection}
-                expanded={expanded.has(node.id)}
-                focused={tabStop === node.id}
-                onFocusKey={setFocusedKey}
-                unresolved={topology.unresolvedGraphs.find((entry) => entry.nodeKey === node.id)}
-                onSelect={onSelect}
-                onToggleExpanded={onToggleExpanded}
-              />
+              <Fragment key={node.id}>
+                <GraphNode
+                  element={element}
+                  aggregate={nodeAggregate}
+                  box={node}
+                  live={liveKey === node.id}
+                  selected={isSelected(selection, node.id, aggregation)}
+                  expanded={expanded.has(node.id)}
+                  focused={tabStop === node.id}
+                  onFocusKey={setFocusedKey}
+                  unresolved={topology.unresolvedGraphs.find((entry) => entry.nodeKey === node.id)}
+                  onSelect={(next) => selectAndTrace(next, node.id)}
+                  onToggleExpanded={toggleExpanded}
+                />
+                {routerKey !== undefined && node.out && (
+                  <RouterKnob
+                    edgeKey={routerKey}
+                    aggregate={elementAggregate(aggregation, routerKey)}
+                    failedHere={nodeAggregate.visits.at(-1)?.error?.stage === 'edge'}
+                    at={node.out}
+                    zIndex={nodeLayer(node.depth) + 1}
+                    onSelect={(next) => selectAndTrace(next, node.id)}
+                    onFocusNode={() => focusNode(node.id)}
+                  />
+                )}
+              </Fragment>
             );
           })}
         </div>
@@ -463,14 +598,9 @@ function PinnedBoxNames({
             data-pinned-graph={node.id}
             onClick={() => onSelect({ kind: 'element', key: node.id })}
             style={{ left, top: 8 + node.depth * 26 }}
-            className="pointer-events-auto absolute flex items-baseline gap-2 rounded-lg border border-violet/45 bg-canvas/92 px-2.5 py-1 whitespace-nowrap shadow-soft backdrop-blur-sm"
+            className="pointer-events-auto absolute rounded-lg border border-violet/45 bg-canvas/92 px-2.5 py-1 font-mono text-[12.5px] whitespace-nowrap text-fg shadow-soft backdrop-blur-sm"
           >
-            <span className="font-mono text-[12.5px] text-fg">{element.address.id}</span>
-            <span className="font-mono text-[10px] tracking-[0.07em] text-violet uppercase opacity-90">
-              {element.kind === 'node' && element.descriptor.kind === 'subgraph'
-                ? element.descriptor.graphKey
-                : element.graphKey}
-            </span>
+            {element.address.id}
           </button>
         );
       })}
@@ -492,14 +622,186 @@ function isSelected(
   return false;
 }
 
+/**
+ * The paint order of one depth's cards: a box at depth `d`, its children one step above it.
+ *
+ * Arrows sit one below the cards of their own graph, so a graph's arrows are drawn above its own
+ * box's background and below every card in it, however deep the box is nested.
+ */
+function nodeLayer(depth: number): number {
+  return 10 + 2 * depth;
+}
+
+/**
+ * Every arrow, one layer per graph depth.
+ *
+ * One layer under every card used to put each open box's translucent background over the arrows
+ * inside it, so a graph two levels deep had its arrows behind two veils. Each depth's arrows now sit
+ * directly above the box they belong to.
+ */
+function ArrowLayers({
+  edges,
+  takenLinks,
+  tracedLinks,
+}: {
+  readonly edges: LayoutResult['edges'];
+  readonly takenLinks: ReadonlySet<string>;
+  /** The arrows into and out of the traced node, or null when nothing is traced. */
+  readonly tracedLinks: ReadonlySet<string> | null;
+}) {
+  const depths = [...new Set(edges.map((edge) => edge.depth))];
+  // Traced arrows paint last in their layer, so a faded arrow never crosses over one.
+  // Keyed by original position, which stays put when the order changes.
+  const indexed = edges.map((edge, index) => ({ edge, key: `${edge.id}-${index}` }));
+  const ordered =
+    tracedLinks === null
+      ? indexed
+      : [
+          ...indexed.filter(({ edge }) => !tracedLinks.has(edge.id)),
+          ...indexed.filter(({ edge }) => tracedLinks.has(edge.id)),
+        ];
+  return (
+    <>
+      <svg width={0} height={0} className="absolute" aria-hidden>
+        <defs>
+          {Object.entries(arrowStyles).map(([name, style]) => (
+            <ArrowMarker key={name} id={`workflow-arrow-${name}`} opacity={style.opacity} />
+          ))}
+        </defs>
+      </svg>
+      {depths.map((depth) => (
+        <svg
+          key={depth}
+          width={1}
+          height={1}
+          style={{ zIndex: nodeLayer(depth) - 1 }}
+          className="pointer-events-none absolute top-0 left-0 overflow-visible"
+          aria-hidden
+        >
+          {ordered.map(({ edge, key }) => {
+            if (edge.depth !== depth) return null;
+            const taken = takenLinks.has(edge.id);
+            const traced = tracedLinks?.has(edge.id) ?? false;
+            const name =
+              tracedLinks === null
+                ? taken
+                  ? 'taken'
+                  : 'untaken'
+                : traced
+                  ? taken
+                    ? 'tracedTaken'
+                    : 'traced'
+                  : taken
+                    ? 'fadedTaken'
+                    : 'faded';
+            const style = arrowStyles[name];
+            return (
+              <path
+                key={key}
+                d={roundedPath(edge.points)}
+                data-taken={taken}
+                data-traced={tracedLinks === null ? undefined : traced}
+                fill="none"
+                stroke="var(--color-blue)"
+                style={{ strokeWidth: style.width, strokeOpacity: style.opacity }}
+                className="transition-[stroke-opacity,stroke-width] duration-ui ease-expo"
+                markerEnd={`url(#workflow-arrow-${name})`}
+              />
+            );
+          })}
+        </svg>
+      ))}
+    </>
+  );
+}
+
+/**
+ * How an arrow is drawn. Every arrow is blue; how much it stands out says what it is.
+ *
+ * With nothing traced, a taken arrow is bright and an untaken one faint. Tracing a node brings every
+ * arrow into and out of it up to full strength, taken or not, since the point is what *could* come
+ * next. The rest step back without disappearing, so the shape of the graph stays readable.
+ */
+const arrowStyles = {
+  taken: { width: 2, opacity: 1 },
+  untaken: { width: 1.4, opacity: 0.42 },
+  tracedTaken: { width: 2.6, opacity: 1 },
+  traced: { width: 2, opacity: 1 },
+  fadedTaken: { width: 2, opacity: 0.32 },
+  faded: { width: 1.4, opacity: 0.16 },
+} as const;
+
+function ArrowMarker({ id, opacity }: { readonly id: string; readonly opacity: number }) {
+  return (
+    <marker
+      id={id}
+      viewBox="0 0 8 8"
+      refX="7"
+      refY="4"
+      markerWidth="6.5"
+      markerHeight="6.5"
+      orient="auto"
+    >
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--color-blue)" fillOpacity={opacity} />
+    </marker>
+  );
+}
+
+/**
+ * A node's router, drawn as part of its node.
+ *
+ * The verifier guarantees exactly one router per node, so the router is a knob on the node's output
+ * port rather than a card competing with it. Every arrow out of the node starts here. It is not a
+ * keyboard stop: the node is, and its dock links to the routing decision. A click hands focus to the
+ * node, so the keyboard carries on from where the pointer was.
+ */
+function RouterKnob({
+  edgeKey,
+  aggregate,
+  failedHere,
+  at,
+  zIndex,
+  onSelect,
+  onFocusNode,
+}: {
+  readonly edgeKey: string;
+  readonly aggregate: ElementAggregate;
+  /** The node's latest visit failed inside its router. */
+  readonly failedHere: boolean;
+  readonly at: { readonly x: number; readonly y: number };
+  readonly zIndex: number;
+  readonly onSelect: (selection: InspectorSelection) => void;
+  readonly onFocusNode: () => void;
+}) {
+  const tone = failedHere
+    ? 'border-error bg-error'
+    : aggregate.routedBy.length > 0
+      ? 'border-blue bg-blue'
+      : 'border-blue bg-elevated';
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      data-router={edgeKey}
+      title={inspectorCopy.routerKnob}
+      aria-label={inspectorCopy.routerKnob}
+      onClick={() => {
+        onSelect(latestRoutingSelection(aggregate) ?? { kind: 'element', key: edgeKey });
+        onFocusNode();
+      }}
+      onDoubleClick={(event) => event.stopPropagation()}
+      style={{ left: at.x - 10, top: at.y - 10, zIndex }}
+      className={`absolute size-5 cursor-pointer rounded-full border-[1.5px] transition-transform duration-micro ease-expo hover:scale-130 ${tone}`}
+    />
+  );
+}
+
 function GraphNode({
   element,
   aggregate,
-  now,
   box,
   live,
   selected,
-  selection,
   expanded,
   focused,
   onFocusKey,
@@ -509,11 +811,9 @@ function GraphNode({
 }: {
   readonly element: DeclaredElement;
   readonly aggregate: ElementAggregate;
-  readonly now: number;
   readonly box: LayoutResult['nodes'][number];
   readonly live: boolean;
   readonly selected: boolean;
-  readonly selection: InspectorSelection | null;
   readonly expanded: boolean;
   readonly focused: boolean;
   readonly onFocusKey: (key: string) => void;
@@ -523,15 +823,6 @@ function GraphNode({
 }) {
   const isSubgraph = element.kind === 'node' && element.descriptor.kind === 'subgraph';
   const visited = aggregate.visits.length > 0 || aggregate.status !== 'unvisited';
-  const latest = aggregate.visits.at(-1);
-
-  const statusRing = live
-    ? 'border-amber bg-amber/11 shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-amber)_14%,transparent)]'
-    : selected
-      ? 'border-blue shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-blue)_22%,transparent)]'
-      : visited
-        ? statusBorder(aggregate.status)
-        : 'border-dashed border-line/35';
 
   const stop = {
     'data-node-key': element.key,
@@ -545,24 +836,29 @@ function GraphNode({
       top: box.y,
       width: box.width,
       height: box.height,
-      zIndex: 10 + box.depth * 2,
+      zIndex: nodeLayer(box.depth),
     },
     'data-element': element.key,
     'data-live': live || undefined,
     'data-status': visited ? aggregate.status : 'unvisited',
   } as const;
 
+  // The whole graph opens and closes, not just its name. A nested graph is a sibling in the DOM
+  // painted above its parent, so a double-click inside one reaches that graph and stops there.
+  const toggleOnDoubleClick = isSubgraph
+    ? {
+        onDoubleClick: (event: React.MouseEvent) => {
+          event.stopPropagation();
+          onToggleExpanded(element.key);
+        },
+      }
+    : {};
+
   if (box.isBox) {
     return (
       <div
         {...commonProps}
-        // The whole graph opens and closes, not just the strip along its top. A nested graph is a
-        // sibling in the DOM painted above its parent, so a double-click inside one reaches that
-        // graph and stops there; this only ever catches the parent's own surface.
-        onDoubleClick={(event) => {
-          event.stopPropagation();
-          onToggleExpanded(element.key);
-        }}
+        {...toggleOnDoubleClick}
         className={`absolute flex flex-col items-stretch rounded-md border bg-canvas/55 ${
           live ? 'border-amber/55 bg-amber/4' : selected ? 'border-blue' : 'border-violet/34'
         }`}
@@ -574,17 +870,9 @@ function GraphNode({
           aria-expanded={expanded}
           className="flex h-10.5 flex-none items-center gap-2 border-b border-line/22 px-3.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue"
         >
-          <span className="truncate font-mono text-[13.5px] text-fg">{element.address.id}</span>
-          {latest?.label && (
-            <span className="min-w-0 truncate text-[12px] text-fg-muted">{latest.label}</span>
-          )}
-          <span className="ml-auto flex-none font-mono text-[10px] tracking-[0.07em] text-violet uppercase opacity-85">
-            {element.kind === 'node' && element.descriptor.kind === 'subgraph'
-              ? element.descriptor.graphKey
-              : element.graphKey}
-          </span>
+          <span className="truncate font-mono text-[14px] text-fg">{element.address.id}</span>
           <span
-            className="flex-none rounded-md border border-line/35 px-1.5 font-mono text-[10.5px] text-fg-subtle"
+            className="ml-auto flex-none rounded-md border border-line/35 px-1.5 font-mono text-[10.5px] text-fg-subtle"
             aria-label={inspectorCopy.collapse}
           >
             ▾
@@ -594,328 +882,136 @@ function GraphNode({
     );
   }
 
-  if (element.kind === 'edge') {
-    // An arrow, not a card. The shell carries the outline colour and the face sits a pixel inside
-    // it; a clipped shape cannot take a border, so the gap between the two polygons is the border.
-    const shellTone = live
-      ? 'bg-amber'
-      : selected
-        ? 'bg-blue'
-        : aggregate.status === 'failed'
-          ? 'bg-error/70'
-          : aggregate.status === 'unvisited'
-            ? 'bg-line/45'
-            : 'bg-blue/55';
-    return (
-      <button
-        {...commonProps}
-        {...stop}
-        type="button"
-        onClick={() =>
-          onSelect(latestRoutingSelection(aggregate) ?? { kind: 'element', key: element.key })
-        }
-        className="absolute text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue"
-      >
-        <span aria-hidden className={`workflow-edge-shell ${shellTone}`} />
-        <span
-          className={`workflow-edge-face flex flex-col justify-center py-2 pr-7 pl-3.5 ${
-            live ? 'bg-amber/12' : 'bg-elevated'
-          }`}
-        >
-          <span className="font-mono text-[9.5px] tracking-widest text-blue uppercase opacity-90">
-            edge fn
-          </span>
-          <span className="mt-0.5 flex items-baseline gap-2 font-mono text-[12.5px] text-fg">
-            <span className="truncate">{element.address.id}</span>
-            <TimeBadge aggregate={aggregate} now={now} />
-          </span>
-          <span className="mt-2 flex flex-wrap gap-1">
-            {element.descriptor.to.map((destination) => {
-              const chosen = aggregate.chosenDestinations.includes(destination);
-              return (
-                <span
-                  key={destination}
-                  className={`rounded px-1.5 font-mono text-[10px] whitespace-nowrap ${
-                    chosen
-                      ? 'border border-green/50 bg-green/10 text-green'
-                      : 'border border-dashed border-line/55 text-fg-subtle'
-                  }`}
-                >
-                  {chosen ? '→ ' : ''}
-                  {destination}
-                </span>
-              );
-            })}
-          </span>
-        </span>
-      </button>
-    );
-  }
+  const ring = live
+    ? 'border-amber bg-amber/11 shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-amber)_14%,transparent)]'
+    : selected
+      ? 'border-blue shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-blue)_22%,transparent)]'
+      : !visited
+        ? `border-dashed ${isSubgraph ? 'border-violet/45' : 'border-line/35'}`
+        : isSubgraph
+          ? 'border-violet/60'
+          : statusBorder(aggregate.status);
+  const fill = visited ? 'bg-elevated' : 'bg-elevated/40';
 
   if (element.kind === 'outcome') {
     return (
-      <button
-        {...commonProps}
-        {...stop}
-        type="button"
-        onClick={() => onSelect({ kind: 'element', key: element.key })}
-        className={`absolute flex items-center justify-center rounded-3xl border bg-elevated/97 px-3.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue ${statusRing}`}
-      >
-        <span className="flex w-full items-baseline gap-2">
+      <div {...commonProps} className="absolute">
+        <button
+          type="button"
+          {...stop}
+          onClick={() => onSelect({ kind: 'element', key: element.key })}
+          className={`flex size-full items-center gap-2 rounded-3xl border px-4 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue ${fill} ${ring}`}
+        >
           <span
             aria-hidden
             className={`size-1.75 flex-none rounded-full ${
               element.descriptor.kind === 'failure' ? 'bg-error' : 'bg-green'
             }`}
           />
-          <span className="truncate font-mono text-[13.5px] text-fg">{element.address.id}</span>
-        </span>
-      </button>
-    );
-  }
-
-  /**
-   * A closed graph keeps the grammar of an open one.
-   *
-   * A subgraph and an operation were two rounded rectangles that differed only in what their
-   * sub-line happened to say, which is not a distinction anyone reads at a glance. An open graph
-   * already announces itself with a violet header strip carrying its graph key; a closed one now
-   * wears the same strip with the caret turned. The rule is legible without reading a word: a header
-   * strip means a graph, and no strip means a step.
-   */
-  if (isSubgraph) {
-    return (
-      <div
-        {...commonProps}
-        // Opening is the same gesture on the same surface as closing: the whole card, not the strip.
-        onDoubleClick={(event) => {
-          event.stopPropagation();
-          onToggleExpanded(element.key);
-        }}
-        className={`absolute flex flex-col overflow-hidden rounded-md border bg-canvas/55 ${
-          live ? 'border-amber/55 bg-amber/4' : selected ? 'border-blue' : 'border-violet/34'
-        }`}
-      >
-        <button
-          type="button"
-          {...stop}
-          onClick={() => onSelect(latestVisitSelection(aggregate, element.key))}
-          aria-expanded={expanded}
-          className="flex h-8 flex-none items-center gap-2 border-b border-violet/22 px-3 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue"
-        >
-          <span className="truncate font-mono text-[12.5px] text-fg">{element.address.id}</span>
-          {latest?.label && (
-            <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{latest.label}</span>
-          )}
-          <span className="ml-auto flex-none font-mono text-[10px] tracking-[0.07em] text-violet uppercase opacity-85">
-            {element.descriptor.kind === 'subgraph'
-              ? element.descriptor.graphKey
-              : element.graphKey}
-          </span>
-          <span
-            aria-hidden
-            className="flex-none rounded-md border border-line/35 px-1.5 font-mono text-[10.5px] text-fg-subtle"
-          >
-            ▸
-          </span>
+          <CardName id={element.address.id} dim={false} />
         </button>
-        <div className="flex min-h-0 flex-1 flex-col justify-center px-3 py-1.5">
-          <span className="flex items-baseline gap-2">
-            <span
-              aria-hidden
-              className={`size-1.75 flex-none self-center rounded-full ${statusDot(
-                visited ? aggregate.status : 'unvisited',
-              )}`}
-            />
-            <span className="truncate font-mono text-[10.5px] text-fg-subtle">
-              <NodeSubline
-                element={element}
-                aggregate={aggregate}
-                unresolvedGraphKey={unresolved?.graphKey ?? null}
-              />
-            </span>
-            <TimeBadge aggregate={aggregate} now={now} />
-          </span>
-          <VisitPips aggregate={aggregate} selection={selection} onSelect={onSelect} />
-        </div>
       </div>
     );
   }
 
   return (
-    <div
-      {...commonProps}
-      className={`absolute flex flex-col justify-center overflow-hidden rounded-md border bg-elevated/97 px-3 py-2.5 ${statusRing} ${
-        visited ? '' : 'bg-elevated/40'
-      }`}
-    >
+    <div {...commonProps} {...toggleOnDoubleClick} className="absolute">
       <button
         type="button"
         {...stop}
         onClick={() => onSelect(latestVisitSelection(aggregate, element.key))}
-        className="text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue"
+        aria-expanded={isSubgraph ? expanded : undefined}
+        className={`relative z-1 flex size-full flex-col justify-center gap-1 overflow-hidden rounded-md border px-4 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue ${fill} ${ring}`}
       >
-        <span className="flex items-baseline gap-2">
+        <span className="flex items-start gap-2">
           <span
             aria-hidden
-            className={`size-1.75 flex-none self-center rounded-full ${statusDot(
+            className={`mt-1.5 size-1.75 flex-none rounded-full ${statusDot(
               visited ? aggregate.status : 'unvisited',
             )}`}
           />
-          <span
-            className={`truncate font-mono text-[13.5px] ${visited ? 'text-fg' : 'text-fg-subtle'}`}
-          >
-            {element.address.id}
-          </span>
-          {element.kind === 'node' && element.descriptor.kind === 'checkpoint' ? (
-            // The slot a subgraph's violet tag takes, in the cyan the canvas uses for kept things.
-            <span className="ml-auto flex flex-none items-baseline gap-2">
-              <CheckpointKindTag />
-              <TimeBadge aggregate={aggregate} now={now} />
+          <CardName id={element.address.id} dim={!visited} />
+          {isSubgraph && (
+            <span aria-hidden className="flex-none font-mono text-[12px] text-violet">
+              ▸
             </span>
-          ) : (
-            <TimeBadge aggregate={aggregate} now={now} />
           )}
         </span>
-        <span className="mt-1.5 flex items-center gap-2 font-mono text-[10.5px] text-fg-subtle">
-          <span className="min-w-0 truncate">
-            <NodeSubline
-              element={element}
-              aggregate={aggregate}
-              unresolvedGraphKey={unresolved?.graphKey ?? null}
-            />
-          </span>
+        <span className="flex min-h-4 items-baseline gap-2 pl-3.75 font-mono text-[11.5px] text-fg-subtle">
+          {aggregate.visits.length > 0 && (
+            <span className={aggregate.open ? 'text-amber' : 'text-fg-muted'}>
+              {formatDuration(aggregate.durationMs)}
+              {aggregate.open ? ' · open' : ''}
+            </span>
+          )}
+          {aggregate.visits.length > 1 && <span>×{aggregate.visits.length}</span>}
+          {unresolved && (
+            <span
+              className="text-amber"
+              title={inspectorCopy.subgraphUnresolved(unresolved.graphKey)}
+            >
+              {inspectorCopy.subgraphMissing}
+            </span>
+          )}
+          {element.kind === 'node' && element.descriptor.kind === 'checkpoint' && (
+            <span className="ml-auto">
+              <CheckpointKindTag />
+            </span>
+          )}
         </span>
       </button>
-      <VisitPips aggregate={aggregate} selection={selection} onSelect={onSelect} />
+      {/* A closed graph is a card with another behind it: there is more in here than one step. It
+          comes after the card so the card stays the first child: opening the graph then reuses the
+          same button, and keyboard focus survives the toggle. */}
+      {isSubgraph && (
+        <span
+          aria-hidden
+          className="absolute inset-0 translate-x-1 translate-y-1 rounded-md border border-violet/30 bg-subtle"
+        />
+      )}
     </div>
   );
 }
 
 /**
- * One pip per visit, in the strip every node reserves whether or not it has any.
+ * A node's id, whole.
  *
- * The strip is reserved from the first layout, so a second visit fills space that was already there
- * rather than growing the node and forcing the graph to be laid out again. Dense contents scroll
- * inside it for the same reason.
+ * Ids are camelCase, so the break opportunities a browser would find in prose are not there and a
+ * long id either overflows or gets cut to a single letter. Offering a break before each capital lets
+ * it wrap onto a second line at its own word boundaries; a single token too long even for that
+ * breaks anywhere rather than spilling out of the card.
  */
-function VisitPips({
-  aggregate,
-  selection,
-  onSelect,
-}: {
-  readonly aggregate: ElementAggregate;
-  readonly selection: InspectorSelection | null;
-  readonly onSelect: (selection: InspectorSelection) => void;
-}) {
-  if (aggregate.visits.length <= 1) return null;
-  return (
-    <span className="mt-2 flex gap-1 overflow-x-auto">
-      {aggregate.visits.map((visit) => {
-        const active =
-          selection?.kind === 'execution' && selection.executionId === visit.executionId;
-        return (
-          <button
-            key={visit.executionId}
-            type="button"
-            title={`execution ${visit.executionId}`}
-            aria-label={`Visit ${visit.visitIndex + 1}, execution ${visit.executionId}${
-              visit.retryOf === null ? '' : `, retry of ${visit.retryOf}`
-            }`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect({ kind: 'execution', executionId: visit.executionId });
-            }}
-            onDoubleClick={(event) => event.stopPropagation()}
-            className={`flex-none rounded-full border px-1.5 font-mono text-[10.5px] ${pipTone(
-              visit.status,
-            )} ${active ? 'ring-2 ring-blue/45' : ''}`}
-          >
-            {visit.visitIndex + 1}
-          </button>
-        );
-      })}
-    </span>
-  );
-}
-
-function NodeSubline({
-  element,
-  aggregate,
-  unresolvedGraphKey,
-}: {
-  readonly element: DeclaredElement;
-  readonly aggregate: ElementAggregate;
-  readonly unresolvedGraphKey: string | null;
-}) {
-  if (unresolvedGraphKey !== null) {
-    return (
-      <span className="text-amber">{inspectorCopy.subgraphUnresolved(unresolvedGraphKey)}</span>
-    );
-  }
-  if (element.kind === 'node' && element.descriptor.kind === 'subgraph') {
-    // The graph key is already in the header strip above this line; repeating it here would spend
-    // the one line the body has on something already on screen.
-    if (aggregate.visits.length === 0) return <>{inspectorCopy.notVisited}</>;
-    const executions = aggregate.nestedExecutionCount;
-    return <>{`${executions} execution${executions === 1 ? '' : 's'} inside`}</>;
-  }
-  if (element.kind === 'node' && element.descriptor.kind === 'checkpoint') {
-    return <CheckpointSubline title={element.descriptor.title} aggregate={aggregate} />;
-  }
-  if (aggregate.visits.length === 0) return <>{inspectorCopy.notVisited}</>;
-
-  const latest = aggregate.visits.at(-1);
-  if (latest?.wait) {
-    return (
-      <>
-        {latest.status === 'waiting' ? inspectorCopy.waitOpen : 'answered'} ·{' '}
-        {latest.wait.kind === 'user_input'
-          ? `${latest.wait.questions.length} questions`
-          : latest.wait.kind.replace('_', ' ')}
-      </>
-    );
-  }
-  return (
-    <>
-      {aggregate.operationKinds.length > 0
-        ? aggregate.operationKinds.join(' · ')
-        : inspectorCopy.noOperationsShort}
-    </>
-  );
-}
-
-function TimeBadge({
-  aggregate,
-  now: _now,
-}: {
-  readonly aggregate: ElementAggregate;
-  readonly now: number;
-}) {
-  if (aggregate.visits.length === 0) {
-    return (
-      <span className="ml-auto flex-none font-mono text-[12px] text-fg-subtle opacity-45">—</span>
-    );
-  }
-  const open = aggregate.open;
+function CardName({ id, dim }: { readonly id: string; readonly dim: boolean }) {
+  const words = id.split(/(?<=[a-z0-9])(?=[A-Z])/);
   return (
     <span
-      className={`ml-auto flex-none font-mono text-[12px] ${open ? 'text-amber' : 'text-fg-muted'}`}
+      className={`line-clamp-2 min-w-0 flex-1 font-mono text-[14px] leading-4.5 wrap-anywhere ${
+        dim ? 'text-fg-subtle' : 'text-fg'
+      }`}
     >
-      {formatDuration(aggregate.durationMs)}
-      {open ? ' · open' : ''}
+      {words.map((word, index) => (
+        <Fragment key={index}>
+          {index > 0 && <wbr />}
+          {word}
+        </Fragment>
+      ))}
     </span>
   );
 }
 
 /** What selecting an element means, wherever the selection came from. */
 function selectionFor(element: DeclaredElement, aggregation: VisitAggregation): InspectorSelection {
-  const aggregate = elementAggregate(aggregation, element.key);
-  if (element.kind === 'edge') {
-    return latestRoutingSelection(aggregate) ?? { kind: 'element', key: element.key };
+  if (element.kind === 'node') {
+    return latestVisitSelection(elementAggregate(aggregation, element.key), element.key);
   }
-  if (element.kind === 'outcome') return { kind: 'element', key: element.key };
-  return latestVisitSelection(aggregate, element.key);
+  return { kind: 'element', key: element.key };
+}
+
+/** How far a press may wander, in screen pixels, before it is a pan rather than a click. */
+const PAN_THRESHOLD = 4;
+
+function clampZoom(k: number): number {
+  return Math.min(2.5, Math.max(0.25, k));
 }
 
 /**
@@ -935,7 +1031,7 @@ function latestVisitSelection(aggregate: ElementAggregate, key: string): Inspect
   return latest ? { kind: 'execution', executionId: latest.executionId } : { kind: 'element', key };
 }
 
-/** An edge selects the latest execution that routed through it, whose dock shows the decision. */
+/** A router selects the latest execution that routed through it, whose dock shows the decision. */
 function latestRoutingSelection(aggregate: ElementAggregate): InspectorSelection | null {
   const latest = aggregate.routedBy.at(-1);
   return latest ? { kind: 'execution', executionId: latest.executionId } : null;
@@ -995,21 +1091,6 @@ function statusDot(status: ElementAggregate['status'] | 'unvisited'): string {
       return 'bg-working';
     default:
       return 'bg-fg-subtle';
-  }
-}
-
-function pipTone(status: string): string {
-  switch (status) {
-    case 'failed':
-      return 'border-error/50 text-error';
-    case 'completed':
-      return 'border-green/35 text-green';
-    case 'waiting':
-      return 'border-waiting bg-waiting/14 text-waiting';
-    case 'interrupted':
-      return 'border-amber/50 text-amber';
-    default:
-      return 'border-line/40 bg-canvas/70 text-fg-subtle';
   }
 }
 
