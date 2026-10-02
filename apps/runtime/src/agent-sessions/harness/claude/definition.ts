@@ -45,6 +45,8 @@ export const claudeHarnessDefinition = {
     reduce: ({ records }) => reduceClaudeLifecycle(records),
     openingRecordedAt: ({ records }, seq) =>
       records.find((record) => record.seq === seq)?.recordedAt ?? null,
+    // Claude reports no Stop for an interrupted turn, and `/clear` starts a new conversation.
+    switchAbandonsOpenTurn: true,
   },
   conversation: { read: readClaudeConversation },
   observation: {

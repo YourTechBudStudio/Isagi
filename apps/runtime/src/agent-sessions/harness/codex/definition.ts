@@ -45,6 +45,8 @@ export const codexHarnessDefinition = {
     reduce: ({ codexRecords }) => reduceCodexRolloutLifecycle(codexRecords ?? []),
     openingRecordedAt: ({ codexRecords }, seq) =>
       codexRecords.find((record) => record.seq === seq)?.recordedAt ?? null,
+    // A `/clear` mid-turn leaves the old thread's rollout without a terminal event.
+    switchAbandonsOpenTurn: true,
   },
   conversation: { read: readCodexConversation },
   observation: {
