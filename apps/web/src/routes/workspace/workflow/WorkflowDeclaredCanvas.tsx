@@ -65,6 +65,8 @@ export function WorkflowDeclaredCanvas({
         topology={topology}
         aggregation={aggregation}
         result={layout.result}
+        requestIdentity={request.identity}
+        artifactHash={artifactHash}
         liveKey={liveKey}
         selection={selection}
         onSelect={onSelect}
@@ -102,6 +104,8 @@ function Viewport({
   topology,
   aggregation,
   result,
+  requestIdentity,
+  artifactHash,
   liveKey,
   selection,
   onSelect,
@@ -110,7 +114,11 @@ function Viewport({
 }: {
   readonly topology: DeclaredTopology;
   readonly aggregation: VisitAggregation;
+  /** The latest committed drawing. While a new shape is laid out, this is still the previous one. */
   readonly result: LayoutResult | null;
+  /** The shape being asked for now; `result` is settled only once its identity matches. */
+  readonly requestIdentity: string;
+  readonly artifactHash: string;
   readonly liveKey: string | null;
   readonly selection: InspectorSelection | null;
   readonly onSelect: (selection: InspectorSelection) => void;
@@ -120,8 +128,51 @@ function Viewport({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState({ x: 40, y: 30, k: 1 });
   const [dragging, setDragging] = useState(false);
-  const fittedRef = useRef<string | null>(null);
+  /** The build last fitted to the canvas. */
+  const fittedHashRef = useRef<string | null>(null);
+  /** Where a toggled graph sat on screen, to put it back there once its new drawing lands. */
+  const anchorRef = useRef<{
+    readonly key: string;
+    readonly screenX: number;
+    readonly screenY: number;
+    readonly identity: string;
+  } | null>(null);
+  /**
+   * Set when the latest press turned into a pan, until the next press begins.
+   *
+   * Both the click it ends with and any double-click it completes are swallowed, so a drag neither
+   * selects a card nor opens a graph.
+   */
+  const pannedRef = useRef(false);
+  /** Ends the press in progress, if any. */
+  const endPressRef = useRef<(() => void) | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+
+  /**
+   * The node whose paths are traced: every arrow into and out of it stands out, the rest step back.
+   *
+   * Local to the canvas rather than read from the selection. The inspector always has something
+   * selected — it opens on the live execution — and a graph that dimmed itself on opening would hide
+   * the taken path it exists to show. A click on a card or knob traces that node, and a click on
+   * empty canvas lets it go.
+   */
+  const [tracedKey, setTracedKey] = useState<string | null>(null);
+  const tracedLinks = useMemo(() => {
+    if (tracedKey === null || !result?.nodes.some((node) => node.id === tracedKey)) return null;
+    return new Set(
+      topology.links
+        .filter((link) => link.fromKey === tracedKey || link.toKey === tracedKey)
+        .map((link) => link.id),
+    );
+  }, [result, topology, tracedKey]);
+
+  const selectAndTrace = useCallback(
+    (next: InspectorSelection, key: string) => {
+      onSelect(next);
+      setTracedKey(key);
+    },
+    [onSelect],
+  );
 
   /**
    * Which element the keyboard is on, as a roving tab stop.
@@ -216,31 +267,130 @@ function Viewport({
     }));
   }, [liveKey, result]);
 
-  // Fit once per shape, never on a status change: a graph that re-centred itself every time a node
-  // finished would move under the reader several times a minute.
-  useEffect(() => {
-    if (!result || fittedRef.current === result.identity) return;
-    fittedRef.current = result.identity;
-    fit();
-  }, [fit, result]);
+  /**
+   * Opens or closes a graph without losing your place.
+   *
+   * The single path for a double-click and for Space. The graph's top-left is remembered on screen
+   * and put back there once the new drawing lands, at the same zoom, so the part of the workflow you
+   * were looking at stays under you instead of the whole canvas re-centring.
+   */
+  const toggleExpanded = useCallback(
+    (key: string) => {
+      const node = result?.nodes.find((candidate) => candidate.id === key);
+      anchorRef.current =
+        result && node
+          ? {
+              key,
+              screenX: view.x + node.x * view.k,
+              screenY: view.y + node.y * view.k,
+              identity: result.identity,
+            }
+          : null;
+      onToggleExpanded(key);
+    },
+    [onToggleExpanded, result, view],
+  );
 
+  // Only a drawing of the shape being asked for may move the camera. The layout hook keeps the
+  // previous drawing up while the next is laid out, and fitting or anchoring to that would place the
+  // camera for a shape that is about to disappear.
+  const settled = result !== null && result.identity === requestIdentity ? result : null;
+
+  // Fit once per build, never on a status change or an expand: a graph that re-centred itself every
+  // time a node finished would move under the reader several times a minute.
   useEffect(() => {
-    if (!dragging) return;
-    const onMove = (event: PointerEvent) => {
-      setView((current) => ({
-        ...current,
-        x: current.x + event.movementX,
-        y: current.y + event.movementY,
-      }));
+    if (settled === null) return;
+    const anchor = anchorRef.current;
+    const anchorDue = anchor !== null && anchor.identity !== settled.identity;
+    // An anchor is spent by the first new drawing after its toggle, whether or not it applies, so it
+    // can never fire on some later, unrelated layout.
+    if (anchorDue) anchorRef.current = null;
+
+    // A new build wins over an anchor: it is a different graph, and the old position means nothing.
+    if (fittedHashRef.current !== artifactHash) {
+      fittedHashRef.current = artifactHash;
+      fit();
+      return;
+    }
+    if (!anchorDue) return;
+    const node = settled.nodes.find((candidate) => candidate.id === anchor.key);
+    if (!node) return;
+    setView((current) => ({
+      ...current,
+      x: anchor.screenX - node.x * current.k,
+      y: anchor.screenY - node.y * current.k,
+    }));
+  }, [artifactHash, fit, settled]);
+
+  /**
+   * A press anywhere is a click until it has moved more than a few pixels, and a pan after that.
+   *
+   * Cards never move. A press that became a pan swallows the click it ends with, so dragging across
+   * a card does not select it.
+   */
+  const startPress = useCallback((event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    endPressRef.current?.();
+    pannedRef.current = false;
+    const start = { x: event.clientX, y: event.clientY };
+    let last: { x: number; y: number } | null = null;
+
+    const onMove = (move: PointerEvent) => {
+      if (last === null) {
+        if (Math.hypot(move.clientX - start.x, move.clientY - start.y) <= PAN_THRESHOLD) return;
+        last = start;
+        pannedRef.current = true;
+        setDragging(true);
+      }
+      const dx = move.clientX - last.x;
+      const dy = move.clientY - last.y;
+      last = { x: move.clientX, y: move.clientY };
+      setView((current) => ({ ...current, x: current.x + dx, y: current.y + dy }));
     };
-    const onUp = () => setDragging(false);
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
+    const end = () => {
       window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      endPressRef.current = null;
+      setDragging(false);
     };
-  }, [dragging]);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    endPressRef.current = end;
+  }, []);
+
+  useEffect(() => () => endPressRef.current?.(), []);
+
+  // Native, because React's wheel listener is passive and cannot stop the page from scrolling or
+  // the browser from zooming on a pinch.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      // A trackpad pinch arrives as a wheel with ctrlKey; ctrl/⌘ + wheel zooms the same way.
+      if (event.ctrlKey || event.metaKey) {
+        const bounds = canvas.getBoundingClientRect();
+        const px = event.clientX - bounds.left;
+        const py = event.clientY - bounds.top;
+        setView((current) => {
+          const k = clampZoom(current.k * Math.exp(-event.deltaY * 0.01));
+          const ratio = k / current.k;
+          // Keep the graph point under the cursor where it is.
+          return { k, x: px - (px - current.x) * ratio, y: py - (py - current.y) * ratio };
+        });
+      } else {
+        setView((current) => ({
+          ...current,
+          x: current.x - event.deltaX,
+          y: current.y - event.deltaY,
+        }));
+      }
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   return (
     <>
@@ -248,9 +398,7 @@ function Viewport({
         <div className="ml-auto flex items-center gap-1.5">
           <ZoomButton
             label={inspectorCopy.zoomOut}
-            onClick={() =>
-              setView((current) => ({ ...current, k: Math.max(0.25, current.k / 1.2) }))
-            }
+            onClick={() => setView((current) => ({ ...current, k: clampZoom(current.k / 1.2) }))}
           >
             −
           </ZoomButton>
@@ -259,9 +407,7 @@ function Viewport({
           </span>
           <ZoomButton
             label={inspectorCopy.zoomIn}
-            onClick={() =>
-              setView((current) => ({ ...current, k: Math.min(2.5, current.k * 1.2) }))
-            }
+            onClick={() => setView((current) => ({ ...current, k: clampZoom(current.k * 1.2) }))}
           >
             +
           </ZoomButton>
@@ -279,7 +425,7 @@ function Viewport({
       <div
         ref={canvasRef}
         data-testid="declared-canvas"
-        className={`relative min-h-0 flex-1 touch-none overflow-hidden ${
+        className={`relative min-h-0 flex-1 touch-none overflow-hidden select-none ${
           dragging ? 'cursor-grabbing' : 'cursor-grab'
         }`}
         onKeyDown={(event) => {
@@ -295,29 +441,35 @@ function Viewport({
           else if (event.key === 'End') move(order.length - 1);
           else if (event.key === 'Enter') {
             const element = topology.elements.get(order[index]!);
-            if (element) onSelect(selectionFor(element, aggregation));
+            if (element) selectAndTrace(selectionFor(element, aggregation), element.key);
           } else if (event.key === ' ' || event.key === 'Spacebar') {
             // The same path a double-click takes, so keyboard expansion and pointer expansion ask
             // for exactly one drawing rather than two that have to agree.
             const key = order[index]!;
             const element = topology.elements.get(key);
             if (element?.kind === 'node' && element.descriptor.kind === 'subgraph') {
-              onToggleExpanded(key);
+              toggleExpanded(key);
             }
           } else {
             return;
           }
           event.preventDefault();
         }}
-        onPointerDown={(event) => {
-          if (event.target === event.currentTarget) setDragging(true);
+        onPointerDown={startPress}
+        onClickCapture={(event) => {
+          // A click from the keyboard has no press behind it, so an earlier pan cannot eat it.
+          if (!pannedRef.current || event.detail === 0) return;
+          event.stopPropagation();
+          event.preventDefault();
         }}
-        onWheel={(event) => {
-          if (!event.ctrlKey && !event.metaKey && Math.abs(event.deltaY) < 1) return;
-          setView((current) => ({
-            ...current,
-            k: Math.min(2.5, Math.max(0.25, current.k * (event.deltaY > 0 ? 0.92 : 1.08))),
-          }));
+        onClick={(event) => {
+          // Anything that is not a control is empty canvas, an open graph's background included.
+          if (!(event.target as Element).closest('button')) setTracedKey(null);
+        }}
+        onDoubleClickCapture={(event) => {
+          if (!pannedRef.current) return;
+          event.stopPropagation();
+          event.preventDefault();
         }}
       >
         <div
@@ -325,7 +477,13 @@ function Viewport({
           style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
           data-testid="declared-viewport"
         >
-          {result && <ArrowLayers edges={result.edges} takenLinks={aggregation.takenLinks} />}
+          {result && (
+            <ArrowLayers
+              edges={result.edges}
+              takenLinks={aggregation.takenLinks}
+              tracedLinks={tracedLinks}
+            />
+          )}
 
           {result?.nodes.map((node) => {
             const element = topology.elements.get(node.id);
@@ -344,8 +502,8 @@ function Viewport({
                   focused={tabStop === node.id}
                   onFocusKey={setFocusedKey}
                   unresolved={topology.unresolvedGraphs.find((entry) => entry.nodeKey === node.id)}
-                  onSelect={onSelect}
-                  onToggleExpanded={onToggleExpanded}
+                  onSelect={(next) => selectAndTrace(next, node.id)}
+                  onToggleExpanded={toggleExpanded}
                 />
                 {routerKey !== undefined && node.out && (
                   <RouterKnob
@@ -354,7 +512,7 @@ function Viewport({
                     failedHere={nodeAggregate.visits.at(-1)?.error?.stage === 'edge'}
                     at={node.out}
                     zIndex={nodeLayer(node.depth) + 1}
-                    onSelect={onSelect}
+                    onSelect={(next) => selectAndTrace(next, node.id)}
                     onFocusNode={() => focusNode(node.id)}
                   />
                 )}
@@ -484,17 +642,31 @@ function nodeLayer(depth: number): number {
 function ArrowLayers({
   edges,
   takenLinks,
+  tracedLinks,
 }: {
   readonly edges: LayoutResult['edges'];
   readonly takenLinks: ReadonlySet<string>;
+  /** The arrows into and out of the traced node, or null when nothing is traced. */
+  readonly tracedLinks: ReadonlySet<string> | null;
 }) {
   const depths = [...new Set(edges.map((edge) => edge.depth))];
+  // Traced arrows paint last in their layer, so a faded arrow never crosses over one.
+  // Keyed by original position, which stays put when the order changes.
+  const indexed = edges.map((edge, index) => ({ edge, key: `${edge.id}-${index}` }));
+  const ordered =
+    tracedLinks === null
+      ? indexed
+      : [
+          ...indexed.filter(({ edge }) => !tracedLinks.has(edge.id)),
+          ...indexed.filter(({ edge }) => tracedLinks.has(edge.id)),
+        ];
   return (
     <>
       <svg width={0} height={0} className="absolute" aria-hidden>
         <defs>
-          <ArrowMarker id="workflow-arrow-taken" opacity={1} />
-          <ArrowMarker id="workflow-arrow-untaken" opacity={0.42} />
+          {Object.entries(arrowStyles).map(([name, style]) => (
+            <ArrowMarker key={name} id={`workflow-arrow-${name}`} opacity={style.opacity} />
+          ))}
         </defs>
       </svg>
       {depths.map((depth) => (
@@ -506,19 +678,34 @@ function ArrowLayers({
           className="pointer-events-none absolute top-0 left-0 overflow-visible"
           aria-hidden
         >
-          {edges.map((edge, index) => {
+          {ordered.map(({ edge, key }) => {
             if (edge.depth !== depth) return null;
             const taken = takenLinks.has(edge.id);
+            const traced = tracedLinks?.has(edge.id) ?? false;
+            const name =
+              tracedLinks === null
+                ? taken
+                  ? 'taken'
+                  : 'untaken'
+                : traced
+                  ? taken
+                    ? 'tracedTaken'
+                    : 'traced'
+                  : taken
+                    ? 'fadedTaken'
+                    : 'faded';
+            const style = arrowStyles[name];
             return (
               <path
-                key={`${edge.id}-${index}`}
+                key={key}
                 d={roundedPath(edge.points)}
                 data-taken={taken}
+                data-traced={tracedLinks === null ? undefined : traced}
                 fill="none"
                 stroke="var(--color-blue)"
-                strokeWidth={taken ? 2 : 1.4}
-                strokeOpacity={taken ? 1 : 0.42}
-                markerEnd={`url(#${taken ? 'workflow-arrow-taken' : 'workflow-arrow-untaken'})`}
+                style={{ strokeWidth: style.width, strokeOpacity: style.opacity }}
+                className="transition-[stroke-opacity,stroke-width] duration-ui ease-expo"
+                markerEnd={`url(#workflow-arrow-${name})`}
               />
             );
           })}
@@ -527,6 +714,22 @@ function ArrowLayers({
     </>
   );
 }
+
+/**
+ * How an arrow is drawn. Every arrow is blue; how much it stands out says what it is.
+ *
+ * With nothing traced, a taken arrow is bright and an untaken one faint. Tracing a node brings every
+ * arrow into and out of it up to full strength, taken or not, since the point is what *could* come
+ * next. The rest step back without disappearing, so the shape of the graph stays readable.
+ */
+const arrowStyles = {
+  taken: { width: 2, opacity: 1 },
+  untaken: { width: 1.4, opacity: 0.42 },
+  tracedTaken: { width: 2.6, opacity: 1 },
+  traced: { width: 2, opacity: 1 },
+  fadedTaken: { width: 2, opacity: 0.32 },
+  faded: { width: 1.4, opacity: 0.16 },
+} as const;
 
 function ArrowMarker({ id, opacity }: { readonly id: string; readonly opacity: number }) {
   return (
@@ -802,6 +1005,13 @@ function selectionFor(element: DeclaredElement, aggregation: VisitAggregation): 
     return latestVisitSelection(elementAggregate(aggregation, element.key), element.key);
   }
   return { kind: 'element', key: element.key };
+}
+
+/** How far a press may wander, in screen pixels, before it is a pan rather than a click. */
+const PAN_THRESHOLD = 4;
+
+function clampZoom(k: number): number {
+  return Math.min(2.5, Math.max(0.25, k));
 }
 
 /**

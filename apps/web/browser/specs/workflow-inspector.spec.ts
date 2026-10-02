@@ -73,6 +73,20 @@ async function settledBox(page: Page, locator: ReturnType<Page['locator']>): Pro
   return last;
 }
 
+/** The canvas camera, read off the viewport's transform. */
+async function camera(page: Page): Promise<{ x: number; y: number; k: number }> {
+  const style = (await canvas(page).getAttribute('style')) ?? '';
+  const match = /translate\(([-\d.e]+)px, ([-\d.e]+)px\) scale\(([-\d.e]+)\)/.exec(style);
+  expect(match).toBeTruthy();
+  return { x: Number(match![1]), y: Number(match![2]), k: Number(match![3]) };
+}
+
+/** The centre of an element on screen. */
+async function centre(locator: ReturnType<Page['locator']>): Promise<{ x: number; y: number }> {
+  const box = (await locator.boundingBox())!;
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
 async function requests(page: Page): Promise<readonly string[]> {
   return page.evaluate(() => [...(window.inspectorFixture?.requestPaths() ?? [])]);
 }
@@ -468,10 +482,145 @@ test('the dock resizes from the keyboard as well as the pointer', async ({ page 
 
 test('pan and zoom move the canvas without laying it out again', async ({ page }) => {
   await open(page, 'done');
+  await canvas(page).locator('[data-element]').first().waitFor();
   const zoomIn = dialog(page).getByRole('button', { name: 'Zoom in' });
-  const before = await canvas(page).getAttribute('style');
+  const before = await camera(page);
   await zoomIn.click();
-  await expect.poll(async () => canvas(page).getAttribute('style')).not.toBe(before);
+  await expect.poll(async () => (await camera(page)).k).toBeGreaterThan(before.k);
+
+  // A plain wheel — a two-finger scroll on a trackpad — pans and leaves the zoom alone.
+  const zoomed = await camera(page);
+  const region = (await dialog(page).locator('[data-testid="declared-canvas"]').boundingBox())!;
+  await page.mouse.move(region.x + region.width / 2, region.y + region.height / 2);
+  await page.mouse.wheel(30, 50);
+  await expect.poll(async () => (await camera(page)).y).toBeCloseTo(zoomed.y - 50, 0);
+  expect(await camera(page)).toEqual({ x: zoomed.x - 30, y: zoomed.y - 50, k: zoomed.k });
+});
+
+test('a pinch zooms around the pointer', async ({ page }) => {
+  await open(page, 'done');
+  const card = canvas(page).locator('[data-element="::node:collect"]');
+  await expect(card).toBeVisible();
+  const before = await camera(page);
+  const under = await centre(card);
+
+  // A trackpad pinch arrives as a wheel with ctrlKey.
+  await page.mouse.move(under.x, under.y);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -30);
+  await page.keyboard.up('Control');
+
+  await expect.poll(async () => (await camera(page)).k).toBeGreaterThan(before.k);
+  const after = await centre(card);
+  expect(Math.abs(after.x - under.x)).toBeLessThan(1);
+  expect(Math.abs(after.y - under.y)).toBeLessThan(1);
+});
+
+test('a drag that starts on a card pans and does not select it; a click still does', async ({
+  page,
+}) => {
+  await open(page, 'done');
+  const viewport = canvas(page);
+  const header = details(page).locator('header').first();
+  await viewport.locator('[data-element="::node:triage"] [data-node-key]').click();
+  await expect(header).toContainText('triage');
+
+  const card = viewport.locator('[data-element="::node:collect"]');
+  const from = await centre(card);
+  const before = await camera(page);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 60, from.y + 40, { steps: 8 });
+  await page.mouse.up();
+
+  const after = await camera(page);
+  expect(after.x - before.x).toBeCloseTo(60, 0);
+  expect(after.y - before.y).toBeCloseTo(40, 0);
+  await expect(header).toContainText('triage');
+
+  // A press that never moved is a click.
+  await card.locator('[data-node-key]').click();
+  await expect(header).toContainText('collect');
+});
+
+test('clicking a node traces its arrows in and out, and clicking empty canvas lets go', async ({
+  page,
+}) => {
+  await open(page, 'done');
+  const viewport = canvas(page);
+  await expect(viewport.locator('[data-element="::node:collect"]')).toBeVisible();
+  // The inspector opens with something selected, and that alone traces nothing.
+  await expect(viewport.locator('path[data-traced]')).toHaveCount(0);
+
+  await viewport.locator('[data-element="::node:collect"] [data-node-key]').click();
+  await expect.poll(() => viewport.locator('path[data-traced="true"]').count()).toBeGreaterThan(0);
+  expect(await viewport.locator('path[data-traced="false"]').count()).toBeGreaterThan(0);
+
+  const region = (await dialog(page).locator('[data-testid="declared-canvas"]').boundingBox())!;
+  await page.mouse.click(region.x + 4, region.y + region.height - 4);
+  await expect(viewport.locator('path[data-traced]')).toHaveCount(0);
+});
+
+test('a drag on the second press of a double-click pans and does not open the graph', async ({
+  page,
+}) => {
+  await open(page, 'done');
+  const viewport = canvas(page);
+  const card = viewport.locator('[data-element="::node:first-pass"]');
+  await expect(card).toBeVisible();
+  const at = await centre(card);
+  const before = await camera(page);
+
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.move(at.x + 30, at.y + 20, { steps: 6 });
+  await page.mouse.up({ clickCount: 2 });
+
+  expect((await camera(page)).x - before.x).toBeCloseTo(30, 0);
+  await page.waitForTimeout(400);
+  await expect(viewport.locator('[data-element="first-pass::node:read"]')).toHaveCount(0);
+
+  // A double-click that never moved still opens it.
+  const moved = await centre(card);
+  await page.mouse.dblclick(moved.x, moved.y);
+  await expect(viewport.locator('[data-element="first-pass::node:read"]')).toHaveCount(1);
+});
+
+test('opening and closing a graph keeps the zoom and keeps the graph where it was', async ({
+  page,
+}) => {
+  await open(page, 'done');
+  const viewport = canvas(page);
+  const card = viewport.locator('[data-element="::node:first-pass"]');
+  await expect(card).toBeVisible();
+
+  // Zoom in on the graph, then open it where the pointer already is.
+  const at = await centre(card);
+  await page.mouse.move(at.x, at.y);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -30);
+  await page.keyboard.up('Control');
+  await settledBox(page, card);
+  const before = (await card.boundingBox())!;
+  const zoom = (await camera(page)).k;
+
+  await page.mouse.dblclick(at.x, at.y);
+  await expect(viewport.locator('[data-element="first-pass::node:read"]')).toHaveCount(1);
+  await settledBox(page, card);
+  const opened = (await card.boundingBox())!;
+  expect((await camera(page)).k).toBe(zoom);
+  expect(Math.abs(opened.x - before.x)).toBeLessThan(1);
+  expect(Math.abs(opened.y - before.y)).toBeLessThan(1);
+
+  // Space takes the same path as a double-click.
+  await viewport.locator('[data-element="::node:first-pass"] [data-node-key]').click();
+  await page.keyboard.press(' ');
+  await expect(viewport.locator('[data-element="first-pass::node:read"]')).toHaveCount(0);
+  await settledBox(page, card);
+  const closed = (await card.boundingBox())!;
+  expect((await camera(page)).k).toBe(zoom);
+  expect(Math.abs(closed.x - before.x)).toBeLessThan(1);
+  expect(Math.abs(closed.y - before.y)).toBeLessThan(1);
 });
 
 test('a reconnect and a duplicate event both leave the run coherent', async ({ page }) => {
@@ -800,8 +949,8 @@ test('a graph name stays pinned once its header has panned off the top', async (
   const region = await dialog(page).locator('[data-testid="declared-canvas"]').boundingBox();
   expect(box && region).toBeTruthy();
 
-  // Dragging starts on empty canvas — a pointer-down on a node is a selection, not a pan — and the
-  // box is panned far enough that its header leaves while its body stays.
+  // A drag pans from anywhere, cards included; the box is panned far enough that its header leaves
+  // while its body stays.
   const from = { x: region!.x + 12, y: region!.y + region!.height - 12 };
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
@@ -940,8 +1089,8 @@ test('a graph opens and closes from anywhere on its card, not just its name', as
   await expect(viewport.locator('[data-element="first-pass::node:read"]')).toHaveCount(1);
 
   // And closes the same way: an open graph's own surface is the same target, so the gesture that
-  // opened it is the gesture that shuts it. Opening refits the canvas, so the card has moved —
-  // its position is read again rather than reused.
+  // opened it is the gesture that shuts it. Opening keeps the graph's top-left where it was but makes
+  // it bigger, so its position is read again rather than reused.
   await expect
     .poll(async () => JSON.stringify(await box.boundingBox()))
     .toBe(await settledBox(page, box));

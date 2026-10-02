@@ -70,13 +70,27 @@ interface ElkEdge {
   }[];
 }
 
-const layoutOptions = {
+/**
+ * How every graph is laid out, at every depth.
+ *
+ * ELK does not hand a parent's options down to the graphs nested in it, so these go on the root and
+ * on every open box. Set on the root alone, a subgraph fell back to ELK's defaults and packed its
+ * cards and arrows half as tightly as the graph around it.
+ */
+const graphOptions = {
   'elk.algorithm': 'layered',
   'elk.direction': 'RIGHT',
   'elk.layered.spacing.nodeNodeBetweenLayers': '74',
   'elk.spacing.nodeNode': '36',
   'elk.edgeRouting': 'ORTHOGONAL',
   'elk.spacing.edgeNode': '22',
+  // Room between parallel arrows, so a bundle leaving one layer reads as separate lines.
+  'elk.spacing.edgeEdge': '16',
+  'elk.layered.spacing.edgeEdgeBetweenLayers': '16',
+  'elk.layered.spacing.edgeNodeBetweenLayers': '22',
+  // A node that routes back to itself loops round under its card. ELK's default of 10 hugs the card,
+  // and the stacked edge of a collapsed subgraph closes the rest of the gap.
+  'elk.spacing.nodeSelfLoop': '26',
   'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
 };
 
@@ -153,8 +167,8 @@ function toElk(request: LayoutRequest): ElkNode {
           id: source.id,
           layoutOptions:
             source.padding === undefined
-              ? portOptions
-              : { ...portOptions, 'elk.padding': source.padding },
+              ? { ...graphOptions, ...portOptions }
+              : { ...graphOptions, ...portOptions, 'elk.padding': source.padding },
           ...portsOf(source.id),
           children: source.children.map(node),
           edges: edgesByContainer.get(source.id) ?? [],
@@ -169,7 +183,7 @@ function toElk(request: LayoutRequest): ElkNode {
 
   return {
     id: 'root',
-    layoutOptions,
+    layoutOptions: graphOptions,
     children: request.nodes.map(node),
     edges: edgesByContainer.get(null) ?? [],
   };

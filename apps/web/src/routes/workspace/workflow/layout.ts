@@ -83,7 +83,7 @@ export const nodeSize = {
 } as const;
 
 /** The header strip a box reserves for its own name, above its children. */
-export const boxPadding = '[top=54,left=20,bottom=20,right=20]';
+export const boxPadding = '[top=62,left=28,bottom=28,right=28]';
 
 /**
  * The identity of a drawing.
