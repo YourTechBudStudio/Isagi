@@ -50,9 +50,11 @@ export function locateCodexRolloutPaths(input: {
       harnessSessionId: input.harnessSessionId,
       codexDirectory,
     });
-    const paths: CodexRolloutPath[] = indexedPath
-      ? [{ harnessSessionId: input.harnessSessionId, path: indexedPath }]
-      : [];
+    // The index owns the current page after a same-thread resume. Appending a
+    // discovered older page would put stale messages after the latest reply.
+    // Earlier history is already reconstructed through the page's history base.
+    if (indexedPath) return [{ harnessSessionId: input.harnessSessionId, path: indexedPath }];
+    const paths: CodexRolloutPath[] = [];
     if (input.discovery !== 'index_only') {
       paths.push(
         ...(yield* discoverNativeRolloutPaths({

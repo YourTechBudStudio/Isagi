@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import BetterSqlite from 'better-sqlite3';
 import { Effect } from 'effect';
 
 import type { HarnessObservationRecord } from '../projection.js';
@@ -100,6 +101,50 @@ test('Codex native transcript lookup uses session id and ignores stale hook hist
       { role: 'assistant', parts: [{ type: 'text', text: 'native answer' }] },
     ],
   );
+});
+
+test('Codex same-thread resume reads the indexed page without appending the old transcript', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-codex-resume-conversation-'));
+  try {
+    const id = 'resumed-thread';
+    const directory = join(root, 'sessions', '2026', '10', '02');
+    mkdirSync(directory, { recursive: true });
+    const oldPath = join(directory, `rollout-old-${id}.jsonl`);
+    const currentPath = join(directory, `rollout-resumed-${id}_page-2.jsonl`);
+    writeFileSync(
+      oldPath,
+      transcript([sessionMeta(id), userMessage('plan'), agentMessage('old progress note')]),
+    );
+    writeFileSync(
+      currentPath,
+      transcript([
+        sessionMeta(id),
+        userMessage('alignment'),
+        agentMessage('current planner decisions'),
+      ]),
+    );
+    const database = new BetterSqlite(join(root, 'state_5.sqlite'));
+    try {
+      database.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT)');
+      database.prepare('INSERT INTO threads VALUES (?, ?)').run(id, currentPath);
+    } finally {
+      database.close();
+    }
+    const history = await Effect.runPromise(
+      readCodexConversation({
+        agentSessionId: 41,
+        harnessSessionId: id,
+        codexDirectory: root,
+        streams: [[id, [record('SessionStart', 0, { transcript_path: oldPath })]]],
+      }),
+    );
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'alignment' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'current planner decisions' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function record(

@@ -7,7 +7,11 @@ import { RuntimeDatabase } from '../../persistence/index.js';
 import { agentSessions, ptyProcesses } from '../../persistence/schema.js';
 import { InternalRuntimeEventBus, type InternalRuntimeEvent } from '../../runtime-events/index.js';
 import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';
-import { type CodexRolloutEntry, type CodexRolloutPath } from './codex/native-artifacts.js';
+import {
+  hookCodexRolloutPaths,
+  type CodexRolloutEntry,
+  type CodexRolloutPath,
+} from './codex/native-artifacts.js';
 import { harnessDefinition } from './definitions.js';
 import {
   discoverHarnessJsonlFiles,
@@ -301,7 +305,15 @@ export const HarnessLedgerObserverLive = Layer.scoped(
             .map(([path]) => ({ path, harnessSessionId }))
             .filter((source) => sourceIsAvailable(source.path));
           const candidateStreams = streams.filter(([streamId]) => streamId === harnessSessionId);
-          const sources = [...cached];
+          // A same-thread resume can announce a new page while the old cached
+          // page still exists. Read newly announced sources without rescanning
+          // native storage or reopening the index on every background poll.
+          const sources = [
+            ...cached,
+            ...hookCodexRolloutPaths(candidateStreams).filter((source) =>
+              sourceIsAvailable(source.path),
+            ),
+          ];
           if (sources.length === 0) {
             sources.push(
               ...(yield* locate({

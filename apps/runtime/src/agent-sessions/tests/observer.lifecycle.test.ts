@@ -464,6 +464,47 @@ test('OpenCode question events change attention without closing the active turn'
   }
 });
 
+test('Codex same-thread resume observes a newly announced transcript while the old page remains', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-resume-page-'));
+  try {
+    await seedActiveAgentSession(root, 'codex');
+    const oldPath = join(root, 'old-rollout.jsonl');
+    const currentPath = join(root, 'resumed-rollout.jsonl');
+    writeFileSync(oldPath, `${codexEntry('session_meta', 0, { id: 'same-thread' })}\n`);
+    const ledger = prepareArtifacts(root, 'same-thread', [
+      ledgerRecord('codex', 'same-thread', 'SessionStart', 0, { transcript_path: oldPath }),
+    ]);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const observer = yield* HarnessLedgerObserver;
+        assert.deepEqual(yield* observer.getTurnEdges(10), []);
+        writeFileSync(
+          currentPath,
+          `${codexEntry('session_meta', 1, { id: 'same-thread' })}\n${codexEntry('event_msg', 2, { type: 'task_started', turn_id: 'resumed-turn' })}\n`,
+        );
+        appendFileSync(
+          ledger,
+          `${ledgerRecord('codex', 'same-thread', 'SessionStart', 1, { transcript_path: currentPath })}\n`,
+        );
+        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        assert.equal(yield* observer.getAttention(10), 'working');
+        appendFileSync(
+          currentPath,
+          `${codexEntry('event_msg', 3, { type: 'task_complete', turn_id: 'resumed-turn' })}\n`,
+        );
+        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        assert.deepEqual(
+          (yield* observer.getTurnEdges(10)).map((edge) => edge.type),
+          ['turn_started', 'turn_ended'],
+        );
+        assert.equal(yield* observer.getAttention(10), 'waiting');
+      }).pipe(Effect.provide(testLayer(root))),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Codex rollout bytes are authoritative while hook records only locate the native source', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-'));
   const rollout = join(root, 'native-rollout.jsonl');
