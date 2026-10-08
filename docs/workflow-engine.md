@@ -48,7 +48,7 @@ Pause stops anything new from starting while an in-flight node function finishes
 
 Cancel stops the run and stops its running headless processes on a best-effort basis; agent panes stay open and history remains. Dismiss detaches a completed, failed or cancelled run from its surface without deleting its history. A surface holds at most one attached run, including a finished run until it is dismissed.
 
-Run history survives deletion of its surface or worktree. Every run belongs to the project it was launched in; that ownership is recorded when the run is created and never changes, so retained history stays attributable after its worktrees are gone. Retention preserves history, not a usable execution environment: a run cannot resume into a surface that no longer exists.
+Run history survives deletion of its surface or worktree. Every run belongs to the project it was launched in; that ownership is recorded when the run is created and never changes, so retained history stays attributable after its worktrees are gone. Retention preserves history, not a usable execution environment: a run cannot resume into a surface that no longer exists. Deleting the project ends retention: its runs, with their checkpoints and history, are erased with it.
 
 ## Inspection and the client boundary
 
