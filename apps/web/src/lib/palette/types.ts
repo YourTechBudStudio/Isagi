@@ -22,6 +22,7 @@ export type PaletteGroup =
   | 'global'
   | 'workflows'
   | 'worktree-commands'
+  | 'project-actions'
   | 'worktree-actions'
   | 'worktree-surfaces'
   | 'switch-worktree';

@@ -2,7 +2,7 @@ import { and, asc, eq, gt, inArray, isNotNull, notInArray } from 'drizzle-orm';
 
 import type { WorkflowRunStatus } from '@isagi/contracts';
 
-import { workflowArtifacts, workflowRuns } from '../../persistence/schema.js';
+import { projects, workflowArtifacts, workflowRuns } from '../../persistence/schema.js';
 import { now, type ArtifactRow, type Db, type RunRow } from './rows.js';
 
 /** Runs and the artifact rows they point at. */
@@ -32,6 +32,26 @@ export function insertRun(
     .values({ ...row, createdAt: at, updatedAt: at })
     .returning()
     .get();
+}
+
+/**
+ * Erases every run of a project; invocations, executions, operations, events and checkpoints
+ * cascade from `workflow_runs.id`. Must run inside the caller's transaction. Returns the number of
+ * runs deleted. The build catalog (`workflow_artifacts`) is not touched.
+ */
+export function deleteRunsOfProject(db: Db, projectId: number): number {
+  return db.delete(workflowRuns).where(eq(workflowRuns.projectId, projectId)).run().changes;
+}
+
+/**
+ * Whether the project row exists. A read of a workspace-owned table inside the engine's own
+ * transaction (ADR 0008 permits cross-domain reads); used only for launch admission.
+ */
+export function projectExists(db: Db, projectId: number): boolean {
+  return (
+    db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get() !==
+    undefined
+  );
 }
 
 export function getRun(db: Db, runId: number): RunRow | null {

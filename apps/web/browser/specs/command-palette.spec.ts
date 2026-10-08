@@ -176,7 +176,14 @@ test('opening the palette reads the catalog and renders the Commands group in pl
   expect(await fixture.commandsFetchCount(page, ORIGIN_WORKTREE)).toBeGreaterThan(baseline);
 
   const headers = await groupHeaders(page).allTextContents();
-  expect(headers).toEqual(['Global', 'Commands', 'This worktree', 'Surfaces', 'Switch worktree']);
+  expect(headers).toEqual([
+    'Global',
+    'Commands',
+    'This project',
+    'This worktree',
+    'Surfaces',
+    'Switch worktree',
+  ]);
 });
 
 test('a running row reads as details, a startable row reads as a launch', async ({ page }) => {
@@ -280,6 +287,7 @@ test('four populated groups stay legible at the empty query', async ({ page }) =
     'Global',
     'Workflows',
     'Commands',
+    'This project',
     'This worktree',
     'Surfaces',
     'Switch worktree',

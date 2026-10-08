@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +17,7 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
 import {
+  DatabaseError,
   DataDirectory,
   RuntimeDatabase,
   RuntimeDatabaseLive,
@@ -677,6 +687,212 @@ test('PTY ownership still orphans a process whose editor handoff never committed
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('PTY GC deletes orphan shell-integration folders and keeps live and young ones', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-shell-integration-'));
+  try {
+    const sessionsPath = join(dataRoot, 'sessions');
+    const root = join(sessionsPath, 'shell-integration');
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const live = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'live.ptylog'),
+          updatedAt: recentIso(),
+        });
+        plantShellIntegrationFolder(root, String(live.id), oldDate());
+        plantShellIntegrationFolder(root, '900', oldDate());
+        plantShellIntegrationFolder(root, '901', new Date(nowMs() - 60_000));
+
+        yield* collectPtyGarbage(
+          repository,
+          nodePtyCatalog(fakeBackend()),
+          'test-runtime',
+          sessionsPath,
+          {
+            nowMs: nowMs(),
+          },
+        );
+        return { liveId: live.id };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(existsSync(join(root, String(output.liveId), 'bashrc')), true);
+    assert.equal(existsSync(join(root, '900')), false);
+    assert.equal(existsSync(join(root, '901')), true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY GC shell-integration collection never reaches outside its root', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-shell-integration-decoy-'));
+  const worktree = plantDecoyWorktree();
+  try {
+    const sessionsPath = join(dataRoot, 'sessions');
+    const root = join(sessionsPath, 'shell-integration');
+    mkdirSync(root, { recursive: true });
+    symlinkSync(worktree, join(root, '910'));
+    plantShellIntegrationFolder(root, 'scratch', oldDate());
+    writeFileSync(join(root, '911'), 'not a folder');
+    utimesSync(join(root, '911'), oldDate(), oldDate());
+
+    await collectShellIntegrationOnly(dataRoot, sessionsPath);
+
+    assert.equal(existsSync(join(worktree, 'src', 'index.ts')), true);
+    assert.equal(existsSync(join(root, '910')), true);
+    assert.equal(existsSync(join(root, 'scratch')), true);
+    assert.equal(existsSync(join(root, '911')), true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+for (const linked of ['shell-integration', 'sessions'] as const) {
+  test(`PTY GC skips a symlinked ${linked} directory for shell-integration collection`, async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-shell-integration-link-'));
+    const worktree = plantDecoyWorktree();
+    try {
+      plantShellIntegrationFolder(worktree, '920', oldDate());
+      const sessionsPath = join(dataRoot, 'sessions');
+      if (linked === 'sessions') {
+        mkdirSync(join(worktree, 'shell-integration'));
+        plantShellIntegrationFolder(join(worktree, 'shell-integration'), '921', oldDate());
+        symlinkSync(worktree, sessionsPath);
+      } else {
+        mkdirSync(sessionsPath);
+        symlinkSync(worktree, join(sessionsPath, 'shell-integration'));
+      }
+
+      await collectShellIntegrationOnly(dataRoot, sessionsPath);
+
+      assert.equal(existsSync(join(worktree, '920', 'bashrc')), true);
+      assert.equal(existsSync(join(worktree, 'src', 'index.ts')), true);
+      if (linked === 'sessions') {
+        assert.equal(existsSync(join(worktree, 'shell-integration', '921', 'bashrc')), true);
+      }
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+}
+
+test('PTY GC skips an unreadable shell-integration root and collects once it is restored', async (context) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    context.skip('chmod 000 does not block reads on Windows or as root.');
+    return;
+  }
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-shell-integration-unreadable-'));
+  const sessionsPath = join(dataRoot, 'sessions');
+  const root = join(sessionsPath, 'shell-integration');
+  try {
+    plantShellIntegrationFolder(root, '930', oldDate());
+    chmodSync(root, 0o000);
+    await collectShellIntegrationOnly(dataRoot, sessionsPath);
+    chmodSync(root, 0o700);
+    assert.equal(existsSync(join(root, '930')), true);
+
+    await collectShellIntegrationOnly(dataRoot, sessionsPath);
+    assert.equal(existsSync(join(root, '930')), false);
+  } finally {
+    chmodSync(root, 0o700);
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY GC skips a shell-integration root replaced by a file and collects once it is restored', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-shell-integration-file-'));
+  const sessionsPath = join(dataRoot, 'sessions');
+  const root = join(sessionsPath, 'shell-integration');
+  try {
+    mkdirSync(sessionsPath, { recursive: true });
+    writeFileSync(root, 'not a directory');
+    await collectShellIntegrationOnly(dataRoot, sessionsPath);
+
+    rmSync(root);
+    plantShellIntegrationFolder(root, '931', oldDate());
+    await collectShellIntegrationOnly(dataRoot, sessionsPath);
+    assert.equal(existsSync(join(root, '931')), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY GC contains a failure of the shell-integration phase', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-shell-integration-failure-'));
+  try {
+    const sessionsPath = join(dataRoot, 'sessions');
+    const root = join(sessionsPath, 'shell-integration');
+    plantShellIntegrationFolder(root, '940', oldDate());
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        // The backend phase reads processes first; the shell-integration mark is the second read.
+        let reads = 0;
+        const failingMark = {
+          ...repository,
+          listProcesses: (input?: Parameters<typeof repository.listProcesses>[0]) =>
+            ++reads === 2
+              ? Effect.fail(new DatabaseError({ operation: 'list_pty_processes', cause: 'boom' }))
+              : repository.listProcesses(input),
+        };
+        yield* collectPtyGarbage(
+          failingMark,
+          nodePtyCatalog(fakeBackend()),
+          'test-runtime',
+          sessionsPath,
+          {
+            nowMs: nowMs(),
+          },
+        );
+        assert.equal(reads, 2);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+    assert.equal(existsSync(join(root, '940')), true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function collectShellIntegrationOnly(dataRoot: string, sessionsPath: string) {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const repository = yield* PtyRepository;
+      yield* collectPtyGarbage(
+        repository,
+        nodePtyCatalog(fakeBackend()),
+        'test-runtime',
+        sessionsPath,
+        {
+          nowMs: nowMs(),
+        },
+      );
+    }).pipe(Effect.provide(testLayer(dataRoot))),
+  );
+}
+
+function plantShellIntegrationFolder(root: string, name: string, modified: Date) {
+  const folder = join(root, name);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'bashrc'), '# rc\n');
+  utimesSync(join(folder, 'bashrc'), modified, modified);
+  utimesSync(folder, modified, modified);
+}
+
+/** A folder outside the data root standing in for a user's worktree; every file must survive. */
+function plantDecoyWorktree() {
+  const worktree = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-worktree-'));
+  mkdirSync(join(worktree, 'src'));
+  writeFileSync(join(worktree, 'src', 'index.ts'), 'export {};\n');
+  return worktree;
+}
+
+function oldDate() {
+  return new Date(nowMs() - 6 * 60_000);
+}
 
 function seedEditorContextReference(database: RuntimeDatabaseService, ptyProcessId: number | null) {
   return database.use('seed_editor_context_reference_for_gc_test', (db) => {

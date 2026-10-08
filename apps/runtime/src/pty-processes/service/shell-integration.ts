@@ -36,6 +36,14 @@ export function foregroundStateFromEvent(event: ShellIntegrationEvent): PtyForeg
   return event === 'foreground-start' ? 'working' : 'idle';
 }
 
+// The per-process rc folders live at `<data>/sessions/shell-integration/<ptyProcessId>/`. The writer
+// below and the PTY GC's orphan-folder phase share this one layout definition.
+export const shellIntegrationSegments = ['sessions', 'shell-integration'] as const;
+
+export function shellIntegrationRoot(sessionsPath: string): string {
+  return join(sessionsPath, shellIntegrationSegments[1]);
+}
+
 export function prepareShellIntegration(input: {
   readonly launch: LaunchPtyProcessInput;
   readonly ptyProcessId: number;
@@ -57,7 +65,7 @@ export function prepareShellIntegration(input: {
   if (shell !== 'bash' && shell !== 'zsh' && shell !== 'fish') return passthrough;
 
   const token = randomBytes(16).toString('hex');
-  const directory = join(input.sessionsPath, 'shell-integration', String(input.ptyProcessId));
+  const directory = join(shellIntegrationRoot(input.sessionsPath), String(input.ptyProcessId));
 
   // Shell integration is best-effort: a read-only sessions dir, full disk, or
   // permission failure must degrade to a plain shell rather than fail the launch.

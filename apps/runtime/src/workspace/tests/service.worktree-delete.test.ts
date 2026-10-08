@@ -9,6 +9,7 @@ import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService, PtyServiceError, type PtyServiceShape } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
 import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
@@ -64,6 +65,7 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -155,6 +157,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, commandService),
       Effect.provideService(PtyService, ptyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -229,6 +232,7 @@ test('delete worktree announces every durable session it cascaded away', async (
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, {
@@ -348,6 +352,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, ptyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -431,6 +436,7 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -493,6 +499,7 @@ test('delete worktree reports safe branch deletion failure as partial success', 
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -539,6 +546,7 @@ test('delete worktree rejects before destructive work when root fallback is miss
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

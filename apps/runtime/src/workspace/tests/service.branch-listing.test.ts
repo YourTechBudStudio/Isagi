@@ -12,6 +12,7 @@ import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import type { ProjectRow } from '../types.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
@@ -71,6 +72,7 @@ test('project branch listing rejects a present project whose path disappeared be
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -118,6 +120,7 @@ test('project branch listing combines local branches with known open worktrees',
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

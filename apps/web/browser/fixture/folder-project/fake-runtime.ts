@@ -37,6 +37,10 @@ export interface FolderProjectFixtureControls {
   readonly setLatency: (ms: number) => void;
   /** Reconcile calls made, newest last — proves a disabled button really is disabled. */
   readonly reconcileCalls: () => readonly (number | null)[];
+  /** Make the next project deletes refuse, as the runtime's cleanup gate can. */
+  readonly setDeleteFails: (fails: boolean) => void;
+  /** Project deletes requested, newest last — proves which project a trigger targeted. */
+  readonly deleteCalls: () => readonly number[];
 }
 
 declare global {
@@ -65,6 +69,8 @@ export function installFakeRuntime() {
   let outcome: RecheckOutcome = 'restores';
   let latency = 0;
   const reconcileCalls: (number | null)[] = [];
+  const deleteCalls: number[] = [];
+  let deleteFails = false;
   /**
    * Bumped by every scenario reset. A request captures it before it waits and
    * checks it before it writes, so work started under an older run can never
@@ -86,6 +92,8 @@ export function installFakeRuntime() {
       scenarioId = id;
       snapshot = scenarioById(id).snapshot;
       reconcileCalls.length = 0;
+      deleteCalls.length = 0;
+      deleteFails = false;
       await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
     },
     scenario: () => scenarioId,
@@ -97,6 +105,10 @@ export function installFakeRuntime() {
       latency = ms;
     },
     reconcileCalls: () => reconcileCalls,
+    setDeleteFails: (fails) => {
+      deleteFails = fails;
+    },
+    deleteCalls: () => deleteCalls,
   };
 
   const realFetch = window.fetch.bind(window);
@@ -162,6 +174,25 @@ export function installFakeRuntime() {
       // A repeat sweep over a folder that is still missing reports nothing at
       // all — which is why the verdict can never be read off the findings list.
       return success({ findings: [] as readonly ReconciliationFinding[] });
+    }
+
+    // Deleting a project removes it from the snapshot, as the runtime's delete
+    // does; files on disk are not this page's concern. A refusal uses a real
+    // envelope from the endpoint's declared union, so the toast shows the
+    // sentence a user would see.
+    const deleteMatch = /^\/projects\/(\d+)$/.exec(path);
+    if (method === 'DELETE' && deleteMatch) {
+      const projectId = Number(deleteMatch[1]);
+      deleteCalls.push(projectId);
+      if (deleteFails) {
+        return failure('The fixture runtime refused to delete.', 'delete_project');
+      }
+      const deleted = snapshot.projects.some((project) => project.id === projectId);
+      snapshot = {
+        ...snapshot,
+        projects: snapshot.projects.filter((project) => project.id !== projectId),
+      };
+      return success({ projectId, deleted });
     }
 
     // Everything below exists because the production components mounted on this

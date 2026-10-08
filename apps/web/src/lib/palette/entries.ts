@@ -12,6 +12,7 @@ import { compactHomePath } from '../workspace/selectors.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
 import { editorActionCommands } from './commands/editor-actions.js';
+import { projectActionCommands } from './commands/project-actions.js';
 import { sessionActionCommands } from './commands/session-actions.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
 import { worktreeActionCommands } from './commands/worktree-actions.js';
@@ -124,6 +125,28 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
     // assembly order, so this placement is what makes the section contiguous and
     // puts `Commands` between `Workflows` and `This worktree`.
     entries.push(...configuredCommandEntries(ctx));
+
+    // `This project` sits directly above `This worktree`, targeting the active
+    // worktree's project.
+    const activeProject = ctx.activeProject;
+    if (activeProject) {
+      for (const command of projectActionCommands) {
+        if (!(command.available?.(ctx) ?? true)) {
+          continue;
+        }
+        const values = { projectId: String(activeProject.id) };
+        entries.push({
+          id: command.id,
+          label: command.label,
+          icon: command.icon,
+          group: command.group,
+          command,
+          values,
+          run: () => command.run(values, ctx),
+          sub: activeProject.name,
+        });
+      }
+    }
 
     const activeSurfaceTitle = ctx.activeSurface?.title;
     const activeWorktreeCommands = worktreeActionCommands.filter(

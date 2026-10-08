@@ -211,6 +211,29 @@ export const worktreeActionsCopy = {
   },
 } as const;
 
+/**
+ * Deleting a project erases what Isagi knows about it and nothing on disk. The
+ * review says both halves plainly, because "delete" next to a folder path reads
+ * like a file operation. Working chrome and a destructive confirm, so no humour.
+ */
+export const projectActionsCopy = {
+  menu: {
+    delete: 'Delete project…',
+  },
+  deleteProject: {
+    label: 'Delete current project…',
+    running: 'Deleting project…',
+    gone: 'This project is no longer in Isagi.',
+    review: {
+      stepLabel: 'Confirm project deletion',
+      title: (name: string) => `Delete ${name} from Isagi?`,
+      body: 'Isagi erases its sessions, terminals and workflow history. The folder and its worktrees stay on disk.',
+      confirm: 'Delete project',
+      cancel: 'Cancel',
+    },
+  },
+} as const;
+
 export const worktreeSetupReviewCopy = {
   title: "This project has setup hooks Isagi hasn't run yet.",
   body: "They're defined in .isagi/config.yaml and run right after the worktree is created. Worth a look before you let them touch your machine.",

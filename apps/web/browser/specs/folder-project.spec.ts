@@ -67,8 +67,10 @@ const rootRow = (page: Page, projectId: number) =>
 const recheckButton = (page: Page) =>
   page.getByRole('button', { name: /^(Check again|Checking…)$/ });
 const relocateButton = (page: Page) => page.getByRole('button', { name: 'Set new path…' });
-const removeButton = (page: Page) => page.getByRole('button', { name: 'Remove project' });
-const confirmPanel = (page: Page) => page.getByRole('button', { name: 'Remove from Isagi' });
+/** The canvas trigger. A rail menu item is a `menuitem`, so the role keeps this to the canvas. */
+const deleteButton = (page: Page) => page.getByRole('button', { name: 'Delete project…' });
+/** The inline confirm the canvas used to arm; the palette's review step replaced it. */
+const inlineConfirm = (page: Page) => page.getByRole('button', { name: 'Remove from Isagi' });
 
 /**
  * The two verdicts, by role *and* text.
@@ -259,22 +261,14 @@ test.describe('scenario switching', () => {
     await expect(recheckButton(page)).toBeEnabled();
   });
 
-  test('re-clicking the current scenario clears a settled failure and an armed removal', async ({
-    page,
-  }) => {
+  test('re-clicking the current scenario clears a settled failure', async ({ page }) => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'reconcile_fails');
     await recheckButton(page).click();
     await expect(checkFailed(page)).toBeVisible();
 
-    await removeButton(page).click();
-    await expect(confirmPanel(page)).toBeVisible();
-
     await scenario(page, 'missing-folder');
     await expect(anyVerdict(page)).toHaveCount(0);
-    // The confirmation is component-local too, and a half-armed destructive
-    // action surviving a reset is worse than a stale verdict.
-    await expect(confirmPanel(page)).toHaveCount(0);
     await expect(recheckButton(page)).toBeVisible();
   });
 
@@ -523,8 +517,8 @@ test.describe('same-path recovery', () => {
 });
 
 /**
- * Everything the recovery surface holds is about *one* project: an armed
- * removal, a settled verdict, a failed check. Production keys the surface on the
+ * Everything the recovery surface holds is about *one* project: a settled
+ * verdict or a failed check. Production keys the surface on the
  * project id (`Canvas`), and these are the cases that key exists for.
  *
  * The fixture renders the production `Canvas` for this branch precisely so these
@@ -535,10 +529,9 @@ test.describe('recovery state is scoped to one project', () => {
    * A disconnected project's rail row.
    *
    * Scoped to the rail deliberately. Playwright matches an accessible name by
-   * substring, and the recovery canvas has a `Remove from Isagi` button, so an
-   * unscoped `name: 'isagi'` matches that too — which is how the first run of
-   * this suite failed. The rail is where these rows live, so scoping to it is
-   * both the fix and the more honest claim.
+   * substring, so an unscoped `name: 'isagi'` can match canvas buttons too —
+   * which is how the first run of this suite failed. The rail is where these
+   * rows live, so scoping to it is both the fix and the more honest claim.
    */
   const missingRow = (page: Page, name: string) =>
     page.locator('aside').getByRole('button', { name });
@@ -566,21 +559,6 @@ test.describe('recovery state is scoped to one project', () => {
     // leak into, so stopping at the assertion above would pass without any
     // isolation at all.
     await expect(anyVerdict(page)).toHaveCount(0);
-  });
-
-  test('an armed removal does not follow the user to another missing project', async ({ page }) => {
-    await removeButton(page).click();
-    await expect(confirmPanel(page)).toBeVisible();
-
-    await missingRow(page, 'isagi').click();
-    await expect(relocateButton(page)).toBeVisible();
-    // A half-armed destructive action arriving over a project the user never
-    // armed it for is worse than a stale verdict.
-    await expect(confirmPanel(page)).toHaveCount(0);
-
-    await missingRow(page, 'notes').click();
-    await expect(recheckButton(page)).toBeVisible();
-    await expect(confirmPanel(page)).toHaveCount(0);
   });
 
   test('a check that lands after the user leaves does not surface on their return', async ({
@@ -611,31 +589,118 @@ test.describe('recovery state is scoped to one project', () => {
   });
 });
 
-test.describe('removal, unchanged', () => {
-  test.beforeEach(async ({ page }) => {
+/**
+ * Every entry point opens the one `delete-project` command, whose palette review
+ * is the only confirm. The fake runtime removes the project from its snapshot,
+ * so what the rail and the selection do afterwards is production behaviour.
+ */
+test.describe('project deletion', () => {
+  const review = (page: Page) =>
+    palette(page).getByText('The folder and its worktrees stay on disk.');
+  /** The review panel's heading; the palette header repeats it as a crumb. */
+  const reviewTitle = (page: Page, text: string) =>
+    palette(page).getByRole('paragraph').filter({ hasText: text });
+  const deleteCalls = (page: Page) =>
+    page.evaluate(() => window.folderProjectFixture?.deleteCalls() ?? []);
+  const projectHeader = (page: Page, projectId: number) =>
+    projectGroup(page, projectId).locator('[data-project-header]');
+  /** A Disconnected row: its name is the glyph letter, then the project name. */
+  const disconnectedRow = (page: Page, name: string) =>
+    page.locator('aside').getByRole('button', { name: new RegExp(`^\\S+ ${name}$`) });
+
+  test('the canvas opens the palette review, and Cancel backs out', async ({ page }) => {
     await scenario(page, 'missing-folder');
-  });
+    await deleteButton(page).click();
 
-  test('removal still confirms in place, and Cancel backs out', async ({ page }) => {
-    await removeButton(page).click();
-    await expect(confirmPanel(page)).toBeVisible();
+    await expect(review(page)).toBeVisible();
+    await expect(reviewTitle(page, 'Delete notes from Isagi?')).toBeVisible();
+    await expect(palette(page).getByText('~/Documents/notes')).toBeVisible();
+    // The canvas no longer arms a confirm of its own.
+    await expect(inlineConfirm(page)).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Cancel' }).click();
-    await expect(confirmPanel(page)).toHaveCount(0);
+    await paletteRow(page, 'Cancel').click();
+    await expect(palette(page)).toHaveCount(0);
+    expect(await deleteCalls(page)).toEqual([]);
     await expect(recheckButton(page)).toBeVisible();
   });
 
-  test('Escape backs out of an armed confirmation', async ({ page }) => {
-    await removeButton(page).click();
-    await expect(confirmPanel(page)).toBeVisible();
+  test('confirming from the canvas deletes the project and selects what is left', async ({
+    page,
+  }) => {
+    await scenario(page, 'missing-folder');
+    await deleteButton(page).click();
+    await paletteRow(page, 'Delete project').click();
 
-    await page.keyboard.press('Escape');
-    await expect(confirmPanel(page)).toHaveCount(0);
+    await expect(palette(page)).toHaveCount(0);
+    expect(await deleteCalls(page)).toEqual([40]);
+    await expect(disconnectedRow(page, 'notes')).toHaveCount(0);
+    // `defaultSelection` over what remains: the first present project's root.
+    await expect(rootRow(page, 10)).toHaveAttribute('aria-current', 'true');
+    await expect(toasts(page)).toHaveCount(0);
   });
 
-  test('Cancel takes focus, so Enter cannot fire the destructive action', async ({ page }) => {
-    await removeButton(page).click();
-    await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  test('deleting the active project from the palette moves the selection without a warning', async ({
+    page,
+  }) => {
+    await scenario(page, 'mixed');
+    await expect(rootRow(page, 40)).toHaveAttribute('aria-current', 'true');
+
+    await openPalette(page);
+    await paletteRow(page, 'Delete current project…').click();
+    await expect(reviewTitle(page, 'Delete notes from Isagi?')).toBeVisible();
+    await paletteRow(page, 'Delete project').click();
+
+    await expect(palette(page)).toHaveCount(0);
+    expect(await deleteCalls(page)).toEqual([40]);
+    await expect(projectGroup(page, 40)).toHaveCount(0);
+    await expect(rootRow(page, 10)).toHaveAttribute('aria-current', 'true');
+    // Left to background reconciliation, this move would raise the persistent
+    // "Active worktree is no longer available" warning, which is false here.
+    await expect(toasts(page)).toHaveCount(0);
+  });
+
+  test('a present project header targets its own project, not the active one', async ({ page }) => {
+    await scenario(page, 'mixed');
+    await projectHeader(page, 10).click({ button: 'right', position: { x: 24, y: 8 } });
+    await page.getByRole('menuitem', { name: 'Delete project…' }).click();
+
+    await expect(reviewTitle(page, 'Delete isagi from Isagi?')).toBeVisible();
+    await expect(palette(page).getByText('~/work/isagi')).toBeVisible();
+    await paletteRow(page, 'Delete project').click();
+
+    await expect(palette(page)).toHaveCount(0);
+    expect(await deleteCalls(page)).toEqual([10]);
+    await expect(projectGroup(page, 10)).toHaveCount(0);
+    // The selection was elsewhere, so it stays put.
+    await expect(rootRow(page, 40)).toHaveAttribute('aria-current', 'true');
+  });
+
+  test('a disconnected row offers the same menu for its own project', async ({ page }) => {
+    await scenario(page, 'two-missing');
+    await disconnectedRow(page, 'isagi').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete project…' }).click();
+
+    await expect(reviewTitle(page, 'Delete isagi from Isagi?')).toBeVisible();
+    await paletteRow(page, 'Cancel').click();
+    await expect(palette(page)).toHaveCount(0);
+    expect(await deleteCalls(page)).toEqual([]);
+  });
+
+  test('a refused delete closes the palette, toasts, and keeps the project', async ({ page }) => {
+    await scenario(page, 'missing-folder');
+    await page.evaluate(() => window.folderProjectFixture?.setDeleteFails(true));
+    await deleteButton(page).click();
+    await paletteRow(page, 'Delete project').click();
+
+    await expect(palette(page)).toHaveCount(0);
+    await expect(page.getByText('Could not delete the project.')).toBeVisible();
+    await expect(disconnectedRow(page, 'notes')).toBeVisible();
+
+    // Recovery is deleting again.
+    await page.evaluate(() => window.folderProjectFixture?.setDeleteFails(false));
+    await deleteButton(page).click();
+    await paletteRow(page, 'Delete project').click();
+    await expect(disconnectedRow(page, 'notes')).toHaveCount(0);
   });
 });
 
@@ -652,7 +717,7 @@ test.describe('keyboard access', () => {
     await expect(stillMissing(page)).toBeVisible();
 
     await page.keyboard.press('Tab');
-    await expect(removeButton(page)).toBeFocused();
+    await expect(deleteButton(page)).toBeFocused();
   });
 
   test('rail rows take focus and select without a pointer', async ({ page }) => {

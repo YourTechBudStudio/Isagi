@@ -13,7 +13,7 @@ export const toastCopy = {
     subtitle: 'The selected checkout is no longer reported by Git.',
   },
   projectDeleteFailed: {
-    title: 'Could not remove the project.',
+    title: 'Could not delete the project.',
   },
   workbenchCommandFailed: {
     title: 'Could not run that command.',

@@ -1,8 +1,15 @@
 import { unlinkSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-import { Effect, Either } from 'effect';
+import { Cause, Effect, Either } from 'effect';
 
 import { diagnosticPhase, logDiagnosticEvent } from '../../diagnostics/phase.js';
+import {
+  isIdName,
+  listOrphanCandidates,
+  openCollectorRoot,
+  sweepOrphans,
+} from '../../persistence/orphan-files.js';
 import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyProcessRow } from '../types.js';
@@ -10,6 +17,7 @@ import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../ty
 import { decodeBackendRef } from './backend-ref.js';
 import type { PtyLaunchReservations } from './lifecycle.js';
 import { cleanupOrphanPtyLogs } from './logs.js';
+import { shellIntegrationSegments } from './shell-integration.js';
 
 const ptyGcIntervalMs = 5 * 60_000;
 const orphanPtyProcessRetentionMs = 5 * 60_000;
@@ -17,7 +25,11 @@ const orphanPtyProcessRetentionMs = 5 * 60_000;
 // log only reaches this age gate after its row has already been deleted by the
 // orphan-process phase, so the window just absorbs clock skew and a crash
 // between row deletion and log deletion. One retention concept, not two.
+// Shell-integration folders reuse it for the same reason: the row is allocated
+// before the folder is written, and only this GC deletes rows, after the
+// process is gone.
 const orphanPtyLogRetentionMs = orphanPtyProcessRetentionMs;
+const orphanShellIntegrationRetentionMs = orphanPtyProcessRetentionMs;
 
 export function startPtyGarbageCollector(
   repository: PtyRepositoryService,
@@ -82,6 +94,54 @@ export function collectPtyGarbage(
         nowMs: options.nowMs,
       }),
     ).pipe(tagGcPhaseError('orphan_logs'));
+    // Contained, unlike its siblings: folder collection is housekeeping and must
+    // never fail the GC pass (which would fail the startup pass in PtyServiceLive).
+    yield* diagnosticPhase(
+      'pty.gc.orphan_shell_integration',
+      { sessionsPath },
+      cleanupOrphanShellIntegration(repository, sessionsPath, {
+        minAgeMs: orphanShellIntegrationRetentionMs,
+        nowMs: options.nowMs ?? Date.now(),
+      }),
+    ).pipe(
+      Effect.catchAllCause((cause) =>
+        Effect.sync(() => {
+          console.warn(
+            '[runtime] PTY GC phase failed phase=orphan_shell_integration',
+            Cause.pretty(cause),
+          );
+        }),
+      ),
+    );
+  });
+}
+
+// Deletes `sessions/shell-integration/<ptyProcessId>/` folders that no PTY row
+// references once they are older than the retention window.
+function cleanupOrphanShellIntegration(
+  repository: PtyRepositoryService,
+  sessionsPath: string,
+  options: { readonly minAgeMs: number; readonly nowMs: number },
+) {
+  return Effect.gen(function* () {
+    // Mark before listing, so a folder written after the mark is listed only
+    // with a row the mark may lack — and that folder is young.
+    const liveIds = new Set((yield* repository.listProcesses()).map((row) => row.id));
+    const label = 'shell integration folder';
+    // `sessionsPath` is `<data root>/sessions`, so its parent is the canonical data root.
+    const opened = openCollectorRoot(dirname(sessionsPath), shellIntegrationSegments, label);
+    if (opened.status !== 'ready') return;
+    const listing = listOrphanCandidates(opened.directory, 'directory', isIdName, label);
+    if (listing.status !== 'listed') return;
+    yield* Effect.promise(() =>
+      sweepOrphans({
+        label,
+        candidates: listing.candidates,
+        isLive: (candidate) => liveIds.has(Number(candidate.name)),
+        minAgeMs: options.minAgeMs,
+        nowMs: options.nowMs,
+      }),
+    );
   });
 }
 

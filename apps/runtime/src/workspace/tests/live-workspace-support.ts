@@ -21,6 +21,11 @@ import {
 } from '../../runtime-events/index.js';
 import { SurfaceRepository } from '../../surfaces/index.js';
 import {
+  WorkflowRunErasure,
+  WorkflowRunErasureLive,
+  type WorkflowRunErasureService,
+} from '../../workflows/erasure.js';
+import {
   WorktreeSetupRepository,
   type WorktreeSetupRepositoryService,
   WorktreeSetupService,
@@ -83,6 +88,11 @@ export interface LiveWorkspaceOptions {
    * and write the same rows.
    */
   readonly database?: RuntimeDatabaseService | undefined;
+  /**
+   * Replaces the real workflow run erasure that project deletion runs inside its transaction, so a
+   * test can make that participant throw and observe the rollback.
+   */
+  readonly runErasure?: WorkflowRunErasureService | undefined;
 }
 
 const baseCommands = {
@@ -158,6 +168,9 @@ export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptio
   const workspace = WorkspaceServiceLive.pipe(
     Layer.provide(
       Layer.mergeAll(
+        options.runErasure
+          ? Layer.succeed(WorkflowRunErasure, options.runErasure)
+          : WorkflowRunErasureLive,
         repository,
         git,
         dataDirectoryLayer,

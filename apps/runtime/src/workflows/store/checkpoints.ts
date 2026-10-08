@@ -40,6 +40,22 @@ export function insertCheckpoint(
     .get();
 }
 
+/**
+ * Every content hash any checkpoint references: the content collector's mark. One JSON scan of
+ * `workflow_checkpoints`; a missing scope has no files and contributes nothing.
+ */
+export function listReferencedContentHashes(db: Db): Set<string> {
+  const rows = db.all<{ readonly sha256: string | null }>(
+    sql`select distinct json_extract(file.value, '$.sha256') as sha256
+        from ${workflowCheckpoints},
+             json_each(${workflowCheckpoints.scopesJson}) as scope,
+             json_each(scope.value, '$.files') as file`,
+  );
+  const hashes = new Set<string>();
+  for (const row of rows) if (typeof row.sha256 === 'string') hashes.add(row.sha256);
+  return hashes;
+}
+
 export function getCheckpoint(db: Db, checkpointId: number): CheckpointRow | null {
   return (
     db.select().from(workflowCheckpoints).where(eq(workflowCheckpoints.id, checkpointId)).get() ??

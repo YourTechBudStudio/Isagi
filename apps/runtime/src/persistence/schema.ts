@@ -356,9 +356,12 @@ export const workflowRuns = sqliteTable(
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     /**
-     * The project this run belongs to, set at launch and never changed. No foreign key: a run's
-     * history outlives its project row, and project deletion erases runs through the workflow
-     * domain. `projects.id` is AUTOINCREMENT, so a dangling id never names a different project.
+     * The project this run belongs to, set at launch and never changed. Run history survives deletion
+     * of its surface or worktree, but not of its project: deleting a project erases its runs in the
+     * same transaction through `WorkflowRunErasure` (`workflows/erasure.ts`), and launch refuses to
+     * insert a run once its project is gone. No foreign key, because a cascade from `projects` would
+     * make the workspace's delete write workflow tables (ADR 0008). `projects.id` is AUTOINCREMENT,
+     * so a dangling id never names a different project.
      */
     projectId: integer('project_id').notNull(),
     workflowKey: text('workflow_key').notNull(),

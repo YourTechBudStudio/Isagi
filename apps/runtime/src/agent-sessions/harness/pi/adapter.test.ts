@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect, Either } from 'effect';
 
+import { emptyOrphanSweepStats } from '../../../persistence/orphan-files.js';
 import { prepareHarnessIntegrationArtifacts } from '../artifacts.js';
 import { buildClaudeHeadlessLaunch, buildClaudeLaunch } from '../claude/adapter.js';
 import { buildCodexHeadlessLaunch, buildCodexLaunch } from '../codex/adapter.js';
@@ -618,6 +619,6 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
       }),
     listAgentSessionIds: Effect.succeed([]),
     writeHarnessSessionId: () => Effect.void,
-    removeDirectory: () => Effect.void,
+    collectOrphanFolders: () => Effect.succeed(emptyOrphanSweepStats),
   } satisfies AgentSessionArtifactsService;
 }

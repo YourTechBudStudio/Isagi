@@ -13,6 +13,7 @@ import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import type { WorktreeRow } from '../types.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
@@ -73,6 +74,7 @@ test('opening a missing branch without a base asks the client for base selection
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provide(WorkflowRunErasureLive),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -179,6 +181,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -284,6 +287,7 @@ test('opening a missing branch can create it from the current detached worktree'
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -399,6 +403,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             });
           }).pipe(
             Effect.provide(WorkspaceServiceLive),
+            Effect.provide(WorkflowRunErasureLive),
             Effect.provideService(CommandService, testCommandService),
             Effect.provideService(PtyService, testPtyService),
             Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

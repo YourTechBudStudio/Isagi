@@ -12,6 +12,7 @@ import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import type { ProjectRow } from '../types.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
@@ -53,6 +54,7 @@ test('project deletion does not touch frontend-owned active context persistence'
       return yield* workspace.deleteProject(project.id);
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -91,6 +93,7 @@ test('project relocation rejects projects that are not missing before touching g
         return yield* workspace.relocateProject({ projectId: project.id, path: '/repo/elsewhere' });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -164,6 +167,7 @@ test('project relocation restores the same project id and reconciles discovered 
         return yield* workspace.relocateProject({ projectId: project.id, path: projectRoot });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -252,6 +256,7 @@ test('registering a new project reconciles the created row without a follow-up l
         return yield* workspace.registerProject({ path: projectRoot });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

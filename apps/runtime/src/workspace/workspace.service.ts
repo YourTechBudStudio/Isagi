@@ -64,6 +64,7 @@ import {
   type InternalRuntimeEventBusService,
 } from '../runtime-events/index.js';
 import { SurfaceRepository } from '../surfaces/index.js';
+import { WorkflowRunErasure } from '../workflows/erasure.js';
 import {
   runPostCreateSetup,
   WorktreeSetupError,
@@ -268,6 +269,7 @@ export const WorkspaceServiceLive = Layer.effect(
     const commands = yield* CommandService;
     const pty = yield* PtyService;
     const internalEvents = yield* InternalRuntimeEventBus;
+    const runErasure = yield* WorkflowRunErasure;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
@@ -326,10 +328,18 @@ export const WorkspaceServiceLive = Layer.effect(
             new Set(worktrees.map((worktree) => worktree.id)),
           );
           // Read *before* the delete: `worktrees.project_id` cascades from `projects`, so after the
-          // commit there is no way to enumerate which worktrees went with it — and retained workflow
-          // history is matched by exactly those ids.
+          // commit there is no way to enumerate which worktrees went with it, and the
+          // `project_deleted` event names exactly those ids.
           const doomedWorktreeIds = worktrees.map((worktree) => worktree.id);
-          const deleted = yield* repository.deleteProject(projectId);
+          // The project's workflow runs are erased in the same transaction as its row. On the
+          // runtime's single SQLite connection, a launch commits wholly before this transaction
+          // (so its run is erased here) or wholly after it (so launch admission refuses it): a
+          // deleted project has no runs and can never gain one. The workflows domain owns the
+          // erasure SQL (ADR 0008); this service only owns the transaction boundary.
+          let erasedRuns = 0;
+          const deleted = yield* repository.deleteProject(projectId, (db) => {
+            erasedRuns = runErasure.eraseProjectRunsInTransaction(db, projectId);
+          });
           if (deleted) {
             yield* publishDurableSessionDeletions(doomed);
             yield* internalEvents.publish({
@@ -337,6 +347,9 @@ export const WorkspaceServiceLive = Layer.effect(
               projectId,
               worktreeIds: doomedWorktreeIds,
             });
+            console.info(
+              `[runtime] Deleted project projectId=${projectId} worktrees=${doomedWorktreeIds.length} workflowRuns=${erasedRuns}`,
+            );
           }
           return { projectId, deleted };
         }),

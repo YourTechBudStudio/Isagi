@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -97,10 +100,10 @@ test('agent session artifacts distinguish missing and invalid metadata', async (
   }
 });
 
-test('agent session artifacts write observed harness session ids and remove directories', async () => {
+test('agent session artifacts write observed harness session ids', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-write-'));
   try {
-    const existsAfterRemove = await Effect.runPromise(
+    await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
         yield* artifacts.initializeMetadata(10);
@@ -112,12 +115,8 @@ test('agent session artifacts write observed harness session ids and remove dire
           readFileSync(join(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json'), 'utf8'),
         ) as { readonly harnessSessionId?: unknown };
         assert.equal(raw.harnessSessionId, 'pi-session-1');
-        yield* artifacts.removeDirectory(10);
-        return existsSync(join(dataRoot, 'sessions', 'agent-sessions', '10'));
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
-
-    assert.equal(existsAfterRemove, false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -169,6 +168,177 @@ test('agent session artifacts reject a symlinked Isagi harness directory', async
     rmSync(external, { recursive: true, force: true });
   }
 });
+
+const graceMs = 60 * 60_000;
+const nowMs = Date.parse('2026-10-08T12:00:00.000Z');
+const oldDate = new Date(nowMs - 2 * graceMs);
+
+test('agent session folder collection deletes only old folders no row references', async () => {
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-folder-gc-')));
+  try {
+    const root = join(dataRoot, 'sessions', 'agent-sessions');
+    const stats = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        for (const id of [10, 11, 12, 13]) yield* artifacts.initializeMetadata(id);
+        backdateFolder(join(root, '10'));
+        backdateFolder(join(root, '11'));
+        // 12 stays young. 13 is old, but its harness is still appending to a ledger file.
+        backdateFolder(join(root, '13'));
+        writeFileSync(join(root, '13', harnessLogFileName()), '{}\n');
+        utimesSync(join(root, '13', harnessLogFileName()), new Date(nowMs), new Date(nowMs));
+        return yield* artifacts.collectOrphanFolders({
+          liveIds: new Set([11]),
+          minAgeMs: graceMs,
+          nowMs,
+        });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(existsSync(join(root, '10')), false);
+    assert.equal(existsSync(join(root, '11')), true);
+    assert.equal(existsSync(join(root, '12')), true);
+    assert.equal(existsSync(join(root, '13')), true);
+    assert.deepEqual(stats.deleted, ['10']);
+    assert.equal(stats.kept, 1);
+    assert.deepEqual(stats.skippedYoung, ['12', '13']);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session folder collection never reaches outside its root', async () => {
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-folder-gc-decoy-')));
+  const worktree = plantDecoyWorktree();
+  try {
+    const root = join(dataRoot, 'sessions', 'agent-sessions');
+    mkdirSync(root, { recursive: true });
+    symlinkSync(worktree, join(root, '20'));
+    mkdirSync(join(root, 'notes'));
+    backdateFolder(join(root, 'notes'));
+    writeFileSync(join(root, '21'), 'not a folder');
+    utimesSync(join(root, '21'), oldDate, oldDate);
+
+    const stats = await collectWithNoLiveIds(dataRoot);
+
+    assert.equal(stats.inspected, 0);
+    assert.equal(existsSync(join(worktree, 'src', 'index.ts')), true);
+    assert.equal(existsSync(join(root, 'notes')), true);
+    assert.equal(existsSync(join(root, '21')), true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+for (const linked of ['agent-sessions', 'sessions'] as const) {
+  test(`agent session folder collection skips a symlinked ${linked} directory`, async () => {
+    const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-folder-gc-link-')));
+    const worktree = plantDecoyWorktree();
+    try {
+      mkdirSync(join(worktree, '30'));
+      backdateFolder(join(worktree, '30'));
+      if (linked === 'sessions') {
+        symlinkSync(worktree, join(dataRoot, 'sessions'));
+      } else {
+        mkdirSync(join(dataRoot, 'sessions'));
+        symlinkSync(worktree, join(dataRoot, 'sessions', 'agent-sessions'));
+      }
+
+      const stats = await collectWithNoLiveIds(dataRoot);
+
+      assert.equal(stats.inspected, 0);
+      assert.equal(existsSync(join(worktree, '30')), true);
+      assert.equal(existsSync(join(worktree, 'src', 'index.ts')), true);
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+}
+
+test('agent session folder collection skips an unreadable root and collects once it is restored', async (context) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    context.skip('chmod 000 does not block reads on Windows or as root.');
+    return;
+  }
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-folder-gc-unreadable-')));
+  const root = join(dataRoot, 'sessions', 'agent-sessions');
+  try {
+    mkdirSync(join(root, '40'), { recursive: true });
+    backdateFolder(join(root, '40'));
+    // One layer for both ticks: building the artifacts layer re-secures the root's mode.
+    const [blocked, restored] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const collect = artifacts.collectOrphanFolders({
+          liveIds: new Set(),
+          minAgeMs: graceMs,
+          nowMs,
+        });
+        chmodSync(root, 0o000);
+        const first = yield* collect;
+        chmodSync(root, 0o700);
+        assert.equal(existsSync(join(root, '40')), true);
+        return [first, yield* collect] as const;
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+    assert.equal(blocked.inspected, 0);
+    assert.deepEqual(restored.deleted, ['40']);
+  } finally {
+    chmodSync(root, 0o700);
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session folder collection skips a root replaced by a file and collects once it is restored', async () => {
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-folder-gc-file-')));
+  const root = join(dataRoot, 'sessions', 'agent-sessions');
+  try {
+    await collectWithNoLiveIds(dataRoot);
+    rmSync(root, { recursive: true, force: true });
+    writeFileSync(root, 'not a directory');
+    const blocked = await collectWithNoLiveIds(dataRoot);
+    assert.equal(blocked.inspected, 0);
+
+    rmSync(root);
+    mkdirSync(join(root, '41'), { recursive: true });
+    backdateFolder(join(root, '41'));
+    const restored = await collectWithNoLiveIds(dataRoot);
+    assert.deepEqual(restored.deleted, ['41']);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function collectWithNoLiveIds(dataRoot: string) {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const artifacts = yield* AgentSessionArtifacts;
+      return yield* artifacts.collectOrphanFolders({
+        liveIds: new Set(),
+        minAgeMs: graceMs,
+        nowMs,
+      });
+    }).pipe(Effect.provide(testLayer(dataRoot))),
+  );
+}
+
+/** A folder outside the data root standing in for a user's worktree; every file must survive. */
+function plantDecoyWorktree() {
+  const worktree = mkdtempSync(join(tmpdir(), 'isagi-agent-folder-gc-worktree-'));
+  mkdirSync(join(worktree, 'src'));
+  writeFileSync(join(worktree, 'src', 'index.ts'), 'export {};\n');
+  utimesSync(join(worktree, 'src', 'index.ts'), oldDate, oldDate);
+  utimesSync(join(worktree, 'src'), oldDate, oldDate);
+  utimesSync(worktree, oldDate, oldDate);
+  return worktree;
+}
+
+function backdateFolder(path: string) {
+  for (const name of readdirSync(path)) utimesSync(join(path, name), oldDate, oldDate);
+  utimesSync(path, oldDate, oldDate);
+}
 
 function testLayer(dataRoot: string) {
   return AgentSessionArtifactsLive.pipe(

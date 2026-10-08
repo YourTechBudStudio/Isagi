@@ -12,6 +12,7 @@ import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import type { ProjectRow } from '../types.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
@@ -141,6 +142,7 @@ function provide<A, E>(
 ) {
   return effect.pipe(
     Effect.provide(WorkspaceServiceLive),
+    Effect.provide(WorkflowRunErasureLive),
     Effect.provideService(CommandService, input.commands),
     Effect.provideService(PtyService, testPtyService),
     Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

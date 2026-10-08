@@ -10,7 +10,7 @@ import type {
 import { WorkflowEngineError } from '../errors.js';
 import { checkSerializable, errorMessage } from '../state/pure.js';
 import { storedParameters, toJson, type RunPlacement } from '../store/rows.js';
-import { findRunOnSurface, insertRun } from '../store/runs.js';
+import { findRunOnSurface, insertRun, projectExists } from '../store/runs.js';
 import type { WorkflowCommandManifest, WorkflowOrigin } from '../types.js';
 import { projectContext, resolveLatestBuild } from './builds.js';
 import { resolvePlacement } from './environment/placement.js';
@@ -111,6 +111,9 @@ export function launch(
     const surfaceId = resolved.surface.kind === 'reuse' ? resolved.surface.surfaceId : null;
     // Checked in the transaction that creates the run, so two launches cannot both take a surface.
     const created = yield* rt.commit('workflow_launch', (db, emit) => {
+      // A run exists only while its project does: project deletion erases runs in its own
+      // transaction (workflows/erasure.ts), and this check refuses any launch that commits after it.
+      if (!projectExists(db, project.id)) return { projectGone: true } as const;
       const occupant = surfaceId === null ? null : findRunOnSurface(db, surfaceId);
       if (occupant) return { busy: occupant.id } as const;
       const run = insertRun(db, {
@@ -141,6 +144,16 @@ export function launch(
       });
       return { run } as const;
     });
+    if ('projectGone' in created) {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'worktree_not_found',
+          message: `Project ${project.id} no longer exists.`,
+          workflowKey: input.workflowKey,
+          worktreeId: origin.worktreeId,
+        }),
+      );
+    }
     if ('busy' in created) {
       return yield* Effect.fail(
         new WorkflowEngineError({

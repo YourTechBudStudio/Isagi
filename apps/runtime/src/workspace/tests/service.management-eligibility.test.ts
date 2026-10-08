@@ -15,6 +15,7 @@ import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
@@ -128,6 +129,7 @@ function workspaceLayerWith(repository: WorkspaceRepositoryService) {
   return WorkspaceServiceLive.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkflowRunErasureLive,
         Layer.succeed(WorkspaceRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
@@ -375,6 +377,7 @@ test('a Git project still reaches the work the guard refuses for folders', async
   const layer = WorkspaceServiceLive.pipe(
     Layer.provide(
       Layer.mergeAll(
+        WorkflowRunErasureLive,
         Layer.succeed(WorkspaceRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
