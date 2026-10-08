@@ -8,11 +8,13 @@ import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
 
 import { errorMessage } from '../state/pure.js';
 import type { CheckpointScope } from '../store/checkpoints.js';
-import type { WorkflowContentStoreService } from '../store/content-store.js';
+import type { ContentCapture } from '../store/content-store.js';
 import { pathContains, type NormalizedScope } from './plan.js';
 
 /**
- * Copying a checkpoint's scopes out of the checkout into the content store.
+ * Copying a checkpoint's scopes out of the checkout into the content store, through one capture
+ * lease, so everything copied stays protected from the content collector until the caller's
+ * checkpoint row has committed.
  *
  * Only regular files are copied. Symlinks, special files and nested `.git` entries are skipped, and
  * nothing is ever followed through a link: a scope path that passes through a symlink fails the
@@ -26,12 +28,12 @@ export class CaptureFailed extends Error {}
 export function captureScopes(
   root: string,
   scopes: readonly NormalizedScope[],
-  content: WorkflowContentStoreService,
+  capture: ContentCapture,
 ): Effect.Effect<CheckpointScope[], CaptureFailed> {
   return Effect.tryPromise({
     try: async () => {
       const captured: CheckpointScope[] = [];
-      for (const scope of scopes) captured.push(await captureScope(root, scope, content));
+      for (const scope of scopes) captured.push(await captureScope(root, scope, capture));
       return captured;
     },
     catch: (cause) =>
@@ -42,7 +44,7 @@ export function captureScopes(
 async function captureScope(
   root: string,
   scope: NormalizedScope,
-  content: WorkflowContentStoreService,
+  capture: ContentCapture,
 ): Promise<CheckpointScope> {
   const base = { scope: scope.scope, kind: scope.kind, path: scope.path, exclude: scope.exclude };
   const found = await locate(root, scope);
@@ -50,9 +52,9 @@ async function captureScope(
 
   const files: WorkflowCheckpointFileDto[] = [];
   if (scope.kind === 'file') {
-    files.push(await copyFile(root, scope.path, content));
+    files.push(await copyFile(root, scope.path, capture));
   } else {
-    await walk(root, scope, scope.path, files, content);
+    await walk(root, scope, scope.path, files, capture);
     files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
   return { ...base, missing: false, files };
@@ -90,14 +92,14 @@ async function walk(
   scope: NormalizedScope,
   directory: string,
   files: WorkflowCheckpointFileDto[],
-  content: WorkflowContentStoreService,
+  capture: ContentCapture,
 ): Promise<void> {
   const entries: Dirent[] = await readdir(join(root, directory), { withFileTypes: true });
   for (const entry of entries) {
     const path = `${directory}/${entry.name}`;
     if (entry.name === '.git' || isExcluded(scope, path)) continue;
-    if (entry.isDirectory()) await walk(root, scope, path, files, content);
-    else if (entry.isFile()) files.push(await copyFile(root, path, content));
+    if (entry.isDirectory()) await walk(root, scope, path, files, capture);
+    else if (entry.isFile()) files.push(await copyFile(root, path, capture));
     // Symlinks and special files are skipped.
   }
 }
@@ -110,12 +112,12 @@ export function isExcluded(scope: Pick<NormalizedScope, 'path' | 'exclude'>, pat
 async function copyFile(
   root: string,
   path: string,
-  content: WorkflowContentStoreService,
+  capture: ContentCapture,
 ): Promise<WorkflowCheckpointFileDto> {
   const absolute = join(root, path);
   const stats = await lstat(absolute);
   const put = await Effect.runPromise(
-    Effect.either(content.put({ source: createReadStream(absolute) })),
+    Effect.either(capture.put({ source: createReadStream(absolute) })),
   );
   if (Either.isLeft(put)) throw new CaptureFailed(`Could not save '${path}': ${put.left.message}`);
   const stored = put.right;

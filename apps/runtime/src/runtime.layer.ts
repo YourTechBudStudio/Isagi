@@ -223,13 +223,18 @@ const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
   Layer.provide(CommandServiceLayer),
   Layer.provide(WorkflowRunErasureLive),
 );
+// Bound once so exactly one content collector runs; the engine is its only consumer.
+const WorkflowContentStoreLayer = WorkflowContentStoreLive.pipe(
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(DatabaseLive),
+);
 // The engine owns every workflow write and pushes its events live, with one exception: project
 // deletion erases a project's runs through `WorkflowRunErasure`. It creates worktrees and surfaces
 // through their owning services (ADR 0008).
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(GitLive),
-  Layer.provide(WorkflowContentStoreLive.pipe(Layer.provide(DataDirectoryLive))),
+  Layer.provide(WorkflowContentStoreLayer),
   Layer.provide(WorkflowRegistryLayer),
   Layer.provide(RepositoryLive),
   Layer.provide(WorkspaceServiceLayer),

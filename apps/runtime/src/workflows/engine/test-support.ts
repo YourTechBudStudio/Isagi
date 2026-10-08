@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,6 +34,7 @@ import { WorkspaceError } from '../../workspace/workspace.service.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
 import {
   makeWorkflowContentStore,
+  type WorkflowContentStoreInstance,
   type WorkflowContentStoreService,
 } from '../store/content-store.js';
 import type { Db } from '../store/rows.js';
@@ -80,6 +81,13 @@ export interface EngineHarness {
   readonly internalEvents: InternalRuntimeEventBusService;
   /** Makes the next write with this operation name fail and roll back, as a full disk would. */
   readonly failNextWrite: (operation: string) => void;
+  /**
+   * Awaits `callback` just before the next write with this operation name starts its transaction,
+   * never inside it. Checkpoint tests sweep the content store here, while a capture lease is open.
+   */
+  readonly beforeNextWrite: (operation: string, callback: () => Promise<void>) => void;
+  /** The real content store the checkpoints port uses, with its collector. */
+  readonly contentStore: WorkflowContentStoreInstance;
   /** Runs an engine call to completion, then waits until background work has settled. */
   readonly run: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>;
   /** Like `run`, but hands back the failure instead of throwing. */
@@ -104,21 +112,22 @@ export interface EngineHarness {
 export async function makeEngineHarness(
   options: { readonly registry?: WorkflowRegistryService } = {},
 ): Promise<EngineHarness> {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-workflow-engine-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-workflow-engine-')));
   const client = new BetterSqlite(join(root, 'isagi.db'));
   client.pragma('journal_mode = WAL');
   client.pragma('foreign_keys = ON');
   const drizzled = drizzle(client, { schema }) as RuntimeDrizzleDatabase;
   migrate(drizzled, { migrationsFolder: migrationsDirectory() });
   const failingWrites = new Set<string>();
+  const beforeWrites = new Map<string, () => Promise<void>>();
   const database: RuntimeDatabaseService = {
     use: (operation, run) =>
       Effect.try({
         try: () => run(drizzled),
         catch: (cause) => new DatabaseError({ operation, cause }),
       }),
-    transaction: (operation, run) =>
-      Effect.try({
+    transaction: (operation, run) => {
+      const write = Effect.try({
         try: () => {
           if (failingWrites.delete(operation)) throw new Error(`Injected failure of ${operation}.`);
           return drizzled.transaction((transaction) =>
@@ -126,7 +135,14 @@ export async function makeEngineHarness(
           );
         },
         catch: (cause) => new DatabaseError({ operation, cause }),
-      }),
+      });
+      return Effect.suspend(() => {
+        const before = beforeWrites.get(operation);
+        if (!before) return write;
+        beforeWrites.delete(operation);
+        return Effect.promise(before).pipe(Effect.zipRight(write));
+      });
+    },
   };
 
   const worktreePath = join(root, 'worktree');
@@ -147,7 +163,7 @@ export async function makeEngineHarness(
   };
   const registry = new FakeRegistry();
   const places = new FakePlaces(root, worktreePath, client);
-  const content = makeWorkflowContentStore(join(root, 'workflow-content'));
+  const contentStore = makeWorkflowContentStore(root);
   const clock = new FakeClock();
   const agents = new FakeAgents(clock, internalEvents);
   const headless = new FakeHeadless(internalEvents);
@@ -164,7 +180,7 @@ export async function makeEngineHarness(
             places: places.port(),
             agents: agents.port(),
             headless: headless.port(),
-            checkpoints: places.checkpointsPort(content),
+            checkpoints: places.checkpointsPort(contentStore.service),
             internalEvents,
           },
         }),
@@ -186,6 +202,8 @@ export async function makeEngineHarness(
     worktreePath,
     internalEvents,
     failNextWrite: (operation) => void failingWrites.add(operation),
+    beforeNextWrite: (operation, callback) => void beforeWrites.set(operation, callback),
+    contentStore,
     run: async (effect) => {
       const value = await Effect.runPromise(effect);
       await harness.settle();

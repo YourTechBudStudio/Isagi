@@ -20,7 +20,8 @@ import { normalizeCheckpointPlan } from './plan.js';
  * ```text
  * plan    = plan(state)                        pure; stage checkpoint_plan on failure
  * commit  = HEAD of the run's checkout         null for a folder project or an unborn repository
- * scopes  = exact copies into the content store; stage checkpoint_capture on failure
+ * scopes  = exact copies into the content store under one capture lease; stage checkpoint_capture
+ *           on failure. The lease is released only after the commit below (or the failure commit).
  * in ONE transaction: insert the checkpoint, save { type: 'complete', update: {}, checkpointId }
  *                     as the result, set checkpoint_id, append checkpoint_captured
  * ```
@@ -69,61 +70,68 @@ export function captureCheckpoint(
     if (!plan.ok) return yield* fail('checkpoint_plan', plan.message);
     const title = node.title?.trim() || leaf.nodeId;
 
-    const captured = yield* Effect.either(
+    // One capture lease spans the copies and the commit that references them (or the failure
+    // commit), so the content collector cannot take a copied blob before its row exists.
+    yield* Effect.scoped(
       Effect.gen(function* () {
-        const project = yield* rt.deps.places.workspace.findProject(run.projectId);
-        if (!project) {
-          return yield* Effect.fail(new Error(`Project ${run.projectId} no longer exists.`));
-        }
-        const commitSha =
-          project.kind === 'git'
-            ? yield* rt.deps.checkpoints
-                .headCommit(run.worktreePath as string)
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new Error(
-                        `Git could not read HEAD in ${run.worktreePath}: ${gitDetail(cause)}`,
+        const capture = yield* rt.deps.checkpoints.content.openCapture;
+        const captured = yield* Effect.either(
+          Effect.gen(function* () {
+            const project = yield* rt.deps.places.workspace.findProject(run.projectId);
+            if (!project) {
+              return yield* Effect.fail(new Error(`Project ${run.projectId} no longer exists.`));
+            }
+            const commitSha =
+              project.kind === 'git'
+                ? yield* rt.deps.checkpoints
+                    .headCommit(run.worktreePath as string)
+                    .pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new Error(
+                            `Git could not read HEAD in ${run.worktreePath}: ${gitDetail(cause)}`,
+                          ),
                       ),
-                  ),
-                )
-            : null;
-        const scopes = yield* captureScopes(
-          run.worktreePath as string,
-          plan.value.scopes,
-          rt.deps.checkpoints.content,
+                    )
+                : null;
+            const scopes = yield* captureScopes(
+              run.worktreePath as string,
+              plan.value.scopes,
+              capture,
+            );
+            return { commitSha, scopes };
+          }),
         );
-        return { commitSha, scopes };
+        if (Either.isLeft(captured)) {
+          return yield* fail('checkpoint_capture', captureMessage(captured.left));
+        }
+
+        yield* rt.commit('workflow_save_checkpoint', (db, emit) => {
+          const execution = getExecution(db, leaf.id);
+          if (!execution || execution.resultJson !== null) return;
+          // Saved even when the run was paused or cancelled meanwhile, as an operation's result is.
+          const checkpoint = insertCheckpoint(db, {
+            runId: run.id,
+            executionId: leaf.id,
+            title,
+            label: execution.label,
+            commitSha: captured.right.commitSha,
+            scopes: captured.right.scopes,
+          });
+          const result: SavedResult = { type: 'complete', update: {}, checkpointId: checkpoint.id };
+          updateExecution(db, leaf.id, { resultJson: toJson(result), checkpointId: checkpoint.id });
+          const name = execution.label === null ? title : `${title} · ${execution.label}`;
+          emit({
+            runId: run.id,
+            executionId: leaf.id,
+            category: 'node',
+            kind: 'checkpoint_captured',
+            message: `${name}: checkpoint ${checkpoint.id} saved`,
+            data: { checkpointId: checkpoint.id },
+          });
+        });
       }),
     );
-    if (Either.isLeft(captured)) {
-      return yield* fail('checkpoint_capture', captureMessage(captured.left));
-    }
-
-    yield* rt.commit('workflow_save_checkpoint', (db, emit) => {
-      const execution = getExecution(db, leaf.id);
-      if (!execution || execution.resultJson !== null) return;
-      // Saved even when the run was paused or cancelled meanwhile, as an operation's result is.
-      const checkpoint = insertCheckpoint(db, {
-        runId: run.id,
-        executionId: leaf.id,
-        title,
-        label: execution.label,
-        commitSha: captured.right.commitSha,
-        scopes: captured.right.scopes,
-      });
-      const result: SavedResult = { type: 'complete', update: {}, checkpointId: checkpoint.id };
-      updateExecution(db, leaf.id, { resultJson: toJson(result), checkpointId: checkpoint.id });
-      const name = execution.label === null ? title : `${title} · ${execution.label}`;
-      emit({
-        runId: run.id,
-        executionId: leaf.id,
-        category: 'node',
-        kind: 'checkpoint_captured',
-        message: `${name}: checkpoint ${checkpoint.id} saved`,
-        data: { checkpointId: checkpoint.id },
-      });
-    });
   });
 }
 

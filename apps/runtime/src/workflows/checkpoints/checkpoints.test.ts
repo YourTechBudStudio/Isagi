@@ -30,6 +30,8 @@ import { Cause, Effect, Exit } from 'effect';
 import { workflowCheckpoints } from '../../persistence/schema.js';
 import { withEngine, type EngineHarness } from '../engine/test-support.js';
 import { WorkflowEngineError } from '../errors.js';
+import { listReferencedContentHashes } from '../store/checkpoints.js';
+import { contentPathFor, type ContentGcResult } from '../store/content-store.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
 
 /**
@@ -590,6 +592,103 @@ test('a scope that passes through a symlink fails instead of copying outside the
       assert.equal(run.status, 'failed');
       assert.equal(run.error?.stage, 'checkpoint_capture');
       assert.match(run.error?.message ?? '', /symbolic link/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+const graceMs = 60 * 60_000;
+
+/** A sweep of the harness's content store two grace periods ahead, so only liveness keeps a blob. */
+function sweepContent(harness: EngineHarness, mark: () => ReadonlySet<string> = () => new Set()) {
+  return harness.contentStore.collectGarbage({
+    nowMs: Date.now() + 2 * graceMs,
+    minAgeMs: graceMs,
+    referencedHashes: mark,
+  });
+}
+
+function sweptStats(result: ContentGcResult | undefined) {
+  assert.equal(result?.status, 'swept', `expected a sweep, got ${JSON.stringify(result)}`);
+  return (result as Extract<ContentGcResult, { status: 'swept' }>).stats;
+}
+
+function blobPath(harness: EngineHarness, hash: string) {
+  return contentPathFor(join(dirname(harness.worktreePath), 'workflow-content'), `sha256:${hash}`);
+}
+
+test('a capture holds its copies until its checkpoint commits; then the mark keeps them', async () => {
+  await withEngine(async (harness) => {
+    commitRepository(harness.worktreePath, { 'notes/a.md': 'a\n', 'notes/b.md': 'b\n' });
+    let during: ContentGcResult | undefined;
+    harness.beforeNextWrite('workflow_save_checkpoint', async () => {
+      during = await sweepContent(harness);
+    });
+
+    const { run } = await launchAndSettle(
+      harness,
+      'held',
+      checkpointWorkflow(
+        () => ({ capture: [{ scope: 'notes', directory: 'notes' }] }),
+        () => ({ to: 'done' }),
+      ),
+    );
+    assert.equal(run.status, 'completed', JSON.stringify(run.error));
+    const held = sweptStats(during);
+    assert.equal(held.kept, 2, 'both copies were held just before the commit');
+    assert.deepEqual(held.deleted, []);
+
+    const referenced = listReferencedContentHashes(harness.db);
+    assert.equal(referenced.size, 2);
+    const paths = [...referenced].map((hash) => blobPath(harness, hash));
+    for (const path of paths) assert.equal(existsSync(path), true);
+
+    const marked = sweptStats(
+      await sweepContent(harness, () => listReferencedContentHashes(harness.db)),
+    );
+    assert.equal(marked.kept, 2, 'the committed row keeps them through the mark');
+
+    const released = sweptStats(await sweepContent(harness));
+    assert.equal(released.deleted.length, 2, 'after the step nothing holds them');
+    for (const path of paths) assert.equal(existsSync(path), false);
+  });
+});
+
+test('a failed capture holds what it copied until its failure commits', async () => {
+  await withEngine(async (harness) => {
+    commitRepository(harness.worktreePath, { 'notes/a.md': 'a\n' });
+    const outside = mkdtempSync(join(tmpdir(), 'isagi-outside-'));
+    try {
+      write(outside, 'secret.txt', 's\n');
+      symlinkSync(outside, join(harness.worktreePath, 'linked'));
+      let during: ContentGcResult | undefined;
+      harness.beforeNextWrite('workflow_fail_checkpoint', async () => {
+        during = await sweepContent(harness);
+      });
+
+      const { run } = await launchAndSettle(
+        harness,
+        'held-failure',
+        checkpointWorkflow(
+          () => ({
+            capture: [
+              { scope: 'notes', directory: 'notes' },
+              { scope: 'secret', file: 'linked/secret.txt' },
+            ],
+          }),
+          () => ({ to: 'done' }),
+        ),
+      );
+      assert.equal(run.status, 'failed');
+      assert.equal(run.error?.stage, 'checkpoint_capture');
+      const held = sweptStats(during);
+      assert.equal(held.kept, 1, 'the copy made before the failure was held');
+      assert.deepEqual(held.deleted, []);
+
+      const released = sweptStats(await sweepContent(harness));
+      assert.equal(released.deleted.length, 1, 'after the failure nothing holds it');
+      assert.equal(listReferencedContentHashes(harness.db).size, 0);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }

@@ -19,6 +19,7 @@ export { WorkflowEngineError } from './errors.js';
 export {
   ContentPublishError,
   ContentUnavailable,
+  type ContentCapture,
   makeWorkflowContentStore,
   WorkflowContentStore,
   WorkflowContentStoreLive,
