@@ -28,6 +28,7 @@ import {
   type SurfaceRepositoryService,
   type SurfaceServiceShape,
 } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
@@ -532,6 +533,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         return yield* service.get;
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

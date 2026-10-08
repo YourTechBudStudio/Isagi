@@ -29,6 +29,7 @@ import type {
 import { realSessionCreationLayer } from '../../session-restore/test-support.js';
 import { SurfaceService } from '../../surfaces/index.js';
 import { TerminalSessionService } from '../../terminal-sessions/index.js';
+import { countRunRows, seedProjectRuns } from '../../workflows/store/test-support.js';
 import { WorkspaceRepository } from '../workspace.repository.js';
 import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
 import { liveWorkspaceLayer } from './live-workspace-support.js';
@@ -290,8 +291,7 @@ describe('removing a folder project', () => {
 
       // The project's worktrees are announced too, and the ids have to have been read *before* the
       // delete: `worktrees.project_id` cascades from `projects`, so afterwards there is nothing left
-      // to enumerate. Retained workflow history has no foreign key to either row, so this event is
-      // the only way anything holding placement in that worktree learns it is gone.
+      // to enumerate.
       const projectDeletions = bus.observations.filter(
         (observation) => observation.event.type === 'project_deleted',
       );
@@ -333,9 +333,14 @@ describe('removing a folder project', () => {
       const outcome = await Effect.runPromise(
         Effect.gen(function* () {
           const service = yield* WorkspaceService;
-          const before = yield* readRows;
+          const database = yield* RuntimeDatabase;
+          const { runIds } = yield* database.transaction('test_seed_runs', (db) =>
+            seedProjectRuns(db, seeded.projectId),
+          );
+          const countRuns = database.use('test_count_runs', (db) => countRunRows(db, runIds));
+          const before = { ...(yield* readRows), runs: yield* countRuns };
           const failure = yield* Effect.either(service.deleteProject(seeded.projectId));
-          return { before, failure, after: yield* readRows };
+          return { before, failure, after: { ...(yield* readRows), runs: yield* countRuns } };
         }).pipe(
           Effect.provide(
             liveWorkspaceLayer(seeded.dataRoot, {
@@ -368,6 +373,9 @@ describe('removing a folder project', () => {
       assert.equal(outcome.after.projects.length, 1);
       assert.equal(outcome.after.agentSessions.length, 1);
       assert.equal(outcome.after.terminalSessions.length, 1);
+      // The gate stands before the transaction that erases workflow runs, so they remain too.
+      assert.equal(outcome.after.runs.runs, 1);
+      assert.equal(outcome.after.runs.checkpoints, 1);
 
       // A refusal announces nothing: a session deletion event here would tell
       // every connected client to drop a session that still exists.

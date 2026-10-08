@@ -12,6 +12,7 @@ import {
   type InternalRuntimeEventBusService,
 } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import { WorkspaceRepository } from '../workspace.repository.js';
 import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
@@ -50,6 +51,7 @@ test('active context persistence validates before writing state', async () => {
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -84,6 +86,7 @@ test('valid active context persistence writes after validation', async () => {
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -130,6 +133,7 @@ test('active context persistence publishes internal activation changes for accep
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, internalEvents),

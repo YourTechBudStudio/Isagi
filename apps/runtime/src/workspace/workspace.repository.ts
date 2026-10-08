@@ -13,6 +13,7 @@ import {
   DatabaseError,
   RuntimeDatabase,
   type RuntimeDatabaseService,
+  type RuntimeDrizzleDatabase,
 } from '../persistence/index.js';
 import {
   agentSessions,
@@ -91,7 +92,16 @@ export interface WorkspaceRepositoryService {
     readonly projectId: number;
     readonly path: string;
   }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
-  readonly deleteProject: (projectId: number) => Effect.Effect<boolean, DatabaseError>;
+  /** Deletes the project row; worktree-scoped rows cascade. True iff a project row was deleted. */
+  readonly deleteProject: (
+    projectId: number,
+    /**
+     * Another domain's writes that must commit or roll back with this delete (today: workflow run
+     * erasure). Synchronous; runs first, inside the same transaction, even when no project row
+     * matches. A throw rolls back both.
+     */
+    inTransaction: (db: RuntimeDrizzleDatabase) => void,
+  ) => Effect.Effect<boolean, DatabaseError>;
   readonly deleteWorktree: (worktreeId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly readWorktreeDeleteDiagnostics: (
     worktreeId: number,
@@ -223,8 +233,9 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .get();
           return row ? worktreeRow(row) : null;
         }),
-      deleteProject: (projectId) =>
-        database.use('delete_project', (db) => {
+      deleteProject: (projectId, inTransaction) =>
+        database.transaction('delete_project', (db) => {
+          inTransaction(db);
           const result = db.delete(projects).where(eq(projects.id, projectId)).run();
           return result.changes > 0;
         }),

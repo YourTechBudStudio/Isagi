@@ -13,6 +13,7 @@ import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import type { WorktreeRow } from '../types.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
@@ -130,6 +131,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provide(WorkflowRunErasureLive),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -198,6 +200,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provide(WorkflowRunErasureLive),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -268,6 +271,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provide(WorkflowRunErasureLive),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -334,6 +338,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provide(WorkflowRunErasureLive),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
@@ -396,6 +401,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provide(WorkflowRunErasureLive),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),

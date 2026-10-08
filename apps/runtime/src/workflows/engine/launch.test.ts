@@ -13,8 +13,9 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { eq } from 'drizzle-orm';
 
-import { workflowGraphInvocations, workflowRuns } from '../../persistence/schema.js';
+import { projects, workflowGraphInvocations, workflowRuns } from '../../persistence/schema.js';
 import { WorkflowEngineError } from '../errors.js';
+import { deleteRunsOfProject } from '../store/runs.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
@@ -312,5 +313,72 @@ test('the launching agent reaches one graph through parse as a root and through 
     assert.ok(refused instanceof WorkflowEngineError);
     assert.equal(refused.code, 'workflow_parse_rejected');
     assert.equal(refused.message, 'Launch this from the agent pane it should drive.');
+  });
+});
+
+/**
+ * Launch admission: a run exists only while its project does. Project deletion erases runs in its
+ * own transaction, and `workflow_launch` refuses a project that is gone, so whichever commits first,
+ * a deleted project ends with no runs.
+ */
+
+test('a launch whose project is deleted before the run is committed is refused and creates no run', async () => {
+  await withEngine(async (harness) => {
+    publish(
+      harness,
+      'orphaned',
+      defineWorkflow({
+        command: () => ({ title: 'Orphaned' }),
+        // `parse` runs after the project was resolved and before the run is committed.
+        parse: () => {
+          harness.db.delete(projects).where(eq(projects.id, 1)).run();
+          return { n: 1 };
+        },
+        graph: recordingGraph<{ readonly n: number }>([]),
+      }),
+    );
+    const refused = await harness.fail(
+      harness.engine.launch({
+        workflowKey: 'orphaned',
+        inputs: {},
+        origin: { worktreeId: 1, surfaceId: 1 },
+      }),
+    );
+    assert.ok(refused instanceof WorkflowEngineError);
+    assert.equal(refused.code, 'worktree_not_found');
+    assert.equal(refused.message, 'Project 1 no longer exists.');
+    assert.equal(refused.workflowKey, 'orphaned');
+    assert.deepEqual(runRows(harness), []);
+    assert.deepEqual(
+      harness.events.filter((event) => event.type === 'workflow_run_event'),
+      [],
+      'a refused launch emits nothing',
+    );
+  });
+});
+
+test('a run committed before its project is deleted is erased by the delete', async () => {
+  await withEngine(async (harness) => {
+    publish(
+      harness,
+      'committed',
+      defineWorkflow({
+        command: () => ({ title: 'Committed' }),
+        parse: () => ({ n: 1 }),
+        graph: recordingGraph<{ readonly n: number }>([]),
+      }),
+    );
+    const runId = await harness.launch('committed');
+    assert.deepEqual(
+      runRows(harness).map((run) => run.id),
+      [runId],
+    );
+    // The shape of the workspace's `delete_project` transaction.
+    harness.db.transaction((db) => {
+      deleteRunsOfProject(db, 1);
+      db.delete(projects).where(eq(projects.id, 1)).run();
+    });
+    await harness.settle();
+    assert.deepEqual(runRows(harness), []);
   });
 });

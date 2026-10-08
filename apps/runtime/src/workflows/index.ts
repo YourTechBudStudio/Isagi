@@ -1,6 +1,6 @@
 /**
- * The workflows module's public surface: the engine, its HTTP routes, and the two services other
- * runtime code composes (discovery and the on-disk content store).
+ * The workflows module's public surface: the engine, its HTTP routes, and the services other
+ * runtime code composes (discovery, the on-disk content store, and project-scoped run erasure).
  */
 
 export { registerWorkflowApi } from './api.js';
@@ -10,6 +10,11 @@ export {
   startEngine,
   type WorkflowEngineService,
 } from './engine/service.js';
+export {
+  WorkflowRunErasure,
+  WorkflowRunErasureLive,
+  type WorkflowRunErasureService,
+} from './erasure.js';
 export { WorkflowEngineError } from './errors.js';
 export {
   ContentPublishError,

@@ -9,6 +9,7 @@ import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import {
   WorkspaceRepository,
@@ -55,6 +56,7 @@ function runWithRepository<A, E>(
   return Effect.runPromise(
     build.pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provide(WorkflowRunErasureLive),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
