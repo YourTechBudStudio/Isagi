@@ -26,6 +26,7 @@ export interface AgentSessionRepositoryService {
   readonly listOrphans: (input: {
     readonly updatedBefore: string;
   }) => Effect.Effect<AgentSessionRow[], DatabaseError>;
+  readonly listIds: Effect.Effect<ReadonlySet<number>, DatabaseError>;
   readonly delete: (agentSessionId: number) => Effect.Effect<void, DatabaseError>;
   /** The pane holding the session, or null. Read the way `listOrphans` reads it. */
   readonly findPlacement: (
@@ -127,23 +128,22 @@ export const AgentSessionRepositoryLive = Layer.effect(
             rows.map((row) => agentSessionRow(artifacts, row.session, row.process)),
           );
         }),
+      listIds: database.use(
+        'list_agent_session_ids',
+        (db) =>
+          new Set(
+            db
+              .select({ id: agentSessions.id })
+              .from(agentSessions)
+              .all()
+              .map((row) => row.id),
+          ),
+      ),
+      // Row only: the session folder is reclaimed later by the orphan-folder collector on the
+      // SessionGc tick, which also covers rows removed by worktree and project cascades.
       delete: (agentSessionId) =>
-        Effect.gen(function* () {
-          yield* database.use('delete_agent_session', (db) => {
-            db.delete(agentSessions).where(eq(agentSessions.id, agentSessionId)).run();
-          });
-          yield* artifacts.removeDirectory(agentSessionId).pipe(
-            Effect.catchAll((error) =>
-              Effect.sync(() => {
-                console.warn('[runtime] Agent session artifact cleanup failed', {
-                  agentSessionId,
-                  path: error.path,
-                  code: error.code,
-                  cause: error.cause,
-                });
-              }),
-            ),
-          );
+        database.use('delete_agent_session', (db) => {
+          db.delete(agentSessions).where(eq(agentSessions.id, agentSessionId)).run();
         }),
       findPlacement: (agentSessionId) =>
         database.use('find_agent_session_placement', (db) => {

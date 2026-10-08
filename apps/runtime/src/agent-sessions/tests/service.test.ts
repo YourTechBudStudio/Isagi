@@ -400,6 +400,7 @@ function fakeRepository(
     find: () => Effect.sync(() => state.session),
     findByActivePtyProcessId: () => Effect.die('findByActivePtyProcessId is not used'),
     listOrphans: () => Effect.die('listOrphans is not used'),
+    listIds: Effect.die('listIds is not used'),
     delete: () => Effect.die('delete is not used'),
     findPlacement: () =>
       placement === undefined ? Effect.die('findPlacement is not used') : Effect.succeed(placement),

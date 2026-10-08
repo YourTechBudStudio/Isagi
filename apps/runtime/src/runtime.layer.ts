@@ -243,6 +243,7 @@ const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(HarnessControlPlaneLayer),
 );
 const SessionGcLayer = SessionGcLive.pipe(
+  Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
   Layer.provide(SessionLifecycleLayer),
