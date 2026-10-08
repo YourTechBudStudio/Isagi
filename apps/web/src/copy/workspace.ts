@@ -43,10 +43,6 @@ export const missingProjectCopy = {
   bodyPrefix: 'Isagi expected',
   bodySuffix: (project: MissingProject) => `but it isn't there anymore. ${project.missingReason}`,
   aside: '// it was here a minute ago',
-  confirm: {
-    title: 'Remove this project?',
-    body: 'Isagi forgets it. Files on disk are left alone.',
-  },
   /**
    * The folder-project recovery action. A folder project cannot be relocated,
    * so the only honest move is to look again at the same path.

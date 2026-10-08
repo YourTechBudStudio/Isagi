@@ -2,10 +2,13 @@ import { Plus } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { ReactNode } from 'react';
 
+import { ContextMenu } from '../../components/ContextMenu.js';
 import { surfaceTransition } from '../../lib/motion.js';
+import { useCommandDispatcher } from '../../lib/palette/dispatcher.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { scopeKey, type RailOrderScope } from '../../lib/workspace/rail-order.js';
 import type { PresentProject } from '../../lib/workspace/types.js';
+import { projectMenuItems } from './project-menu.js';
 import { ProjectGlyph } from './ProjectGlyph.js';
 import { useRailDragLayer } from './rail-drag-context.js';
 import { RailOrderNotice } from './RailOrderNotice.js';
@@ -43,33 +46,40 @@ export function ProjectGroup({
   onSelectSurface: (worktreeId: number, surfaceId: number) => void;
 }) {
   const openPalette = usePaletteStore((state) => state.openPalette);
+  const dispatchCommand = useCommandDispatcher();
   const rail = useRailDragLayer();
   const scope: RailOrderScope = { kind: 'worktrees', projectId: project.id };
 
   return (
     <div className="group/group">
-      <ProjectHeaderBody
-        project={project}
-        action={
-          // Git projects only. A folder project owns exactly one environment and
-          // the runtime refuses to make another, so offering the `+` here would
-          // be an invitation to a refusal. The web filters for honesty, not for
-          // enforcement — a forced call is still refused by the runtime.
-          project.kind !== 'git' ? undefined : (
-            // Nested controls keep their own press semantics: the drag engine
-            // refuses to start a gesture from anything inside `data-no-drag`.
-            <button
-              type="button"
-              data-no-drag
-              title="Open worktree"
-              onClick={() => openPalette('open-worktree', { projectId: String(project.id) })}
-              className="ml-auto grid size-5 place-items-center rounded-md text-fg-subtle opacity-0 transition group-hover/group:opacity-100 hover:bg-blue/15 hover:text-blue"
-            >
-              <Plus size={14} />
-            </button>
-          )
-        }
-      />
+      {/* Right-click only, like worktree rows: no visible menu button. A
+          right-click never starts a rail drag, which needs the left button. */}
+      <ContextMenu items={projectMenuItems(project.id, dispatchCommand)}>
+        <div>
+          <ProjectHeaderBody
+            project={project}
+            action={
+              // Git projects only. A folder project owns exactly one environment and
+              // the runtime refuses to make another, so offering the `+` here would
+              // be an invitation to a refusal. The web filters for honesty, not for
+              // enforcement — a forced call is still refused by the runtime.
+              project.kind !== 'git' ? undefined : (
+                // Nested controls keep their own press semantics: the drag engine
+                // refuses to start a gesture from anything inside `data-no-drag`.
+                <button
+                  type="button"
+                  data-no-drag
+                  title="Open worktree"
+                  onClick={() => openPalette('open-worktree', { projectId: String(project.id) })}
+                  className="ml-auto grid size-5 place-items-center rounded-md text-fg-subtle opacity-0 transition group-hover/group:opacity-100 hover:bg-blue/15 hover:text-blue"
+                >
+                  <Plus size={14} />
+                </button>
+              )
+            }
+          />
+        </div>
+      </ContextMenu>
 
       {/* A removed worktree collapses in place; the rows below reflow up
           naturally, and the rows above stay put. */}

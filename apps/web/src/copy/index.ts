@@ -26,6 +26,7 @@ export {
 } from './errors.js';
 export {
   paletteCopy,
+  projectActionsCopy,
   surfaceActionsCopy,
   worktreeActionsCopy,
   worktreeCreateCopy,

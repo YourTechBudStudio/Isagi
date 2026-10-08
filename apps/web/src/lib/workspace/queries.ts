@@ -29,7 +29,12 @@ import {
   restoreActivePaneFocus,
 } from './activation.js';
 import { handleReconciliationFindings, scheduleWorkspaceReconcile } from './background-sync.js';
-import { reconcileSelection, workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
+import {
+  defaultSelection,
+  reconcileSelection,
+  workspaceDataFromSnapshot,
+  type WorkspaceData,
+} from './model.js';
 import {
   activeContextQueryKey,
   commandLogMetadataQueryKey,
@@ -216,33 +221,6 @@ export function useAddProjectMutation() {
   });
 }
 
-export function useDeleteProjectMutation() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (projectId: number) => runRuntimeEffect(deleteProject(projectId)),
-    onError: (error, projectId) => {
-      showToast({
-        id: `delete-project-failed:${projectId}`,
-        kind: 'warning',
-        title: toastCopy.projectDeleteFailed.title,
-        subtitle: formatRuntimeError(error),
-      });
-      console.error('[workspace] project deletion failed', error);
-    },
-    onSuccess: (_output, projectId) => {
-      const worktreeIds =
-        client
-          .getQueryData<WorkspaceData>(workspaceQueryKey)
-          ?.projects.find((project) => project.id === projectId)
-          ?.worktrees.map((worktree) => worktree.id) ?? [];
-      for (const worktreeId of worktreeIds) {
-        publishTerminalWorkspaceFact({ type: 'durable_worktree_deleted', worktreeId });
-      }
-      return commitDeleteProjectSuccess(client);
-    },
-  });
-}
-
 /**
  * What a same-path recheck established about one project.
  *
@@ -382,6 +360,40 @@ export async function deleteWorktreeFromPalette(
   } catch (error) {
     await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
     throw error;
+  }
+}
+
+/**
+ * The one project-delete path, shared by every entry point through the
+ * `delete-project` palette command. Never rejects: a failure is reported by the
+ * existing toast and the snapshot is re-read, so the palette can always close.
+ * `{ deleted: false }` (already gone) is success.
+ */
+export async function deleteProjectFromPalette(
+  projectId: number,
+  remove: typeof deleteProject = deleteProject,
+  client: QueryClient = queryClient,
+): Promise<void> {
+  try {
+    await runRuntimeEffect(remove(projectId));
+  } catch (error) {
+    showToast({
+      id: `delete-project-failed:${projectId}`,
+      kind: 'warning',
+      title: toastCopy.projectDeleteFailed.title,
+      subtitle: formatRuntimeError(error),
+    });
+    console.error('[workspace] project deletion failed', error);
+    await client.invalidateQueries({ queryKey: workspaceQueryKey });
+    return;
+  }
+  try {
+    await commitDeleteProjectSuccess(client, projectId);
+  } catch (error) {
+    // The project is gone; only the follow-up read failed. Saying the delete
+    // failed would be false, so log it and let the next refetch catch up.
+    console.error('[workspace] workspace refresh after project deletion failed', error);
+    await client.invalidateQueries({ queryKey: workspaceQueryKey });
   }
 }
 
@@ -738,8 +750,53 @@ export async function commitRelocateProjectSuccess(
   await client.invalidateQueries({ queryKey: workspaceQueryKey });
 }
 
-export async function commitDeleteProjectSuccess(client: QueryClient) {
-  await client.invalidateQueries({ queryKey: workspaceQueryKey });
+/**
+ * Settle a successful project delete.
+ *
+ * The worktree ids come from the cache *before* the refetch replaces it, since
+ * the fresh snapshot no longer knows them. The selection is moved here, before
+ * `useReconcileSelection` sees the new data: left to that effect, a worktree
+ * selection on the deleted project would be "recovered" with a warning that the
+ * checkout is no longer reported by Git, which is false for a deliberate delete.
+ * A selection elsewhere is left alone.
+ *
+ * The read must begin after the delete. `fetchQuery` joins a workspace read
+ * already in flight (a focus refetch, say) whatever its `staleTime`, and that
+ * read would still list the deleted project. Cancelling first, `exact` as in
+ * {@link runProjectRecheck}, makes the fetch below a new one.
+ */
+export async function commitDeleteProjectSuccess(
+  client: QueryClient,
+  projectId: number,
+  fetchWorkspaceData: (
+    signal?: AbortSignal | undefined,
+  ) => Promise<WorkspaceData> = loadWorkspaceData,
+) {
+  const worktreeIds =
+    client
+      .getQueryData<WorkspaceData>(workspaceQueryKey)
+      ?.projects.find((project) => project.id === projectId)
+      ?.worktrees.map((worktree) => worktree.id) ?? [];
+  for (const worktreeId of worktreeIds) {
+    publishTerminalWorkspaceFact({ type: 'durable_worktree_deleted', worktreeId });
+  }
+
+  await client.cancelQueries({ queryKey: workspaceQueryKey, exact: true });
+  const data = await client.fetchQuery({
+    queryKey: workspaceQueryKey,
+    queryFn: ({ signal }) => fetchWorkspaceData(signal),
+    staleTime: 0,
+  });
+
+  const store = useWorkspaceStore.getState();
+  const { selection } = store;
+  if (
+    (selection.kind === 'worktree' || selection.kind === 'missingProject') &&
+    selection.projectId === projectId
+  ) {
+    store.setSelection(defaultSelection(data.projects));
+    restoreActivePaneFocus();
+  }
   publishTerminalWorkspaceFact({ type: 'durable_inventory_refresh_requested' });
 }
 

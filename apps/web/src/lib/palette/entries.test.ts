@@ -10,6 +10,7 @@ import {
 } from '../../copy/index.js';
 import { workflowSummaryFixture } from '../workspace/workflow/test-support.js';
 import { assembleEntries, workflowFailureEntry } from './entries.js';
+import { GROUP_LABELS, GROUP_ORDER } from './groups.js';
 import type { CommandErrorContent, PaletteContext, PaletteEntry } from './types.js';
 
 test('active worktree action entries freeze the active project and worktree ids', () => {
@@ -17,6 +18,28 @@ test('active worktree action entries freeze the active project and worktree ids'
   const entry = entries.find((candidate) => candidate.id === 'delete-active-worktree');
 
   assert.deepEqual(entry?.values, { projectId: '1', worktreeId: '11' });
+});
+
+test('delete-project sits under This project, directly before the worktree actions', () => {
+  const entries = assembleEntries(ctx());
+  const index = entries.findIndex((candidate) => candidate.id === 'delete-project');
+  const entry = entries[index];
+
+  assert.equal(entry?.group, 'project-actions');
+  assert.equal(entry?.label, 'Delete current project…');
+  assert.equal(entry?.sub, 'isagi');
+  assert.deepEqual(entry?.values, { projectId: '1' });
+  assert.equal(entries[index + 1]?.group, 'worktree-actions');
+  assert.equal(GROUP_LABELS['project-actions'], 'This project');
+  assert.equal(GROUP_ORDER.indexOf('project-actions') + 1, GROUP_ORDER.indexOf('worktree-actions'));
+});
+
+test('no project actions without an active worktree', () => {
+  const entries = assembleEntries(ctx({ activeWorktree: null }));
+  assert.equal(
+    entries.some((candidate) => candidate.group === 'project-actions'),
+    false,
+  );
 });
 
 test('workflow descriptors assemble into workflow entries', () => {
