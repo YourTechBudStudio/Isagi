@@ -1,5 +1,5 @@
 import type { Effect } from 'effect';
-import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { useRegistry } from '../../state/registry.js';
 import { runApp } from '../../state/runtime.js';
@@ -14,6 +14,7 @@ import type {
   TerminalAttachmentSnapshot,
   TerminalPresentationController,
 } from './controller.js';
+import { useEnsuredTerminalSession } from './ensured-session.js';
 import { browserTerminalEnvironment } from './environment.js';
 import { selectPresentationResource } from './resource-selection.js';
 import {
@@ -60,11 +61,7 @@ export function useTerminalAttachmentResource(input: {
   const identityKey = input.identity
     ? `${input.identity.kind}:${input.identity.sessionId}`
     : 'none';
-  const session = useMemo(() => {
-    if (!input.identity) return null;
-    const ensured = workspace.cache.ensureSession(input.identity, input.placement);
-    return ensured.status === 'ensured' ? ensured : null;
-  }, [workspace.cache, input.identity?.kind, input.identity?.sessionId]);
+  const session = useEnsuredTerminalSession(workspace.cache, input.identity, input.placement);
   // React state, not a ref: preparation resolves outside React's knowledge, and
   // the cache publication that accompanies installation may be rendered before
   // this value is written. A ref write would schedule no render and could strand

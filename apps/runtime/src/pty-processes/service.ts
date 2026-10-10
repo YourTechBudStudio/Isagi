@@ -16,7 +16,6 @@ import {
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
 import { CliAccess } from '../cli-access/index.js';
-import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { runPeriodically } from '../platform/fibers/index.js';
 import { DataDirectory, DatabaseError } from '../platform/persistence/index.js';
@@ -73,6 +72,13 @@ import {
   type PtyProcessAllocation,
   type PtyProcessLaunchMetadata,
 } from './types.js';
+
+/**
+ * The SIGTERM grace each live node-pty incarnation gets when the runtime shuts down. The whole sweep shares it, and it
+ * stays well inside the desktop's stop budget (`stopGrace`, 3 s before it SIGKILLs the runtime) so the runtime, not
+ * that SIGKILL, ends its own PTYs and records them as `runtime_shutdown`.
+ */
+export const SHUTDOWN_GRACEFUL_TIMEOUT_MS = 1_000;
 
 const defaultCols = 100;
 const defaultRows = 30;
@@ -195,9 +201,11 @@ const make = Effect.gen(function* () {
     });
 
   // Runs while the supervisors still consume exits, before they are interrupted: detach every websocket, then end
-  // every live node-pty incarnation as a `runtime_shutdown`. Best effort per row: an already-dead incarnation is an
-  // `already_absent` that commits nothing false, and a genuine control failure leaves the row running for the next
-  // startup reconciliation to classify honestly. Deferred writes the sweep hands to `retry` are drained after it.
+  // every live node-pty incarnation as a `runtime_shutdown`. Every incarnation is terminated at once under one shared
+  // grace, so the sweep takes one grace however many PTYs are live and finishes inside the desktop's stop budget.
+  // Best effort per row: an already-dead incarnation is an `already_absent` that commits nothing false, and a genuine
+  // control failure is logged and leaves the row running for the next startup reconciliation to classify honestly.
+  // Deferred writes the sweep hands to `retry` are drained after it.
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
       const sessions = yield* repository
@@ -205,19 +213,18 @@ const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => []));
       for (const active of [...activeAttachments.values()]) yield* active.release;
       activeAttachments.clear();
-      for (const session of sessions) {
-        if (session.backend !== 'node_pty') continue;
-        yield* terminateWithReason(session.id, 'runtime_shutdown').pipe(
-          Effect.catch((error) =>
-            Effect.logWarning('Could not terminate PTY process at shutdown').pipe(
-              Effect.annotateLogs({
-                ptyProcessId: session.id,
-                cause: describeOperationalCause(error),
-              }),
-            ),
-          ),
-        );
-      }
+      yield* terminatePtyProcesses(
+        (input) =>
+          terminateWithReason(input.ptyProcessId, 'runtime_shutdown', input.gracefulTimeoutMs),
+        {
+          failurePolicy: 'best_effort',
+          gracefulTimeoutMs: SHUTDOWN_GRACEFUL_TIMEOUT_MS,
+          operation: 'runtime_shutdown',
+          ptyProcessIds: sessions
+            .filter((session) => session.backend === 'node_pty')
+            .map((session) => session.id),
+        },
+      ).pipe(Effect.ignore);
     }),
   );
 

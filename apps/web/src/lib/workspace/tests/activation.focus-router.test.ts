@@ -11,6 +11,7 @@ import {
   paneFocusAllowed,
   registerDrawerFocusTarget,
   registerPaneFocusTarget,
+  restoreActivePaneFocus,
   restoreWorkbenchFocus,
 } from '../activation.js';
 import { cachedWorkspaceData, workspaceAtom } from '../queries.js';
@@ -20,6 +21,7 @@ import {
   selectWorktree,
   setActivePane,
   setActiveSurface,
+  setWorkflowInspectorOpen,
 } from '../store.js';
 import { project, snapshotOf, surface, workspace, worktree } from './test-support.js';
 
@@ -167,7 +169,34 @@ describe('pane focus ownership guard', () => {
     assert.deepEqual(calls, [], 'a busy or open palette owns focus, not the pane');
   });
 
-  it('focuses the pane when both overlays are closed', () => {
+  it('drops a pane-focus request that fires while the workflow inspector is open', () => {
+    seedWorkspace();
+    setWorkflowInspectorOpen(registry, true);
+    const calls = recordingPaneTarget();
+
+    activatePane(
+      registry,
+      { worktreeId: WORKTREE_ID, surfaceId: SURFACE_ID, paneId: PANE_ID },
+      { persist: false },
+    );
+
+    // A bar control that disabled itself dropped focus to the body; a terminal that took it then
+    // would swallow the Escape that closes the inspector and receive keys typed at it.
+    assert.deepEqual(calls, [], 'an open inspector owns focus, not the pane behind it');
+  });
+
+  it('focuses the pane again once the inspector closes and its close path restores it', () => {
+    seedWorkspace();
+    setWorkflowInspectorOpen(registry, true);
+    const calls = recordingPaneTarget();
+
+    setWorkflowInspectorOpen(registry, false);
+    restoreActivePaneFocus(registry);
+
+    assert.deepEqual(calls, ['pane'], 'closing the inspector lands the user back in their pane');
+  });
+
+  it('focuses the pane when every overlay is closed', () => {
     seedWorkspace();
     const calls = recordingPaneTarget();
 
@@ -217,7 +246,15 @@ describe('paneFocusAllowed', () => {
     assert.equal(paneFocusAllowed(registry), false);
   });
 
-  it('is true only when neither overlay is open', () => {
+  it('is false while the workflow inspector is open, and true again once it closes', () => {
+    setWorkflowInspectorOpen(registry, true);
+    assert.equal(paneFocusAllowed(registry), false);
+
+    setWorkflowInspectorOpen(registry, false);
+    assert.equal(paneFocusAllowed(registry), true);
+  });
+
+  it('is true only when no overlay is open', () => {
     assert.equal(paneFocusAllowed(registry), true);
   });
 });

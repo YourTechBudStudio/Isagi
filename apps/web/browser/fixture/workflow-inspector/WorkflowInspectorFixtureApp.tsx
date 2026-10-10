@@ -1,11 +1,20 @@
 import { Effect } from 'effect';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { WorkflowEventDto } from '@isagi/contracts';
 
 import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
+import { useRegistry } from '../../../src/lib/state/registry.js';
 import { runApp } from '../../../src/lib/state/runtime.js';
-import { selectWorktree, setActiveSurface } from '../../../src/lib/workspace/store.js';
+import {
+  restoreActivePaneFocus,
+  usePaneFocusTarget,
+} from '../../../src/lib/workspace/activation.js';
+import {
+  selectWorktree,
+  setActivePane,
+  setActiveSurface,
+} from '../../../src/lib/workspace/store.js';
 import type { WorkflowSignal } from '../../../src/lib/workspace/workflow/live.js';
 import { useRuntimeIdentity } from '../../../src/lib/workspace/workflow/queries.js';
 import { receiveWorkflowSignal } from '../../../src/lib/workspace/workflow/sync.js';
@@ -26,6 +35,18 @@ function publishWorkflowSignals(...signals: readonly WorkflowSignal[]) {
     fixtureRegistry,
     Effect.forEach(signals, (signal) => receiveWorkflowSignal(signal), { discard: true }),
   );
+}
+
+declare global {
+  interface Window {
+    inspectorWorkbench?: {
+      /**
+       * Ask the production focus router to put keyboard focus on the active pane, as a terminal does
+       * when it re-asserts focus (its activation after the bar's resize reaches it, or a re-render).
+       */
+      readonly reassertPaneFocus: () => void;
+    };
+  }
 }
 
 /**
@@ -49,6 +70,9 @@ export function WorkflowInspectorFixtureApp({
   useEffect(() => {
     setActiveSurface(fixtureRegistry, FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
     selectWorktree(fixtureRegistry, FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
+    window.inspectorWorkbench = {
+      reassertPaneFocus: () => restoreActivePaneFocus(fixtureRegistry),
+    };
   }, []);
 
   return (
@@ -67,6 +91,7 @@ function FixtureShell({
 }) {
   const runtimeIdentity = useRuntimeIdentity();
   const [scenario, setScenario] = useState<ScenarioKey>('waiting_questions');
+  const [terminalMounted, setTerminalMounted] = useState(false);
 
   // Published rather than written into the cache: a real client learns which run occupies a surface
   // from the connection's snapshot. Sent once the runtime answers, as a connection would.
@@ -213,6 +238,15 @@ function FixtureShell({
         </button>
         <button
           type="button"
+          data-action="mount-terminal"
+          aria-pressed={terminalMounted}
+          className="rounded border border-line/40 px-1.5 py-0.5 font-mono text-fg-subtle"
+          onClick={() => setTerminalMounted(true)}
+        >
+          Agent terminal
+        </button>
+        <button
+          type="button"
           data-action="reconnect"
           className="rounded border border-line/40 px-1.5 py-0.5 font-mono text-fg-subtle"
           onClick={() => {
@@ -226,13 +260,52 @@ function FixtureShell({
       {/* The work surface the inspector sits above, and the bar it opens from. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 p-3">
-          <div className="h-full rounded-md border border-line/28 bg-terminal-surface/80 p-4 font-mono text-[12.5px] text-fg-muted">
+          <div className="flex h-full flex-col rounded-md border border-line/28 bg-terminal-surface/80 p-4 font-mono text-[12.5px] text-fg-muted">
             <p className="text-green">$ isagi run release-check</p>
             <p className="text-fg-subtle">the work surface this inspector sits above</p>
+            {terminalMounted && <FakeAgentTerminal />}
           </div>
         </div>
         <WorkflowBarContainer inspectorEngineFactory={engine.factory} />
       </div>
     </main>
+  );
+}
+
+/**
+ * A stand-in for an agent terminal in the surface's active pane. Opt-in, so the specs about where
+ * focus goes when there is no pane keep their meaning.
+ *
+ * It is the pane's registered focus target, as `PaneTerminal` is, and it consumes Escape the way
+ * xterm's helper textarea does (sent to the agent, prevented and stopped), so an Escape typed while
+ * it holds focus never reaches anything above it.
+ */
+function FakeAgentTerminal() {
+  const registry = useRegistry();
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    setActivePane(registry, FIXTURE_PLACEMENT.surfaceId, FIXTURE_PLACEMENT.paneId);
+  }, [registry]);
+
+  usePaneFocusTarget({
+    surfaceId: FIXTURE_PLACEMENT.surfaceId,
+    paneId: FIXTURE_PLACEMENT.paneId,
+    priority: 100,
+    focus: () => inputRef.current?.focus(),
+  });
+
+  return (
+    <textarea
+      ref={inputRef}
+      aria-label="Agent terminal"
+      data-fixture-terminal
+      className="mt-2 min-h-0 flex-1 resize-none bg-transparent text-fg outline-none"
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    />
   );
 }

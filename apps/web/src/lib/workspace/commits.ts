@@ -39,11 +39,12 @@ import type { AppRequirements } from '../state/runtime.js';
 import { showToast } from '../toast/index.js';
 import {
   activatePane,
+  activateSurface,
   cancelWorkbenchFocusPersistence,
   restoreActivePaneFocus,
 } from './activation.js';
 import { handleReconciliationFindings, scheduleWorkspaceReconcile } from './background-sync.js';
-import { defaultSelection, reconcileSelection } from './model.js';
+import { defaultSelection, findWorktree, reconcileSelection } from './model.js';
 import {
   cachedWorkspaceData,
   refreshWorkspace,
@@ -69,7 +70,14 @@ import {
   splitPane,
   startPane,
 } from './runtime-data.js';
-import { forgetPane, forgetSurface, selectionAtom, selectWorktree, setSelection } from './store.js';
+import {
+  activeSurfaceByWorktreeAtom,
+  forgetPane,
+  forgetSurface,
+  selectionAtom,
+  selectWorktree,
+  setSelection,
+} from './store.js';
 import { publishTerminalFactEffect } from './terminal-presentation/facts.js';
 
 /** The app registry, from the effect context (`runApp` and atom effects provide it). */
@@ -273,11 +281,15 @@ export const renameSurfaceTitleFromPalette = Effect.fn('renameSurfaceTitleFromPa
 
 export const deleteSurfaceFromPalette = Effect.fn('deleteSurfaceFromPalette')(
   function* (input: { readonly worktreeId: number; readonly surfaceId: number }) {
+    // Decided before the request: the runtime's `surface_changed` event can forget the active
+    // override and re-read the workspace before the response lands, erasing both facts.
+    const successorSurfaceId = surfaceSuccessor(yield* registryNow, input);
     const output = yield* Effect.uninterruptible(deleteSurface(input.surfaceId));
     yield* commitDeleteSurfaceSuccess({
       worktreeId: input.worktreeId,
       surfaceId: input.surfaceId,
       output,
+      successorSurfaceId,
     });
     return output;
   },
@@ -422,16 +434,40 @@ export const commitRenameSurfaceSuccess = Effect.fn('commitRenameSurfaceSuccess'
 });
 
 /**
+ * The surface to activate when `target` goes: its next rail neighbour, else the previous one. `null`
+ * when `target` is not the worktree's active surface (deleting another one keeps the selection) or
+ * is its only surface.
+ */
+function surfaceSuccessor(
+  registry: AtomRegistry.AtomRegistry,
+  target: { readonly worktreeId: number; readonly surfaceId: number },
+): number | null {
+  const worktree = findWorktree(cachedWorkspaceData(registry)?.projects ?? [], target.worktreeId);
+  if (!worktree) return null;
+  const activeSurfaceId =
+    registry.get(activeSurfaceByWorktreeAtom)[target.worktreeId] ?? worktree.activeSurfaceId;
+  if (activeSurfaceId !== target.surfaceId) return null;
+  const index = worktree.surfaces.findIndex((surface) => surface.id === target.surfaceId);
+  if (index === -1) return null;
+  return (worktree.surfaces[index + 1] ?? worktree.surfaces[index - 1])?.id ?? null;
+}
+
+/**
  * The deleted surface's detail stays cached but is never read again (web-state §2.3 delta 5:
  * there is no `removeQueries`); the local overrides and the focus revision are what matter.
+ *
+ * Deleting the active surface activates `successorSurfaceId` (persisting the runtime focus row,
+ * whose `active_surface_id` the delete nulled), unless the user activated another surface meanwhile
+ * or the successor is gone too.
  */
 export const commitDeleteSurfaceSuccess = Effect.fn('commitDeleteSurfaceSuccess')(
   function* (input: {
     readonly worktreeId: number;
     readonly surfaceId: number;
     readonly output: DeleteSurfaceOutput;
+    readonly successorSurfaceId: number | null;
   }) {
-    yield* refreshWorkspace();
+    const data = yield* refreshWorkspace();
     if (input.output.deletedSurfaceId !== input.surfaceId) return;
     const registry = yield* registryNow;
     yield* publishTerminalFactEffect({
@@ -442,6 +478,12 @@ export const commitDeleteSurfaceSuccess = Effect.fn('commitDeleteSurfaceSuccess'
     cancelWorkbenchFocusPersistence(registry, input.worktreeId);
     forgetSurface(registry, input.worktreeId, input.surfaceId);
     forgetPane(registry, input.surfaceId);
+    const successor = findWorktree(data.projects, input.worktreeId)?.surfaces.find(
+      (surface) => surface.id === input.successorSurfaceId,
+    );
+    if (successor && registry.get(activeSurfaceByWorktreeAtom)[input.worktreeId] === undefined) {
+      activateSurface(registry, { worktreeId: input.worktreeId, surfaceId: successor.id });
+    }
   },
 );
 

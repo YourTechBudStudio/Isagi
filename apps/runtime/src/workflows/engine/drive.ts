@@ -280,9 +280,12 @@ const runNodeFunction = Effect.fn('workflows.runNodeFunction')(function* (
   });
 });
 
-/** Marks the execution and the run as waiting, the first time a check finds nothing yet. */
+/**
+ * Marks the execution and the run as waiting, the first time a check finds nothing yet. After Resume
+ * the execution is already waiting and only the run changes, with no event to carry its summary.
+ */
 function park(rt: EngineRuntime, runId: number, executionId: number) {
-  return rt.commit('workflow_park', (db, emit) => {
+  return rt.commit('workflow_park', (db, emit, _abort, changed) => {
     const run = getRun(db, runId);
     const execution = getExecution(db, executionId);
     if (!run || !execution || (run.status !== 'running' && run.status !== 'waiting')) return;
@@ -298,7 +301,10 @@ function park(rt: EngineRuntime, runId: number, executionId: number) {
         data: result?.type === 'suspend' ? result.wait : null,
       });
     }
-    if (run.status === 'running') updateRun(db, runId, { status: 'waiting' });
+    if (run.status === 'running') {
+      updateRun(db, runId, { status: 'waiting' });
+      changed(runId);
+    }
   });
 }
 

@@ -19,11 +19,13 @@ import {
   validateProjectRoot,
 } from '../platform/git/index.js';
 import { ProjectRepository } from '../projects/index.js';
+import { PtyService } from '../pty-processes/index.js';
+import { sessionPtyProcessIds, WorktreeDeleteDiagnosticsReader } from './delete-diagnostics.js';
 import { ProjectOrderError, WorkspaceError, WorktreeOrderError } from './errors.js';
 import { ProjectDeletionParticipant } from './project-deletion-participant.js';
 import { commandCleanup, requireProject } from './project-guards.js';
 import { reconciliation, reconciliationFindingsFromWorktreeResult } from './reconcile.js';
-import { durableSessionDeletions } from './worktree-delete.js';
+import { durableSessionDeletions, terminateSessionPtys } from './worktree-delete.js';
 
 /**
  * A project's life in the registry: registering a path, pointing a missing Git project at its new path, deleting it,
@@ -33,6 +35,8 @@ export const projectLifecycle = Effect.gen(function* () {
   const repository = yield* ProjectRepository;
   const git = yield* Git;
   const commands = yield* CommandService;
+  const pty = yield* PtyService;
+  const deleteDiagnostics = yield* WorktreeDeleteDiagnosticsReader;
   const internalEvents = yield* InternalEvents;
   const deletionParticipant = yield* ProjectDeletionParticipant;
   const reconcile = yield* reconciliation;
@@ -145,6 +149,18 @@ export const projectLifecycle = Effect.gen(function* () {
           projectId,
         );
       }
+      // The cascade below erases every agent and terminal session of these worktrees, and with
+      // them the only rows that point at their live processes: stop those processes first, as
+      // deleting a single worktree does, or they run on with no owner.
+      const sessionPtys: number[] = [];
+      for (const worktree of worktrees) {
+        sessionPtys.push(...sessionPtyProcessIds(yield* deleteDiagnostics.read(worktree.id)));
+      }
+      yield* terminateSessionPtys(pty, {
+        operation: 'project_delete',
+        ptyProcessIds: sessionPtys,
+        projectId,
+      });
       const doomed = yield* sessionDeletions.inWorktrees(
         new Set(worktrees.map((worktree) => worktree.id)),
       );

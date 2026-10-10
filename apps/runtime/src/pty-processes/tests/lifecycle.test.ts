@@ -9,6 +9,7 @@ import test from 'node:test';
 
 import {
   type Cause,
+  Clock,
   Context,
   Deferred,
   Effect,
@@ -35,7 +36,7 @@ import { NodePtyBackend } from '../adapters/node-pty.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
 import { PtyRepository } from '../repository.js';
-import { PtyService } from '../service.js';
+import { PtyService, SHUTDOWN_GRACEFUL_TIMEOUT_MS } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
 import {
   PtyServiceError,
@@ -328,6 +329,54 @@ test('closing the PTY service scope stops the loops, sweeps, interrupts supervis
           'retry landed the killed write',
         ]);
         assert.equal((yield* repository.findProcess(ptyProcessId))?.status, 'killed');
+      }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+    ),
+  ));
+
+test('the shutdown sweep terminates every live PTY at once, in one shared grace inside the desktop stop budget', () =>
+  withDataRoot('isagi-pty-shutdown-sweep-', (dataRoot) =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const terminations: { readonly grace: number; readonly endedAt: number }[] = [];
+        const backend = fakeNodePty({
+          // Every incarnation spends its whole grace, as a tree that ignores SIGTERM would.
+          terminate: ({ gracefulTimeoutMs }) =>
+            Effect.gen(function* () {
+              yield* Effect.sleep(gracefulTimeoutMs);
+              const endedAt = yield* Clock.currentTimeMillis;
+              terminations.push({ grace: gracefulTimeoutMs, endedAt });
+              return { terminated: true };
+            }),
+        });
+        const service = yield* buildInScope(ptyServiceLayer(fakeCatalog(backend)));
+        const pty = Context.get(service.context, PtyService);
+        const repository = yield* PtyRepository;
+        const launched = yield* Effect.forEach([1, 2, 3, 4, 5], () =>
+          pty.launch({ command: 'pnpm', args: ['dev'], cwd: '/repo/isagi' }),
+        );
+        const startedAt = yield* Clock.currentTimeMillis;
+
+        const closing = yield* Effect.forkChild(service.close);
+        // Far more than one grace, so a sequential sweep would finish too and show its stagger.
+        yield* TestClock.adjust(launched.length * SHUTDOWN_GRACEFUL_TIMEOUT_MS * 2);
+        yield* Fiber.join(closing);
+
+        // The desktop SIGKILLs the runtime 3 s after SIGTERM; the sweep must end well before.
+        assert.ok(SHUTDOWN_GRACEFUL_TIMEOUT_MS <= 1_500);
+        assert.equal(terminations.length, launched.length);
+        for (const { grace, endedAt } of terminations) {
+          assert.equal(grace, SHUTDOWN_GRACEFUL_TIMEOUT_MS);
+          assert.equal(
+            endedAt - startedAt,
+            SHUTDOWN_GRACEFUL_TIMEOUT_MS,
+            'all ended after one grace',
+          );
+        }
+        for (const { ptyProcessId } of launched) {
+          const row = yield* repository.findProcess(ptyProcessId);
+          assert.equal(row?.status, 'killed');
+          assert.equal(row?.statusReason, 'runtime_shutdown');
+        }
       }).pipe(Effect.provide(persistenceLayer(dataRoot))),
     ),
   ));

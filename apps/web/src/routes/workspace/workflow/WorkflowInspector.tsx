@@ -7,6 +7,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { WorkflowCheckpointSummaryDto, WorkflowRunSummary } from '@isagi/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
+import { isPaletteOpen } from '../../../lib/palette/store.js';
 import { disabledQuery } from '../../../lib/state/policy.js';
 import { useRegistry } from '../../../lib/state/registry.js';
 import { queryError } from '../../../lib/state/result.js';
@@ -163,28 +164,43 @@ export function WorkflowInspector({
   }, []);
 
   /**
-   * Focus moves into the overlay on open and back where it came from on close.
+   * Focus moves into the overlay on open, and on close goes back where it came from unless something
+   * already took it.
    *
-   * "Back where it came from" is the Inspect toggle in practice, and reading it from the document
-   * rather than being handed a ref is what keeps that true however the inspector was opened.
+   * The close path hands focus to the active pane, as the drawer's does, and that lands a frame or two
+   * after the close while this unmount waits for the exit animation. So the opener (the Inspect toggle
+   * in practice, read from the document so that holds however the inspector was opened) only gets
+   * focus back when nothing holds it: there is no pane to return to, or the pane has not taken it yet
+   * and will on its own frame.
    */
   useEffect(() => {
     const opener = document.activeElement;
     closeRef.current?.focus();
     return () => {
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+      const holder = document.activeElement;
+      const unclaimed = holder === null || holder === document.body;
+      if (unclaimed && opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
   }, []);
 
-  const onKeyDown = useCallback(
-    (event: React.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    },
-    [onClose],
-  );
+  /**
+   * Escape closes the inspector wherever focus is, as the header's Esc hint promises. A `keydown` on
+   * the dialog only heard it while focus was inside, and the bar below stays operable: one click on
+   * a bar control moved focus out (or to the body, once that control disabled itself) and Escape
+   * went nowhere. On the document it still runs after React's handlers, so an Escape the bar's
+   * input flow or the palette consumed (prevented and stopped) never reaches it; stopping it here
+   * keeps one Escape from also leaving zen. An open palette owns Escape even while busy.
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || isPaletteOpen(registry)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, registry]);
 
   const toggleExpanded = useCallback((key: string) => {
     setExpanded((current) => {
@@ -237,7 +253,6 @@ export function WorkflowInspector({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.985, y: 6 }}
         transition={surfaceTransition}
-        onKeyDown={onKeyDown}
         style={{ bottom: bottomInset + 8 }}
         className="absolute inset-x-4 top-4 z-30 flex flex-col overflow-hidden rounded-md border border-line/42 bg-elevated/97 shadow-lift backdrop-blur-xl"
       >

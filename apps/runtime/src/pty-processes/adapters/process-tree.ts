@@ -1,6 +1,6 @@
 import process from 'node:process';
 
-import { Effect } from 'effect';
+import { Duration, Effect } from 'effect';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { execCommand } from '../../platform/process/index.js';
@@ -94,6 +94,21 @@ export function killProcessTreeSurvivors(
       );
     }
     return { killedRoot: sweep.killedRoot };
+  });
+}
+
+const DESCENDANT_EXIT_POLL = Duration.millis(50);
+
+// Waits until every snapshotted descendant has exited, polling with signal 0 so a
+// grace period can end once the tree is gone. Unbounded: the caller bounds it by
+// its grace. Liveness errs towards waiting (a reused pid only extends the wait up
+// to that bound), and processes the snapshot never saw are left to the final sweep.
+export function awaitProcessTreeDescendantsExit(
+  snapshot: ProcessTreeSnapshot | null,
+): Effect.Effect<void> {
+  const anyAlive = () => snapshot?.descendants.some((row) => isPidAlive(row.pid)) ?? false;
+  return Effect.gen(function* () {
+    while (anyAlive()) yield* Effect.sleep(DESCENDANT_EXIT_POLL);
   });
 }
 
@@ -216,6 +231,16 @@ function readPosixProcessTable(): Effect.Effect<ProcessTableRow[] | null> {
       ),
     ),
   );
+}
+
+// Signal 0 delivers nothing; it only asks whether the pid exists and is ours to signal.
+function isPidAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Reports whether the signal was delivered.

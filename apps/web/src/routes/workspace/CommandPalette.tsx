@@ -45,6 +45,7 @@ import {
   isBusy,
   paletteReducer,
   callerRunningCopy,
+  type PaletteEvent,
 } from '../../lib/palette/machine.js';
 import {
   commandForEntryId,
@@ -231,7 +232,25 @@ export function CommandPalette() {
   );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
 
-  const [machine, send] = useReducer(paletteReducer, initialPaletteState);
+  const [machine, dispatch] = useReducer(paletteReducer, initialPaletteState);
+  const seenEffectIds = useRef(new Set<number>());
+  const consumedEffectIds = useRef<number[]>([]);
+  // Every palette event goes through here. Effects the runner below has already
+  // started leave the queue in the same batch as the next real event, at that
+  // event's priority. Trimming them used to be an update of its own, dispatched
+  // from the runner's passive effect, so each path keystroke left a second,
+  // default-priority render behind it. Chromium runs queued keystrokes before that
+  // render's scheduler task, React counts every keystroke commit that leaves it
+  // pending as a nested update, and the 51st key of a fast burst threw "Maximum
+  // update depth exceeded" from its own dispatch and lost its character.
+  const send = useCallback((event: PaletteEvent) => {
+    const consumed = consumedEffectIds.current;
+    if (consumed.length > 0) {
+      consumedEffectIds.current = [];
+      dispatch({ type: 'effects-consumed', ids: consumed });
+    }
+    dispatch(event);
+  }, []);
   const [workflowFormEntryId, setWorkflowFormEntryId] = useState<string | null>(null);
   // The three runtime calls the workflow adapter needs, run against this app session.
   const workflowLaunchDeps = useMemo(() => makeWorkflowLaunchDeps(app), [app]);
@@ -240,7 +259,6 @@ export function CommandPalette() {
   // Live highlight index for event-time handlers (defined before the selection
   // hook); render reads `selection.selectedIndex` directly.
   const selectedIndexRef = useRef<number | null>(null);
-  const seenEffectIds = useRef(new Set<number>());
   const pathSuggestTimer = useRef<number | null>(null);
   const lastOpenRequest = useRef<{
     readonly entryId: string | null;
@@ -249,7 +267,7 @@ export function CommandPalette() {
 
   const closeCurrentPalette = useCallback(() => {
     send({ type: 'closed' });
-  }, []);
+  }, [send]);
 
   // A command's async run (or a workflow launch) is in flight. The machine stays
   // in search/step while the run effect resolves, so without this the palette
@@ -446,8 +464,9 @@ export function CommandPalette() {
       pushRecent: pushRecentEntry,
       pathSuggestTimer,
       seenEffectIds,
+      consumedEffectIds,
     });
-  }, [machine.effects, allEntries, ctx, pushRecentEntry]);
+  }, [machine.effects, allEntries, ctx, send, pushRecentEntry]);
 
   const renderedLength =
     view.kind === 'running'

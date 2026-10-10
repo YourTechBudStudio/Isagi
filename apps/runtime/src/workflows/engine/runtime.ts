@@ -34,12 +34,13 @@ import type { AuthorBridge } from './author-bridge.js';
 export interface EngineRuntime {
   readonly deps: EngineDeps;
   /**
-   * Runs `write` in one transaction, then publishes its events and their runs' summaries. `abort`
-   * refuses the write: it rolls back and the commit fails with that refusal, not a database fault.
+   * Runs `write` in one transaction, then publishes its events and their runs' summaries, plus the
+   * summary of every run `changed` names. `abort` refuses the write: it rolls back and the commit
+   * fails with that refusal, not a database fault.
    */
   readonly commit: <A>(
     operation: string,
-    write: (db: Db, emit: Emit, abort: Abort) => A,
+    write: (db: Db, emit: Emit, abort: Abort, changed: Changed) => A,
   ) => Effect.Effect<A, DatabaseError | WorkflowEngineError>;
   /** A read outside any transaction. */
   readonly read: <A>(operation: string, read: (db: Db) => A) => Effect.Effect<A, DatabaseError>;
@@ -75,6 +76,12 @@ export interface EngineRuntime {
 
 /** Appends an event inside the current transaction. */
 export type Emit = (draft: EventDraft) => void;
+
+/**
+ * Marks a run whose summary the current transaction changed without appending one of its events, so
+ * its new summary is still pushed once the transaction commits.
+ */
+export type Changed = (runId: number) => void;
 
 /** Refuses the current transaction: it rolls back, and the commit fails with `error`. */
 export type Abort = (error: WorkflowEngineError) => never;

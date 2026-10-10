@@ -229,7 +229,7 @@ export const projectOperationReasons: ReasonTable<ProjectOperationRejectionReaso
   relocation_not_supported: null,
 };
 
-/** `projects.delete`: deletion fails as a project only when stopping a worktree's commands fails. */
+/** `projects.delete`: deletion fails as a project only when stopping a worktree's commands or session processes fails. */
 export const projectDeleteReasons: ReasonTable<ProjectDeleteRejectionReason> = {
   project_not_found: null,
   project_not_missing: null,
@@ -249,7 +249,7 @@ export const projectDeleteReasons: ReasonTable<ProjectDeleteRejectionReason> = {
   dirty_checkout_requires_force: null,
   root_worktree_not_found: null,
   command_cleanup_failed: 'command_cleanup_failed',
-  pty_teardown_failed: null,
+  pty_teardown_failed: 'pty_teardown_failed',
   setup_config_invalid: null,
   setup_trust_required: null,
   setup_trust_mismatch: null,

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 
-import { Context, Effect, Layer, Queue, Stream, type Cause } from 'effect';
+import { Context, Deferred, Effect, Exit, Layer, Queue, Stream, type Cause } from 'effect';
 import * as nodePty from 'node-pty';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
@@ -24,6 +24,7 @@ import type {
 import { PtyKillError, PtyResizeError, PtyStartError, PtyWriteError } from '../types.js';
 import { collectNodePtyGarbage } from './node-pty-gc.js';
 import {
+  awaitProcessTreeDescendantsExit,
   killProcessTreeSurvivors,
   signalProcessTreeDescendants,
   snapshotProcessTree,
@@ -39,6 +40,8 @@ interface LiveNodePtyProcess {
   attachment: NodePtyAttachmentSink | null;
   running: boolean;
   suppressExitCallback: boolean;
+  /** Completed by the exit callback, whether or not that exit is reported, so a grace can end early. */
+  readonly exited: Deferred.Deferred<void>;
 }
 
 interface NodePtyAttachmentSink {
@@ -216,7 +219,12 @@ const make = Effect.gen(function* () {
           });
           if (graceful) {
             yield* signalProcessTreeDescendants(tree, 'SIGTERM');
-            yield* Effect.sleep(input.gracefulTimeoutMs);
+            // The grace is a ceiling, not a wait: it ends as soon as the root and every snapshotted
+            // descendant have honoured SIGTERM, so a tree that stops promptly is not held for it.
+            yield* Deferred.await(live.exited).pipe(
+              Effect.andThen(awaitProcessTreeDescendantsExit(tree)),
+              Effect.timeoutOption(input.gracefulTimeoutMs),
+            );
             const current = liveSessions.get(ref.ptyProcessId);
             if (current?.running) {
               current.suppressExitCallback = true;
@@ -313,6 +321,7 @@ function startNodePtyProcess(
     attachment: null,
     running: true,
     suppressExitCallback: false,
+    exited: Deferred.makeUnsafe<void>(),
   };
   liveSessions.set(input.ptyProcessId, live);
   const parser = createShellIntegrationParser({
@@ -343,6 +352,7 @@ function startNodePtyProcess(
     appendVisible(visible);
   });
   pty.onExit((event) => {
+    Deferred.doneUnsafe(live.exited, Exit.void);
     // `kill` marks and removes the process-local live entry before node-pty can
     // emit exit. No `Exited` for that callback, so GC/delete cleanup cannot
     // rewrite an already-terminal or already-deleted durable row; the stream

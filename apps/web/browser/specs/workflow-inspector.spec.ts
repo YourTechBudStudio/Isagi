@@ -110,6 +110,55 @@ test('the inspector opens from the bar, closes with Escape, and hands focus back
   await expect(inspect(page)).toBeFocused();
 });
 
+test('Escape closes the inspector after a bar control took focus', async ({ page }) => {
+  await open(page, 'waiting_questions');
+  await bar(page).getByRole('button', { name: 'Pause', exact: true }).click();
+
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test('a bar control clicked over an agent terminal keeps focus from the terminal, and Escape still closes', async ({
+  page,
+}) => {
+  await page.goto('./');
+  await expect(bar(page)).toBeVisible();
+  await page.locator('[data-action="mount-terminal"]').click();
+  const terminal = page.getByRole('textbox', { name: 'Agent terminal' });
+  // The active pane takes focus when its terminal registers, as it does in the app.
+  await expect(terminal).toBeFocused();
+
+  await inspect(page).click();
+  await expect(dialog(page)).toBeVisible();
+  await bar(page).getByRole('button', { name: 'Pause', exact: true }).click();
+  // The pane's focus machinery re-asserts, as a terminal does when the bar's resize reaches it. The
+  // router defers by two frames; wait past them so a steal would have landed.
+  await page.evaluate(() => window.inspectorWorkbench?.reassertPaneFocus());
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+      ),
+  );
+  await expect(terminal).not.toBeFocused();
+
+  // Had the terminal taken focus it would have swallowed this, as xterm sends Escape to the agent.
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toHaveCount(0);
+  // Closing lands the person back in their pane, as closing the drawer does.
+  await expect(terminal).toBeFocused();
+});
+
+test('Escape closes the inspector when nothing holds focus', async ({ page }) => {
+  await open(page);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).toHaveCount(0);
+});
+
 test('the bar stays reachable and operable while the inspector is open', async ({ page }) => {
   await open(page, 'waiting_questions');
 

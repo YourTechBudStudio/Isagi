@@ -1,10 +1,13 @@
-import { useAtom } from '@effect/atom-react';
+import { useAtom, useAtomValue } from '@effect/atom-react';
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { workflowCopy } from '../../copy/index.js';
+import { useRegistry } from '../../lib/state/registry.js';
+import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
+import { setWorkflowInspectorOpen, workflowInspectorOpenAtom } from '../../lib/workspace/store.js';
 import {
   useAttachedWorkflowRun,
   useRuntimeConnectionPhase,
@@ -29,19 +32,41 @@ export function WorkflowBarContainer({
    */
   readonly inspectorEngineFactory?: LayoutEngineFactory | undefined;
 } = {}) {
+  const registry = useRegistry();
   const { activeSurface } = useWorkspace();
   const summary = useAttachedWorkflowRun(activeSurface?.id ?? null) ?? null;
   const runId = summary?.runId ?? null;
   const runtimeIdentity = useRuntimeIdentity();
   const [logExpanded, setLogExpanded] = useState(false);
   /**
-   * Local, and deliberately not a route.
+   * Registry state, and deliberately not a route.
    *
    * The inspector opens from the bar of the surface its run is attached to and nowhere else: there
    * is no `/workspace/workflows/:runId`, no direct-by-run-id entry, and no promise that a link stays
-   * valid after Dismiss. Keeping it beside `logExpanded` is what makes that true by construction.
+   * valid after Dismiss. It lives in the registry only so pane focus can see it: an open inspector
+   * owns keyboard focus, and a terminal that took focus behind it would swallow the Escape that
+   * closes it. This container stays its only writer.
    */
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const inspectorOpen = useAtomValue(workflowInspectorOpenAtom);
+
+  /**
+   * Closing hands keyboard focus back to the active pane, as closing the drawer does: the atom flips
+   * first, so the focus scheduler's ownership guard already sees the inspector closed.
+   */
+  const closeInspector = useCallback(() => {
+    setWorkflowInspectorOpen(registry, false);
+    restoreActivePaneFocus(registry);
+  }, [registry]);
+
+  // The inspector is this bar's overlay. When the bar goes (zen, leaving the workspace) it goes with
+  // it, as local state did; an open flag left behind would keep every pane from taking focus.
+  useEffect(() => () => setWorkflowInspectorOpen(registry, false), [registry]);
+
+  // A run that let go of this surface takes its inspector with it: an overlay left open would be
+  // describing a run the bar no longer shows.
+  useEffect(() => {
+    if (summary === null && inspectorOpen) setWorkflowInspectorOpen(registry, false);
+  }, [registry, summary, inspectorOpen]);
   const [barHeight, setBarHeight] = useState(64);
   const barRef = useRef<HTMLElement | null>(null);
   const connection = useRuntimeConnectionPhase();
@@ -149,10 +174,6 @@ export function WorkflowBarContainer({
     }
   }
 
-  // A run that let go of this surface takes its inspector with it: an overlay left open would be
-  // describing a run the bar no longer shows.
-  if (summary === null && inspectorOpen) setInspectorOpen(false);
-
   return (
     <AnimatePresence initial={false}>
       {summary && inspectorOpen && (
@@ -161,7 +182,7 @@ export function WorkflowBarContainer({
           summary={summary}
           bottomInset={barHeight}
           engineFactory={inspectorEngineFactory}
-          onClose={() => setInspectorOpen(false)}
+          onClose={closeInspector}
         />
       )}
       {summary && (
@@ -180,7 +201,9 @@ export function WorkflowBarContainer({
           actionsLocked={mutating}
           actionError={visible?.error ?? null}
           onToggleLog={() => setLogExpanded((expanded) => !expanded)}
-          onToggleInspector={() => setInspectorOpen((open) => !open)}
+          onToggleInspector={() =>
+            inspectorOpen ? closeInspector() : setWorkflowInspectorOpen(registry, true)
+          }
           onPause={actions.pause}
           onResume={actions.resume}
           onCancel={actions.cancel}

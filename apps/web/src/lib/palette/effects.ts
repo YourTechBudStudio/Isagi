@@ -16,6 +16,7 @@ export function runPaletteEffects(
     readonly pushRecent: (entryId: string) => void;
     readonly pathSuggestTimer: { current: number | null };
     readonly seenEffectIds: { current: Set<number> };
+    readonly consumedEffectIds: { current: number[] };
   },
 ) {
   const pending = effects.filter((effect) => !options.seenEffectIds.current.has(effect.id));
@@ -25,8 +26,10 @@ export function runPaletteEffects(
 
   for (const effect of pending) {
     options.seenEffectIds.current.add(effect.id);
+    // Trimmed from the queue by the palette's next event, never by an update of
+    // its own: see `send` in CommandPalette.
+    options.consumedEffectIds.current.push(effect.id);
   }
-  options.send({ type: 'effects-consumed', ids: pending.map((effect) => effect.id) });
 
   for (const effect of pending) {
     runPaletteEffect(effect, options);

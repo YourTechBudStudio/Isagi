@@ -99,6 +99,7 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
       worktreeId: 10,
       surfaceId: 101,
       output: { deletedSurfaceId: 101, deletedPaneIds: [201] },
+      successorSurfaceId: null,
     }),
   );
 

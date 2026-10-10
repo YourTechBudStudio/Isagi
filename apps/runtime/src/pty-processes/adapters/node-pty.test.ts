@@ -161,6 +161,33 @@ test('node-pty terminate affirms a kill when it signalled a live handle', async 
   assert.deepEqual(result.inspection, { status: 'missing' });
 });
 
+test('node-pty terminate ends its grace as soon as the process tree honours SIGTERM', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const backend = yield* NodePtyBackend;
+      assert.ok(backend.terminate);
+      const { ref } = yield* backend.launch({
+        ptyProcessId: 4_247,
+        backendSessionName: null,
+        command: '/bin/sh',
+        args: ['-c', 'sleep 30 & wait'],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+        cols: 80,
+        rows: 24,
+        logPath: null,
+      });
+      const startedAt = Date.now();
+      const terminated = yield* backend.terminate({ ref, gracefulTimeoutMs: 10_000 });
+      return { terminated, elapsedMs: Date.now() - startedAt };
+    }).pipe(Effect.provide(NodePtyBackend.layer)),
+  );
+
+  assert.deepEqual(result.terminated, { terminated: true });
+  // The ceiling was 10 s; a tree that stopped at once is released well before it.
+  assert.ok(result.elapsedMs < 3_000, `terminate took ${result.elapsedMs} ms`);
+});
+
 // The adapter's callbacks only enqueue: every later fact about a launched process
 // arrives on its `events` stream, and live output on the attachment's queue.
 

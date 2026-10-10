@@ -14,11 +14,7 @@ import { InternalEvents } from '../platform/events/index.js';
 import { Git, type GitCommandError } from '../platform/git/index.js';
 import { ProjectRepository, type ProjectRow, type WorktreeRow } from '../projects/index.js';
 import { PtyService } from '../pty-processes/index.js';
-import {
-  sessionPtyProcessIds,
-  WorktreeDeleteDiagnosticsReader,
-  type WorktreeDeleteDiagnostics,
-} from './delete-diagnostics.js';
+import { sessionPtyProcessIds, WorktreeDeleteDiagnosticsReader } from './delete-diagnostics.js';
 import { WorkspaceError } from './errors.js';
 import {
   commandCleanup,
@@ -136,7 +132,9 @@ export const worktreeDelete = Effect.gen(function* () {
         yield* diagnosticPhase(
           'workspace.delete_worktree.pty_teardown',
           context,
-          terminateWorktreeSessionPtys(pty, diagnostics, {
+          terminateSessionPtys(pty, {
+            operation: 'worktree_delete',
+            ptyProcessIds: sessionPtyProcessIds(diagnostics),
             projectId: project.id,
             worktreeId: worktree.id,
           }),
@@ -259,29 +257,37 @@ function gitBranchDeleteDiagnostic(error: GitCommandError) {
   return `git ${error.args.join(' ')} failed`;
 }
 
-function terminateWorktreeSessionPtys(
+/**
+ * Stops the live agent and terminal processes of worktrees about to be deleted. Their session rows cascade away with
+ * the worktree, and nothing else would ever stop them. Shared by worktree and project deletion.
+ */
+export function terminateSessionPtys(
   pty: PtyService['Service'],
-  diagnostics: WorktreeDeleteDiagnostics,
-  context: {
+  input: {
+    readonly operation: 'worktree_delete' | 'project_delete';
+    readonly ptyProcessIds: readonly number[];
     readonly projectId: number;
-    readonly worktreeId: number;
+    readonly worktreeId?: number;
   },
 ) {
   return pty
     .terminateMany({
       failurePolicy: 'required',
       gracefulTimeoutMs: sessionTerminationGraceMs,
-      operation: 'worktree_delete',
-      ptyProcessIds: sessionPtyProcessIds(diagnostics),
+      operation: input.operation,
+      ptyProcessIds: input.ptyProcessIds,
     })
     .pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceError({
             code: 'pty_teardown_failed',
-            message: `Could not stop active sessions for worktree ${context.worktreeId}.`,
-            projectId: context.projectId,
-            worktreeId: context.worktreeId,
+            message:
+              input.worktreeId === undefined
+                ? `Could not stop active sessions for project ${input.projectId}.`
+                : `Could not stop active sessions for worktree ${input.worktreeId}.`,
+            projectId: input.projectId,
+            worktreeId: input.worktreeId,
             cause: error,
           }),
       ),

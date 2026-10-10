@@ -1,6 +1,7 @@
 /**
  * Workbench interaction state the client owns: which environment is selected, which surface and
- * pane are active, the commands drawer and zen mode. One set per app session (registry).
+ * pane are active, the commands drawer, the workflow inspector and zen mode. One set per app session
+ * (registry).
  *
  * React reads the atoms with `useAtomValue`; every write goes through the `(registry, ...)` actions
  * below, so the transitions stay in one place.
@@ -35,6 +36,16 @@ export const drawerAtom = Atom.make<DrawerState>({ open: false, selectedCommandI
 );
 
 export const zenAtom = Atom.make(false).pipe(Atom.keepAlive);
+
+/**
+ * Whether the workflow inspector is open over the active surface's run.
+ *
+ * Registry state rather than the workflow bar's local state because pane focus reads it: an open
+ * inspector owns keyboard focus the way the drawer does, so the focus router and the terminal's
+ * self-asserting focus calls must be able to see it (`paneFocusAllowed`). Still not a route: it opens
+ * only from the bar of the surface its run is attached to.
+ */
+export const workflowInspectorOpenAtom = Atom.make(false).pipe(Atom.keepAlive);
 
 type Registry = AtomRegistry.AtomRegistry;
 
@@ -96,6 +107,10 @@ export function setZen(registry: Registry, zen: boolean): void {
 
 export function toggleZen(registry: Registry): void {
   registry.update(zenAtom, (zen) => !zen);
+}
+
+export function setWorkflowInspectorOpen(registry: Registry, open: boolean): void {
+  registry.set(workflowInspectorOpenAtom, open);
 }
 
 /** Opens the drawer, selecting `commandId` when given and keeping the selection otherwise. */

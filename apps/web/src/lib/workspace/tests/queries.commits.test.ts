@@ -16,6 +16,7 @@ import {
   commitDeleteWorktreeSuccess,
   commitLaunchSessionSuccess,
   commitOpenWorktreeSuccess,
+  deleteSurfaceFromPalette,
   startAgentSessionFromPalette,
 } from '../commits.js';
 import type { WorkspaceData } from '../model.js';
@@ -24,6 +25,7 @@ import {
   activePaneBySurfaceAtom,
   activeSurfaceByWorktreeAtom,
   emptyWorkspaceSelection,
+  forgetSurface,
   selectionAtom,
   setSelection,
 } from '../store.js';
@@ -239,6 +241,7 @@ test('delete surface success refetches workspace and clears only stale local ove
       worktreeId: 10,
       surfaceId: 501,
       output: { deletedSurfaceId: 501, deletedPaneIds: [601] },
+      successorSurfaceId: null,
     }),
   );
   await flush();
@@ -363,4 +366,85 @@ test('delete worktree success falls back through selection reconciliation when r
     projectId: 1,
     worktreeId: 10,
   });
+});
+
+/** The worktree from the manual test plan: four surfaces, rail order as the runtime returns it. */
+const fourSurfaces = (ids: readonly number[]): WorkspaceData => ({
+  projects: [
+    project({
+      id: 1,
+      name: 'repo',
+      surfaces: ids.map((id) => ({
+        id,
+        title: ['Terminal', 'Pi', 'Claude', 'Claude 2'][id - 1]!,
+        paneKinds: ['agent_session' as const],
+        attention: 'idle' as const,
+      })),
+    }),
+  ],
+});
+
+/**
+ * A session where deleting a surface behaves like the runtime: the `surface_changed` event (which
+ * forgets the active override) lands before the HTTP response, and the next read lacks the surface.
+ */
+async function deleteSurfaceSession(t: Parameters<typeof workspaceSession>[0], deleted: number) {
+  const focusWrites: number[] = [];
+  const remaining = [1, 2, 3, 4].filter((id) => id !== deleted);
+  const { registry } = workspaceSession(t, [fourSurfaces([1, 2, 3, 4]), fourSurfaces(remaining)], {
+    api: {
+      deleteSurface: (surfaceId) =>
+        Effect.sync(() => {
+          forgetSurface(registry, 10, surfaceId);
+          return { deletedSurfaceId: surfaceId, deletedPaneIds: [surfaceId * 100] };
+        }),
+      getSurfaceDetail: (surfaceId) =>
+        Effect.succeed({
+          id: surfaceId,
+          worktreeId: 10,
+          activePaneId: surfaceId * 100,
+          panes: [{ id: surfaceId * 100 }],
+        } as unknown as SurfaceDetail),
+      setWorktreeEnvironmentFocus: (_worktreeId, input) =>
+        Effect.sync(() => {
+          focusWrites.push(input.activeSurfaceId ?? 0);
+          return { worktreeId: 10 };
+        }) as never,
+    },
+  });
+  await holdWorkspace(t, registry);
+  return { registry, focusWrites };
+}
+
+test('deleting the active surface activates its next neighbour and persists that focus', async (t) => {
+  const { registry, focusWrites } = await deleteSurfaceSession(t, 3);
+  registry.set(activeSurfaceByWorktreeAtom, { 10: 3 });
+
+  await runApp(registry, deleteSurfaceFromPalette({ worktreeId: 10, surfaceId: 3 }));
+  await flush();
+
+  assert.equal(registry.get(activeSurfaceByWorktreeAtom)[10], 4, 'Claude 2 follows Claude');
+  assert.equal(registry.get(activePaneBySurfaceAtom)[4], 400);
+  assert.deepEqual(focusWrites, [4]);
+});
+
+test('deleting the last active surface in the rail activates the previous one', async (t) => {
+  const { registry } = await deleteSurfaceSession(t, 4);
+  registry.set(activeSurfaceByWorktreeAtom, { 10: 4 });
+
+  await runApp(registry, deleteSurfaceFromPalette({ worktreeId: 10, surfaceId: 4 }));
+  await flush();
+
+  assert.equal(registry.get(activeSurfaceByWorktreeAtom)[10], 3);
+});
+
+test('deleting a surface that is not active keeps the active surface', async (t) => {
+  const { registry, focusWrites } = await deleteSurfaceSession(t, 3);
+  registry.set(activeSurfaceByWorktreeAtom, { 10: 1 });
+
+  await runApp(registry, deleteSurfaceFromPalette({ worktreeId: 10, surfaceId: 3 }));
+  await flush();
+
+  assert.equal(registry.get(activeSurfaceByWorktreeAtom)[10], 1);
+  assert.deepEqual(focusWrites, []);
 });

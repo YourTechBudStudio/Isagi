@@ -76,7 +76,14 @@ import {
   type LaunchInput,
 } from './launch.js';
 import { recoverAtStartup } from './restart.js';
-import type { Abort, Emit, EngineDeps, EngineRuntime, HeadlessProcess } from './runtime.js';
+import type {
+  Abort,
+  Changed,
+  Emit,
+  EngineDeps,
+  EngineRuntime,
+  HeadlessProcess,
+} from './runtime.js';
 
 /**
  * The engine plus what tests and scripts need to observe its background work: `inFlight` counts the
@@ -251,7 +258,7 @@ export function startEngine(input: {
     const artifactCache = new Map<string, LoadedWorkflowArtifact>();
     const drivers = new Map<number, { again: boolean }>();
 
-    const publish = (rows: readonly EventRow[]) =>
+    const publish = (rows: readonly EventRow[], changedRuns: ReadonlySet<number>) =>
       Effect.gen(function* () {
         for (const row of rows) {
           yield* events.publish({
@@ -260,7 +267,7 @@ export function startEngine(input: {
             payload: eventDto(row),
           });
         }
-        for (const runId of new Set(rows.map((row) => row.runId))) {
+        for (const runId of new Set([...rows.map((row) => row.runId), ...changedRuns])) {
           const summary = yield* database.use('workflow_read_summary', (db) =>
             runSummaryById(db, runId),
           );
@@ -276,22 +283,32 @@ export function startEngine(input: {
 
     const rt: EngineRuntime = {
       deps,
-      commit: <A>(operation: string, write: (db: Db, emit: Emit, abort: Abort) => A) => {
+      commit: <A>(
+        operation: string,
+        write: (db: Db, emit: Emit, abort: Abort, changed: Changed) => A,
+      ) => {
         let appended: EventRow[] = [];
+        let changedRuns = new Set<number>();
         return database
           .transaction<A, WorkflowEngineError>(operation, (db, abort) => {
             appended = [];
+            changedRuns = new Set();
             return write(
               db,
               (draft) => {
                 appended.push(appendEvent(db, draft));
               },
               abort,
+              (runId) => {
+                changedRuns.add(runId);
+              },
             );
           })
           .pipe(
             Effect.tap(() =>
-              publish(appended).pipe(Effect.catchCause(logCause('Workflow event publish failed'))),
+              publish(appended, changedRuns).pipe(
+                Effect.catchCause(logCause('Workflow event publish failed')),
+              ),
             ),
           );
       },

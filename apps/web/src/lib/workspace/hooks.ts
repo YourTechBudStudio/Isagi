@@ -10,7 +10,11 @@ import { queryError } from '../state/result.js';
 import { showToast } from '../toast/index.js';
 import { activateSurface, restoreActivePaneFocus } from './activation.js';
 import { applyAttentionToProjects, attentionSourcesAtom } from './attention.js';
-import { scheduleActiveContextPersistence, scheduleWorkspaceReconcile } from './background-sync.js';
+import {
+  scheduleActiveContextPersistence,
+  scheduleWorkspaceReconcile,
+  settleMissingProjectsToast,
+} from './background-sync.js';
 import {
   activeContextFromSelection,
   activeWorktreeId,
@@ -67,6 +71,11 @@ export function useWorkspaceSelectionSync() {
       setSelection(registry, decision.next);
     }
   }, [activeContextData, activeContextError, workspace.data, selection, registry, run]);
+
+  const projects = workspace.data?.projects;
+  useEffect(() => {
+    if (projects) settleMissingProjectsToast(registry, projects);
+  }, [projects, registry]);
 }
 
 /** Persist the user's selection as the runtime's active context (debounced, latest wins). */

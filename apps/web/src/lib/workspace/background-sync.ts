@@ -12,10 +12,11 @@ import { toastCopy } from '../../copy/index.js';
 import { keys } from '../state/keys.js';
 import { revalidate } from '../state/policy.js';
 import { appRuntime, type AppRequirements } from '../state/runtime.js';
-import { showToast } from '../toast/index.js';
+import { dismissToast, showToast } from '../toast/index.js';
 import { workspaceReadAtom } from './queries.js';
 import { reconcileWorkspace, updateActiveContext } from './runtime-data.js';
 import { publishTerminalFactEffect } from './terminal-presentation/facts.js';
+import type { Project } from './types.js';
 
 /** The selection is persisted this long after it last changed. */
 const ACTIVE_CONTEXT_DEBOUNCE = Duration.millis(180);
@@ -116,6 +117,8 @@ export const scheduleActiveContextPersistence = (activeContext: SetActiveContext
 export const scheduleWorkspaceReconcile = (projectId: number | null) =>
   Effect.flatMap(backgroundSync, (sync) => sync.reconcile(projectId));
 
+const MISSING_PROJECTS_TOAST_ID = 'workspace-project-missing';
+
 export function handleReconciliationFindings(
   registry: AtomRegistry.AtomRegistry,
   findings: readonly ReconciliationFinding[],
@@ -127,7 +130,7 @@ export function handleReconciliationFindings(
   const missingProjects = findings.filter((finding) => finding.kind === 'project_missing');
   if (missingProjects.length > 0) {
     showToast(registry, {
-      id: 'workspace-project-missing',
+      id: MISSING_PROJECTS_TOAST_ID,
       kind: 'warning',
       title: toastCopy.reconciliation.missingProjectsTitle(missingProjects),
       subtitle: toastCopy.reconciliation.missingProjectsSubtitle(missingProjects),
@@ -145,4 +148,17 @@ export function handleReconciliationFindings(
       lifetime: { autoDismiss: false },
     });
   }
+}
+
+/**
+ * The missing-project warning never auto-dismisses, so it is settled against the workspace instead:
+ * once no project is missing any more (relocated, removed, or found again by a later reconcile) the
+ * warning has nothing left to point at and goes. While one is still missing it stays as raised.
+ */
+export function settleMissingProjectsToast(
+  registry: AtomRegistry.AtomRegistry,
+  projects: readonly Pick<Project, 'status'>[],
+) {
+  if (projects.some((project) => project.status === 'missing')) return;
+  dismissToast(registry, MISSING_PROJECTS_TOAST_ID);
 }

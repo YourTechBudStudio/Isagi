@@ -26,6 +26,7 @@ import {
   selectionAtom,
   setActivePane,
   setActiveSurface,
+  workflowInspectorOpenAtom,
 } from './store.js';
 
 type Registry = AtomRegistry.AtomRegistry;
@@ -229,14 +230,22 @@ export function restoreWorkbenchFocus(
  * Whether the active pane may take keyboard focus right now: true only when no
  * focus-owning overlay is open. The command palette owns focus while open (its
  * focus effect asserts it in every view, the busy panel included); the commands
- * drawer owns it when open with the palette closed.
+ * drawer owns it when open with the palette closed; the workflow inspector owns
+ * it while open, even after a click on the bar below it dropped focus to the
+ * body (a disabled-while-pending control), because a terminal that took focus
+ * then would swallow the Escape that closes the inspector and receive keys typed
+ * at it.
  *
  * One fact, two enforcement points: the focus scheduler below, and the terminal
  * presentation controller's self-asserting focus calls. Read at focus time,
  * never cached, so it is always current.
  */
 export function paneFocusAllowed(registry: Registry): boolean {
-  return !isPaletteOpen(registry) && !registry.get(drawerAtom).open;
+  return (
+    !isPaletteOpen(registry) &&
+    !registry.get(drawerAtom).open &&
+    !registry.get(workflowInspectorOpenAtom)
+  );
 }
 
 export function cancelWorkbenchFocusPersistence(registry: Registry, worktreeId: number) {

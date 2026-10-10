@@ -175,8 +175,10 @@ export const worktreeDeleteRejectionReasonSchema = Schema.Literals([
   'pty_teardown_failed',
 ]);
 
-/** A one-member reason set: `Literals` keeps `.literals` like every other reason schema. */
-export const projectDeleteRejectionReasonSchema = Schema.Literals(['command_cleanup_failed']);
+export const projectDeleteRejectionReasonSchema = Schema.Literals([
+  'command_cleanup_failed',
+  'pty_teardown_failed',
+]);
 
 /**
  * Sibling reorder rejections. Each scope has its own disjoint reason set because
