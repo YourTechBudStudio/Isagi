@@ -6,7 +6,7 @@
   "apps/desktop/src/main/updater/desktop-update-ipc.ts": "IPC boundary: each update intent from the renderer runs one updater effect.",
   "apps/runtime/src/environment/sessions/gc.ts": "Transitional deep run: setInterval orphan-session GC tick; phase 3 replaces it with a scheduled scoped fiber.",
   "apps/runtime/src/platform/http/route-runtime.ts": "HTTP/WebSocket boundary: the one place a Fastify request or socket callback becomes a fiber on the server request runtime (RouteRuntime.runPromise in runRouteRequest; RouteRuntime.runFork for the post-200 content-stream failure log).",
-  "apps/runtime/src/pty-processes/stream-route.ts": "WebSocket boundary: socket close and message callbacks feed the attach Deferred and Queue.",
+  "apps/runtime/src/pty-processes/stream-route.ts": "PTY WebSocket boundary: forks one scoped connection fiber per socket on the RouteRuntime.",
   "apps/runtime/src/runtime-events/api.ts": "Runtime-events WebSocket boundary: forks one scoped connection fiber per socket on the RouteRuntime.",
   "apps/runtime/src/workflows/checkpoints/capture.ts": "Transitional deep run: Promise-based checkpoint capture calls the content store; phase 3 makes capture an Effect.",
   "apps/runtime/src/workflows/checkpoints/mirror.ts": "Transitional deep run: Promise-based checkpoint mirroring opens content-store entries; phase 3 makes mirroring an Effect.",
