@@ -9,6 +9,7 @@ import type {
   EditorDiagnosticsOutput,
   RetryEditorProvisioningOutput,
 } from '@isagi/contracts';
+import { makeLogCapture } from '@isagi/testing';
 
 import { withApiServer } from '../platform/http/testing.js';
 import { registerEditorRoutes } from './api.js';
@@ -171,27 +172,33 @@ test('a retry arriving while one is running maps to editor_rejected', async () =
 });
 
 test('an unexpected failure is reported as an unhandled API error, not as a rejection', async () => {
-  const originalConsoleError = console.error;
-  console.error = () => {};
-  try {
-    await withEditorApi(
-      fakeProvisioning({ retry: Effect.fail(new Error('boom')) as never }),
-      async (fastify) => {
-        const response = await fastify.inject({
-          method: 'POST',
-          url: '/api/v1/editor/provisioning/retry',
-        });
-        const payload = response.json() as { error?: { code: string } };
+  // The typed route helper logs the unclassified failure through Effect; captured here so it is asserted rather
+  // than printed.
+  const logs = makeLogCapture();
+  await withApiServer(
+    Layer.mergeAll(
+      Layer.succeed(
+        EditorProvisioning,
+        fakeProvisioning({ retry: Effect.fail(new Error('boom')) as never }),
+      ),
+      Layer.succeed(EditorContextService, fakeEditors({})),
+      logs.layer,
+    ),
+    registerEditorRoutes,
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/editor/provisioning/retry',
+      });
+      const payload = response.json() as { error?: { code: string } };
 
-        assert.equal(response.statusCode, 500);
-        // `api_`-prefixed codes bypass the endpoint's declared error schema, so
-        // the fallback is safe even though this code is not in the editor union.
-        assert.equal(payload.error?.code, 'api_unhandled_error');
-      },
-    );
-  } finally {
-    console.error = originalConsoleError;
-  }
+      assert.equal(response.statusCode, 500);
+      // `api_`-prefixed codes bypass the endpoint's declared error schema, so
+      // the fallback is safe even though this code is not in the editor union.
+      assert.equal(payload.error?.code, 'api_unhandled_error');
+    },
+  );
+  assert.ok(logs.lines.some((line) => line.message === 'Unhandled API handler failure'));
 });
 
 // ---------------------------------------------------------------------------

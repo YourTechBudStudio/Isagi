@@ -1,5 +1,4 @@
 import { Buffer } from 'node:buffer';
-import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { createWriteStream } from 'node:fs';
@@ -8,11 +7,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { promisify } from 'node:util';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
-const execFileAsync = promisify(execFile);
+import { execCommand } from '../../platform/process/index.js';
 
 // Everything in provisioning that touches the network, an archive, or a file
 // mode lives behind this one service, so `install.ts` — which owns the ordering,
@@ -47,6 +45,19 @@ export class EditorInstallIoError extends Data.TaggedError('EditorInstallIoError
   readonly output: string | null;
   readonly cause: unknown;
 }> {}
+
+/**
+ * The release server answered a download with a non-2xx status. Carried as the `cause` of the download's
+ * `EditorInstallIoError`, whose `status` is what the caller branches on.
+ */
+export class EditorDownloadFailed extends Data.TaggedError('EditorDownloadFailed')<{
+  readonly status: number;
+  readonly url: string;
+}> {
+  override get message() {
+    return `Request failed with status ${this.status}.`;
+  }
+}
 
 export interface EditorSharedStatePaths {
   readonly userDataPath: string;
@@ -109,22 +120,29 @@ const codeServerUserSettings = `${JSON.stringify({ 'chat.disableAIFeatures': tru
 
 /**
  * @param sessionSocketDirectory The directory this seam reports and prepares,
- * chosen once by the caller rather than per call: every incarnation of every
+ * chosen once by the layer rather than per call: every incarnation of every
  * editor context in this process shares it, and a caller that asked twice must
- * be told the same place both times. Its *lifetime* belongs to the caller too —
- * see `EditorInstallIo.layer`, which is where the runtime's directory is released.
+ * be told the same place both times. Its *lifetime* belongs to the layer too,
+ * which is where the runtime's directory is released.
  */
-export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInstallIo['Service'] {
-  return {
-    downloadTo: ({ url, destination }) =>
-      Effect.tryPromise({
+function installIo(sessionSocketDirectory: string): EditorInstallIo['Service'] {
+  return EditorInstallIo.of({
+    downloadTo: Effect.fn('EditorInstallIo.downloadTo')(function* ({ url, destination }) {
+      const downloadFailed = (cause: unknown) =>
+        new EditorInstallIoError({
+          operation: 'download',
+          status: cause instanceof EditorDownloadFailed ? cause.status : null,
+          output: null,
+          cause,
+        });
+      return yield* Effect.tryPromise({
         try: async (signal) => {
           const response = await fetch(url, { signal, redirect: 'follow' });
           if (!response.ok || !response.body) {
             // Drain rather than leak the socket. The status is the whole payload
             // the caller needs; the body of an error response is not read.
             await response.body?.cancel();
-            throw new HttpResponseError(response.status);
+            throw new EditorDownloadFailed({ status: response.status, url });
           }
           const hash = createHash('sha256');
           await pipeline(
@@ -140,32 +158,32 @@ export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInsta
           );
           return { sha256: hash.digest('hex') };
         },
-        catch: (cause) =>
-          new EditorInstallIoError({
-            operation: 'download',
-            status: cause instanceof HttpResponseError ? cause.status : null,
-            output: null,
-            cause,
-          }),
-      }),
+        catch: downloadFailed,
+      });
+    }),
 
-    extractTarGz: ({ archive, into, stripComponents }) =>
-      Effect.tryPromise({
-        try: async (signal) => {
-          await execFileAsync(
-            'tar',
-            ['-xzf', archive, '-C', into, '--strip-components', String(stripComponents)],
-            { signal, maxBuffer: 1024 * 1024 },
-          );
-        },
-        catch: (cause) =>
-          new EditorInstallIoError({
-            operation: 'extract',
-            status: null,
-            output: boundedToolOutput(cause),
-            cause,
-          }),
-      }),
+    extractTarGz: Effect.fn('EditorInstallIo.extractTarGz')(function* ({
+      archive,
+      into,
+      stripComponents,
+    }) {
+      // Interrupting the extraction (the attempt deadline) kills `tar`.
+      yield* execCommand(
+        'tar',
+        ['-xzf', archive, '-C', into, '--strip-components', String(stripComponents)],
+        { maxBuffer: 1024 * 1024 },
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new EditorInstallIoError({
+              operation: 'extract',
+              status: null,
+              output: boundedToolOutput(cause.stderr),
+              cause,
+            }),
+        ),
+      );
+    }),
 
     assertExecutable: (path) =>
       Effect.tryPromise({
@@ -226,7 +244,7 @@ export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInsta
             cause,
           }),
       }),
-  };
+  });
 }
 
 const make = Effect.gen(function* () {
@@ -236,7 +254,7 @@ const make = Effect.gen(function* () {
       Effect.tryPromise(() => rm(sessionSocketDirectory, { recursive: true, force: true })),
     ),
   );
-  return makeEditorInstallIo(sessionSocketDirectory);
+  return installIo(sessionSocketDirectory);
 });
 
 /**
@@ -296,22 +314,11 @@ export class EditorInstallIo extends Context.Service<
   static readonly layer = Layer.effect(EditorInstallIo, make);
 }
 
-// Local to this module: it exists only to carry a status out of the `try` block
-// and is never seen by a caller.
-class HttpResponseError extends Error {
-  constructor(readonly status: number) {
-    super(`Request failed with status ${status}.`);
-  }
-}
-
 function isExistingFile(cause: unknown) {
   return cause instanceof Error && (cause as { readonly code?: unknown }).code === 'EEXIST';
 }
 
-function boundedToolOutput(cause: unknown): string | null {
-  if (typeof cause !== 'object' || cause === null || !('stderr' in cause)) return null;
-  const stderr: unknown = (cause as { readonly stderr?: unknown }).stderr;
-  if (typeof stderr !== 'string') return null;
+function boundedToolOutput(stderr: string): string | null {
   const trimmed = stderr.trim();
   if (!trimmed) return null;
   // Bounded in bytes, as the name says. `slice` counts UTF-16 code units, so a

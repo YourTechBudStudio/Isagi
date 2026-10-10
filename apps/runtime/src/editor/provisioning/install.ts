@@ -61,105 +61,103 @@ export interface ProvisionCodeServerInput {
  *
  * The step numbering matches program design §7.1.5.
  */
-export function provisionCodeServer(
+export const provisionCodeServer = Effect.fn('EditorProvisioning.provisionCodeServer')(function* (
   input: ProvisionCodeServerInput,
-): Effect.Effect<ResolvedEditorInstallation, EditorProvisioningFailure> {
+): Effect.fn.Return<ResolvedEditorInstallation, EditorProvisioningFailure> {
   const { io, paths, artifact, platformKey, version, onPhase } = input;
   const installRoot = join(paths.toolsPath, 'code-server', version);
   const executablePath = join(installRoot, artifact.executablePath);
 
-  return Effect.gen(function* () {
-    // 1. The reuse fast path (AC2). A matching receipt plus a still-executable
-    //    binary is a complete answer: no network call, and no re-hash of a
-    //    ~200 MB tree to re-derive what the write ordering already proved.
-    const receipt = readEditorInstallReceipt(installRoot);
-    const reusable =
-      receipt !== null && editorInstallReceiptMatches(receipt, { version, platformKey, artifact });
-    if (reusable) {
-      // The manifest's path, not the receipt's. `editorInstallReceiptMatches`
-      // has already proved the two are equal; resolving from the manifest means
-      // no filesystem target is ever derived from a persisted string.
-      const usable = yield* io.assertExecutable(executablePath).pipe(
-        Effect.as(true),
-        Effect.catch(() => Effect.succeed(false)),
-      );
-      if (usable) {
-        // 8/9 for the reuse path: shared editor state is still prepared, so
-        // "resolved" means the same thing whether or not a download happened.
-        const shared = yield* prepareShared(io, paths.editorsPath);
-        return { version, installRoot, executablePath, ...shared };
-      }
-    }
-
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        // 2. Staging, owned by a finalizer so it is removed on success, on every
-        //    modelled failure, on interruption, and on the attempt deadline.
-        const staging = yield* acquireStaging(paths.toolsPath);
-        const archivePath = join(staging, 'artifact.tar.gz');
-        const treePath = join(staging, 'tree');
-
-        // 3. Download, hashing in flight.
-        yield* onPhase('downloading');
-        const downloaded = yield* io
-          .downloadTo({ url: artifact.url, destination: archivePath })
-          .pipe(Effect.mapError((error) => downloadFailure(error, version)));
-
-        // 4. Verify before anything is extracted, let alone published.
-        yield* onPhase('verifying');
-        if (downloaded.sha256 !== artifact.sha256) {
-          return yield* new EditorProvisioningFailure({
-            reason: 'integrity_mismatch',
-            diagnostic: `Downloaded Code Server ${version} did not match its pinned checksum. Expected sha-256 ${artifact.sha256}, received ${downloaded.sha256}.`,
-          });
-        }
-
-        // 5. Extract.
-        yield* onPhase('extracting');
-        yield* Effect.tryPromise({
-          try: () => mkdir(treePath, { recursive: true }),
-          catch: (cause) => cause,
-        }).pipe(Effect.mapError(() => unusable(`could not create an extraction directory`)));
-        yield* io
-          .extractTarGz({
-            archive: archivePath,
-            into: treePath,
-            stripComponents: artifact.stripComponents,
-          })
-          .pipe(
-            Effect.mapError(
-              (error) =>
-                new EditorProvisioningFailure({
-                  reason: 'extract_failed',
-                  diagnostic: `Extracting Code Server ${version} failed.${error.output ? ` tar: ${error.output}` : ''}`,
-                }),
-            ),
-          );
-
-        // 6. Prove the tree is usable before a receipt is allowed to claim it is.
-        yield* io
-          .assertExecutable(join(treePath, artifact.executablePath))
-          .pipe(
-            Effect.mapError(() =>
-              unusable(`the extracted archive has no executable at ${artifact.executablePath}`),
-            ),
-          );
-
-        // 7. Publish. Uninterruptible: a deadline arriving between the rename and
-        //    the receipt write would leave an install root that claims nothing,
-        //    which the next attempt would have to clean up anyway.
-        yield* publish({ installRoot, treePath, version, platformKey, artifact });
-
-        // 8. Shared editor state, inside provisioning so "ready to launch" is one
-        //    fact rather than two.
-        const shared = yield* prepareShared(io, paths.editorsPath);
-
-        // 9.
-        return { version, installRoot, executablePath, ...shared };
-      }),
+  // 1. The reuse fast path (AC2). A matching receipt plus a still-executable
+  //    binary is a complete answer: no network call, and no re-hash of a
+  //    ~200 MB tree to re-derive what the write ordering already proved.
+  const receipt = readEditorInstallReceipt(installRoot);
+  const reusable =
+    receipt !== null && editorInstallReceiptMatches(receipt, { version, platformKey, artifact });
+  if (reusable) {
+    // The manifest's path, not the receipt's. `editorInstallReceiptMatches`
+    // has already proved the two are equal; resolving from the manifest means
+    // no filesystem target is ever derived from a persisted string.
+    const usable = yield* io.assertExecutable(executablePath).pipe(
+      Effect.as(true),
+      Effect.catch(() => Effect.succeed(false)),
     );
-  });
-}
+    if (usable) {
+      // 8/9 for the reuse path: shared editor state is still prepared, so
+      // "resolved" means the same thing whether or not a download happened.
+      const shared = yield* prepareShared(io, paths.editorsPath);
+      return { version, installRoot, executablePath, ...shared };
+    }
+  }
+
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      // 2. Staging, owned by a finalizer so it is removed on success, on every
+      //    modelled failure, on interruption, and on the attempt deadline.
+      const staging = yield* acquireStaging(paths.toolsPath);
+      const archivePath = join(staging, 'artifact.tar.gz');
+      const treePath = join(staging, 'tree');
+
+      // 3. Download, hashing in flight.
+      yield* onPhase('downloading');
+      const downloaded = yield* io
+        .downloadTo({ url: artifact.url, destination: archivePath })
+        .pipe(Effect.mapError((error) => downloadFailure(error, version)));
+
+      // 4. Verify before anything is extracted, let alone published.
+      yield* onPhase('verifying');
+      if (downloaded.sha256 !== artifact.sha256) {
+        return yield* new EditorProvisioningFailure({
+          reason: 'integrity_mismatch',
+          diagnostic: `Downloaded Code Server ${version} did not match its pinned checksum. Expected sha-256 ${artifact.sha256}, received ${downloaded.sha256}.`,
+        });
+      }
+
+      // 5. Extract.
+      yield* onPhase('extracting');
+      yield* Effect.tryPromise({
+        try: () => mkdir(treePath, { recursive: true }),
+        catch: (cause) => cause,
+      }).pipe(Effect.mapError(() => unusable(`could not create an extraction directory`)));
+      yield* io
+        .extractTarGz({
+          archive: archivePath,
+          into: treePath,
+          stripComponents: artifact.stripComponents,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new EditorProvisioningFailure({
+                reason: 'extract_failed',
+                diagnostic: `Extracting Code Server ${version} failed.${error.output ? ` tar: ${error.output}` : ''}`,
+              }),
+          ),
+        );
+
+      // 6. Prove the tree is usable before a receipt is allowed to claim it is.
+      yield* io
+        .assertExecutable(join(treePath, artifact.executablePath))
+        .pipe(
+          Effect.mapError(() =>
+            unusable(`the extracted archive has no executable at ${artifact.executablePath}`),
+          ),
+        );
+
+      // 7. Publish. Uninterruptible: a deadline arriving between the rename and
+      //    the receipt write would leave an install root that claims nothing,
+      //    which the next attempt would have to clean up anyway.
+      yield* publish({ installRoot, treePath, version, platformKey, artifact });
+
+      // 8. Shared editor state, inside provisioning so "ready to launch" is one
+      //    fact rather than two.
+      const shared = yield* prepareShared(io, paths.editorsPath);
+
+      // 9.
+      return { version, installRoot, executablePath, ...shared };
+    }),
+  );
+});
 
 function acquireStaging(toolsPath: string) {
   return Effect.acquireRelease(
