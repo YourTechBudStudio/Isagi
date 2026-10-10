@@ -17,7 +17,7 @@ import { reconcilePersistedProcesses } from '../service.js';
 import type { ActiveAttachment } from '../service/attachments.js';
 import { handleExit, type PtyTerminations } from '../service/lifecycle.js';
 import { terminatePtyProcess } from '../service/termination.js';
-import { fakeBackendCatalog, manualPtyRetryScheduler } from '../testing.js';
+import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
 import {
   PtyKillError,
   PtyTerminationInProgressError,
@@ -58,7 +58,7 @@ interface Harness {
   readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly terminations: PtyTerminations;
-  readonly retry: ReturnType<typeof manualPtyRetryScheduler>;
+  readonly retry: ReturnType<typeof manualPtyPersistenceRetry>;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly ptyProcessId: number;
 }
@@ -83,7 +83,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
           repository,
           bus: publishOnlyRecordingEventBus('termination tests do not subscribe'),
           terminations: new Map(),
-          retry: manualPtyRetryScheduler(),
+          retry: manualPtyPersistenceRetry(),
           activeAttachments: new Map(),
           ptyProcessId,
         });

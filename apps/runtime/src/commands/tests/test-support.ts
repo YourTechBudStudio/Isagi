@@ -121,7 +121,6 @@ export function fakeAttachment(overrides: Partial<PtyAttachment> = {}): PtyAttac
     replayBytes: 0,
     live: true,
     detach: Effect.void,
-    unsubscribe: () => {},
     ...overrides,
   };
 }

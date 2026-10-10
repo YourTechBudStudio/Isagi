@@ -10,21 +10,25 @@ import {
   type PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
 
-import { HarnessLaunchBlocked, HarnessAdapterError } from '../../harnesses/index.js';
+import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { errorMessage, type RouteRuntime } from '../../platform/http/index.js';
-import { DatabaseError } from '../../platform/persistence/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import {
   PtyService,
   registerPtyStreamRoute,
   type PtyStreamStrategy,
-  PtyResizeError,
+  type PtyResizeError,
   PtyServiceError,
-  PtyWriteError,
+  type PtyWriteError,
 } from '../../pty-processes/index.js';
 import type { PtyAttachmentPlan } from '../../pty-processes/index.js';
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
-import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/service.js';
-import { SessionLifecycle, SessionLifecycleError, type SessionLifecycleKey } from './lifecycle.js';
+import { type AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
+import { type TerminalSessionError, TerminalSessionService } from '../terminal-sessions/service.js';
+import {
+  SessionLifecycle,
+  type SessionLifecycleError,
+  type SessionLifecycleKey,
+} from './lifecycle.js';
 
 /** The services the session attach routes use. */
 type AttachRouteServices =
@@ -71,6 +75,19 @@ class SessionAttachProtocolError extends Data.TaggedError('SessionAttachProtocol
   readonly message: string;
 }> {}
 
+/** Everything a session attach connection can fail with, mapped to its socket error frame by `websocketError`. */
+type SessionAttachError =
+  | SessionAttachProtocolError
+  | SessionLifecycleError
+  | AgentSessionError
+  | TerminalSessionError
+  | HarnessAdapterError
+  | HarnessLaunchBlocked
+  | PtyServiceError
+  | PtyWriteError
+  | PtyResizeError
+  | DatabaseError;
+
 function registerSessionAttachRoute(
   fastify: FastifyInstance,
   runtime: RouteRuntime<AttachRouteServices>,
@@ -80,10 +97,15 @@ function registerSessionAttachRoute(
     readonly sessionKind: 'agent_session' | 'terminal_session';
     readonly resolveProcessId: (
       sessionId: number,
-    ) => Effect.Effect<number, unknown, AttachRouteServices>;
+    ) => Effect.Effect<number, SessionAttachError, AttachRouteServices>;
   },
 ) {
-  const strategy: PtyStreamStrategy<SessionAttachTarget, SessionPreamble, AttachRouteServices> = {
+  const strategy: PtyStreamStrategy<
+    SessionAttachTarget,
+    SessionPreamble,
+    SessionAttachError,
+    AttachRouteServices
+  > = {
     path: input.path,
     logLabel: `PTY websocket ${input.sessionKind} attach`,
     mode: 'interactive',
@@ -146,10 +168,9 @@ function registerSessionAttachRoute(
           key: target.sessionKey,
           handle: {
             moved: Effect.gen(function* () {
-              controls.send({ type: 'error', code: 'session_attachment_moved' });
+              yield* controls.send({ type: 'error', code: 'session_attachment_moved' });
               yield* controls.detach;
-              controls.close();
-              yield* Effect.promise<void>(() => new Promise((resolve) => setImmediate(resolve)));
+              yield* controls.close;
             }),
           },
         });
@@ -198,56 +219,59 @@ function decodeClientMessage(raw: string): PtyWebSocketInputMessage | null {
   }
 }
 
-export function websocketError(error: unknown): {
+export function websocketError(error: SessionAttachError): {
   readonly code: PtyWebSocketErrorCode;
   readonly message?: string;
 } {
-  if (error instanceof HarnessLaunchBlocked)
-    return {
-      code: error.reason,
-      message: `Harness process creation is blocked: ${error.reason}.${error.diagnostic ? ` ${error.diagnostic}` : ''}`,
-    };
-  if (error instanceof SessionAttachProtocolError) {
-    return { code: error.code, message: error.message };
+  switch (error._tag) {
+    case 'HarnessLaunchBlocked':
+      return {
+        code: error.reason,
+        message: `Harness process creation is blocked: ${error.reason}.${error.diagnostic ? ` ${error.diagnostic}` : ''}`,
+      };
+    case 'SessionAttachProtocolError':
+      return { code: error.code, message: error.message };
+    case 'AgentSessionError':
+      switch (error.code) {
+        case 'harness_metadata_missing':
+        case 'harness_metadata_invalid':
+        case 'active_process_missing':
+        case 'active_process_not_running':
+          return { code: error.code, message: error.message };
+        default:
+          return { code: 'session_not_found', message: error.message };
+      }
+    case 'TerminalSessionError':
+      switch (error.code) {
+        case 'active_process_missing':
+        case 'active_process_not_running':
+          return { code: error.code, message: error.message };
+        default:
+          return { code: 'session_not_found', message: error.message };
+      }
+    case 'HarnessAdapterError':
+      return error.code === 'unsupported_harness'
+        ? { code: 'unsupported_harness', message: error.message }
+        : { code: 'unknown', message: errorMessage(error) };
+    case 'SessionLifecycleError':
+      switch (error.code) {
+        case 'attach_token_expired':
+        case 'attach_token_missing':
+          return { code: error.code, message: error.message };
+        default:
+          return { code: 'attach_token_invalid', message: error.message };
+      }
+    case 'PtyServiceError':
+      return error.code === 'worktree_not_found'
+        ? { code: 'session_not_found', message: error.message }
+        : { code: error.code, message: error.message };
+    case 'PtyWriteError':
+    case 'PtyResizeError':
+      return { code: 'pty_write_failed', message: error.message };
+    case 'DatabaseError':
+      return {
+        code: 'pty_state_load_failed',
+        message: `PTY state load failed: ${error.operation}`,
+      };
   }
-  if (error instanceof AgentSessionError || error instanceof TerminalSessionError) {
-    if (error instanceof AgentSessionError && error.code === 'harness_metadata_missing') {
-      return { code: 'harness_metadata_missing', message: error.message };
-    }
-    if (error instanceof AgentSessionError && error.code === 'harness_metadata_invalid') {
-      return { code: 'harness_metadata_invalid', message: error.message };
-    }
-    if (error.code === 'active_process_missing') {
-      return { code: 'active_process_missing', message: error.message };
-    }
-    if (error.code === 'active_process_not_running') {
-      return { code: 'active_process_not_running', message: error.message };
-    }
-    return { code: 'session_not_found', message: error.message };
-  }
-  if (error instanceof HarnessAdapterError && error.code === 'unsupported_harness') {
-    return { code: 'unsupported_harness', message: error.message };
-  }
-  if (error instanceof SessionLifecycleError) {
-    if (error.code === 'attach_token_expired') {
-      return { code: 'attach_token_expired', message: error.message };
-    }
-    if (error.code === 'attach_token_missing') {
-      return { code: 'attach_token_missing', message: error.message };
-    }
-    return { code: 'attach_token_invalid', message: error.message };
-  }
-  if (error instanceof PtyServiceError) {
-    if (error.code === 'worktree_not_found') {
-      return { code: 'session_not_found', message: error.message };
-    }
-    return { code: error.code, message: error.message };
-  }
-  if (error instanceof PtyWriteError || error instanceof PtyResizeError) {
-    return { code: 'pty_write_failed', message: error.message };
-  }
-  if (error instanceof DatabaseError) {
-    return { code: 'pty_state_load_failed', message: `PTY state load failed: ${error.operation}` };
-  }
-  return { code: 'unknown', message: errorMessage(error) };
 }

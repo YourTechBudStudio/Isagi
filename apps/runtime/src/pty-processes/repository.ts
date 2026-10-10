@@ -256,12 +256,6 @@ function findProcess(
   });
 }
 
-export class MissingLaunchWorktree extends Error {
-  constructor(readonly worktreeId: number) {
-    super(`Worktree ${worktreeId} was not found.`);
-  }
-}
-
 export function appendLog(path: string, data: string) {
   appendFileSync(path, data, 'utf8');
   return Buffer.byteLength(data, 'utf8');

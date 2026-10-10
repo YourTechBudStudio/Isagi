@@ -20,11 +20,11 @@ import {
 import { DatabaseError } from '../platform/persistence/index.js';
 import {
   type PtyService,
-  PtyServiceError,
+  type PtyServiceError,
   registerPtyStreamRoute,
   type PtyStreamStrategy,
 } from '../pty-processes/index.js';
-import { CommandError } from './errors.js';
+import { CommandError, type CommandServiceError } from './errors.js';
 import type { CommandsLayer } from './layer.js';
 import { CommandService } from './service.js';
 
@@ -113,6 +113,7 @@ function registerCommandLogStreamRoute(
       >;
     },
     Extract<CommandLogStreamOutputMessage, { readonly type: 'command_log_state' }>,
+    CommandLogStreamProtocolError | CommandServiceError,
     CommandService | PtyService
   > = {
     path: commandLogStreamWebSocketEndpoint.path,
@@ -162,8 +163,7 @@ function registerCommandLogStreamRoute(
     beforeAttach: () => Effect.void,
     recoverAttachFailure: ({ target, cause }) =>
       Effect.gen(function* () {
-        if (!(cause instanceof PtyServiceError) || cause.code !== 'backend_attach_failed')
-          return null;
+        if (cause._tag !== 'PtyServiceError' || cause.code !== 'backend_attach_failed') return null;
 
         const commands = yield* CommandService;
         const metadata = yield* commands.readLogMetadata({
@@ -185,10 +185,9 @@ function registerCommandLogStreamRoute(
     supersede: () => true,
     displace: ({ controls }) =>
       Effect.gen(function* () {
-        controls.send({ type: 'error', code: 'stream_superseded' });
+        yield* controls.send({ type: 'error', code: 'stream_superseded' });
         yield* controls.detach;
-        controls.close();
-        yield* Effect.promise<void>(() => new Promise((resolve) => setImmediate(resolve)));
+        yield* controls.close;
       }),
     registerAttachment: () => Effect.succeed(() => {}),
     mapError: commandLogStreamError,
@@ -263,42 +262,52 @@ function decodeClientMessage(raw: string) {
   }
 }
 
-function commandLogStreamError(error: unknown): {
+/** Everything a command log stream connection can fail with, mapped to its socket error frame. */
+function commandLogStreamError(
+  error: CommandLogStreamProtocolError | CommandServiceError | PtyServiceError,
+): {
   readonly code: CommandLogStreamErrorCode;
   readonly message?: string;
 } {
-  if (error instanceof CommandLogStreamProtocolError) {
-    return { code: error.code, message: error.message };
-  }
-  if (error instanceof CommandError) {
-    if (
-      error.code === 'worktree_not_found' ||
-      error.code === 'command_config_invalid' ||
-      error.code === 'command_not_found'
-    ) {
+  switch (error._tag) {
+    case 'CommandLogStreamProtocolError':
       return { code: error.code, message: error.message };
-    }
-    return { code: 'unknown', message: error.message };
-  }
-  if (error instanceof PtyServiceError) {
-    switch (error.code) {
-      case 'backend_unavailable':
-      case 'backend_session_missing':
-      case 'backend_attach_failed':
-      case 'log_read_failed':
+    case 'CommandError':
+      if (
+        error.code === 'worktree_not_found' ||
+        error.code === 'command_config_invalid' ||
+        error.code === 'command_not_found'
+      ) {
         return { code: error.code, message: error.message };
-      case 'session_not_found':
-      case 'session_not_running':
-      case 'active_process_missing':
-      case 'active_process_not_running':
-      case 'session_already_attached':
-        return { code: 'backend_attach_failed', message: error.message };
-    }
+      }
+      return { code: 'unknown', message: error.message };
+    case 'PtyServiceError':
+      return ptyServiceStreamError(error);
+    case 'DatabaseError':
+      return {
+        code: 'pty_state_load_failed',
+        message: `PTY state load failed: ${error.operation}`,
+      };
   }
-  if (error instanceof DatabaseError)
-    return {
-      code: 'pty_state_load_failed',
-      message: `PTY state load failed: ${error.operation}`,
-    };
-  return { code: 'unknown', message: errorMessage(error) };
+}
+
+function ptyServiceStreamError(error: PtyServiceError): {
+  readonly code: CommandLogStreamErrorCode;
+  readonly message?: string;
+} {
+  switch (error.code) {
+    case 'backend_unavailable':
+    case 'backend_session_missing':
+    case 'backend_attach_failed':
+    case 'log_read_failed':
+      return { code: error.code, message: error.message };
+    case 'session_not_found':
+    case 'session_not_running':
+    case 'active_process_missing':
+    case 'active_process_not_running':
+    case 'session_already_attached':
+      return { code: 'backend_attach_failed', message: error.message };
+    case 'worktree_not_found':
+      return { code: 'unknown', message: errorMessage(error) };
+  }
 }

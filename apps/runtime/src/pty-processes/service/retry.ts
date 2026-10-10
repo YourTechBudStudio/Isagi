@@ -1,78 +1,57 @@
-import { Effect } from 'effect';
+import { Cause, Deferred, Effect, Exit, FiberSet, type Scope } from 'effect';
 
-// Persistence retries outlive the call that scheduled them, so they need an
-// owner. This is that owner: every deferred terminal write is scheduled here,
-// and the PTY service scope shuts the scheduler down while the repository is
-// still open — so a queued write gets one last attempt against a live database,
-// and anything still unresolved after that is abandoned loudly rather than left
-// writing into a torn-down runtime.
-export interface PtyRetryScheduler {
-  // `job` must handle its own failures; a job that wants another attempt
-  // schedules itself again from inside its failure branch.
-  readonly schedule: (label: string, job: Effect.Effect<void>) => void;
-  // Stops accepting new work, runs what is queued without waiting out its delay,
-  // and waits for everything in flight.
-  readonly shutdown: Effect.Effect<void>;
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
+import { PtyProcessSettings } from '../settings.js';
+
+/**
+ * The owner of deferred terminal writes. A kill or exit whose durable fact could not be persisted is handed here and
+ * retried until it lands. Persistence retries outlive the call that submitted them, so they live in this owner's
+ * scope: the PTY service acquires it first, which makes it the last thing released — while the repository is still
+ * open.
+ */
+export interface PtyPersistenceRetry {
+  /**
+   * Retries `attempt` every `PtyProcessSettings.persistenceRetryDelay` until it succeeds. Each failure is logged. When
+   * the scope closes, a waiting retry gets one immediate final attempt (the delay was only backoff), and a retry that
+   * still fails then is abandoned with a warning. Submitting after the scope began closing abandons at once.
+   */
+  readonly submit: <E>(label: string, attempt: Effect.Effect<void, E>) => Effect.Effect<void>;
 }
 
-interface QueuedRetry {
-  readonly label: string;
-  readonly job: Effect.Effect<void>;
-}
+export const makePersistenceRetry: Effect.Effect<PtyPersistenceRetry, never, Scope.Scope> =
+  Effect.gen(function* () {
+    const { persistenceRetryDelay } = yield* PtyProcessSettings;
+    const fibers = yield* FiberSet.make<void, never>();
+    const draining = yield* Deferred.make<void>();
+    // Registered after `FiberSet.make`, so it runs before the set interrupts its fibers: shutdown cuts every waiting
+    // backoff short and waits for the final attempts instead of dropping them.
+    yield* Effect.addFinalizer(() =>
+      Deferred.succeed(draining, undefined).pipe(Effect.andThen(FiberSet.awaitEmpty(fibers))),
+    );
 
-const retryDelayMs = 1_000;
+    const abandon = (label: string) =>
+      Effect.logWarning('Abandoning PTY persistence retry after shutdown').pipe(
+        Effect.annotateLogs({ label }),
+      );
 
-export function makePtyRetryScheduler(
-  options: { readonly delayMs?: number | undefined } = {},
-): PtyRetryScheduler {
-  const delayMs = options.delayMs ?? retryDelayMs;
-  const queued = new Map<NodeJS.Timeout, QueuedRetry>();
-  const running = new Set<Promise<void>>();
-  let stopped = false;
-
-  const start = (job: Effect.Effect<void>) => {
-    const promise = Effect.runPromise(job);
-    running.add(promise);
-    void promise.finally(() => running.delete(promise));
-  };
-
-  const schedule = (label: string, job: Effect.Effect<void>) => {
-    if (stopped) {
-      // Past shutdown there is nobody left to serve another attempt: the
-      // reservation this retry was holding dies with the runtime and the row
-      // stays whatever it last durably was. Say so rather than leaving a silent
-      // gap between the kill and the record.
-      console.warn(`[runtime] Abandoning PTY persistence retry after shutdown ${label}`);
-      return;
-    }
-    const timer = setTimeout(() => {
-      queued.delete(timer);
-      start(job);
-    }, delayMs);
-    timer.unref();
-    queued.set(timer, { label, job });
-  };
-
-  return {
-    schedule,
-    shutdown: Effect.promise(async () => {
-      // Set first, so a job that fails during the drain is refused another
-      // attempt — and logs its abandonment — instead of queueing work nobody
-      // will ever run.
-      stopped = true;
-      const pending = [...queued.entries()];
-      queued.clear();
-      for (const [timer, retry] of pending) {
-        clearTimeout(timer);
-        // The delay was only ever backoff. The database is still open right now,
-        // so a queued terminal write gets its attempt here rather than being
-        // dropped for having been scheduled a moment too late.
-        console.info(`[runtime] Draining queued PTY persistence retry ${retry.label}`);
-        start(retry.job);
+    const loop = Effect.fnUntraced(function* <E>(label: string, attempt: Effect.Effect<void, E>) {
+      while (true) {
+        yield* Effect.raceFirst(Effect.sleep(persistenceRetryDelay), Deferred.await(draining));
+        const exit = yield* Effect.exit(attempt);
+        if (Exit.isSuccess(exit)) return;
+        yield* Effect.logError('PTY persistence retry failed').pipe(
+          Effect.annotateLogs({ label, cause: describeOperationalCause(Cause.squash(exit.cause)) }),
+        );
+        if (yield* Deferred.isDone(draining)) return yield* abandon(label);
       }
-      // In-flight jobs are mid-write against a repository that is still open;
-      // draining them here is what keeps the write out of a closed database.
-      await Promise.allSettled([...running]);
-    }),
-  };
-}
+    });
+
+    return {
+      submit: (label, attempt) =>
+        Deferred.isDone(draining).pipe(
+          Effect.flatMap((done) =>
+            done ? abandon(label) : FiberSet.run(fibers, loop(label, attempt)).pipe(Effect.asVoid),
+          ),
+        ),
+    } satisfies PtyPersistenceRetry;
+  });

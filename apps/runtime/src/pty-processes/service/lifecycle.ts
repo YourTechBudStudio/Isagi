@@ -1,12 +1,13 @@
 import { Effect } from 'effect';
 
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { InternalEvents } from '../../platform/events/index.js';
 import type { PtyRepository } from '../repository.js';
 import type { PtyProcessStatusReason } from '../types.js';
 import type { PtyExit } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { transitionProcessByIdAndPublish } from './events.js';
-import type { PtyRetryScheduler } from './retry.js';
+import type { PtyPersistenceRetry } from './retry.js';
 
 export type DurablePtyTerminationReason = Extract<
   PtyProcessStatusReason,
@@ -71,39 +72,44 @@ export function skipReservedRow(
   reservations: PtyReservations,
   ptyProcessId: number,
   warnAfterMs: number,
-) {
-  const termination = reservations.terminations.get(ptyProcessId);
-  if (termination) {
-    warnOnceWhenStale(
-      termination,
-      warnAfterMs,
-      (ageMs) =>
-        `[runtime] PTY termination reservation is still unresolved ptyProcessId=${ptyProcessId} reason=${termination.reason} ownership=${termination.ownership} ageMs=${ageMs}`,
-    );
-    return true;
-  }
-  const launch = reservations.launches.get(ptyProcessId);
-  if (launch) {
-    warnOnceWhenStale(
-      launch,
-      warnAfterMs,
-      (ageMs) =>
-        `[runtime] PTY launch reservation is still unresolved ptyProcessId=${ptyProcessId} ageMs=${ageMs}`,
-    );
-    return true;
-  }
-  return false;
+): Effect.Effect<boolean> {
+  return Effect.suspend(() => {
+    const termination = reservations.terminations.get(ptyProcessId);
+    if (termination) {
+      return warnOnceWhenStale(termination, warnAfterMs, (ageMs) =>
+        Effect.logWarning('PTY termination reservation is still unresolved').pipe(
+          Effect.annotateLogs({
+            ptyProcessId,
+            reason: termination.reason,
+            ownership: termination.ownership,
+            ageMs,
+          }),
+        ),
+      ).pipe(Effect.as(true));
+    }
+    const launch = reservations.launches.get(ptyProcessId);
+    if (launch) {
+      return warnOnceWhenStale(launch, warnAfterMs, (ageMs) =>
+        Effect.logWarning('PTY launch reservation is still unresolved').pipe(
+          Effect.annotateLogs({ ptyProcessId, ageMs }),
+        ),
+      ).pipe(Effect.as(true));
+    }
+    return Effect.succeed(false);
+  });
 }
 
 function warnOnceWhenStale(
   reservation: PtyReservationAge,
   warnAfterMs: number,
-  message: (ageMs: number) => string,
+  warn: (ageMs: number) => Effect.Effect<void>,
 ) {
-  const ageMs = Date.now() - reservation.reservedAt;
-  if (ageMs <= warnAfterMs || reservation.ageWarningLogged) return;
-  reservation.ageWarningLogged = true;
-  console.warn(message(ageMs));
+  return Effect.suspend(() => {
+    const ageMs = Date.now() - reservation.reservedAt;
+    if (ageMs <= warnAfterMs || reservation.ageWarningLogged) return Effect.void;
+    reservation.ageWarningLogged = true;
+    return warn(ageMs);
+  });
 }
 
 // Reserve the allocation window. Called from inside the repository's insert
@@ -179,7 +185,7 @@ function clearTerminationReservation(
 export function handleExit(
   repository: PtyRepository['Service'],
   eventBus: InternalEvents['Service'],
-  retry: PtyRetryScheduler,
+  retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
   ptyProcessId: number,
@@ -193,8 +199,8 @@ export function handleExit(
       // the consequence of its own affirmative kill.
       termination.exit = exit;
       activeAttachments.delete(ptyProcessId);
-      console.info(
-        `[runtime] Captured backend exit for terminating PTY ${ptyProcessId} reason=${termination.reason}`,
+      yield* Effect.logInfo('Captured backend exit for terminating PTY').pipe(
+        Effect.annotateLogs({ ptyProcessId, reason: termination.reason }),
       );
       return;
     }
@@ -206,17 +212,21 @@ export function handleExit(
 function persistExit(
   repository: PtyRepository['Service'],
   eventBus: InternalEvents['Service'],
-  retry: PtyRetryScheduler,
+  retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
   ptyProcessId: number,
   exit: PtyExit,
 ) {
   return persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        console.error(`[runtime] Failed to persist PTY exit for session ${ptyProcessId}`, error);
-        scheduleExitRetry(repository, eventBus, retry, activeAttachments, ptyProcessId, exit);
-      }),
+      logPersistFailure('Failed to persist PTY exit', ptyProcessId, error).pipe(
+        Effect.andThen(
+          retry.submit(
+            `exit ptyProcessId=${ptyProcessId}`,
+            persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit),
+          ),
+        ),
+      ),
     ),
     Effect.asVoid,
   );
@@ -230,29 +240,28 @@ function persistExit(
 export function persistCapturedExitAndRelease(
   repository: PtyRepository['Service'],
   eventBus: InternalEvents['Service'],
-  retry: PtyRetryScheduler,
+  retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
   ptyProcessId: number,
   termination: PtyTerminationState,
   exit: PtyExit,
 ) {
+  const release = Effect.sync(() =>
+    clearTerminationReservation(terminations, ptyProcessId, termination),
+  );
   return persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
     Effect.matchEffect({
-      onSuccess: () =>
-        Effect.sync(() => clearTerminationReservation(terminations, ptyProcessId, termination)),
+      onSuccess: () => release,
       onFailure: (error) =>
-        Effect.sync(() => {
-          console.error(`[runtime] Failed to persist PTY exit for session ${ptyProcessId}`, error);
+        Effect.gen(function* () {
+          yield* logPersistFailure('Failed to persist PTY exit', ptyProcessId, error);
           transferTerminationToRetry(termination);
-          scheduleExitRetry(
-            repository,
-            eventBus,
-            retry,
-            activeAttachments,
-            ptyProcessId,
-            exit,
-            () => clearTerminationReservation(terminations, ptyProcessId, termination),
+          yield* retry.submit(
+            `exit ptyProcessId=${ptyProcessId}`,
+            persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
+              Effect.andThen(release),
+            ),
           );
         }),
     }),
@@ -264,39 +273,31 @@ export function persistCapturedExitAndRelease(
 export function retryPersistKilledUntilSuccess(
   repository: PtyRepository['Service'],
   eventBus: InternalEvents['Service'],
-  retry: PtyRetryScheduler,
+  retry: PtyPersistenceRetry,
   terminations: PtyTerminations,
   ptyProcessId: number,
   termination: PtyTerminationState,
 ) {
-  transferTerminationToRetry(termination);
-  const attempt: Effect.Effect<void> = Effect.suspend(() =>
-    transitionProcessByIdAndPublish(repository, eventBus, {
-      ptyProcessId,
-      status: 'killed',
-      statusReason: termination.reason,
-      exitCode: null,
-      signal: null,
-    }).pipe(
-      Effect.matchEffect({
+  return Effect.suspend(() => {
+    transferTerminationToRetry(termination);
+    return retry.submit(
+      `killed ptyProcessId=${ptyProcessId}`,
+      transitionProcessByIdAndPublish(repository, eventBus, {
+        ptyProcessId,
+        status: 'killed',
+        statusReason: termination.reason,
+        exitCode: null,
+        signal: null,
+      }).pipe(
         // A rejection by an already-terminal row resolves this retry just as a
         // successful write does: the durable fact is settled either way, so the
         // reservation must not outlive it.
-        onSuccess: () =>
+        Effect.andThen(
           Effect.sync(() => clearTerminationReservation(terminations, ptyProcessId, termination)),
-        onFailure: (error) =>
-          Effect.sync(() => {
-            console.error(
-              `[runtime] Failed to retry PTY termination persistence for session ${ptyProcessId}`,
-              error,
-            );
-            retry.schedule(`killed ptyProcessId=${ptyProcessId}`, attempt);
-          }),
-      }),
-    ),
-  );
-
-  retry.schedule(`killed ptyProcessId=${ptyProcessId}`, attempt);
+        ),
+      ),
+    );
+  });
 }
 
 function persistExitOnce(
@@ -320,38 +321,21 @@ function persistExitOnce(
     // attachment but announces nothing — logging a competing outcome would read
     // as a second death.
     if (result.applied) {
-      console.info(
-        `[runtime] PTY exited ptyProcessId=${ptyProcessId} status=${status} exitCode=${exit.exitCode ?? 'null'} signal=${exit.signal ?? 'null'}`,
+      yield* Effect.logInfo('PTY exited').pipe(
+        Effect.annotateLogs({
+          ptyProcessId,
+          status,
+          exitCode: exit.exitCode ?? 'null',
+          signal: exit.signal ?? 'null',
+        }),
       );
     }
     return result;
   });
 }
 
-function scheduleExitRetry(
-  repository: PtyRepository['Service'],
-  eventBus: InternalEvents['Service'],
-  retry: PtyRetryScheduler,
-  activeAttachments: Map<number, ActiveAttachment>,
-  ptyProcessId: number,
-  exit: PtyExit,
-  onResolved?: () => void,
-) {
-  const attempt: Effect.Effect<void> = Effect.suspend(() =>
-    persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
-      Effect.matchEffect({
-        onSuccess: () => Effect.sync(() => onResolved?.()),
-        onFailure: (error) =>
-          Effect.sync(() => {
-            console.error(
-              `[runtime] Failed to retry PTY exit persistence for session ${ptyProcessId}`,
-              error,
-            );
-            retry.schedule(`exit ptyProcessId=${ptyProcessId}`, attempt);
-          }),
-      }),
-    ),
+function logPersistFailure(message: string, ptyProcessId: number, error: unknown) {
+  return Effect.logError(message).pipe(
+    Effect.annotateLogs({ ptyProcessId, cause: describeOperationalCause(error) }),
   );
-
-  retry.schedule(`exit ptyProcessId=${ptyProcessId}`, attempt);
 }

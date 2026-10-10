@@ -54,7 +54,6 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           cols: 80,
           rows: 24,
           logPath: null,
-          onExit: () => {},
         });
       }).pipe(Effect.provide(TmuxBackend.layer)),
     );
@@ -126,7 +125,6 @@ test('tmux launch shell-quotes structured command arguments', async () => {
           cols: 80,
           rows: 24,
           logPath: null,
-          onExit: () => {},
         });
       }).pipe(Effect.provide(TmuxBackend.layer)),
     );

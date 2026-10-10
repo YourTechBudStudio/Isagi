@@ -3,9 +3,10 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Queue, Stream, type Cause } from 'effect';
 import * as nodePty from 'node-pty';
 
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { replayUtf8LogFile } from '../log-replay.js';
 import {
   createShellIntegrationParser,
@@ -17,6 +18,8 @@ import type {
   LaunchBackendSessionInput,
   NodePtyBackendRef,
   PtyBackend as PtyBackendShape,
+  PtyOutputMessage,
+  PtyProcessEvent,
 } from '../types.js';
 import { PtyKillError, PtyResizeError, PtyStartError, PtyWriteError } from '../types.js';
 import { collectNodePtyGarbage } from './node-pty-gc.js';
@@ -26,26 +29,24 @@ import {
   snapshotProcessTree,
 } from './process-tree.js';
 
+// node-pty is adapted here, once: its `onData`/`onExit` callbacks do only synchronous work (parse, append the log,
+// enqueue) and never run an Effect. Every fact about a launched process reaches the PTY service through the
+// `events` queue returned by `launch`; live output reaches an attachment through the queue it registered.
 interface LiveNodePtyProcess {
   readonly ptyProcessId: number;
   readonly process: nodePty.IPty;
   readonly logPath: string | null;
-  attachment: NodePtyAttachment | null;
+  attachment: NodePtyAttachmentSink | null;
   running: boolean;
   suppressExitCallback: boolean;
 }
 
-interface NodePtyAttachment {
-  readonly id: symbol;
-  readonly onOutput: (data: string) => void;
-  readonly onExit: (exit: {
-    readonly exitCode: number | null;
-    readonly signal: string | null;
-  }) => void;
+interface NodePtyAttachmentSink {
+  readonly output: Queue.Enqueue<PtyOutputMessage>;
 }
 
-const make = Effect.sync(() => {
-  ensureNodePtyDarwinHelperExecutable();
+const make = Effect.gen(function* () {
+  yield* ensureNodePtyDarwinHelperExecutable;
   const liveSessions = new Map<number, LiveNodePtyProcess>();
   const listSessions = Effect.sync(() =>
     [...liveSessions.values()].flatMap((session) =>
@@ -65,73 +66,11 @@ const make = Effect.sync(() => {
   return {
     name: 'node_pty',
     available: Effect.succeed(true),
-    launch: (input) =>
-      Effect.try({
-        try: () => {
-          const pty = spawnNodePty(input);
-          const live: LiveNodePtyProcess = {
-            ptyProcessId: input.ptyProcessId,
-            process: pty,
-            logPath: input.logPath,
-            attachment: null,
-            running: true,
-            suppressExitCallback: false,
-          };
-          liveSessions.set(input.ptyProcessId, live);
-          const parser = createShellIntegrationParser({
-            shellIntegration: input.shellIntegration ?? null,
-            onEvent: (event) =>
-              input.onForegroundCommand?.({
-                ptyProcessId: input.ptyProcessId,
-                state: foregroundStateFromEvent(event),
-              }),
-          });
-          pty.onData((data) => {
-            if (live.attachment === null) {
-              for (const response of terminalProbeResponses(data, {
-                cols: input.cols,
-                rows: input.rows,
-              })) {
-                live.process.write(response);
-              }
-            }
-            const visible = parser.push(data);
-            if (visible.length === 0) return;
-            appendBackendLog(input.logPath, visible, input.ptyProcessId);
-            live.attachment?.onOutput(visible);
-          });
-          pty.onExit((event) => {
-            // `kill` marks and removes the process-local live entry before
-            // node-pty can emit exit. Ignore that callback so GC/delete cleanup
-            // cannot rewrite an already-terminal or already-deleted durable row.
-            if (live.suppressExitCallback || liveSessions.get(input.ptyProcessId) !== live) {
-              return;
-            }
-            live.running = false;
-            // Release any bytes the parser was holding back as a potential
-            // partial marker prefix so a mid-escape exit doesn't drop them from
-            // the log/replay (mirrors tmux's push+flush on replay).
-            const trailing = parser.flush();
-            if (trailing.length > 0) {
-              appendBackendLog(input.logPath, trailing, input.ptyProcessId);
-              live.attachment?.onOutput(trailing);
-            }
-            const exit = {
-              exitCode: event.exitCode ?? null,
-              signal: event.signal ? String(event.signal) : null,
-            };
-            live.attachment?.onExit(exit);
-            liveSessions.delete(input.ptyProcessId);
-            input.onExit(exit);
-          });
-          return {
-            schemaVersion: 1,
-            backend: 'node_pty',
-            ptyProcessId: input.ptyProcessId,
-            pid: pty.pid,
-            shellIntegrationToken: input.shellIntegration?.token ?? null,
-          } satisfies NodePtyBackendRef;
-        },
+    launch: Effect.fnUntraced(function* (input: LaunchBackendSessionInput) {
+      // Created before the spawn, so nothing the process does can happen before there is somewhere to put it.
+      const events = yield* Queue.unbounded<PtyProcessEvent, Cause.Done>();
+      const ref = yield* Effect.try({
+        try: () => startNodePtyProcess(input, events, liveSessions),
         catch: (cause) =>
           new PtyStartError({
             ptyProcessId: input.ptyProcessId,
@@ -139,71 +78,89 @@ const make = Effect.sync(() => {
             cwd: input.cwd,
             cause,
           }),
-      }),
-    attach: (input) =>
-      Effect.try({
-        try: () => {
-          if (input.ref.backend !== 'node_pty') {
-            throw new Error(`Cannot attach node-pty backend to ${input.ref.backend} ref.`);
-          }
-          const ref = input.ref;
+      });
+      return { ref, events: Stream.fromQueue(events) };
+    }),
+    attach: (input) => {
+      const ref = input.ref;
+      if (ref.backend !== 'node_pty') {
+        return Effect.fail(
+          attachError(
+            undefined,
+            new Error(`Cannot attach node-pty backend to ${ref.backend} ref.`),
+          ),
+        );
+      }
+      const sink: NodePtyAttachmentSink = { output: input.output };
+      return Effect.acquireRelease(
+        // Registration and the log size are read in one synchronous step, so no byte is both replayed and delivered.
+        Effect.suspend(() => {
           const live = liveSessions.get(ref.ptyProcessId);
           if (!live?.running) {
-            throw new Error(`node-pty process ${ref.ptyProcessId} is not live.`);
+            return Effect.fail(
+              attachError(
+                ref.ptyProcessId,
+                new Error(`node-pty process ${ref.ptyProcessId} is not live.`),
+              ),
+            );
           }
-          live.process.resize(input.cols, input.rows);
-          const attachment = {
-            id: Symbol(`node-pty-attachment-${ref.ptyProcessId}`),
-            onOutput: input.onOutput,
-            onExit: input.onSessionExit,
-          } satisfies NodePtyAttachment;
-          live.attachment = attachment;
-          return {
-            replayBytes: replayBytesForLog(live.logPath),
-            write: (data) =>
-              Effect.try({
-                try: () => live.process.write(data),
-                catch: (cause) => new PtyWriteError({ ptyProcessId: ref.ptyProcessId, cause }),
-              }),
-            resize: (size) =>
-              Effect.try({
-                try: () => live.process.resize(size.cols, size.rows),
-                catch: (cause) => new PtyResizeError({ ptyProcessId: ref.ptyProcessId, cause }),
-              }),
-            detach: Effect.sync(() => {
-              if (live.attachment?.id === attachment.id) {
-                live.attachment = null;
-              }
-            }),
-          } satisfies BackendAttachment;
-        },
-        catch: (cause) =>
-          new PtyStartError({
-            ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
-            command: 'node_pty_attach',
-            cwd: '',
-            cause,
+          return Effect.try({
+            try: () => {
+              live.process.resize(input.cols, input.rows);
+              live.attachment = sink;
+              return { live, replayBytes: replayBytesForLog(live.logPath) };
+            },
+            catch: (cause) => attachError(ref.ptyProcessId, cause),
+          });
+        }),
+        ({ live }) =>
+          Effect.sync(() => {
+            if (live.attachment === sink) live.attachment = null;
           }),
-      }),
-    writeInput: (input) =>
-      Effect.try({
-        try: () => {
-          if (input.ref.backend !== 'node_pty') {
-            throw new Error(`Cannot write node-pty input to ${input.ref.backend} ref.`);
-          }
-          const ref = input.ref;
-          const live = liveSessions.get(ref.ptyProcessId);
-          if (!live?.running) {
-            throw new Error(`node-pty process ${ref.ptyProcessId} is not live.`);
-          }
-          live.process.write(input.data);
-        },
-        catch: (cause) =>
+      ).pipe(
+        Effect.map(
+          ({ live, replayBytes }) =>
+            ({
+              replayBytes,
+              write: (data) =>
+                Effect.try({
+                  try: () => live.process.write(data),
+                  catch: (cause) => new PtyWriteError({ ptyProcessId: ref.ptyProcessId, cause }),
+                }),
+              resize: (size) =>
+                Effect.try({
+                  try: () => live.process.resize(size.cols, size.rows),
+                  catch: (cause) => new PtyResizeError({ ptyProcessId: ref.ptyProcessId, cause }),
+                }),
+            }) satisfies BackendAttachment,
+        ),
+      );
+    },
+    writeInput: (input) => {
+      const ref = input.ref;
+      if (ref.backend !== 'node_pty') {
+        return Effect.fail(
           new PtyWriteError({
-            ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
-            cause,
+            cause: new Error(`Cannot write node-pty input to ${ref.backend} ref.`),
           }),
-      }),
+        );
+      }
+      return Effect.suspend(() => {
+        const live = liveSessions.get(ref.ptyProcessId);
+        if (!live?.running) {
+          return Effect.fail(
+            new PtyWriteError({
+              ptyProcessId: ref.ptyProcessId,
+              cause: new Error(`node-pty process ${ref.ptyProcessId} is not live.`),
+            }),
+          );
+        }
+        return Effect.try({
+          try: () => live.process.write(input.data),
+          catch: (cause) => new PtyWriteError({ ptyProcessId: ref.ptyProcessId, cause }),
+        });
+      });
+    },
     replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
     inspect: (ref) =>
       Effect.succeed(
@@ -334,6 +291,90 @@ export class NodePtyBackend extends Context.Service<NodePtyBackend, PtyBackendSh
 
 type NodePtySpawn = typeof nodePty.spawn;
 
+function attachError(ptyProcessId: number | undefined, cause: unknown) {
+  return new PtyStartError({ ptyProcessId, command: 'node_pty_attach', cwd: '', cause });
+}
+
+/**
+ * Spawns and wires the node-pty callbacks. They do only synchronous work: answer terminal probes while detached, parse
+ * shell-integration markers, append the log (synchronously, which is what makes an attachment's `replayBytes` exact),
+ * and enqueue. `events` ends after `Exited`, or without one when `kill`/`terminate` suppressed the exit callback.
+ */
+function startNodePtyProcess(
+  input: LaunchBackendSessionInput,
+  events: Queue.Queue<PtyProcessEvent, Cause.Done>,
+  liveSessions: Map<number, LiveNodePtyProcess>,
+): NodePtyBackendRef {
+  const pty = spawnNodePty(input);
+  const live: LiveNodePtyProcess = {
+    ptyProcessId: input.ptyProcessId,
+    process: pty,
+    logPath: input.logPath,
+    attachment: null,
+    running: true,
+    suppressExitCallback: false,
+  };
+  liveSessions.set(input.ptyProcessId, live);
+  const parser = createShellIntegrationParser({
+    shellIntegration: input.shellIntegration ?? null,
+    onEvent: (event) =>
+      Queue.offerUnsafe(events, {
+        _tag: 'ForegroundChanged',
+        state: foregroundStateFromEvent(event),
+      }),
+  });
+  const appendVisible = (visible: string) => {
+    const failure = appendBackendLog(input.logPath, visible);
+    if (failure !== null) Queue.offerUnsafe(events, { _tag: 'LogAppendFailed', cause: failure });
+    if (live.attachment)
+      Queue.offerUnsafe(live.attachment.output, { type: 'output', data: visible });
+  };
+  pty.onData((data) => {
+    if (live.attachment === null) {
+      for (const response of terminalProbeResponses(data, {
+        cols: input.cols,
+        rows: input.rows,
+      })) {
+        live.process.write(response);
+      }
+    }
+    const visible = parser.push(data);
+    if (visible.length === 0) return;
+    appendVisible(visible);
+  });
+  pty.onExit((event) => {
+    // `kill` marks and removes the process-local live entry before node-pty can
+    // emit exit. No `Exited` for that callback, so GC/delete cleanup cannot
+    // rewrite an already-terminal or already-deleted durable row; the stream
+    // still ends, which lets the supervisor finish.
+    if (live.suppressExitCallback || liveSessions.get(input.ptyProcessId) !== live) {
+      Queue.endUnsafe(events);
+      return;
+    }
+    live.running = false;
+    // Release any bytes the parser was holding back as a potential partial
+    // marker prefix so a mid-escape exit doesn't drop them from the log/replay
+    // (mirrors tmux's push+flush on replay).
+    const trailing = parser.flush();
+    if (trailing.length > 0) appendVisible(trailing);
+    const exit = {
+      exitCode: event.exitCode ?? null,
+      signal: event.signal ? String(event.signal) : null,
+    };
+    if (live.attachment) Queue.offerUnsafe(live.attachment.output, { type: 'exit', ...exit });
+    liveSessions.delete(input.ptyProcessId);
+    Queue.offerUnsafe(events, { _tag: 'Exited', ...exit });
+    Queue.endUnsafe(events);
+  });
+  return {
+    schemaVersion: 1,
+    backend: 'node_pty',
+    ptyProcessId: input.ptyProcessId,
+    pid: pty.pid,
+    shellIntegrationToken: input.shellIntegration?.token ?? null,
+  } satisfies NodePtyBackendRef;
+}
+
 export function spawnNodePty(
   input: LaunchBackendSessionInput,
   spawn: NodePtySpawn = nodePty.spawn,
@@ -399,14 +440,15 @@ function defaultTerminalColor(color: string) {
   return color === '10' ? 'rgb:cdd6/cdd6/f4f4' : 'rgb:1e1e/1e1e/2e2e';
 }
 
-function appendBackendLog(path: string | null, data: string, ptyProcessId: number) {
-  if (!path) {
-    return;
-  }
+// Returns the failure, if any, so the caller can enqueue it: this runs inside a node-pty callback, where no Effect
+// (and so no logger) may run.
+function appendBackendLog(path: string | null, data: string): unknown {
+  if (!path) return null;
   try {
     appendFileSync(path, data, 'utf8');
+    return null;
   } catch (error) {
-    console.error(`[runtime] Failed to append PTY output for session ${ptyProcessId}`, error);
+    return error;
   }
 }
 
@@ -434,30 +476,40 @@ function replayBytesForLog(path: string | null) {
   }
 }
 
-function ensureNodePtyDarwinHelperExecutable() {
-  if (process.platform !== 'darwin') {
-    return;
+const ensureNodePtyDarwinHelperExecutable = Effect.suspend(() => {
+  const outcome = repairNodePtyDarwinHelper();
+  switch (outcome._tag) {
+    case 'Unchanged':
+      return Effect.void;
+    case 'Repaired':
+      return Effect.logWarning('Repaired node-pty macOS spawn helper permissions').pipe(
+        Effect.annotateLogs({ helper: outcome.helper }),
+      );
+    case 'Failed':
+      return Effect.logWarning(
+        'Could not inspect or repair node-pty macOS spawn helper permissions',
+      ).pipe(Effect.annotateLogs({ cause: describeOperationalCause(outcome.cause) }));
   }
+});
 
+function repairNodePtyDarwinHelper():
+  | { readonly _tag: 'Unchanged' }
+  | { readonly _tag: 'Repaired'; readonly helper: string }
+  | { readonly _tag: 'Failed'; readonly cause: unknown } {
+  if (process.platform !== 'darwin') return { _tag: 'Unchanged' };
   try {
     const helper = findNodePtySpawnHelper();
-    if (!helper) {
-      return;
-    }
-
+    if (!helper) return { _tag: 'Unchanged' };
     try {
       accessSync(helper, constants.X_OK);
-      return;
+      return { _tag: 'Unchanged' };
     } catch {
       const mode = statSync(helper).mode;
       chmodSync(helper, mode | 0o111);
-      console.warn(`[runtime] Repaired node-pty macOS spawn helper permissions: ${helper}`);
+      return { _tag: 'Repaired', helper };
     }
-  } catch (error) {
-    console.warn(
-      '[runtime] Could not inspect or repair node-pty macOS spawn helper permissions',
-      error,
-    );
+  } catch (cause) {
+    return { _tag: 'Failed', cause };
   }
 }
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Stream } from 'effect';
 
 import { CliAccessNone } from '../cli-access/index.js';
 import type { InternalEvent, InternalEvents } from '../platform/events/index.js';
@@ -185,12 +185,15 @@ export function editorBackendStub(
     available: Effect.succeed(true),
     launch: ({ ptyProcessId }) =>
       Effect.succeed({
-        schemaVersion: 1 as const,
-        backend: name,
-        ...(name === 'tmux'
-          ? { sessionName: `isagi_test_${ptyProcessId}` }
-          : { ptyProcessId, pid: 4_242 }),
-      } as never),
+        ref: {
+          schemaVersion: 1 as const,
+          backend: name,
+          ...(name === 'tmux'
+            ? { sessionName: `isagi_test_${ptyProcessId}` }
+            : { ptyProcessId, pid: 4_242 }),
+        } as never,
+        events: Stream.empty,
+      }),
     writeInput: () => Effect.void,
     attach: () => Effect.die(`${name} attach is not expected in editor tests`),
     resize: () => Effect.void,

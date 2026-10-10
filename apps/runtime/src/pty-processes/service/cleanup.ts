@@ -15,7 +15,7 @@ import type { ActiveAttachment } from './attachments.js';
 import { decodeBackendRef } from './backend-ref.js';
 import { transitionProcessAndPublish } from './events.js';
 import type { DurablePtyTerminationReason, PtyTerminations } from './lifecycle.js';
-import type { PtyRetryScheduler } from './retry.js';
+import type { PtyPersistenceRetry } from './retry.js';
 import { terminatePtyProcess } from './termination.js';
 
 // What this cleanup attempt established about the incarnation, and nothing
@@ -41,7 +41,7 @@ export interface PtyCleanupDependencies {
   readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
-  readonly retry: PtyRetryScheduler;
+  readonly retry: PtyPersistenceRetry;
 }
 
 /**
@@ -78,7 +78,7 @@ export function cleanupPtyProcess(
       // the adapter is probed first to keep a genuinely missing backend a
       // structured `backend_unavailable` rather than a raw kill failure — the
       // same rule termination follows.
-      const backend = deps.catalog.forBackend(session.backend);
+      const backend = yield* deps.catalog.forBackend(session.backend);
       if (!(yield* backend.available)) {
         return yield* Effect.fail(backendUnavailable(session.backend, session.id));
       }
@@ -95,8 +95,8 @@ export function cleanupPtyProcess(
     // alive | missing | unavailable, so probing first would only buy a second
     // round-trip to the same backend for an outcome it is about to report.
     const ref = yield* decodeBackendRef(session);
-    const inspection = yield* deps.catalog
-      .forBackend(session.backend)
+    const backend = yield* deps.catalog.forBackend(session.backend);
+    const inspection = yield* backend
       .inspect(ref)
       .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
 

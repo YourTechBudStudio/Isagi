@@ -30,25 +30,17 @@ const make = Effect.gen(function* () {
 
   const configured = backends[configuredBackendName[currentConfig.pty.backend]];
   if (configured === tmux && !(yield* tmux.available)) {
-    console.warn(
-      '[runtime] Configured PTY backend tmux is unavailable; PTY launches may fail until tmux is installed or config.yaml selects node-pty.',
+    yield* Effect.logWarning(
+      'Configured PTY backend tmux is unavailable; PTY launches may fail until tmux is installed or config.yaml selects node-pty.',
     );
   }
-  console.info(`[runtime] PTY launch backend selected backend=${configured.name}`);
+  yield* Effect.logInfo('PTY launch backend selected').pipe(
+    Effect.annotateLogs({ backend: configured.name }),
+  );
 
   return PtyBackendCatalog.of({
     configured,
-    forBackend: (name) => {
-      // SQLite stores `backend` as bare text with no CHECK constraint, so an
-      // unknown value is out-of-model corruption — and an inherited key like
-      // `toString` would otherwise resolve to something that is not an adapter
-      // at all. Failing loudly is the only safe answer: falling back to the
-      // configured adapter would aim an inspect or kill at the wrong process.
-      if (!Object.hasOwn(backends, name)) {
-        throw new Error(`Unknown persisted PTY backend ${String(name)}.`);
-      }
-      return backends[name];
-    },
+    forBackend: (name) => resolveRegisteredBackend(backends, name),
     all: Object.values(backends),
   });
 });
@@ -61,8 +53,9 @@ export class PtyBackendCatalog extends Context.Service<
     readonly configured: PtyBackendShape;
     // Every operation on an existing PTY row resolves its adapter from the row's
     // persisted backend, never from the launch preference: a persisted incarnation
-    // belongs to the transport that created it (ADR 0005).
-    readonly forBackend: (name: PtyBackendName) => PtyBackendShape;
+    // belongs to the transport that created it (ADR 0005). An unknown name is a
+    // defect, never a fallback.
+    readonly forBackend: (name: PtyBackendName) => Effect.Effect<PtyBackendShape>;
     // Every registered adapter, for sweeps that must cover backend-only state that
     // has no persisted row to dispatch from. Order is incidental.
     readonly all: readonly PtyBackendShape[];
@@ -72,4 +65,19 @@ export class PtyBackendCatalog extends Context.Service<
   static readonly layer = PtyBackendCatalog.layerNoDeps.pipe(
     Layer.provide([NodePtyBackend.layer, TmuxBackend.layer]),
   );
+}
+
+/**
+ * SQLite stores `backend` as bare text with no CHECK constraint, so an unknown value is out-of-model corruption — and
+ * an inherited key like `toString` would otherwise resolve to something that is not an adapter at all. Dying loudly is
+ * the only safe answer: falling back to the configured adapter would aim an inspect or kill at the wrong process.
+ * Shared with the test catalog so a fake can never be more permissive than production.
+ */
+export function resolveRegisteredBackend(
+  backends: Readonly<Record<PtyBackendName, PtyBackendShape>>,
+  name: PtyBackendName,
+): Effect.Effect<PtyBackendShape> {
+  return Object.hasOwn(backends, name)
+    ? Effect.succeed(backends[name])
+    : Effect.die(new Error(`Unknown persisted PTY backend ${String(name)}.`));
 }

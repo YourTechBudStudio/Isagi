@@ -1,9 +1,9 @@
 import { unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { Cause, Effect, Result } from 'effect';
+import { Effect, Result } from 'effect';
 
-import { diagnosticPhase } from '../../platform/diagnostics/index.js';
+import { describeOperationalCause, diagnosticPhase } from '../../platform/diagnostics/index.js';
 import {
   isIdName,
   listOrphanCandidates,
@@ -23,7 +23,6 @@ import type { PtyLaunchReservations } from './lifecycle.js';
 import { cleanupOrphanPtyLogs } from './logs.js';
 import { shellIntegrationSegments } from './shell-integration.js';
 
-const ptyGcIntervalMs = 5 * 60_000;
 const orphanPtyProcessRetentionMs = 5 * 60_000;
 // Stray log files (no DB row) share the process retention window by design: a
 // log only reaches this age gate after its row has already been deleted by the
@@ -34,31 +33,6 @@ const orphanPtyProcessRetentionMs = 5 * 60_000;
 // process is gone.
 const orphanPtyLogRetentionMs = orphanPtyProcessRetentionMs;
 const orphanShellIntegrationRetentionMs = orphanPtyProcessRetentionMs;
-
-export function startPtyGarbageCollector(
-  repository: PtyRepository['Service'],
-  catalog: PtyBackendCatalog['Service'],
-  runtimeNamespace: string,
-  sessionsPath: string,
-  options: {
-    readonly pinnedPtyProcessIds?: ReadonlySet<number> | undefined;
-    readonly pendingLaunches?: PtyLaunchReservations | undefined;
-  } = {},
-) {
-  const timer = setInterval(() => {
-    void Effect.runPromise(
-      collectPtyGarbage(repository, catalog, runtimeNamespace, sessionsPath, options).pipe(
-        Effect.catch((error) =>
-          Effect.sync(() => {
-            console.warn('[runtime] PTY GC failed', error);
-          }),
-        ),
-      ),
-    );
-  }, ptyGcIntervalMs);
-  timer.unref();
-  return timer;
-}
 
 export function collectPtyGarbage(
   repository: PtyRepository['Service'],
@@ -109,12 +83,9 @@ export function collectPtyGarbage(
       }),
     ).pipe(
       Effect.catchCause((cause) =>
-        Effect.sync(() => {
-          console.warn(
-            '[runtime] PTY GC phase failed phase=orphan_shell_integration',
-            Cause.pretty(cause),
-          );
-        }),
+        Effect.logWarning('PTY GC phase failed', cause).pipe(
+          Effect.annotateLogs({ phase: 'orphan_shell_integration' }),
+        ),
       ),
     );
   });
@@ -155,9 +126,9 @@ function tagGcPhaseError<A, E, R>(phase: string) {
   return (effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.tapError((error) =>
-        Effect.sync(() => {
-          console.warn(`[runtime] PTY GC phase failed phase=${phase}`, error);
-        }),
+        Effect.logWarning('PTY GC phase failed').pipe(
+          Effect.annotateLogs({ phase, cause: describeOperationalCause(error) }),
+        ),
       ),
     );
 }
@@ -179,13 +150,13 @@ function cleanupBackendProcesses(
       if (!(yield* backend.available)) continue;
       const findings = yield* backend.collectGarbage({ runtimeNamespace, sessions }).pipe(
         Effect.catch((error) =>
-          Effect.sync(() => {
-            console.warn(
-              `[runtime] Could not collect PTY backend GC findings backend=${backend.name}`,
-              error,
-            );
-            return [] as readonly PtyBackendGcFinding[];
-          }),
+          Effect.logWarning('Could not collect PTY backend GC findings').pipe(
+            Effect.annotateLogs({
+              backend: backend.name,
+              cause: describeOperationalCause(error),
+            }),
+            Effect.as([] as readonly PtyBackendGcFinding[]),
+          ),
         ),
       );
       for (const finding of findings) {
@@ -227,8 +198,8 @@ function cleanupOrphanPtyProcesses(
         }),
       );
       if (options.pinnedPtyProcessIds.has(process.id)) {
-        console.info(
-          `[runtime] Keeping orphan PTY process because it is pinned ptyProcessId=${process.id}`,
+        yield* Effect.logInfo('Keeping orphan PTY process because it is pinned').pipe(
+          Effect.annotateLogs({ ptyProcessId: process.id }),
         );
         continue;
       }
@@ -237,9 +208,9 @@ function cleanupOrphanPtyProcesses(
       // Reporting one as the other would make the GC log lie about why the row
       // survived.
       if (options.pendingLaunches.has(process.id)) {
-        console.info(
-          `[runtime] Keeping orphan PTY process because its launch is still pending ptyProcessId=${process.id}`,
-        );
+        yield* Effect.logInfo(
+          'Keeping orphan PTY process because its launch is still pending',
+        ).pipe(Effect.annotateLogs({ ptyProcessId: process.id }));
         continue;
       }
       if (!isRetentionElapsed(process.updatedAt, options.nowMs)) continue;
@@ -266,17 +237,19 @@ function cleanupOrphanPtyProcess(
   return Effect.gen(function* () {
     if (process.status === 'starting' || process.status === 'running') {
       const backendCleaned = yield* cleanupLiveOrphanPtyBackend(
-        catalog.forBackend(process.backend),
+        yield* catalog.forBackend(process.backend),
         process,
       );
       if (!backendCleaned) return;
     }
 
-    const logCleaned = cleanupPtyProcessLog(process);
+    const logCleaned = yield* cleanupPtyProcessLog(process);
     if (!logCleaned) return;
 
     yield* repository.deleteProcess(process.id);
-    console.info(`[runtime] Deleted orphan PTY process ptyProcessId=${process.id}`);
+    yield* Effect.logInfo('Deleted orphan PTY process').pipe(
+      Effect.annotateLogs({ ptyProcessId: process.id }),
+    );
   });
 }
 
@@ -287,9 +260,9 @@ function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow
       // The row claims a live process but its backend ref is undecodable, so we
       // cannot inspect or kill it. Keep the row rather than orphaning a possibly
       // live backend process with no durable record pointing at it.
-      console.warn(
-        `[runtime] Keeping orphan PTY process because backend ref is undecodable backend=${backend.name} ptyProcessId=${process.id}`,
-      );
+      yield* Effect.logWarning(
+        'Keeping orphan PTY process because backend ref is undecodable',
+      ).pipe(Effect.annotateLogs({ backend: backend.name, ptyProcessId: process.id }));
       return false;
     }
 
@@ -298,18 +271,26 @@ function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow
       .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
     if (inspection.status === 'missing') return true;
     if (inspection.status === 'unavailable') {
-      console.warn(
-        `[runtime] Keeping orphan PTY process because backend inspection is unavailable backend=${backend.name} ptyProcessId=${process.id}`,
-        inspection.cause,
+      yield* Effect.logWarning(
+        'Keeping orphan PTY process because backend inspection is unavailable',
+      ).pipe(
+        Effect.annotateLogs({
+          backend: backend.name,
+          ptyProcessId: process.id,
+          cause: describeOperationalCause(inspection.cause),
+        }),
       );
       return false;
     }
 
     const killResult = yield* backend.kill(ref).pipe(Effect.result);
     if (Result.isFailure(killResult)) {
-      console.warn(
-        `[runtime] Keeping orphan PTY process because backend kill failed backend=${backend.name} ptyProcessId=${process.id}`,
-        killResult.failure,
+      yield* Effect.logWarning('Keeping orphan PTY process because backend kill failed').pipe(
+        Effect.annotateLogs({
+          backend: backend.name,
+          ptyProcessId: process.id,
+          cause: describeOperationalCause(killResult.failure),
+        }),
       );
       return false;
     }
@@ -318,15 +299,25 @@ function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow
 }
 
 function cleanupPtyProcessLog(process: PtyProcessRow) {
-  if (!process.logPath) return true;
-  try {
-    unlinkSync(process.logPath);
-    return true;
-  } catch (error) {
-    if (isMissingFileError(error)) return true;
-    console.warn(`[runtime] Could not delete PTY process log ptyProcessId=${process.id}`, error);
-    return false;
-  }
+  const logPath = process.logPath;
+  if (!logPath) return Effect.succeed(true);
+  return Effect.try({
+    try: () => unlinkSync(logPath),
+    catch: (error) => error,
+  }).pipe(
+    Effect.as(true),
+    Effect.catch((error) =>
+      isMissingFileError(error)
+        ? Effect.succeed(true)
+        : Effect.logWarning('Could not delete PTY process log').pipe(
+            Effect.annotateLogs({
+              ptyProcessId: process.id,
+              cause: describeOperationalCause(error),
+            }),
+            Effect.as(false),
+          ),
+    ),
+  );
 }
 
 // Retention is measured from `updatedAt`, which is only bumped on a real status
@@ -368,17 +359,14 @@ function applyGcFinding(backend: PtyBackend, finding: PtyBackendGcFinding) {
     finding.type === 'orphan_backend_session'
       ? 'orphan backend session'
       : `terminal ${finding.status} PTY row`;
-  console.warn(
-    `[runtime] Killing ${reason} during PTY backend GC backend=${backend.name} ptyProcessId=${finding.ptyProcessId}`,
-  );
-  return backend.kill(finding.ref).pipe(
+  const annotations = { backend: backend.name, ptyProcessId: finding.ptyProcessId };
+  return Effect.logWarning(`Killing ${reason} during PTY backend GC`).pipe(
+    Effect.annotateLogs(annotations),
+    Effect.andThen(backend.kill(finding.ref)),
     Effect.catch((error) =>
-      Effect.sync(() => {
-        console.warn(
-          `[runtime] Failed to kill PTY backend session during GC backend=${backend.name} ptyProcessId=${finding.ptyProcessId}`,
-          error,
-        );
-      }),
+      Effect.logWarning('Failed to kill PTY backend session during GC').pipe(
+        Effect.annotateLogs({ ...annotations, cause: describeOperationalCause(error) }),
+      ),
     ),
   );
 }

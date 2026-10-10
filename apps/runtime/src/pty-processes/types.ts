@@ -1,4 +1,4 @@
-import { Data, type Effect } from 'effect';
+import { Data, type Effect, type Queue, type Scope, type Stream } from 'effect';
 
 import type {
   PtyProcessBackend,
@@ -128,21 +128,35 @@ export interface LaunchBackendSessionInput {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly shellIntegration?: ShellIntegrationConfig | null | undefined;
-  readonly onForegroundCommand?:
-    | ((event: {
-        readonly ptyProcessId: number;
-        readonly state: PtyForegroundCommandState;
-      }) => void)
-    | undefined;
   readonly cols: number;
   readonly rows: number;
   readonly logPath: string | null;
-  readonly onExit: (exit: PtyExit) => void;
 }
 
 export interface PtyExit {
   readonly exitCode: number | null;
   readonly signal: string | null;
+}
+
+/**
+ * Every fact a backend learns about a launched process after the spawn. The adapter callbacks only enqueue these;
+ * the PTY service's per-process supervisor fiber is the one place they become effects.
+ */
+export type PtyProcessEvent =
+  | { readonly _tag: 'ForegroundChanged'; readonly state: PtyForegroundCommandState }
+  | { readonly _tag: 'LogAppendFailed'; readonly cause: unknown }
+  | ({ readonly _tag: 'Exited' } & PtyExit);
+
+/** What a backend writes to a live attachment: output and, for a process that exits while attached, `exit`. */
+export type PtyOutputMessage = PtyStreamOutputMessageSet;
+
+export interface LaunchedBackendSession {
+  readonly ref: BackendSessionRef;
+  /**
+   * Ends after `Exited`, or without one when the process was killed through `kill`/`terminate` (the killer owns
+   * that terminal fact). A backend with no live exit signal (tmux) returns an empty stream.
+   */
+  readonly events: Stream.Stream<PtyProcessEvent>;
 }
 
 export class PtyStartError
@@ -300,6 +314,7 @@ export type BackendInspection =
   | { readonly status: 'missing' }
   | { readonly status: 'unavailable'; readonly cause?: unknown };
 
+/** A live attachment. It detaches when the scope it was acquired in closes. */
 export interface BackendAttachment {
   readonly replayBytes: number | null;
   readonly write: (data: string) => Effect.Effect<void, PtyWriteError>;
@@ -307,32 +322,31 @@ export interface BackendAttachment {
     readonly cols: number;
     readonly rows: number;
   }) => Effect.Effect<void, PtyResizeError>;
-  readonly detach: Effect.Effect<void, never>;
 }
 
 export interface PtyBackend {
   readonly name: PtyBackendName;
   readonly available: Effect.Effect<boolean, never>;
+  /** Spawns. Every later fact about the process arrives on the returned `events` stream. */
   readonly launch: (
     input: LaunchBackendSessionInput,
-  ) => Effect.Effect<BackendSessionRef, PtyStartError>;
+  ) => Effect.Effect<LaunchedBackendSession, PtyStartError>;
   readonly writeInput: (input: {
     readonly ref: BackendSessionRef;
     readonly data: string;
   }) => Effect.Effect<void, PtyWriteError>;
+  /**
+   * Live output goes to `output` from this instant, and `replayBytes` is the log size at the same instant, so no
+   * byte is both replayed and delivered. Backends that only learn foreground state while attached (tmux) also write
+   * `foreground`. Detaches when the scope closes (tmux: kills its attach client).
+   */
   readonly attach: (input: {
     readonly ref: BackendSessionRef;
     readonly cols: number;
     readonly rows: number;
-    readonly onOutput: (data: string) => void;
-    readonly onForegroundCommand?:
-      | ((event: {
-          readonly ptyProcessId: number;
-          readonly state: PtyForegroundCommandState;
-        }) => void)
-      | undefined;
-    readonly onSessionExit: (exit: PtyExit) => void;
-  }) => Effect.Effect<BackendAttachment, PtyStartError>;
+    readonly output: Queue.Enqueue<PtyOutputMessage>;
+    readonly foreground: Queue.Enqueue<PtyForegroundCommandState>;
+  }) => Effect.Effect<BackendAttachment, PtyStartError, Scope.Scope>;
   readonly replay: (input: {
     readonly ref: BackendSessionRef;
     readonly logPath: string | null;

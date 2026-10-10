@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, FiberMap, Layer, Stream } from 'effect';
 
 import { noCliAccess } from '../../cli-access/index.js';
 import {
@@ -18,7 +18,7 @@ import { reconcilePersistedProcesses } from '../service.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from '../service/launch.js';
 import type { PtyReservations } from '../service/lifecycle.js';
-import { fakeBackendCatalog, manualPtyRetryScheduler } from '../testing.js';
+import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
 import {
   PtyStartError,
   type BackendSessionRef,
@@ -36,11 +36,14 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
     available: Effect.succeed(true),
     launch: () =>
       Effect.succeed({
-        schemaVersion: 1,
-        backend: 'node_pty',
-        ptyProcessId: 1,
-        pid: 4242,
-      } satisfies BackendSessionRef),
+        ref: {
+          schemaVersion: 1,
+          backend: 'node_pty',
+          ptyProcessId: 1,
+          pid: 4242,
+        } satisfies BackendSessionRef,
+        events: Stream.empty,
+      }),
     writeInput: () => Effect.void,
     attach: () => Effect.die(`${name} attach is not expected here`),
     replay: () => Effect.void,
@@ -88,6 +91,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
         const repository = yield* PtyRepository;
         const bus = publishOnlyRecordingEventBus('launch allocation tests do not subscribe');
         const reservations: PtyReservations = { terminations: new Map(), launches: new Map() };
+        const supervisors = yield* FiberMap.make<number, void, never>();
         return yield* body({
           repository,
           bus,
@@ -102,7 +106,8 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
               clear: () => Effect.succeed(false),
               isWorking: () => false,
             },
-            retry: manualPtyRetryScheduler(),
+            retry: manualPtyPersistenceRetry(),
+            supervisors,
             reservations,
             activeAttachments: new Map(),
             runtimeNamespace: 'testns',

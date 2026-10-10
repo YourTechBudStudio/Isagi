@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer, Result } from 'effect';
+import { Effect, Layer, Result, Stream } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
@@ -48,7 +48,6 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
         replayBytes: 0,
         write: () => Effect.void,
         resize: () => Effect.void,
-        detach: Effect.void,
       }),
     replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' as const }),
@@ -398,10 +397,13 @@ function launchingCatalog(configured: PtyBackendName, launched: PtyBackendName[]
       Effect.sync(() => {
         launched.push(name);
         return {
-          schemaVersion: 1 as const,
-          backend: 'node_pty' as const,
-          ptyProcessId: input.ptyProcessId,
-          pid: 4242,
+          ref: {
+            schemaVersion: 1 as const,
+            backend: 'node_pty' as const,
+            ptyProcessId: input.ptyProcessId,
+            pid: 4242,
+          },
+          events: Stream.empty,
         };
       }),
   });
