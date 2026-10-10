@@ -1,23 +1,38 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { Effect } from 'effect';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
-import { queryClient } from '../../../src/lib/query/client.js';
+import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
+import { runApp } from '../../../src/lib/state/runtime.js';
 import { useWorkspace } from '../../../src/lib/workspace/hooks.js';
-import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
+import { selectWorktree, setActiveSurface } from '../../../src/lib/workspace/store.js';
+import type { WorkflowSignal } from '../../../src/lib/workspace/workflow/live.js';
 import {
-  useAttachedWorkflowRunsQuery,
+  useAttachedWorkflowRuns,
   useRuntimeIdentity,
-  useWorkflowRuntimeSync,
 } from '../../../src/lib/workspace/workflow/queries.js';
-import { publishWorkflowSignal } from '../../../src/lib/workspace/workflow/signals.js';
+import { receiveWorkflowSignal } from '../../../src/lib/workspace/workflow/sync.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { Surface } from '../../../src/routes/workspace/Surface.js';
 import { WorkflowBarContainer } from '../../../src/routes/workspace/WorkflowBarContainer.js';
+import { createFixtureRegistry } from '../test-support/registry.js';
 import {
   FIXTURE_PLACEMENT,
   fixtureSummary,
   type WorkflowBarRuntimeControls,
 } from './fake-runtime.js';
+
+const fixtureRegistry = createFixtureRegistry();
+
+/**
+ * Deliver runtime signals the way the runtime-events connection does: in order, through the
+ * production live sync of this page's app session.
+ */
+function publishWorkflowSignals(...signals: readonly WorkflowSignal[]) {
+  void runApp(
+    fixtureRegistry,
+    Effect.forEach(signals, (signal) => receiveWorkflowSignal(signal), { discard: true }),
+  );
+}
 
 type Scenario = Parameters<typeof fixtureSummary>[0];
 
@@ -38,55 +53,50 @@ export function WorkflowBarFixtureApp({
   readonly runtime: WorkflowBarRuntimeControls;
 }) {
   useEffect(() => {
-    const store = useWorkspaceStore.getState();
-    store.setActiveSurface(FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
-    store.selectWorktree(FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
+    setActiveSurface(fixtureRegistry, FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
+    selectWorktree(fixtureRegistry, FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
   }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       <FixtureShell runtime={runtime} />
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 
 function FixtureShell({ runtime }: { readonly runtime: WorkflowBarRuntimeControls }) {
-  useWorkflowRuntimeSync();
   const runtimeIdentity = useRuntimeIdentity();
-  // Read through the same query the container reads, so what the page reports is what the bar sees
+  // Read through the same atom the container reads, so what the page reports is what the bar sees
   // rather than a second snapshot taken at a different moment.
-  const attachedRuns = useAttachedWorkflowRunsQuery().data ?? [];
+  const attachedRuns = useAttachedWorkflowRuns() ?? [];
   const recorded = useSyncExternalStore(runtime.subscribe, runtime.requests);
   const [scenario, setScenario] = useState<Scenario>('waiting_input');
   const [executionId, setExecutionId] = useState(5);
-  // Zen mode unmounts the bar entirely, so the page has to be able to reproduce that: the React
-  // Query cache outlives the component, and anything the bar remembers locally does not.
+  // Zen mode unmounts the bar entirely, so the page has to be able to reproduce that: the app
+  // session's state outlives the component, and anything the bar remembers locally does not.
   const [barMounted, setBarMounted] = useState(true);
 
   // Published, not written: the snapshot is how a real client learns which runs occupy a surface.
-  // It waits for the runtime identity because the live sync only subscribes once it has one, and a
-  // snapshot published before that subscription would be delivered to nobody.
+  // It waits for the runtime identity so the page reports ready only once the runtime answers.
   useEffect(() => {
     if (runtimeIdentity === null) return;
-    publishWorkflowSignal({ type: 'connected' });
-    publishWorkflowSignal({
-      type: 'snapshot',
-      summaries: [fixtureSummary('waiting_input', { executionId: 5 })],
-    });
+    publishWorkflowSignals(
+      { type: 'connected' },
+      { type: 'snapshot', summaries: [fixtureSummary('waiting_input', { executionId: 5 })] },
+    );
     // Later changes arrive as the incremental events a runtime would actually send.
   }, [runtimeIdentity]);
 
   const swapRun = () => {
     // A different run takes the same surface, exactly as a relaunch would: the new run's summary
     // arrives attached, and the old run's arrives with its surface released.
-    publishWorkflowSignal({
-      type: 'run_changed',
-      summary: fixtureSummary('waiting_input', { runId: 88, executionId: 5 }),
-    });
-    publishWorkflowSignal({
-      type: 'run_changed',
-      summary: fixtureSummary('done', { runId: 77, attached: false }),
-    });
+    publishWorkflowSignals(
+      {
+        type: 'run_changed',
+        summary: fixtureSummary('waiting_input', { runId: 88, executionId: 5 }),
+      },
+      { type: 'run_changed', summary: fixtureSummary('done', { runId: 77, attached: false }) },
+    );
   };
 
   return (
@@ -99,7 +109,7 @@ function FixtureShell({ runtime }: { readonly runtime: WorkflowBarRuntimeControl
             data-action={`scenario-${value}`}
             onClick={() => {
               setScenario(value);
-              publishWorkflowSignal({
+              publishWorkflowSignals({
                 type: 'run_changed',
                 summary: fixtureSummary(value, { executionId }),
               });
@@ -115,7 +125,7 @@ function FixtureShell({ runtime }: { readonly runtime: WorkflowBarRuntimeControl
             // The run moved on to another execution that waits on a question of its own.
             const next = executionId + 1;
             setExecutionId(next);
-            publishWorkflowSignal({
+            publishWorkflowSignals({
               type: 'run_changed',
               summary: fixtureSummary(scenario, { executionId: next }),
             });
@@ -135,7 +145,7 @@ function FixtureShell({ runtime }: { readonly runtime: WorkflowBarRuntimeControl
           data-action="detach"
           onClick={() =>
             // Dismissed: the run's summary now names no surface.
-            publishWorkflowSignal({
+            publishWorkflowSignals({
               type: 'run_changed',
               summary: fixtureSummary('done', { runId: 77, attached: false }),
             })
@@ -153,7 +163,7 @@ function FixtureShell({ runtime }: { readonly runtime: WorkflowBarRuntimeControl
           type="button"
           data-action="one-more-line"
           onClick={() =>
-            publishWorkflowSignal({ type: 'run_event', event: runtime.appendLogLine() })
+            publishWorkflowSignals({ type: 'run_event', event: runtime.appendLogLine() })
           }
         >
           One more line
@@ -191,10 +201,10 @@ function FixtureShell({ runtime }: { readonly runtime: WorkflowBarRuntimeControl
         )}
       </output>
       {/*
-        The three production readers of the attached-run cache, on one page and one QueryClient.
-        None of them is given the summary: each resolves it through the same query, which is the
+        The three production readers of the attached runs, on one page and one app registry.
+        None of them is given the summary: each resolves it through the same atom, which is the
         only way to show that they cannot drift apart.
-      */}
+        */}
       <SurfaceAttentionProbe />
       <div className="h-48 flex-none p-3" data-surface-host>
         <ActiveSurface />

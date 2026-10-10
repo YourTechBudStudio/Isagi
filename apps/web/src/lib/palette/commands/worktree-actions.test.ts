@@ -1,17 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { AtomRegistry } from 'effect/reactivity';
+
 import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
 
-import { queryClient } from '../../query/client.js';
+import { RuntimeApi } from '../../runtime/client.js';
+import { runtimeApiLayerAtom } from '../../state/runtime.js';
+import { makeTestRegistry } from '../../state/testing.js';
+import { paletteTestSession } from '../test-support.js';
 import type { PaletteContext } from '../types.js';
 import { deleteActiveWorktreeCommand } from './worktree-actions.js';
 
 const originalFetch = globalThis.fetch;
 
+// The production `RuntimeApi` layer over a stubbed `fetch`, so these tests keep asserting the
+// requests the commands send; one app session per test.
+let registry: AtomRegistry.AtomRegistry;
+
+test.beforeEach(() => {
+  registry = makeTestRegistry({ initialValues: [[runtimeApiLayerAtom, RuntimeApi.layer]] });
+});
+
 test.afterEach(() => {
+  registry.dispose();
   globalThis.fetch = originalFetch;
-  queryClient.clear();
   Reflect.deleteProperty(globalThis, 'window');
 });
 
@@ -195,6 +208,7 @@ function ctx(input: {
     },
     activeSurface: null,
     activePaneId: null,
+    ...paletteTestSession(registry),
     launchableHarnesses: [],
     editorAvailable: false,
   };

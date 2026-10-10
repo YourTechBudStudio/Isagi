@@ -1,7 +1,10 @@
+import type { AtomRegistry } from 'effect/reactivity';
+
 import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
 
-import { controlPlaneQueryKey } from '../../../src/lib/control-plane/queries.js';
-import { queryClient } from '../../../src/lib/query/client.js';
+import { controlPlaneQuery } from '../../../src/lib/control-plane/queries.js';
+import { revalidate } from '../../../src/lib/state/policy.js';
+import { runApp } from '../../../src/lib/state/runtime.js';
 import { moveBefore } from '../../../src/lib/workspace/rail-order.js';
 import { requestBodyText } from '../test-support/request-body.js';
 import { FIXTURE_CONTROL_PLANE, FIXTURE_SNAPSHOT } from './seed.js';
@@ -32,7 +35,7 @@ export interface RailFixtureControls {
   readonly order: () => string;
   /**
    * Flip the runtime's editor capability. The rail reads it through the
-   * production control-plane query, so the fixture invalidates that query the
+   * production control-plane query, so the fixture re-reads that query the
    * way a real capability change would.
    */
   readonly setEditorAvailable: (available: boolean) => Promise<void>;
@@ -48,7 +51,7 @@ declare global {
 
 const RUNTIME_ORIGIN = 'http://rail-fixture.invalid';
 
-export function installFakeRuntime() {
+export function installFakeRuntime(registry: AtomRegistry.AtomRegistry) {
   let snapshot: WorkspaceSnapshot = FIXTURE_SNAPSHOT;
   let controlPlane: ControlPlaneSnapshot = FIXTURE_CONTROL_PLANE;
   let failNext = false;
@@ -71,7 +74,7 @@ export function installFakeRuntime() {
           ? { status: 'ready', version: '1.0.0' }
           : { status: 'not_applicable' },
       };
-      await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+      await runApp(registry, revalidate(controlPlaneQuery));
     },
     editorOpens: () => editorOpens,
   };

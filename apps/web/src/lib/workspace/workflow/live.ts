@@ -1,159 +1,119 @@
-import type { QueryClient } from '@tanstack/react-query';
+/**
+ * The workflow layer's live state: what the shared runtime connection has told it, kept per app
+ * session (per atom registry) rather than in module variables.
+ *
+ * `receiveWorkflowSignal` (`sync.ts`) applies each pushed fact to the workflow reads; this file
+ * holds what that needs between facts: the connection phase the bar shows, the reconnect counter
+ * every live read depends on, events held for reads still in flight, the 250 ms refetch windows,
+ * and a feed of the facts for the one waiter that needs them (`awaitPreparation`).
+ */
+import { Duration, Effect, FiberMap, PubSub, type Scope } from 'effect';
+import { Atom, Reactivity } from 'effect/reactivity';
 
-import type {
-  GetWorkflowRunOutput,
-  ListWorkflowEventsOutput,
-  WorkflowEventDto,
-  WorkflowRunSummary,
-} from '@isagi/contracts';
+import type { WorkflowEventDto, WorkflowRunSummary } from '@isagi/contracts';
 
-import {
-  workflowAttachedRunsQueryKey,
-  workflowCheckpointListQueryKey,
-  workflowEventsQueryKey,
-  workflowExecutionQueryKey,
-  workflowRunQueryKey,
-} from '../query-keys.js';
-import { replaceAttached, upsertAttached, type AttachedRuns } from './attached.js';
-import { subscribeToWorkflowSignals, type WorkflowSignal } from './signals.js';
+import { appRuntime } from '../../state/runtime.js';
 
 /**
- * How long a burst of events for one row is collected before that row is refetched once.
+ * What the shared runtime connection tells the workflow layer.
+ *
+ * `connected`/`disconnected` are facts too, because a client that was offline has to re-read what
+ * it missed.
+ */
+export type WorkflowSignal =
+  | { readonly type: 'connected' }
+  | { readonly type: 'disconnected' }
+  | { readonly type: 'snapshot'; readonly summaries: readonly WorkflowRunSummary[] }
+  | { readonly type: 'run_changed'; readonly summary: WorkflowRunSummary }
+  | { readonly type: 'run_event'; readonly event: WorkflowEventDto };
+
+export type RuntimeConnectionPhase = 'connecting' | 'connected' | 'disconnected';
+
+/**
+ * The connection's current phase, not just its transitions.
+ *
+ * A reader that only learned from future signals would start at `connecting` forever if it mounted
+ * after the socket opened, which is ordinary: the bar unmounts and remounts with zen mode. A state
+ * atom replays the phase to whoever reads it next.
+ */
+export const runtimeConnectionPhaseAtom = Atom.make<RuntimeConnectionPhase>('connecting').pipe(
+  Atom.keepAlive,
+);
+
+/**
+ * Bumped by every (re)connect. Each live read (run, events, execution, checkpoint list) reads it,
+ * so a reconnect re-reads the live reads someone is looking at and marks the others stale, while
+ * structures and saved checkpoints, which are immutable, are left alone.
+ *
+ * A dependency rather than a shared `Reactivity` key: every live read registering one key would
+ * make a single invalidation re-enter `Reactivity`'s handler loop (each rebuild re-registers its
+ * handler on the set being iterated), which never terminates.
+ */
+export const workflowResyncAtom = Atom.make(0).pipe(Atom.keepAlive);
+
+/**
+ * How long a burst of events for one read is collected before that read is refetched once.
  *
  * A running node appends several events within milliseconds (started, operation started and
  * finished, waiting), and each names the same run. One refetch per burst is enough.
  */
-export const workflowRefetchDelayMs = 250;
+export const workflowRefetchDelay = Duration.millis(250);
 
-/**
- * Keeps the workflow caches in step with the runtime socket. Mounted once per session.
- *
- * The whole live protocol is: an event arrives, it is appended to its run's event list, and the run
- * (and the execution it names, if any) is refetched. A changed summary replaces the cached one. The
- * latest write wins; nothing compares revisions or timestamps, so a slow refetch can briefly show an
- * older summary until the next event or refetch corrects it.
- */
-export class WorkflowLiveSync {
-  private readonly queryClient: QueryClient;
-  private readonly runtimeIdentity: string;
-  private readonly delayMs: number;
-  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private unsubscribe: (() => void) | null = null;
-
-  constructor(options: {
-    readonly queryClient: QueryClient;
-    readonly runtimeIdentity: string;
-    readonly delayMs?: number | undefined;
-  }) {
-    this.queryClient = options.queryClient;
-    this.runtimeIdentity = options.runtimeIdentity;
-    this.delayMs = options.delayMs ?? workflowRefetchDelayMs;
-  }
-
-  start() {
-    if (this.unsubscribe) return;
-    this.unsubscribe = subscribeToWorkflowSignals((signal) => this.receive(signal));
-  }
-
-  stop() {
-    this.unsubscribe?.();
-    this.unsubscribe = null;
-    for (const timer of this.timers.values()) clearTimeout(timer);
-    this.timers.clear();
-  }
-
-  receive(signal: WorkflowSignal) {
-    switch (signal.type) {
-      case 'snapshot':
-        this.queryClient.setQueryData<AttachedRuns>(this.attachedKey(), () =>
-          replaceAttached(signal.summaries),
-        );
-        break;
-      case 'run_changed':
-        this.applySummary(signal.summary);
-        break;
-      case 'run_event':
-        this.applyEvent(signal.event);
-        break;
-      case 'connected':
-        // A reconnect cannot prove nothing was missed while the socket was down, so every open run
-        // view re-reads. Event ids are global across runs, so a gap in one run's list cannot be
-        // detected; the event list is re-read from the beginning and merged.
-        // Structures and saved checkpoints are immutable, and the snapshot refreshes attached runs.
-        void this.queryClient.invalidateQueries({
-          queryKey: ['workflows', this.runtimeIdentity],
-          predicate: (query) => liveKinds.has(String(query.queryKey[2])),
-        });
-        break;
-      case 'disconnected':
-        break;
-    }
-  }
-
-  private applySummary(summary: WorkflowRunSummary) {
-    this.queryClient.setQueryData<AttachedRuns>(this.attachedKey(), (current) =>
-      upsertAttached(current ?? [], summary),
-    );
-    const runKey = workflowRunQueryKey(this.runtimeIdentity, summary.runId);
-    if (this.queryClient.getQueryState(runKey)?.status === 'error') {
-      // Writing the summary would clear the failed read's error while the tree beside it is still
-      // the one that failed to refresh. A successful re-read is what clears it.
-      this.refetchSoon(runKey);
-      return;
-    }
-    this.queryClient.setQueryData<GetWorkflowRunOutput>(runKey, (current) =>
-      current === undefined ? current : { ...current, run: summary },
-    );
-  }
-
-  private applyEvent(event: WorkflowEventDto) {
-    const eventsKey = workflowEventsQueryKey(this.runtimeIdentity, event.runId);
-    const state = this.queryClient.getQueryState(eventsKey);
-    if (state?.fetchStatus === 'fetching') {
-      // A read is in flight and may already have passed this event, so it waits for that read.
-      holdForRead(eventsKey, event);
-    } else if (state?.status === 'error') {
-      // The last read failed, so what is held is incomplete. Appending would clear that error
-      // without recovering what was missed; a full re-read either succeeds or keeps the warning.
-      holdForRead(eventsKey, event);
-      this.refetchSoon(eventsKey);
-    } else if (state?.data === undefined) {
-      // Nothing holds this run's events; the next read starts from the beginning and includes it.
-    } else {
-      this.queryClient.setQueryData<readonly WorkflowEventDto[]>(eventsKey, (current) =>
-        mergeEvents(current ?? [], [event]),
-      );
-    }
-
-    this.refetchSoon(workflowRunQueryKey(this.runtimeIdentity, event.runId));
-    if (event.executionId !== null) {
-      this.refetchSoon(workflowExecutionQueryKey(this.runtimeIdentity, event.executionId));
-    }
-    if (event.kind === 'checkpoint_captured') {
-      this.refetchSoon(workflowCheckpointListQueryKey(this.runtimeIdentity, event.runId));
-    }
-  }
-
-  /** One trailing refetch per key per burst. Only a query someone is looking at is refetched. */
-  private refetchSoon(queryKey: readonly unknown[]) {
-    const id = JSON.stringify(queryKey);
-    if (this.timers.has(id)) return;
-    this.timers.set(
-      id,
-      setTimeout(() => {
-        this.timers.delete(id);
-        void this.queryClient.invalidateQueries({ queryKey, exact: true });
-      }, this.delayMs),
-    );
-  }
-
-  private attachedKey() {
-    return workflowAttachedRunsQueryKey(this.runtimeIdentity);
-  }
+/** The session's live-sync handle. */
+export interface WorkflowLive {
+  /** Keep an event for the read of `runId` that is in flight; that read merges it when it lands. */
+  readonly hold: (runId: number, event: WorkflowEventDto) => void;
+  /** The events held for `runId`, removed. */
+  readonly takeHeld: (runId: number) => readonly WorkflowEventDto[];
+  /**
+   * Invalidate `key` once, `workflowRefetchDelay` after the first request in a burst; requests
+   * while a window is open join it. Only a read someone is looking at refetches.
+   */
+  readonly refetchSoon: (key: string) => Effect.Effect<void>;
+  /** Every applied signal, in order, for waiters that react to pushed facts. */
+  readonly publish: (signal: WorkflowSignal) => Effect.Effect<void>;
+  /** Subscribe before reading, so nothing pushed in between is missed. */
+  readonly subscribe: Effect.Effect<PubSub.Subscription<WorkflowSignal>, never, Scope.Scope>;
 }
 
-/** The query kinds whose data changes while a run is live. */
-const liveKinds = new Set(['run', 'events', 'execution', 'checkpoints']);
+/**
+ * The live-sync state as a resource atom: built on first use per registry, and its fibers and feed
+ * die with the registry. Nothing mounts it.
+ */
+export const workflowLiveAtom = appRuntime
+  .atom(
+    Effect.gen(function* () {
+      const reactivity = yield* Reactivity.Reactivity;
+      const windows = yield* FiberMap.make<string>();
+      const signals = yield* PubSub.unbounded<WorkflowSignal>();
+      yield* Effect.addFinalizer(() => PubSub.shutdown(signals));
+      const held = new Map<number, readonly WorkflowEventDto[]>();
+      const live: WorkflowLive = {
+        hold: (runId, event) => {
+          held.set(runId, [...(held.get(runId) ?? []), event]);
+        },
+        takeHeld: (runId) => {
+          const events = held.get(runId) ?? [];
+          held.delete(runId);
+          return events;
+        },
+        refetchSoon: (key) =>
+          FiberMap.run(
+            windows,
+            key,
+            Effect.sleep(workflowRefetchDelay).pipe(Effect.andThen(reactivity.invalidate([key]))),
+            { onlyIfMissing: true },
+          ).pipe(Effect.asVoid),
+        publish: (signal) => PubSub.publish(signals, signal).pipe(Effect.asVoid),
+        subscribe: PubSub.subscribe(signals),
+      };
+      return live;
+    }),
+  )
+  .pipe(Atom.keepAlive);
+
+/** The session's live handle, from inside an app effect. */
+export const workflowLive = Atom.getResult(workflowLiveAtom);
 
 /** Events by id, each once. Both sides are already in id order in practice; this does not rely on it. */
 export function mergeEvents(
@@ -176,49 +136,4 @@ function isAscending(events: readonly WorkflowEventDto[]): boolean {
     if (events[index]!.eventId <= events[index - 1]!.eventId) return false;
   }
   return true;
-}
-
-/**
- * Events pushed for a run whose first read was still in flight, keyed by that read's query key.
- * The read merges and clears them when it finishes, so a push that raced it is not lost.
- */
-const heldForRead = new Map<string, WorkflowEventDto[]>();
-
-function holdForRead(queryKey: readonly unknown[], event: WorkflowEventDto) {
-  const id = JSON.stringify(queryKey);
-  heldForRead.set(id, [...(heldForRead.get(id) ?? []), event]);
-}
-
-function takeHeldForRead(queryKey: readonly unknown[]): readonly WorkflowEventDto[] {
-  const id = JSON.stringify(queryKey);
-  const held = heldForRead.get(id) ?? [];
-  heldForRead.delete(id);
-  return held;
-}
-
-/**
- * A run's whole event log, read forward from the beginning in pages.
- *
- * Whatever is already cached, and whatever was pushed while the read was in flight, is merged in
- * by id rather than overwritten.
- */
-export async function loadWorkflowEvents(input: {
-  readonly queryClient: QueryClient;
-  readonly runtimeIdentity: string | null;
-  readonly runId: number;
-  readonly list: (cursor: number | null) => Promise<ListWorkflowEventsOutput>;
-  readonly signal?: AbortSignal | undefined;
-}): Promise<readonly WorkflowEventDto[]> {
-  const key = workflowEventsQueryKey(input.runtimeIdentity, input.runId);
-  const fetched: WorkflowEventDto[] = [];
-  let cursor: number | null = null;
-  for (;;) {
-    const page = await input.list(cursor);
-    fetched.push(...page.items);
-    input.signal?.throwIfAborted();
-    if (page.nextCursor === null) break;
-    cursor = page.nextCursor;
-  }
-  const cached = input.queryClient.getQueryData<readonly WorkflowEventDto[]>(key) ?? [];
-  return mergeEvents(mergeEvents(cached, fetched), takeHeldForRead(key));
 }

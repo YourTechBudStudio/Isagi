@@ -1,10 +1,11 @@
+import { useAtomValue } from '@effect/atom-react';
 import { motion } from 'motion/react';
 import { useEffect, useState } from 'react';
 
 import { workAreaCopy } from '../../copy/index.js';
 import { uiTransition, zenTransition } from '../../lib/motion.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { zenAtom } from '../../lib/workspace/store.js';
 import { ActionBar } from './ActionBar.js';
 import { Canvas } from './Canvas.js';
 import { StatusStrip } from './StatusStrip.js';
@@ -21,7 +22,7 @@ import { WorkflowBarContainer } from './WorkflowBarContainer.js';
  * (z-40, opaque atmosphere) covers all chrome; `⌘K` still navigates, Esc exits.
  */
 export function WorkArea() {
-  const zen = useWorkspaceStore((state) => state.zen);
+  const zen = useAtomValue(zenAtom);
   const { error } = useWorkspace();
 
   return (

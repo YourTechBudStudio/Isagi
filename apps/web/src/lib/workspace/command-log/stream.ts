@@ -1,5 +1,5 @@
-import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Schema } from 'effect';
+import type { AtomRegistry } from 'effect/reactivity';
 import { useCallback, useEffect, useState } from 'react';
 
 import {
@@ -10,13 +10,15 @@ import {
 } from '@isagi/contracts';
 
 import { workbenchCopy } from '../../../copy/index.js';
+import { keys } from '../../state/keys.js';
+import { useRegistry } from '../../state/registry.js';
+import { invalidateKeys, provideApp } from '../../state/runtime.js';
 import {
   type PtyStreamConnectionState,
   type PtyStreamTransport,
   type PtyStreamTransportController,
   usePtyStream,
 } from '../pty-stream/index.js';
-import { commandLogMetadataQueryKey, worktreeCommandsQueryKey } from '../query-keys.js';
 import { formatRuntimeError, resolveCommandLogStreamWebSocketUrl } from '../runtime-data.js';
 
 export type CommandLogStreamState = {
@@ -42,7 +44,7 @@ export function useCommandLogStream({
   readonly rendererWarning: string | null;
   readonly setRendererWarning: (message: string | null) => void;
 } {
-  const queryClient = useQueryClient();
+  const registry = useRegistry();
   const streamKey = `${worktreeId}:${commandName}:${latestRunId}`;
   const [status, setStatus] = useState<CommandStatus | null>(null);
   const [latestRun, setLatestRun] = useState<CommandLogMetadataLatestRun | null>(null);
@@ -58,9 +60,10 @@ export function useCommandLogStream({
     setRendererWarning(null);
   }, [streamKey]);
 
+  // The stream runs this effect itself, so it gets the app's services bound in.
   const resolveUrl = useCallback(
-    () => resolveCommandLogStreamWebSocketUrl(worktreeId, commandName),
-    [commandName, worktreeId],
+    () => provideApp(registry, resolveCommandLogStreamWebSocketUrl(worktreeId, commandName)),
+    [commandName, registry, worktreeId],
   );
 
   const handleDomainMessage = useCallback(
@@ -82,9 +85,9 @@ export function useCommandLogStream({
     ) => {
       setExit(nextExit);
       setLive(false);
-      void invalidateCommandReadModel(queryClient, worktreeId, commandName);
+      invalidateCommandReadModel(registry, worktreeId, commandName);
     },
-    [commandName, queryClient, worktreeId],
+    [commandName, registry, worktreeId],
   );
 
   const handleResolveError = useCallback(
@@ -127,16 +130,14 @@ export function decodeCommandLogStreamMessage(data: unknown): CommandLogStreamOu
   }
 }
 
-export async function invalidateCommandReadModel(
-  queryClient: QueryClient,
+/**
+ * A command's run ended: its catalog status and its log metadata are both stale. The two keys are
+ * exact, so other commands' log metadata is untouched.
+ */
+export function invalidateCommandReadModel(
+  registry: AtomRegistry.AtomRegistry,
   worktreeId: number,
   commandName: string,
-) {
-  await queryClient.invalidateQueries({
-    queryKey: worktreeCommandsQueryKey(worktreeId),
-    exact: true,
-  });
-  await queryClient.invalidateQueries({
-    queryKey: commandLogMetadataQueryKey(worktreeId, commandName),
-  });
+): void {
+  invalidateKeys(registry, [keys.commands(worktreeId), keys.commandLog(worktreeId, commandName)]);
 }

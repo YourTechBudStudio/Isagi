@@ -1,3 +1,4 @@
+import type { AtomRegistry } from 'effect/reactivity';
 import { Bot, Code, Maximize2, ScanSearch, SquareChevronRight, SquareTerminal } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 
@@ -6,11 +7,12 @@ import { worktreeActionsCopy } from '../../copy/index.js';
 import { useEditorAvailable } from '../../lib/control-plane/queries.js';
 import type { IconType } from '../../lib/icon.js';
 import {
-  handleDispatchedCommandError,
   useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { openDrawer, setZen } from '../../lib/workspace/store.js';
 
 /** What the bar knows about the runtime when it decides which rows to offer. */
 interface ActionCapabilities {
@@ -42,7 +44,7 @@ type WorktreeAction = WorktreeActionBase &
     | {
         readonly kind: 'callback';
         readonly mocked?: boolean;
-        readonly run: (worktreeId: number) => void;
+        readonly run: (worktreeId: number, registry: AtomRegistry.AtomRegistry) => void;
       }
     | { readonly kind: 'command'; readonly commandId: string }
   );
@@ -88,7 +90,7 @@ const worktreeActions: readonly WorktreeAction[] = [
     id: 'open-commands',
     label: 'Open commands',
     icon: SquareChevronRight,
-    run: () => useWorkspaceStore.getState().openDrawer(),
+    run: (_worktreeId, registry) => openDrawer(registry),
   },
 ];
 
@@ -110,8 +112,9 @@ const dividerBefore = new Set(['ai-review', 'open-commands']);
  */
 export function ActionBar() {
   const worktree = useActiveWorktree();
-  const setZen = useWorkspaceStore((state) => state.setZen);
+  const registry = useRegistry();
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   const editorAvailable = useEditorAvailable();
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -137,11 +140,11 @@ export function ActionBar() {
       // The compact button has no inline failure surface of its own, so a
       // refusal goes to the shared dispatch handler.
       void dispatchCommand(action.commandId, { worktreeId: String(worktree.id) }).catch(
-        handleDispatchedCommandError,
+        onDispatchError,
       );
       return;
     }
-    action.run(worktree.id);
+    action.run(worktree.id, registry);
     if (action.mocked) {
       setNotice(`${action.label} is mocked for now.`);
     }
@@ -160,7 +163,7 @@ export function ActionBar() {
         <Tooltip label="Focus mode">
           <button
             type="button"
-            onClick={() => setZen(true)}
+            onClick={() => setZen(registry, true)}
             aria-label="Focus mode"
             className="grid size-8 place-items-center rounded-lg text-fg-muted transition-colors duration-micro ease-expo hover:bg-white/8 hover:text-fg"
           >

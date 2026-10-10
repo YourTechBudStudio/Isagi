@@ -293,10 +293,11 @@ test.describe('refresh', () => {
     expect(await reads(page, 'GET /workspace')).toBe(fresh + 1);
   });
 
-  // Pins React Query's default `networkMode: 'online'`, which pauses reads while the browser
-  // reports offline. Plan R24 drops this deliberately (web-state §2.3 delta 2): S4.W7 updates this
-  // spec, with a ledger line, when the Effect state layer lands.
-  test('while offline, a workspace refresh waits until the browser is back online', async ({
+  // No offline pausing (plan R24, web-state §2.3 delta 2). React Query's default
+  // `networkMode: 'online'` held reads while the browser reported offline, which is wrong for a
+  // runtime on localhost: `navigator.onLine` says nothing about whether it answers. The browser
+  // coming back online is still a revalidation signal, but only for what is stale.
+  test('while offline, a workspace refresh still runs, and coming back online does not repeat it', async ({
     page,
     context,
   }) => {
@@ -306,8 +307,8 @@ test.describe('refresh', () => {
 
     await context.setOffline(true);
     await emitWorkspaceChange(page);
-    await page.waitForTimeout(1_500);
-    expect(await reads(page, 'GET /workspace')).toBe(before);
+    await settle(page);
+    expect(await reads(page, 'GET /workspace')).toBe(before + 1);
 
     await context.setOffline(false);
     await settle(page);

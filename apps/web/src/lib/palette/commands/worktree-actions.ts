@@ -3,8 +3,7 @@ import { Trash2 } from 'lucide-react';
 import type { DeleteWorktreeInput, DeleteWorktreeOutput } from '@isagi/contracts';
 
 import { worktreeActionsCopy } from '../../../copy/index.js';
-import { runRuntimeEffect } from '../../runtime/run.js';
-import { deleteWorktreeFromPalette } from '../../workspace/queries.js';
+import { deleteWorktreeFromPalette } from '../../workspace/commits.js';
 import { preflightDeleteWorktree } from '../../workspace/runtime-data.js';
 import type {
   ArgValues,
@@ -34,9 +33,7 @@ export const deleteActiveWorktreeCommand: PaletteCommand = {
       return { mode: 'unavailable' };
     }
 
-    const preflight = await runRuntimeEffect(
-      preflightDeleteWorktree(target.projectId, target.worktreeId),
-    );
+    const preflight = await ctx.app(preflightDeleteWorktree(target.projectId, target.worktreeId));
     const nextValues = {
       projectId: String(preflight.projectId),
       worktreeId: String(preflight.worktreeId),
@@ -103,7 +100,9 @@ export const deleteActiveWorktreeCommand: PaletteCommand = {
       checkoutRemovalMode: values.dirty === 'true' ? 'force' : 'normal',
       branchRemovalMode: values.deleteMode === CHECKOUT_AND_BRANCH ? 'delete_if_safe' : 'preserve',
     };
-    const output = await deleteWorktreeFromPalette(target.projectId, target.worktreeId, request);
+    const output = await ctx.app(
+      deleteWorktreeFromPalette(target.projectId, target.worktreeId, request),
+    );
     const partialWarning = deletePartialWarning(output.branchRemoval);
     if (partialWarning) {
       return {

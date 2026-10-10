@@ -3,7 +3,13 @@ import test from 'node:test';
 
 import type { WorkflowRunSummary } from '@isagi/contracts';
 
-import { aggregateAttention, applyAttentionToProjects, useAttentionStore } from '../attention.js';
+import { makeTestRegistry } from '../../state/testing.js';
+import {
+  aggregateAttention,
+  applyAttentionToProjects,
+  attentionSourcesAtom,
+  replaceAttentionSources,
+} from '../attention.js';
 import type { Project } from '../types.js';
 import { workflowPresentationStatus, workflowRunAttention } from '../workflow/derive.js';
 import { workflowSummaryFixture } from '../workflow/test-support.js';
@@ -14,8 +20,10 @@ test('attention aggregation prioritizes error, then working, then waiting, then 
   assert.equal(aggregateAttention(['working', 'error']), 'error');
 });
 
-test('attention snapshots replace source state without rolling terminal-only surfaces into worktrees', () => {
-  useAttentionStore.getState().replaceSources([
+test('attention snapshots replace source state without rolling terminal-only surfaces into worktrees', (t) => {
+  const registry = makeTestRegistry();
+  t.after(() => registry.dispose());
+  replaceAttentionSources(registry, [
     {
       worktreeId: 10,
       surfaceId: 101,
@@ -24,7 +32,7 @@ test('attention snapshots replace source state without rolling terminal-only sur
       attention: 'waiting',
     },
   ]);
-  useAttentionStore.getState().replaceSources([
+  replaceAttentionSources(registry, [
     {
       worktreeId: 10,
       surfaceId: 102,
@@ -36,7 +44,7 @@ test('attention snapshots replace source state without rolling terminal-only sur
 
   const [project] = applyAttentionToProjects(
     [projectFixture()],
-    useAttentionStore.getState().sourcesByKey,
+    registry.get(attentionSourcesAtom),
   );
   const worktree = project?.worktrees[0];
 

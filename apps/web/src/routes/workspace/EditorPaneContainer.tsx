@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useAtomSet, useAtomValue } from '@effect/atom-react';
+import { Cause, Exit, Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
 import type { EditorContextMetadata, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
-import {
-  useEnsureEditorRuntimeMutation,
-  useEditorDiagnosticsQuery,
-} from '../../lib/editor/queries.js';
+import { editorDiagnosticsAtom, makeEnsureEditorRuntimeAtom } from '../../lib/editor/queries.js';
 import {
   editorAttemptBanner,
   editorPaneView,
@@ -13,6 +13,9 @@ import {
   type EditorStartIntent,
 } from '../../lib/editor/view.js';
 import { classifyRuntimeFailure } from '../../lib/runtime/classify.js';
+import { disabledQuery } from '../../lib/state/policy.js';
+import { useRegistry } from '../../lib/state/registry.js';
+import { queryError } from '../../lib/state/result.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { EditorPane, type EditorDiagnosticsState } from './EditorPane.js';
 import { usePaneChromeActions } from './usePaneChromeActions.js';
@@ -44,7 +47,16 @@ export function EditorPaneContainer({
   const view = editorPaneView(editorContext);
   const banner = editorAttemptBanner(editorContext);
 
-  const ensure = useEnsureEditorRuntimeMutation({ editorContextId, surfaceId: surface.id });
+  const registry = useRegistry();
+  // One ensure fn atom per context and surface, so its pending state belongs to this pane.
+  const ensureAtom = useMemo(
+    () => makeEnsureEditorRuntimeAtom(editorContextId, surface.id),
+    [editorContextId, surface.id],
+  );
+  const ensure = useAtomValue(ensureAtom);
+  const runEnsure = useAtomSet(ensureAtom, { mode: 'promiseExit' });
+  // The intent of the latest ensure (the old mutation's `variables.intent`).
+  const [lastIntent, setLastIntent] = useState<EditorStartIntent | null>(null);
   const chrome = usePaneChromeActions({
     worktreeId: surface.worktreeId,
     surfaceId: surface.id,
@@ -72,24 +84,22 @@ export function EditorPaneContainer({
       // that settled as `editor_launch_failed`, and the pane would report two
       // different failures as though both described the latest try.
       setNotice(null);
-      ensure.mutate(
-        { intent },
-        {
-          onError: (error) => {
-            if (generationRef.current !== generation) return;
-            // `editor_launch_failed` is already the durable attempt record, and
-            // the invalidated surface detail renders it as the settled state.
-            // Reporting it again from the response would say one fact twice.
-            const classified = classifyRuntimeFailure(error);
-            if (classified.kind === 'api' && classified.apiError.code === 'editor_launch_failed') {
-              return;
-            }
-            setNotice(formatRuntimeError(error));
-          },
-        },
-      );
+      setLastIntent(intent);
+      void runEnsure({ intent }).then((exit) => {
+        if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) return;
+        if (generationRef.current !== generation) return;
+        const error = Cause.squash(exit.cause);
+        // `editor_launch_failed` is already the durable attempt record, and
+        // the invalidated surface detail renders it as the settled state.
+        // Reporting it again from the response would say one fact twice.
+        const classified = classifyRuntimeFailure(error);
+        if (classified.kind === 'api' && classified.apiError.code === 'editor_launch_failed') {
+          return;
+        }
+        setNotice(formatRuntimeError(error));
+      });
     },
-    [ensure],
+    [runEnsure],
   );
 
   // One `reuse` per mounted context. Reuse is a no-op once an incarnation is
@@ -126,17 +136,20 @@ export function EditorPaneContainer({
 
   const diagnosticsOpen =
     openForPtyProcessId !== null && openForPtyProcessId === activePtyProcessId;
-  const diagnosticsQuery = useEditorDiagnosticsQuery(
-    { editorContextId, ptyProcessId: activePtyProcessId },
-    { enabled: diagnosticsOpen },
-  );
+  // Read only while the disclosure is open against a known incarnation.
+  const diagnosticsAtom =
+    diagnosticsOpen && activePtyProcessId !== null
+      ? editorDiagnosticsAtom([editorContextId, activePtyProcessId])
+      : disabledQuery;
+  const diagnosticsResult = useAtomValue(diagnosticsAtom);
+  const diagnosticsData = Option.getOrUndefined(AsyncResult.value(diagnosticsResult));
 
   const diagnostics: EditorDiagnosticsState = !diagnosticsOpen
     ? { kind: 'closed' }
-    : diagnosticsQuery.data
-      ? { kind: 'loaded', output: diagnosticsQuery.data }
-      : diagnosticsQuery.error
-        ? { kind: 'failed', detail: formatRuntimeError(diagnosticsQuery.error) }
+    : diagnosticsData
+      ? { kind: 'loaded', output: diagnosticsData }
+      : diagnosticsResult._tag === 'Failure'
+        ? { kind: 'failed', detail: formatRuntimeError(queryError(diagnosticsResult)) }
         : { kind: 'loading' };
 
   const onToggleDiagnostics = useCallback(() => {
@@ -145,10 +158,9 @@ export function EditorPaneContainer({
     );
   }, [activePtyProcessId]);
 
-  const refetchDiagnostics = diagnosticsQuery.refetch;
   const onRetryDiagnostics = useCallback(() => {
-    void refetchDiagnostics();
-  }, [refetchDiagnostics]);
+    registry.refresh(diagnosticsAtom);
+  }, [registry, diagnosticsAtom]);
 
   return (
     <EditorPane
@@ -160,7 +172,7 @@ export function EditorPaneContainer({
       hasDiagnostics={editorContext.hasDiagnostics}
       focused={focused}
       onFocus={onFocus}
-      starting={ensure.isPending && editorStartIsPending(view, ensure.variables?.intent ?? null)}
+      starting={ensure.waiting && editorStartIsPending(view, lastIntent)}
       onStart={start}
       diagnostics={diagnostics}
       onToggleDiagnostics={onToggleDiagnostics}

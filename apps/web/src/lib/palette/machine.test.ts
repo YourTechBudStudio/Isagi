@@ -11,6 +11,7 @@ import {
   callerRunningCopy,
   type PaletteState,
 } from './machine.js';
+import { paletteTestSession } from './test-support.js';
 import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
 
 const ctx: PaletteContext = {
@@ -19,6 +20,7 @@ const ctx: PaletteContext = {
   activeWorktree: null,
   activeSurface: null,
   activePaneId: null,
+  ...paletteTestSession(),
   launchableHarnesses: [],
   editorAvailable: false,
 };

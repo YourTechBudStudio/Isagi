@@ -1,3 +1,5 @@
+import type { AtomRegistry } from 'effect/reactivity';
+
 import type {
   AgentHarness,
   CommandSummary,
@@ -6,6 +8,7 @@ import type {
 } from '@isagi/contracts';
 
 import type { IconType } from '../icon.js';
+import type { AppRun } from '../state/registry.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
 
 /**
@@ -37,11 +40,18 @@ export type PaletteGroup =
 export type ConfiguredCommandsFailureKind = 'config_error' | 'unavailable';
 
 /**
- * Snapshot of the current workspace context, derived from the Zustand store.
+ * Snapshot of the current workspace context, derived from workspace state.
  * Arg `options`/`default` functions read this so global commands get
  * worktree-optimized defaults (e.g. default project = the active worktree's).
  */
 export interface PaletteContext {
+  /**
+   * The app session the palette runs in. Commands read and write client state through it
+   * (`registry.get(atom)`, the store actions) instead of reaching for module state.
+   */
+  readonly registry: AtomRegistry.AtomRegistry;
+  /** Runs an app effect against the same services as the atoms (`useAppRun()`). */
+  readonly app: AppRun;
   readonly projects: readonly Project[];
   readonly activeWorktree: Worktree | null;
   readonly activeProject: Project | null;

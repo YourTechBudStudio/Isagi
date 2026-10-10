@@ -1,15 +1,17 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Effect } from 'effect';
 import { motion } from 'motion/react';
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { zenTransition } from '../../src/lib/motion.js';
+import { AppStateProvider } from '../../src/lib/state/AppStateProvider.js';
+import { queryRetryAtom } from '../../src/lib/state/policy.js';
 import { useTerminalAttachmentResource } from '../../src/lib/workspace/terminal-presentation/context.js';
 import { TerminalPresentationProvider } from '../../src/lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { sendAgentComposerNewline } from '../../src/routes/workspace/agentComposerKeys.js';
 import { PaneTerminal } from '../../src/routes/workspace/PaneTerminal.js';
 import type { AnsiRecipe } from './ansi.js';
 import { createInstrumentedEnvironment, type FixtureTerminalState } from './instrumentation.js';
+import { createFixtureRegistry } from './test-support/registry.js';
 
 const params = new URLSearchParams(location.search);
 const renderer = params.get('renderer') === 'dom' ? 'dom' : 'webgl';
@@ -22,7 +24,8 @@ const topology = readTopology(params.get('topology'));
 // Harness recipes stand in for agent sessions, so they get the same custom-key wiring the
 // production pane gives an agent session. An ordinary shell recipe deliberately gets none.
 const identityKind = recipe === 'shell' ? 'terminal_session' : 'agent_session';
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+// Query retries off for this page: a failed fixture read surfaces at once.
+const fixtureRegistry = createFixtureRegistry({ initialValues: [[queryRetryAtom, null]] });
 const instrumentation = createInstrumentedEnvironment({
   renderer,
   recipe,
@@ -39,7 +42,7 @@ export function FixtureApp() {
   );
   const [inspection, setInspection] = useState<readonly FixtureTerminalState[]>([]);
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       <main className="h-screen bg-canvas p-4 text-fg" data-browser-terminal-fixture>
         <FixtureControls
           inspect={() => setInspection(instrumentation.inspectTerminals())}
@@ -72,7 +75,7 @@ export function FixtureApp() {
           <div data-provider-destroyed />
         )}
       </main>
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 

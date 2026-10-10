@@ -1,21 +1,31 @@
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
+import type { AtomRegistry } from 'effect/reactivity';
+
+import { makeTestRegistry } from '../state/testing.js';
 import {
+  beginDelete,
+  clearDelete,
+  failDelete,
   isDeletePending,
   isRunDeleteBlocked,
   paneDeleteKey,
+  pendingDeletesAtom,
   showsDeleteSweep,
   surfaceDeleteKey,
-  usePendingDeleteStore,
 } from './pending-deletes.js';
 
-const store = () => usePendingDeleteStore.getState();
-const entryFor = (key: string) => usePendingDeleteStore.getState().entriesByKey[key] ?? null;
-
 describe('pending deletes', () => {
+  let registry: AtomRegistry.AtomRegistry;
+  const entryFor = (key: string) => registry.get(pendingDeletesAtom)[key] ?? null;
+
   beforeEach(() => {
-    usePendingDeleteStore.setState({ entriesByKey: {} });
+    registry = makeTestRegistry();
+  });
+
+  afterEach(() => {
+    registry.dispose();
   });
 
   it('keys panes and surfaces apart so one delete never locks the other', () => {
@@ -26,16 +36,16 @@ describe('pending deletes', () => {
     const key = paneDeleteKey(4);
     assert.equal(isDeletePending(entryFor(key)), false);
 
-    store().beginDelete(key, 'pane');
+    beginDelete(registry, key, 'pane');
     assert.equal(isDeletePending(entryFor(key)), true);
 
-    store().clearDelete(key);
+    clearDelete(registry, key);
     assert.equal(entryFor(key), null);
   });
 
   it('draws the sweep only at the origin that started the delete', () => {
     const key = paneDeleteKey(4);
-    store().beginDelete(key, 'menu');
+    beginDelete(registry, key, 'menu');
 
     assert.equal(showsDeleteSweep(entryFor(key), 'menu'), true);
     assert.equal(showsDeleteSweep(entryFor(key), 'pane'), false);
@@ -43,8 +53,8 @@ describe('pending deletes', () => {
 
   it('releases the target once a delete fails, and stops sweeping', () => {
     const key = surfaceDeleteKey(2);
-    store().beginDelete(key, 'menu');
-    store().failDelete(key, 'worktree is locked');
+    beginDelete(registry, key, 'menu');
+    failDelete(registry, key, 'worktree is locked');
 
     const entry = entryFor(key);
     // A failure is a result the user still has to read, not work in progress:
@@ -56,12 +66,12 @@ describe('pending deletes', () => {
 
   it('ignores a failure for a target that is no longer in flight', () => {
     const key = surfaceDeleteKey(2);
-    store().failDelete(key, 'too late');
+    failDelete(registry, key, 'too late');
     assert.equal(entryFor(key), null);
   });
 
   it('blocks a pane delete while its owning surface is being deleted', () => {
-    store().beginDelete(surfaceDeleteKey(2), 'menu');
+    beginDelete(registry, surfaceDeleteKey(2), 'menu');
 
     assert.equal(
       isRunDeleteBlocked(
@@ -72,7 +82,7 @@ describe('pending deletes', () => {
           surfaceId: 2,
           values: { surfaceId: '2', paneId: '4' },
         },
-        store().entriesByKey,
+        registry.get(pendingDeletesAtom),
       ),
       true,
     );

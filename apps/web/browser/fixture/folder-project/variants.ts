@@ -1,4 +1,5 @@
-import { create } from 'zustand';
+import { useAtom } from '@effect/atom-react';
+import { Atom } from 'effect/reactivity';
 
 import type { RecheckOutcome } from './fake-runtime.js';
 
@@ -25,8 +26,12 @@ export interface VariantState {
   readonly set: (patch: Partial<Omit<VariantState, 'set'>>) => void;
 }
 
-export const useVariants = create<VariantState>((set) => ({
-  outcome: 'restores',
-  latency: 0,
-  set: (patch) => set(patch),
-}));
+type Variants = Omit<VariantState, 'set'>;
+
+/** Page-level fixture state, kept in the page's app registry like any other client state. */
+const variantsAtom = Atom.make<Variants>({ outcome: 'restores', latency: 0 }).pipe(Atom.keepAlive);
+
+export function useVariants(): VariantState {
+  const [variants, setVariants] = useAtom(variantsAtom);
+  return { ...variants, set: (patch) => setVariants((current) => ({ ...current, ...patch })) };
+}

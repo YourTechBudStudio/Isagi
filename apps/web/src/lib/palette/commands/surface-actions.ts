@@ -4,17 +4,15 @@ import type { SplitPaneDirection, SurfaceDetail, SurfacePane } from '@isagi/cont
 
 import { surfaceActionsCopy } from '../../../copy/index.js';
 import { parseAgentHarness } from '../../harness-labels.js';
-import { queryClient } from '../../query/client.js';
-import { runRuntimeEffect } from '../../runtime/run.js';
-import { resolveActivePaneId } from '../../workspace/model.js';
 import {
   deleteSurfaceFromPalette,
   deleteSurfacePaneFromPalette,
   renameSurfaceTitleFromPalette,
   splitPaneFromPalette,
-} from '../../workspace/queries.js';
-import { surfaceDetailQueryKey } from '../../workspace/query-keys.js';
-import { getSurfaceDetail, UserVisibleError } from '../../workspace/runtime-data.js';
+} from '../../workspace/commits.js';
+import { resolveActivePaneId } from '../../workspace/model.js';
+import { readFresh, surfaceDetailAtom } from '../../workspace/queries.js';
+import { UserVisibleError } from '../../workspace/runtime-data.js';
 import type { ArgValues, PaletteCommand, PaletteContext } from '../types.js';
 import { harnessSelectArg } from './session-actions.js';
 
@@ -65,7 +63,7 @@ export const renameActiveSurfaceCommand: PaletteCommand = {
     if (title.length > TITLE_MAX_LENGTH) {
       throw new UserVisibleError(surfaceActionsCopy.renameSurface.titleTooLong);
     }
-    await renameSurfaceTitleFromPalette(surfaceId, title);
+    await ctx.app(renameSurfaceTitleFromPalette(surfaceId, title));
   },
 };
 
@@ -93,7 +91,7 @@ export const deleteActiveSurfaceCommand: PaletteCommand = {
     if (!target) {
       return;
     }
-    await deleteSurfaceFromPalette(target);
+    await ctx.app(deleteSurfaceFromPalette(target));
   },
 };
 
@@ -108,7 +106,7 @@ export const deleteActivePaneCommand: PaletteCommand = {
     if (!target) {
       return { mode: 'unavailable' };
     }
-    const detail = await fetchSurfaceDetail(target.surfaceId);
+    const detail = await fetchSurfaceDetail(ctx, target.surfaceId);
     const explicitPaneId = Number(values.paneId);
     const pane = Number.isInteger(explicitPaneId)
       ? (detail.panes.find((candidate) => candidate.id === explicitPaneId) ?? null)
@@ -129,7 +127,7 @@ export const deleteActivePaneCommand: PaletteCommand = {
     if (!target || !Number.isInteger(paneId)) {
       return;
     }
-    await deleteSurfacePaneFromPalette({ ...target, paneId });
+    await ctx.app(deleteSurfacePaneFromPalette({ ...target, paneId }));
   },
 };
 
@@ -172,7 +170,7 @@ function splitPaneCommand(input: {
       if (!target) {
         return { mode: 'unavailable' };
       }
-      const detail = await fetchSurfaceDetail(target.surfaceId);
+      const detail = await fetchSurfaceDetail(ctx, target.surfaceId);
       const explicitPaneId = Number(values.paneId);
       const pane = Number.isInteger(explicitPaneId)
         ? (detail.panes.find((candidate) => candidate.id === explicitPaneId) ?? null)
@@ -211,25 +209,29 @@ function splitPaneCommand(input: {
         if (harness === null) {
           throw new UserVisibleError(surfaceActionsCopy.chooseHarness);
         }
-        await splitPaneFromPalette({
-          ...target,
-          split: {
-            paneId,
-            direction: input.direction,
-            newPane: { kind: 'agent_session', harness },
-          },
-        });
+        await ctx.app(
+          splitPaneFromPalette({
+            ...target,
+            split: {
+              paneId,
+              direction: input.direction,
+              newPane: { kind: 'agent_session', harness },
+            },
+          }),
+        );
         return;
       }
       if (sourceKind === 'terminal_session') {
-        await splitPaneFromPalette({
-          ...target,
-          split: {
-            paneId,
-            direction: input.direction,
-            newPane: { kind: 'terminal_session' },
-          },
-        });
+        await ctx.app(
+          splitPaneFromPalette({
+            ...target,
+            split: {
+              paneId,
+              direction: input.direction,
+              newPane: { kind: 'terminal_session' },
+            },
+          }),
+        );
       }
     },
   };
@@ -259,12 +261,13 @@ function readSurfaceId(values: ArgValues, ctx: PaletteContext) {
   return ctx.activeSurface?.id ?? null;
 }
 
-async function fetchSurfaceDetail(surfaceId: number) {
-  return queryClient.fetchQuery({
-    queryKey: surfaceDetailQueryKey(surfaceId),
-    queryFn: ({ signal }) => runRuntimeEffect(getSurfaceDetail(surfaceId), { signal }),
-    staleTime: 0,
-  });
+/**
+ * A fresh read of the surface, through its cached query so the result also refreshes the cache:
+ * the decision is made on what the runtime says now, not on a possibly stale snapshot. One attempt,
+ * as the old `fetchQuery({ staleTime: 0 })`: a preflight that cannot read reports at once.
+ */
+function fetchSurfaceDetail(ctx: PaletteContext, surfaceId: number): Promise<SurfaceDetail> {
+  return ctx.app(readFresh(surfaceDetailAtom(surfaceId)));
 }
 
 function resolveCommandPane(

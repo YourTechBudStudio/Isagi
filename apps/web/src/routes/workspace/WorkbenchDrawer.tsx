@@ -1,3 +1,4 @@
+import { useAtomValue } from '@effect/atom-react';
 import { Maximize2, Minimize2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -9,12 +10,13 @@ import {
 } from 'react';
 
 import { surfaceTransition } from '../../lib/motion.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
+import { isPaletteOpen } from '../../lib/palette/store.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import {
   registerDrawerFocusTarget,
   restoreActivePaneFocus,
 } from '../../lib/workspace/activation.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { closeDrawer, drawerAtom, type DrawerState } from '../../lib/workspace/store.js';
 import { CommandsView } from './WorkbenchCommands.js';
 
 const MIN_WIDTH = 800;
@@ -26,9 +28,11 @@ const DEFAULT_WIDTH = `max(${MIN_WIDTH}px, 60vw)`;
  * Commands are processes you *watch* (logs, ports, run/stop); interactive shells
  * live on the canvas as terminal surfaces, not here.
  */
+const selectDrawerOpen = (drawer: DrawerState) => drawer.open;
+
 export function WorkbenchDrawer() {
-  const open = useWorkspaceStore((state) => state.drawer.open);
-  const closeDrawer = useWorkspaceStore((state) => state.closeDrawer);
+  const registry = useRegistry();
+  const open = useAtomValue(drawerAtom, selectDrawerOpen);
 
   const asideRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState<number | null>(null);
@@ -37,9 +41,9 @@ export function WorkbenchDrawer() {
   widthRef.current = width;
 
   const closeDrawerAndRestoreFocus = useCallback(() => {
-    closeDrawer();
-    restoreActivePaneFocus();
-  }, [closeDrawer]);
+    closeDrawer(registry);
+    restoreActivePaneFocus(registry);
+  }, [registry]);
 
   // The drawer owns keyboard focus while it is the topmost open surface. One
   // effect covers both halves because the aside only exists while `open`:
@@ -53,8 +57,8 @@ export function WorkbenchDrawer() {
     }
     const focusDrawer = () => asideRef.current?.focus({ preventScroll: true });
     focusDrawer();
-    return registerDrawerFocusTarget(focusDrawer);
-  }, [open]);
+    return registerDrawerFocusTarget(registry, focusDrawer);
+  }, [open, registry]);
 
   // Dismiss on Escape or a click anywhere outside the drawer.
   //
@@ -63,7 +67,7 @@ export function WorkbenchDrawer() {
   // guard any pointer selection in the palette would dismiss the drawer on
   // `pointerdown` (React's handlers run at the root before the event reaches
   // window), and an Escape the busy palette leaves unconsumed would dismiss it
-  // mid-run. Palette state is read via `getState()` at event time rather than
+  // mid-run. Palette state is read from the registry at event time rather than
   // subscribed: during the very click that closes the palette, this listener
   // fires after React's handlers but before the close effect commits
   // `closePalette()`, so `open` still reads true and the drawer correctly
@@ -74,7 +78,7 @@ export function WorkbenchDrawer() {
       return;
     }
     const onKey = (event: KeyboardEvent) => {
-      if (usePaletteStore.getState().open) {
+      if (isPaletteOpen(registry)) {
         return;
       }
       if (event.key === 'Escape') {
@@ -82,7 +86,7 @@ export function WorkbenchDrawer() {
       }
     };
     const onPointerDown = (event: PointerEvent) => {
-      if (usePaletteStore.getState().open) {
+      if (isPaletteOpen(registry)) {
         return;
       }
       if (asideRef.current && !asideRef.current.contains(event.target as Node)) {
@@ -95,7 +99,7 @@ export function WorkbenchDrawer() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [open, closeDrawerAndRestoreFocus]);
+  }, [open, closeDrawerAndRestoreFocus, registry]);
 
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();

@@ -1,7 +1,7 @@
 import { FolderSymlink } from 'lucide-react';
 
 import { paletteCopy } from '../../../copy/index.js';
-import { relocateProjectPath } from '../../workspace/queries.js';
+import { relocateProjectPath } from '../../workspace/commits.js';
 import type { Project } from '../../workspace/types.js';
 import type { PaletteCommand } from '../types.js';
 
@@ -30,11 +30,11 @@ export const relocateProjectCommand: PaletteCommand = {
       placeholder: paletteCopy.placeholders.repositoryRootPath,
     },
   ],
-  run: (values) => {
+  run: (values, ctx) => {
     const projectId = Number(values.projectId);
     const path = values.path?.trim();
     if (Number.isInteger(projectId) && projectId > 0 && path) {
-      return relocateProjectPath(projectId, path);
+      return ctx.app(relocateProjectPath(projectId, path));
     }
     return undefined;
   },

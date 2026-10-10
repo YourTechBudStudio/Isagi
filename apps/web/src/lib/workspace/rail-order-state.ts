@@ -1,123 +1,125 @@
-import { create } from 'zustand';
+import { useAtomValue } from '@effect/atom-react';
+import { Atom, type AtomRegistry } from 'effect/reactivity';
+import { useCallback } from 'react';
 
 import type { WorkspaceData } from './model.js';
 import { applyRailMove, type RailMoveIntent } from './rail-order.js';
 
 /**
- * In-flight and failed rail reorders, keyed by sibling scope.
+ * What one sibling scope says about its reorder: still being persisted, or refused.
  *
- * This is frontend interaction state, not server state (ADR 0001): the runtime
- * owns whether a move persisted, and this owns what the rail shows while the
- * user waits and what it says if the move came back refused. It is keyed by
- * scope rather than held globally so a slow project reorder never freezes an
- * unrelated worktree's surface list.
- *
- * `movedId` rides along on both states because ADR 0004 puts feedback at the
- * action: Phase 05 needs to know *which row* in the list is the subject. A
- * pending entry also keeps the whole intent, because a snapshot that lands
- * mid-write has to be re-projected before it is installed — see
- * `applyPendingRailMoves`.
+ * `movedId` rides along on both states because ADR 0004 puts feedback at the action: the rail
+ * needs to know *which row* in the list is the subject. A pending entry also keeps the whole
+ * intent, because the rail shows it on top of every workspace read until the runtime answers
+ * (`projectRailOrder`).
  */
 export type RailOrderEntry =
   | { readonly status: 'pending'; readonly movedId: number; readonly intent: RailMoveIntent }
   | { readonly status: 'failed'; readonly movedId: number; readonly message: string };
 
-interface RailOrderStore {
-  readonly entriesByScope: Readonly<Record<string, RailOrderEntry>>;
-  readonly beginRailOrder: (scopeKey: string, intent: RailMoveIntent) => void;
-  readonly failRailOrder: (scopeKey: string, movedId: number, message: string) => void;
-  readonly clearRailOrder: (scopeKey: string) => void;
-}
-
-export const useRailOrderStore = create<RailOrderStore>((set) => ({
-  entriesByScope: {},
-  // A begin also clears any earlier failure in this scope: the user has moved
-  // on, and a stale refusal must not sit beside a fresh attempt.
-  beginRailOrder: (scopeKey, intent) =>
-    set((state) => ({
-      entriesByScope: {
-        ...state.entriesByScope,
-        [scopeKey]: { status: 'pending', movedId: intent.movedId, intent },
-      },
-    })),
-  failRailOrder: (scopeKey, movedId, message) =>
-    set((state) => ({
-      entriesByScope: {
-        ...state.entriesByScope,
-        [scopeKey]: { status: 'failed', movedId, message },
-      },
-    })),
-  clearRailOrder: (scopeKey) =>
-    set((state) => {
-      if (!(scopeKey in state.entriesByScope)) return {};
-      const next = { ...state.entriesByScope };
-      delete next[scopeKey];
-      return { entriesByScope: next };
-    }),
-}));
-
-/**
- * Whether this list is still awaiting a persisted move. Read imperatively,
- * because the drag engine asks at `pointerdown` — outside React's render pass —
- * to decide whether to refuse the gesture. A *failed* scope is not pending: the
- * list is interactive again so the user can simply try the move once more.
- */
-export function isRailOrderPending(scopeKey: string): boolean {
-  return useRailOrderStore.getState().entriesByScope[scopeKey]?.status === 'pending';
-}
-
-/** True while any scope is mid-write, which gates the shared workspace refresh. */
-export function anyRailOrderPending(): boolean {
-  return Object.values(useRailOrderStore.getState().entriesByScope).some(
-    (entry) => entry.status === 'pending',
-  );
+/** A move the runtime accepted whose convergence read has not landed yet. */
+export interface AcceptedRailMove {
+  readonly intent: RailMoveIntent;
+  /** The `clock` value this acceptance produced. */
+  readonly acceptedAt: number;
 }
 
 /**
- * Re-project every in-flight move onto a snapshot that just came off the wire.
+ * In-flight, refused and accepted-but-unconverged rail reorders.
  *
- * The reorder workflow cancels the workspace query before it projects, but that
- * only covers fetches already running: any of the app's other refresh paths — a
- * session or surface runtime event, a reconciliation completing — can start a
- * new one while a move is still being persisted, and the runtime would answer it
- * with the order from *before* the move. Installing that answer unchanged would
- * yank the dragged row back under the user's cursor, then flip it forward again
- * when the reorder's own refresh lands.
+ * This is frontend interaction state, not server state (ADR 0001): the runtime owns whether a move
+ * persisted, and this owns what the rail shows while the user waits and what it says if the move
+ * came back refused.
  *
- * So the fetch path replays pending intents over whatever arrives, which keeps
- * newer intent on top of older server truth for exactly as long as the write is
- * outstanding. Every other fact in the snapshot is honoured as fetched, and once
- * the move settles — accepted or refused — its entry is gone and the runtime's
- * order is again the only order.
- *
- * Total in the same way `applyRailMove` is: an intent whose row or anchor is
- * absent from the fresh snapshot changes nothing, so a move against siblings the
- * runtime has since removed simply stops being replayed.
+ * - `entries`, keyed by sibling scope: a pending entry gates its scope (a second drop is refused)
+ *   and is replayed over every read; a failed entry is the inline notice. Per scope, so a slow
+ *   project reorder never freezes an unrelated worktree's surface list.
+ * - `accepted`: moves the runtime accepted, replayed only over reads that *began before* the
+ *   acceptance (`startedAt < acceptedAt`). Such a read cannot know the move; every later read
+ *   already does, because the runtime committed before it answered.
+ * - `clock`: ticks on each acceptance. A workspace read records it when it starts
+ *   (`WorkspaceRead.startedAt`).
  */
-export function applyPendingRailMoves(data: WorkspaceData): WorkspaceData {
-  return Object.values(useRailOrderStore.getState().entriesByScope).reduce(
-    (snapshot, entry) =>
-      entry.status === 'pending' ? applyRailMove(snapshot, entry.intent) : snapshot,
-    data,
-  );
+export interface RailOrderState {
+  readonly entries: Readonly<Record<string, RailOrderEntry>>;
+  readonly accepted: readonly AcceptedRailMove[];
+  readonly clock: number;
 }
+
+export const railOrderAtom = Atom.make<RailOrderState>({
+  entries: {},
+  accepted: [],
+  clock: 0,
+}).pipe(Atom.keepAlive);
+
+/** The runtime's workspace as read, tagged with the rail clock at the moment the read began. */
+export interface WorkspaceRead {
+  readonly data: WorkspaceData;
+  readonly startedAt: number;
+}
+
+/**
+ * What the rail shows for one read under the current reorder state.
+ *
+ * Old reads can never undo newer moves: a pending move is replayed over every read, and an
+ * accepted one over every read that began before it was accepted (later reads carry it in the
+ * runtime's own order). `applyRailMove` is total, so a move whose row or anchor the read no longer
+ * has changes nothing, and idempotent, so replaying a move the order already contains is harmless.
+ * With nothing to replay the read's own data comes back, by reference.
+ */
+export function projectRailOrder(read: WorkspaceRead, rail: RailOrderState): WorkspaceData {
+  let data = read.data;
+  for (const accepted of rail.accepted) {
+    if (read.startedAt < accepted.acceptedAt) data = applyRailMove(data, accepted.intent);
+  }
+  for (const entry of Object.values(rail.entries)) {
+    if (entry.status === 'pending') data = applyRailMove(data, entry.intent);
+  }
+  return data;
+}
+
+/** True while any scope is mid-write, which defers the shared convergence read. */
+export function anyRailOrderPending(rail: RailOrderState): boolean {
+  return Object.values(rail.entries).some((entry) => entry.status === 'pending');
+}
+
+/**
+ * Whether this list is still awaiting a persisted move. Read imperatively, because the drag engine
+ * asks at `pointerdown` — outside React's render pass — to decide whether to refuse the gesture. A
+ * *failed* scope is not pending: the list is interactive again so the user can simply try the move
+ * once more.
+ */
+export function isRailOrderPending(registry: AtomRegistry.AtomRegistry, scopeKey: string): boolean {
+  return registry.get(railOrderAtom).entries[scopeKey]?.status === 'pending';
+}
+
+type RailOrderFailure = Extract<RailOrderEntry, { status: 'failed' }>;
 
 /** The refusal to render inline at this list, or `null` when there is none. */
-export function useRailOrderFailure(
-  scopeKey: string,
-): Extract<RailOrderEntry, { status: 'failed' }> | null {
-  return useRailOrderStore((state) => {
-    const entry = state.entriesByScope[scopeKey];
-    return entry?.status === 'failed' ? entry : null;
-  });
+export function useRailOrderFailure(scopeKey: string): RailOrderFailure | null {
+  const select = useCallback((rail: RailOrderState) => failureAt(rail, scopeKey), [scopeKey]);
+  return useAtomValue(railOrderAtom, select);
+}
+
+function failureAt(rail: RailOrderState, scopeKey: string): RailOrderFailure | null {
+  const entry = rail.entries[scopeKey];
+  return entry?.status === 'failed' ? entry : null;
 }
 
 /**
- * Dismiss a failure. Nothing expires it on a timer: a refusal the user never
- * looked at is worse than one that waits, so it is cleared by dismissal, by the
- * next reorder in this scope, or by Phase 05 when the owning list stops existing.
+ * Dismiss a failure. Nothing expires it on a timer: a refusal the user never looked at is worse
+ * than one that waits, so it is cleared by dismissal, by the next reorder in this scope, or by the
+ * rail when the owning list stops existing.
  */
-export function clearRailOrderFailure(scopeKey: string): void {
-  if (useRailOrderStore.getState().entriesByScope[scopeKey]?.status !== 'failed') return;
-  useRailOrderStore.getState().clearRailOrder(scopeKey);
+export function clearRailOrderFailure(registry: AtomRegistry.AtomRegistry, scopeKey: string): void {
+  registry.update(railOrderAtom, (rail) =>
+    failureAt(rail, scopeKey) === null ? rail : withoutEntry(rail, scopeKey),
+  );
+}
+
+/** `rail` with this scope's entry removed (pending or failed). */
+export function withoutEntry(rail: RailOrderState, scopeKey: string): RailOrderState {
+  if (!(scopeKey in rail.entries)) return rail;
+  const { [scopeKey]: _removed, ...entries } = rail.entries;
+  return { ...rail, entries };
 }

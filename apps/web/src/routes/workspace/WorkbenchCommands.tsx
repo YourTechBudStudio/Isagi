@@ -1,10 +1,17 @@
+import { useAtom, useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { AlertTriangle, Play, RefreshCw, RotateCcw, Square } from 'lucide-react';
+import { useCallback, useMemo } from 'react';
 
 import type { CommandRunStatus, CommandSummary, WorktreeCommandsOutput } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
 import { useRuntimeLocality } from '../../lib/runtime/locality.js';
+import { disabledQuery } from '../../lib/state/policy.js';
+import { useRegistry } from '../../lib/state/registry.js';
+import { mutationError, queryError } from '../../lib/state/result.js';
 import {
   commandAffordances,
   commandAttentionState,
@@ -18,14 +25,17 @@ import { useCommandLogStream } from '../../lib/workspace/command-log/stream.js';
 import { commandEndpointsPresentation } from '../../lib/workspace/command-ports.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import {
-  useCommandLogMetadataQuery,
-  useRestartCommandMutation,
-  useRunCommandMutation,
-  useStopCommandMutation,
-  useWorktreeCommandsQuery,
+  commandActionAtoms,
+  commandLogMetadataAtom,
+  worktreeCommandsAtom,
+  type CommandActionResult,
 } from '../../lib/workspace/queries.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import {
+  drawerAtom,
+  selectCommand as selectDrawerCommand,
+  type DrawerState,
+} from '../../lib/workspace/store.js';
 import { CommandEndpoints } from './CommandEndpoints.js';
 import { XtermSurface } from './XtermSurface.js';
 
@@ -33,30 +43,59 @@ type CommandListItem = CommandSummary & {
   readonly presentation: CommandPresentation;
 };
 
+/** One command action's state and its trigger, as a component holds it. */
+interface CommandAction {
+  readonly result: CommandActionResult;
+  readonly start: (commandName: string) => void;
+}
+
+/**
+ * Run / stop / restart for one worktree, owned by the calling component instance: each caller
+ * builds its own fn atoms, so the list and the detail never share a pending or error state.
+ */
+function useCommandActions(worktreeId: number | null) {
+  const atoms = useMemo(() => commandActionAtoms(worktreeId), [worktreeId]);
+  const [run, startRun] = useAtom(atoms.run);
+  const [stop, startStop] = useAtom(atoms.stop);
+  const [restart, startRestart] = useAtom(atoms.restart);
+  return {
+    run: { result: run, start: startRun } satisfies CommandAction,
+    stop: { result: stop, start: startStop } satisfies CommandAction,
+    restart: { result: restart, start: startRestart } satisfies CommandAction,
+  };
+}
+
 /**
  * The commands master-detail shown inside the workbench drawer. Commands are
  * processes you *watch* (logs, ports, run/stop); interactive shells live on the
  * canvas as terminal surfaces, not here.
  */
+const selectSelectedCommandId = (drawer: DrawerState) => drawer.selectedCommandId;
+
 export function CommandsView() {
   const worktree = useActiveWorktree();
-  const selectedId = useWorkspaceStore((state) => state.drawer.selectedCommandId);
-  const selectCommand = useWorkspaceStore((state) => state.selectCommand);
-  const commandsQuery = useWorktreeCommandsQuery(worktree?.id ?? null);
-  const runCommand = useRunCommandMutation(worktree?.id ?? null);
-  const stopCommand = useStopCommandMutation(worktree?.id ?? null);
-  const commandRead = commandsQuery.data;
+  const registry = useRegistry();
+  const selectedId = useAtomValue(drawerAtom, selectSelectedCommandId);
+  const selectCommand = useCallback(
+    (commandName: string) => selectDrawerCommand(registry, commandName),
+    [registry],
+  );
+  const commandsAtom = worktree ? worktreeCommandsAtom(worktree.id) : disabledQuery;
+  const commands = useAtomValue(commandsAtom);
+  const refetchCommands = () => registry.refresh(commandsAtom);
+  const { run: runCommand, stop: stopCommand } = useCommandActions(worktree?.id ?? null);
+  const commandRead = Option.getOrUndefined(AsyncResult.value(commands));
 
   if (!worktree) {
     return <EmptyCommandsState label={workbenchCopy.emptyCommands} />;
   }
 
-  if (commandsQuery.error) {
+  if (commands._tag === 'Failure') {
     return (
       <CommandDiagnosticState
         title={workbenchCopy.commandReadFailedTitle}
-        body={formatRuntimeError(commandsQuery.error)}
-        onRefresh={() => void commandsQuery.refetch()}
+        body={formatRuntimeError(queryError(commands))}
+        onRefresh={refetchCommands}
       />
     );
   }
@@ -76,7 +115,7 @@ export function CommandsView() {
           title={workbenchCopy.commandConfigDiagnosticTitle}
           body={workbenchCopy.commandConfigDiagnosticBody}
           diagnostic={`${path}\n${message}`}
-          onRefresh={() => void commandsQuery.refetch()}
+          onRefresh={refetchCommands}
         />
       );
     }
@@ -108,7 +147,7 @@ export function CommandsView() {
               // one inline run, where a bare newline would collapse into a space
               // mid-sentence and read as a typo.
               configDiagnostic={`${path} — ${message}`}
-              onRefreshCatalog={() => void commandsQuery.refetch()}
+              onRefreshCatalog={refetchCommands}
             />
           ) : null}
         </div>
@@ -123,8 +162,8 @@ export function CommandsView() {
     commandRead?.status === 'configured'
       ? commandRead.removedCommands.map((command) => commandItem(command, 'removed'))
       : [];
-  const commands = [...configured, ...removed];
-  const selected = commands.find((command) => command.name === selectedId) ?? commands[0] ?? null;
+  const listed = [...configured, ...removed];
+  const selected = listed.find((command) => command.name === selectedId) ?? listed[0] ?? null;
 
   return (
     <>
@@ -137,7 +176,7 @@ export function CommandsView() {
         ]}
         selected={selected}
         onSelect={selectCommand}
-        loading={commandsQuery.isPending}
+        loading={commands._tag === 'Initial'}
         runCommand={runCommand}
         stopCommand={stopCommand}
       />
@@ -166,8 +205,8 @@ function CommandList({
   readonly selected: CommandListItem | null;
   readonly onSelect: (commandName: string) => void;
   readonly loading?: boolean | undefined;
-  readonly runCommand: ReturnType<typeof useRunCommandMutation>;
-  readonly stopCommand: ReturnType<typeof useStopCommandMutation>;
+  readonly runCommand: CommandAction;
+  readonly stopCommand: CommandAction;
 }) {
   const hasCommands = sections.some((section) => section.commands.length > 0);
 
@@ -218,8 +257,8 @@ function CommandListRow({
   readonly command: CommandListItem;
   readonly selected: boolean;
   readonly onSelect: (commandName: string) => void;
-  readonly runCommand: ReturnType<typeof useRunCommandMutation>;
-  readonly stopCommand: ReturnType<typeof useStopCommandMutation>;
+  readonly runCommand: CommandAction;
+  readonly stopCommand: CommandAction;
 }) {
   const { canRun, canStop } = commandAffordances(command.status, command.presentation);
   // The row has space for one affordance, so it carries the likelier intent and
@@ -231,10 +270,10 @@ function CommandListRow({
   const runAction = () => {
     onSelect(command.name);
     if (rowAction === 'stop') {
-      stopCommand.mutate(command.name);
+      stopCommand.start(command.name);
       return;
     }
-    runCommand.mutate(command.name);
+    runCommand.start(command.name);
   };
 
   return (
@@ -247,7 +286,7 @@ function CommandListRow({
         <button
           type="button"
           onClick={runAction}
-          disabled={runCommand.isPending || stopCommand.isPending}
+          disabled={runCommand.result.waiting || stopCommand.result.waiting}
           title={`${rowAction === 'stop' ? 'Stop' : 'Run'} ${command.name}`}
           aria-label={`${rowAction === 'stop' ? 'Stop' : 'Run'} ${command.name}`}
           className="grid size-5 flex-none place-items-center rounded-md border border-line/20 text-fg-subtle transition-colors hover:border-blue/45 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
@@ -290,12 +329,17 @@ function CommandDetail({
   /** Offered only for `managed`, where a fix happens on disk and needs a re-read. */
   readonly onRefreshCatalog?: (() => void) | undefined;
 }) {
-  const logMetadataQuery = useCommandLogMetadataQuery(worktreeId, command.name);
-  const restartCommand = useRestartCommandMutation(worktreeId);
-  const runCommand = useRunCommandMutation(worktreeId);
-  const stopCommand = useStopCommandMutation(worktreeId);
-  const mutationError = restartCommand.error ?? runCommand.error ?? stopCommand.error;
-  const latestRun = logMetadataQuery.data?.latestRun;
+  const logMetadata = useAtomValue(commandLogMetadataAtom([worktreeId, command.name]));
+  const {
+    restart: restartCommand,
+    run: runCommand,
+    stop: stopCommand,
+  } = useCommandActions(worktreeId);
+  const actionError =
+    mutationError(restartCommand.result) ??
+    mutationError(runCommand.result) ??
+    mutationError(stopCommand.result);
+  const latestRun = Option.getOrUndefined(AsyncResult.value(logMetadata))?.latestRun;
   const locality = useRuntimeLocality();
   // The separator only earns its place when there is a toggle to separate. A
   // command that declared no ports keeps exactly the header it has today.
@@ -342,8 +386,8 @@ function CommandDetail({
           {canRestart && (
             <button
               type="button"
-              onClick={() => restartCommand.mutate(command.name)}
-              disabled={restartCommand.isPending}
+              onClick={() => restartCommand.start(command.name)}
+              disabled={restartCommand.result.waiting}
               title={`Restart ${command.name}`}
               className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
             >
@@ -358,8 +402,8 @@ function CommandDetail({
           {canRun && (
             <button
               type="button"
-              onClick={() => runCommand.mutate(command.name)}
-              disabled={runCommand.isPending || stopCommand.isPending}
+              onClick={() => runCommand.start(command.name)}
+              disabled={runCommand.result.waiting || stopCommand.result.waiting}
               title={`Run ${command.name}`}
               aria-label={`Run ${command.name}`}
               className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
@@ -370,8 +414,8 @@ function CommandDetail({
           {canStop && (
             <button
               type="button"
-              onClick={() => stopCommand.mutate(command.name)}
-              disabled={runCommand.isPending || stopCommand.isPending}
+              onClick={() => stopCommand.start(command.name)}
+              disabled={runCommand.result.waiting || stopCommand.result.waiting}
               title={`Stop ${command.name}`}
               aria-label={`Stop ${command.name}`}
               className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
@@ -383,16 +427,16 @@ function CommandDetail({
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
         {notice && <CommandDetailNotice notice={notice} />}
-        {mutationError && (
+        {actionError !== null && (
           <p className="mb-3 rounded-md border border-error/20 bg-error/8 px-2.5 py-2 text-[12px] text-error">
-            {formatRuntimeError(mutationError)}
+            {formatRuntimeError(actionError)}
           </p>
         )}
-        {logMetadataQuery.error ? (
+        {logMetadata._tag === 'Failure' ? (
           <p className="font-mono text-[11.5px] text-error">
-            {formatRuntimeError(logMetadataQuery.error)}
+            {formatRuntimeError(queryError(logMetadata))}
           </p>
-        ) : logMetadataQuery.isPending ? (
+        ) : logMetadata._tag === 'Initial' ? (
           <p className="font-mono text-[11.5px] text-fg-subtle opacity-70">
             {workbenchCopy.commandsLoading}
           </p>

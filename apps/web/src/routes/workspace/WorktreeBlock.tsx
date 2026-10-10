@@ -7,15 +7,16 @@ import type { ContextMenuItem } from '../../components/ContextMenu.js';
 import { surfaceActionsCopy, worktreeActionsCopy } from '../../copy/index.js';
 import { EASE_EXPO, surfaceTransition, uiTransition } from '../../lib/motion.js';
 import {
-  handleDispatchedCommandError,
   useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import {
+  clearDelete,
   isDeletePending,
   showsDeleteSweep,
   surfaceDeleteKey,
   useDeleteEntry,
-  usePendingDeleteStore,
   useRunDelete,
 } from '../../lib/workspace/pending-deletes.js';
 import { scopeKey, type RailOrderScope } from '../../lib/workspace/rail-order.js';
@@ -57,6 +58,7 @@ export function WorktreeBlock({
   onSelectSurface: (worktreeId: number, surfaceId: number) => void;
 }) {
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   const rail = useRailDragLayer();
   const surfaceScope: RailOrderScope = { kind: 'surfaces', worktreeId: worktree.id };
 
@@ -68,7 +70,7 @@ export function WorktreeBlock({
     void dispatchCommand(commandId, {
       projectId: String(projectId),
       worktreeId: String(worktree.id),
-    }).catch(handleDispatchedCommandError);
+    }).catch(onDispatchError);
   };
 
   const menuItems: ContextMenuItem[] = worktreeMenuCommandIds({
@@ -189,14 +191,15 @@ function SurfaceRow({
   pillId: string;
   onSelect: () => void;
 }) {
+  const registry = useRegistry();
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   // The right-click menu is the only way to delete a surface, so it is always the
   // site that owns the running indicator. The row itself stays visually untouched
   // and only goes unselectable — see ADR 0004.
   const surfaceKey = surfaceDeleteKey(surface.id);
   const surfaceDelete = useDeleteEntry(surfaceKey);
   const deleting = isDeletePending(surfaceDelete);
-  const clearDelete = usePendingDeleteStore((state) => state.clearDelete);
   const runDelete = useRunDelete();
 
   const surfaceValues = {
@@ -209,7 +212,7 @@ function SurfaceRow({
     <ContextMenu
       error={surfaceDelete?.error ?? null}
       onResultDismissed={() => {
-        if (surfaceDelete?.error) clearDelete(surfaceKey);
+        if (surfaceDelete?.error) clearDelete(registry, surfaceKey);
       }}
       items={[
         {
@@ -217,9 +220,7 @@ function SurfaceRow({
           icon: Pencil,
           disabled: deleting,
           onSelect: () => {
-            void dispatchCommand('rename-active-surface', surfaceValues).catch(
-              handleDispatchedCommandError,
-            );
+            void dispatchCommand('rename-active-surface', surfaceValues).catch(onDispatchError);
           },
         },
         {

@@ -4,8 +4,12 @@ import type { ReactNode } from 'react';
 
 import { ContextMenu } from '../../components/ContextMenu.js';
 import { surfaceTransition } from '../../lib/motion.js';
-import { useCommandDispatcher } from '../../lib/palette/dispatcher.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
+import {
+  useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
+} from '../../lib/palette/dispatcher.js';
+import { openPalette } from '../../lib/palette/store.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import { scopeKey, type RailOrderScope } from '../../lib/workspace/rail-order.js';
 import type { PresentProject } from '../../lib/workspace/types.js';
 import { projectMenuItems } from './project-menu.js';
@@ -45,8 +49,9 @@ export function ProjectGroup({
   activeSurfaceByWorktreeId: Readonly<Record<number, number>>;
   onSelectSurface: (worktreeId: number, surfaceId: number) => void;
 }) {
-  const openPalette = usePaletteStore((state) => state.openPalette);
+  const registry = useRegistry();
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   const rail = useRailDragLayer();
   const scope: RailOrderScope = { kind: 'worktrees', projectId: project.id };
 
@@ -54,7 +59,7 @@ export function ProjectGroup({
     <div className="group/group">
       {/* Right-click only, like worktree rows: no visible menu button. A
           right-click never starts a rail drag, which needs the left button. */}
-      <ContextMenu items={projectMenuItems(project.id, dispatchCommand)}>
+      <ContextMenu items={projectMenuItems(project.id, dispatchCommand, onDispatchError)}>
         <div>
           <ProjectHeaderBody
             project={project}
@@ -70,7 +75,9 @@ export function ProjectGroup({
                   type="button"
                   data-no-drag
                   title="Open worktree"
-                  onClick={() => openPalette('open-worktree', { projectId: String(project.id) })}
+                  onClick={() =>
+                    openPalette(registry, 'open-worktree', { projectId: String(project.id) })
+                  }
                   className="ml-auto grid size-5 place-items-center rounded-md text-fg-subtle opacity-0 transition group-hover/group:opacity-100 hover:bg-blue/15 hover:text-blue"
                 >
                   <Plus size={14} />

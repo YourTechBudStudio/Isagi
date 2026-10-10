@@ -1,8 +1,12 @@
+import { useAtomRefresh, useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowCheckpointSummaryDto } from '@isagi/contracts';
 
-import { useWorkflowCheckpointList } from '../../../lib/workspace/workflow/queries.js';
+import { queryError } from '../../../lib/state/result.js';
+import { workflowCheckpointListAtom } from '../../../lib/workspace/workflow/queries.js';
 import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import {
   checkpointCommitLabel,
@@ -49,8 +53,10 @@ export function WorkflowCheckpointsPanel({
   /** A person's choice, which also moves the dock to the execution that saved it. */
   readonly onSelect: (checkpoint: WorkflowCheckpointSummaryDto) => void;
 }) {
-  const list = useWorkflowCheckpointList(runId);
-  const items = list.data ?? null;
+  const listAtom = workflowCheckpointListAtom(runId);
+  const list = useAtomValue(listAtom);
+  const refreshList = useAtomRefresh(listAtom);
+  const items = Option.getOrNull(AsyncResult.value(list));
   const groups = useMemo(() => groupCheckpoints(view, items ?? []), [view, items]);
 
   const resolved =
@@ -69,12 +75,12 @@ export function WorkflowCheckpointsPanel({
   return (
     <div className="flex min-h-0 flex-1 bg-canvas/55">
       <div className="min-h-0 flex-none basis-68 overflow-auto border-r border-line/22 py-1.5">
-        {list.error ? (
+        {queryError(list) !== null ? (
           <div className="px-4 py-3">
             <p className="text-[12.5px] text-fg-muted">{inspectorCopy.checkpointsFailed}</p>
             <button
               type="button"
-              onClick={() => void list.refetch()}
+              onClick={refreshList}
               className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
             >
               {inspectorCopy.checkpointsRetry}

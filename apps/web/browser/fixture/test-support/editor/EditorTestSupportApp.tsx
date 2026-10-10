@@ -1,15 +1,27 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { useEffect, useState } from 'react';
 
-import { queryClient } from '../../../../src/lib/query/client.js';
+import { AppStateProvider } from '../../../../src/lib/state/AppStateProvider.js';
+import { revalidate } from '../../../../src/lib/state/policy.js';
+import { runApp } from '../../../../src/lib/state/runtime.js';
 import { restoreActivePaneFocus } from '../../../../src/lib/workspace/activation.js';
-import { useSurfaceDetailQuery } from '../../../../src/lib/workspace/queries.js';
-import { surfaceDetailQueryKey } from '../../../../src/lib/workspace/query-keys.js';
-import { emptyWorkspaceSelection, useWorkspaceStore } from '../../../../src/lib/workspace/store.js';
+import { surfaceDetailAtom } from '../../../../src/lib/workspace/queries.js';
+import {
+  activePaneBySurfaceAtom,
+  emptyWorkspaceSelection,
+  selectWorktree,
+  setActiveSurface,
+  setSelection,
+} from '../../../../src/lib/workspace/store.js';
 import { TerminalPresentationProvider } from '../../../../src/lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { Surface } from '../../../../src/routes/workspace/Surface.js';
+import { createFixtureRegistry } from '../registry.js';
 import type { EditorRuntimeControls } from './fake-runtime.js';
 import { SURFACE_ID, WORKTREE_ID } from './fake-runtime.js';
+
+const fixtureRegistry = createFixtureRegistry();
 
 /**
  * A test-support harness, not a gallery. It has no picker, no authored state
@@ -20,20 +32,19 @@ import { SURFACE_ID, WORKTREE_ID } from './fake-runtime.js';
  * activation across the iframe's own document, and the focus router landing back
  * inside the workbench — and because the container's lifecycle rules (one mount
  * `reuse`, notice lifetime, diagnostics keyed to an incarnation) need effects,
- * a client renderer, and a real query cache, none of which the Node suite has.
+ * a client renderer, and a real app registry, none of which the Node suite has.
  *
  * It mounts the **production** `Surface`, so the kind dispatch, the container,
- * the query observer, the runtime client, and the invalidation are all the real
+ * the surface-detail read, the runtime client, and the invalidation are all the real
  * ones. Only the process at the other end of the wire is replaced.
  */
 export function EditorTestSupportApp({ runtime }: { readonly runtime: EditorRuntimeControls }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const store = useWorkspaceStore.getState();
-    store.setSelection(emptyWorkspaceSelection);
-    store.selectWorktree(1, WORKTREE_ID);
-    store.setActiveSurface(WORKTREE_ID, SURFACE_ID);
+    setSelection(fixtureRegistry, emptyWorkspaceSelection);
+    selectWorktree(fixtureRegistry, 1, WORKTREE_ID);
+    setActiveSurface(fixtureRegistry, WORKTREE_ID, SURFACE_ID);
     setReady(true);
   }, []);
 
@@ -43,8 +54,7 @@ export function EditorTestSupportApp({ runtime }: { readonly runtime: EditorRunt
       // Production reconciles a change it did not initiate through the
       // `editor_context_changed` event, which invalidates surface detail. This
       // harness has no event socket, so the invalidation is asked for directly.
-      refetchSurface: () =>
-        queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(SURFACE_ID) }),
+      refetchSurface: () => runApp(fixtureRegistry, revalidate(surfaceDetailAtom(SURFACE_ID))),
     };
     return () => {
       delete window.editorTestSupport;
@@ -54,12 +64,12 @@ export function EditorTestSupportApp({ runtime }: { readonly runtime: EditorRunt
   if (!ready) return null;
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       {/*
-        The neighbouring shell pane is a `PtyPane`, which reads the presentation
-        cache. Production mounts this provider around the work area for the same
-        reason, so the harness is faithful rather than accommodating.
-      */}
+          The neighbouring shell pane is a `PtyPane`, which reads the presentation
+          cache. Production mounts this provider around the work area for the same
+          reason, so the harness is faithful rather than accommodating.
+        */}
       <TerminalPresentationProvider
         settings={{
           scrollbackLines: 5_000,
@@ -68,15 +78,18 @@ export function EditorTestSupportApp({ runtime }: { readonly runtime: EditorRunt
       >
         <Harness />
       </TerminalPresentationProvider>
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 
+const selectFixturePaneId = (activePaneBySurfaceId: Readonly<Record<number, number>>) =>
+  activePaneBySurfaceId[SURFACE_ID] ?? null;
+
 function Harness() {
-  const activePaneId = useWorkspaceStore(
-    (state) => state.activePaneBySurfaceId[SURFACE_ID] ?? null,
+  const activePaneId = useAtomValue(activePaneBySurfaceAtom, selectFixturePaneId);
+  const detail = Option.getOrUndefined(
+    AsyncResult.value(useAtomValue(surfaceDetailAtom(SURFACE_ID))),
   );
-  const detail = useSurfaceDetailQuery(SURFACE_ID);
 
   return (
     <div data-editor-test-support className="flex h-screen flex-col gap-2 bg-canvas p-4">
@@ -91,15 +104,19 @@ function Harness() {
         router the palette and the drawer call, so the return leg under test is
         the production one.
       */}
-      <button type="button" data-restore-focus onClick={() => restoreActivePaneFocus()}>
+      <button
+        type="button"
+        data-restore-focus
+        onClick={() => restoreActivePaneFocus(fixtureRegistry)}
+      >
         restore focus
       </button>
       <div className="min-h-0 flex-1">
-        {detail.data ? (
+        {detail ? (
           <Surface
             surface={{
               id: SURFACE_ID,
-              title: detail.data.title,
+              title: detail.title,
               paneKinds: ['editor_context', 'terminal_session'],
               attention: 'idle',
             }}

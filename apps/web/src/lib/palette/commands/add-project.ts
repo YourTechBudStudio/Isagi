@@ -1,7 +1,7 @@
 import { FolderPlus } from 'lucide-react';
 
 import { paletteCopy } from '../../../copy/index.js';
-import { addProjectPath } from '../../workspace/queries.js';
+import { addProjectPath } from '../../workspace/commits.js';
 import type { PaletteCommand } from '../types.js';
 
 export const addProjectCommand: PaletteCommand = {
@@ -17,10 +17,10 @@ export const addProjectCommand: PaletteCommand = {
       placeholder: paletteCopy.placeholders.projectRootPath,
     },
   ],
-  run: (values) => {
+  run: (values, ctx) => {
     const path = values.path?.trim();
     if (path) {
-      return addProjectPath(path);
+      return ctx.app(addProjectPath(path));
     }
     return undefined;
   },

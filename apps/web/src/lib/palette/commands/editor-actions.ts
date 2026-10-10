@@ -30,7 +30,7 @@ export const openEditorCommand: PaletteCommand = {
     if (worktreeId === null) {
       return;
     }
-    await openEditorFromPalette(worktreeId, emptySurfaceIdFromValues(values, ctx));
+    await ctx.app(openEditorFromPalette(worktreeId, emptySurfaceIdFromValues(values, ctx)));
   },
 };
 

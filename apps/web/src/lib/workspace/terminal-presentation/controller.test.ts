@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { Effect } from 'effect';
-
 import { terminalSettingsDefaults } from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
 
@@ -555,14 +553,15 @@ describe('terminal presentation controller', () => {
       initialViewport: null,
       onViewport: () => undefined,
       paneFocusAllowed: () => true,
-      resolveUrl: () => {
+      resolveUrl: (signal) => {
         env.claims += 1;
-        // A claim that never settles on its own: only interruption ends it.
-        return Effect.callback<string, Error>(() =>
-          Effect.sync(() => {
+        // A claim that never settles on its own: only the disposal signal ends it.
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
             observedAbort = true;
-          }),
-        );
+            reject(signal.reason);
+          });
+        });
       },
     });
 
@@ -605,7 +604,7 @@ describe('terminal presentation controller', () => {
       initialViewport: null,
       onViewport: () => undefined,
       paneFocusAllowed: () => true,
-      resolveUrl: () => Effect.fail(failure),
+      resolveUrl: () => Promise.reject(failure),
     });
 
     env.runTasks();
@@ -661,9 +660,9 @@ async function startController(
       session.updateViewport(viewport);
     },
     paneFocusAllowed: options.paneFocusAllowed ?? (() => true),
-    resolveUrl: () => {
+    resolveUrl: async () => {
       env.claims += 1;
-      return Effect.succeed('ws://runtime.test/pty/7');
+      return 'ws://runtime.test/pty/7';
     },
   });
 

@@ -11,6 +11,7 @@ import {
 import { workflowSummaryFixture } from '../workspace/workflow/test-support.js';
 import { assembleEntries, workflowFailureEntry } from './entries.js';
 import { GROUP_LABELS, GROUP_ORDER } from './groups.js';
+import { paletteTestSession } from './test-support.js';
 import type { CommandErrorContent, PaletteContext, PaletteEntry } from './types.js';
 
 test('active worktree action entries freeze the active project and worktree ids', () => {
@@ -442,6 +443,7 @@ function ctx(options: Partial<PaletteContext> = {}): PaletteContext {
     },
     activeSurface: { id: 42, title: 'Main', paneKinds: [], attention: 'idle' },
     activePaneId: null,
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
     ...options,

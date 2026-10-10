@@ -1,10 +1,15 @@
+import { useAtom } from '@effect/atom-react';
+import { Atom } from 'effect/reactivity';
 import { motion } from 'motion/react';
+import { useMemo } from 'react';
 
 import { Button } from '../../components/Button.js';
 import { missingProjectCopy, projectActionsCopy } from '../../copy/index.js';
 import { uiTransition } from '../../lib/motion.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
-import { formatRuntimeError, useRecheckProjectMutation } from '../../lib/workspace/queries.js';
+import { openPalette } from '../../lib/palette/store.js';
+import { useRegistry } from '../../lib/state/registry.js';
+import { mutationData, mutationError } from '../../lib/state/result.js';
+import { formatRuntimeError, makeRecheckProjectAtom } from '../../lib/workspace/queries.js';
 import type { MissingProject } from '../../lib/workspace/types.js';
 
 /** Cross-fade used when a recheck verdict appears under the action row. */
@@ -32,30 +37,35 @@ const swap = {
  * follow the user from one missing project to another.
  */
 export function MissingProjectActions({ project }: { project: MissingProject }) {
-  const openPalette = usePaletteStore((state) => state.openPalette);
-  const recheck = useRecheckProjectMutation();
+  const registry = useRegistry();
+  // One recheck per mounted instance, so its pending/verdict state belongs to this project.
+  const recheckAtom = useMemo(() => makeRecheckProjectAtom(), []);
+  const [recheck, setRecheck] = useAtom(recheckAtom);
+  const recheckError = mutationError(recheck);
   const isFolder = project.kind === 'folder';
 
   // Cleared *before* the attempt rather than when it resolves: a previous
   // verdict must never sit under a check that is currently running and might
   // disagree with it.
   const startRecheck = () => {
-    recheck.reset();
-    recheck.mutate(project.id);
+    setRecheck(Atom.Reset);
+    setRecheck(project.id);
   };
 
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="flex gap-2.5">
         {isFolder ? (
-          <Button disabled={recheck.isPending} onClick={startRecheck}>
-            {recheck.isPending
+          <Button disabled={recheck.waiting} onClick={startRecheck}>
+            {recheck.waiting
               ? missingProjectCopy.recheck.pending
               : missingProjectCopy.recheck.action}
           </Button>
         ) : (
           <Button
-            onClick={() => openPalette('relocate-project', { projectId: String(project.id) })}
+            onClick={() =>
+              openPalette(registry, 'relocate-project', { projectId: String(project.id) })
+            }
           >
             Set new path…
           </Button>
@@ -63,7 +73,7 @@ export function MissingProjectActions({ project }: { project: MissingProject }) 
         <Button
           variant="secondary"
           className="hover:border-error/35 hover:text-fg"
-          onClick={() => openPalette('delete-project', { projectId: String(project.id) })}
+          onClick={() => openPalette(registry, 'delete-project', { projectId: String(project.id) })}
         >
           {projectActionsCopy.menu.delete}
         </Button>
@@ -71,9 +81,9 @@ export function MissingProjectActions({ project }: { project: MissingProject }) 
 
       {isFolder && (
         <RecheckVerdict
-          pending={recheck.isPending}
-          stillMissing={recheck.data?.status === 'still_unavailable'}
-          error={recheck.isError ? formatRuntimeError(recheck.error) : null}
+          pending={recheck.waiting}
+          stillMissing={mutationData(recheck)?.status === 'still_unavailable'}
+          error={recheckError === null ? null : formatRuntimeError(recheckError)}
         />
       )}
     </div>

@@ -20,8 +20,8 @@ const runtimeClientErrorTags: ReadonlySet<unknown> = new Set<RuntimeClientError[
 ]);
 
 /**
- * Classify a thrown/rejected runtime failure. `runRuntimeEffect` and Effect's own `runPromise`
- * reject with the failure value itself, so the value is classified as-is.
+ * Classify a thrown/rejected runtime failure. `runApp` and Effect's own `runPromise` reject with
+ * the failure value itself, so the value is classified as-is.
  */
 export function classifyRuntimeFailure(error: unknown): ClassifiedRuntimeFailure {
   if (!isRuntimeClientError(error)) {

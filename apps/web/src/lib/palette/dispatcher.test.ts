@@ -4,6 +4,7 @@ import test from 'node:test';
 import { Plus } from 'lucide-react';
 
 import { dispatchCommandEntry } from './dispatcher.js';
+import { paletteTestSession } from './test-support.js';
 import type { PaletteContext, PaletteEntry } from './types.js';
 
 const ctx: PaletteContext = {
@@ -12,6 +13,7 @@ const ctx: PaletteContext = {
   activeWorktree: null,
   activeSurface: null,
   activePaneId: null,
+  ...paletteTestSession(),
   launchableHarnesses: [],
   editorAvailable: false,
 };

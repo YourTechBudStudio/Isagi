@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, type TestContext } from 'node:test';
 
-import { Effect } from 'effect';
-
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
 import {
@@ -90,7 +88,7 @@ function begin(t: TestContext) {
       onViewport: () => undefined,
       onEvent: () => undefined,
       paneFocusAllowed: () => true,
-      resolveUrl: () => Effect.succeed('ws://runtime.test/pty/7'),
+      resolveUrl: async () => 'ws://runtime.test/pty/7',
       isCancelled,
     });
 

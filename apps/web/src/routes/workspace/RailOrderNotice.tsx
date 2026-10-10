@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 
+import { useRegistry } from '../../lib/state/registry.js';
 import {
   clearRailOrderFailure,
   useRailOrderFailure,
@@ -29,6 +30,7 @@ import { scopeKey, type RailOrderScope } from '../../lib/workspace/rail-order.js
  * pick up the list above it.
  */
 export function RailOrderNotice({ scope, id }: { scope: RailOrderScope; id: number }) {
+  const registry = useRegistry();
   const key = scopeKey(scope);
   const failure = useRailOrderFailure(key);
   // A scope holds at most one refusal, and it belongs to the row that was
@@ -39,7 +41,7 @@ export function RailOrderNotice({ scope, id }: { scope: RailOrderScope; id: numb
     <RailOrderFailureLine
       scopeKey={key}
       message={failure.message}
-      onDismiss={() => clearRailOrderFailure(key)}
+      onDismiss={() => clearRailOrderFailure(registry, key)}
     />
   );
 }

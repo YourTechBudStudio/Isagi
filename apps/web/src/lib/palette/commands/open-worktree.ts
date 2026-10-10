@@ -7,16 +7,15 @@ import type {
 } from '@isagi/contracts';
 
 import { paletteCopy, worktreeCreateCopy, worktreeSetupReviewCopy } from '../../../copy/index.js';
-import { runRuntimeEffect } from '../../runtime/run.js';
 import { restoreActivePaneFocus } from '../../workspace/activation.js';
-import { openWorktreeFromPalette } from '../../workspace/queries.js';
+import { openWorktreeFromPalette } from '../../workspace/commits.js';
 import {
   listProjectBranches,
   preflightWorktreeSetup,
   trustWorktreeSetup,
 } from '../../workspace/runtime-data.js';
 import { formatWorktreeSetupFailureDetails } from '../../workspace/setup-failure.js';
-import { useWorkspaceStore } from '../../workspace/store.js';
+import { selectWorktree } from '../../workspace/store.js';
 import type { Project, Worktree } from '../../workspace/types.js';
 import type { CommandOutcome, Option, PaletteCommand } from '../types.js';
 
@@ -81,7 +80,7 @@ export const openWorktreeCommand: PaletteCommand = {
           return [];
         }
 
-        const branchList = await runRuntimeEffect(listProjectBranches(project.id));
+        const branchList = await ctx.app(listProjectBranches(project.id));
         const worktreeOptions = [...project.worktrees].map((worktree) => ({
           value: worktree.branch ?? String(worktree.id),
           label: worktreeOptionLabel(worktree),
@@ -131,7 +130,7 @@ export const openWorktreeCommand: PaletteCommand = {
           return [];
         }
 
-        const branchList = await runRuntimeEffect(listProjectBranches(project.id));
+        const branchList = await ctx.app(listProjectBranches(project.id));
         const branchOptions = branchList.branches.map((branch) => ({
           value: `branch:${branch.name}`,
           label: branch.name,
@@ -175,9 +174,9 @@ export const openWorktreeCommand: PaletteCommand = {
       kind: 'review',
       key: 'setupTrust',
       label: 'Setup hooks',
-      load: async (_ctx, values) => {
+      load: async (ctx, values) => {
         const projectId = Number(values.projectId);
-        const preflight = await runRuntimeEffect(preflightWorktreeSetup(projectId));
+        const preflight = await ctx.app(preflightWorktreeSetup(projectId));
         if (preflight.status === 'needs_approval' && preflight.hash) {
           return {
             title: worktreeSetupReviewCopy.title,
@@ -234,8 +233,8 @@ export const openWorktreeCommand: PaletteCommand = {
       if (!target?.worktrees.some((candidate) => candidate.id === selected.worktreeId)) {
         return targetUnavailable();
       }
-      useWorkspaceStore.getState().selectWorktree(selected.projectId, selected.worktreeId);
-      restoreActivePaneFocus();
+      selectWorktree(ctx.registry, selected.projectId, selected.worktreeId);
+      restoreActivePaneFocus(ctx.registry);
       return;
     }
 
@@ -245,8 +244,8 @@ export const openWorktreeCommand: PaletteCommand = {
       (candidate) => candidate.branch === values.branch || String(candidate.id) === values.branch,
     );
     if (project && worktree) {
-      useWorkspaceStore.getState().selectWorktree(project.id, worktree.id);
-      restoreActivePaneFocus();
+      selectWorktree(ctx.registry, project.id, worktree.id);
+      restoreActivePaneFocus(ctx.registry);
       return;
     }
 
@@ -264,13 +263,15 @@ export const openWorktreeCommand: PaletteCommand = {
 
     const review = payloads?.setupTrust;
     if (isSetupReviewPayload(review) && review.trust) {
-      await runRuntimeEffect(trustWorktreeSetup(project.id, review.trust));
+      await ctx.app(trustWorktreeSetup(project.id, review.trust));
     }
 
     const base = payloads?.base;
     const output = isBaseRefPayload(base)
-      ? await openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base })
-      : await openWorktreeFromPalette(project.id, { branch: values.branch });
+      ? await ctx.app(
+          openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base }),
+        )
+      : await ctx.app(openWorktreeFromPalette(project.id, { branch: values.branch }));
 
     return outcomeForOpenWorktree(output);
   },
