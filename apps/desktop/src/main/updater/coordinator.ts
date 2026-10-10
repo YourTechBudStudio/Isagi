@@ -1,87 +1,39 @@
-import { Effect } from 'effect';
+import {
+  Data,
+  Duration,
+  Effect,
+  FiberHandle,
+  FiberSet,
+  Queue,
+  Schedule,
+  Semaphore,
+  Stream,
+} from 'effect';
+import { HttpClient } from 'effect/http';
 
-import { DESKTOP_UPDATE_PROTOCOL_VERSION, type DesktopUpdateSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot } from '@isagi/contracts';
 
-import type { UpdaterDiagnosticSink } from './diagnostics.js';
-import type { DownloadPageOutcome } from './download-page.js';
+import { DesktopUpdaterConfig, type UpdaterEvent, type UpdaterListener } from './config.js';
+import {
+  makeTrackedDiagnosticWrites,
+  UpdaterDiagnostics,
+  type UpdaterDiagnosticRecord,
+} from './diagnostics.js';
+import {
+  readRestartReadiness,
+  type RestartReadinessDiagnosticCategory,
+} from './restart-readiness.js';
+import type { DesktopUpdater } from './service.js';
+import { makeSnapshotStore } from './snapshot-store.js';
 
 export const updaterSchedule = {
-  repeatCheckMs: 4 * 60 * 60 * 1_000,
-  upToDateMs: 5_000,
+  repeatCheck: Duration.hours(4),
+  upToDate: Duration.seconds(5),
 } as const;
 
 type UpdateInfo = { readonly version: string };
 type ProgressInfo = { readonly percent: number };
-type UpdaterEvent =
-  | 'error'
-  | 'update-available'
-  | 'update-not-available'
-  | 'download-progress'
-  | 'update-downloaded'
-  | 'update-cancelled';
-type UpdaterListener = (...args: unknown[]) => void;
 
-export interface UpdaterAdapter {
-  allowPrerelease: boolean;
-  autoDownload: boolean;
-  autoInstallOnAppQuit: boolean;
-  autoRunAppAfterInstall: boolean;
-  checkForUpdates(): Promise<unknown>;
-  downloadUpdate(): Promise<unknown>;
-  quitAndInstall(): void;
-  on(event: UpdaterEvent, listener: UpdaterListener): unknown;
-  off(event: UpdaterEvent, listener: UpdaterListener): unknown;
-}
-
-export interface UpdaterTimers {
-  setTimeout(callback: () => void, milliseconds: number): unknown;
-  clearTimeout(handle: unknown): void;
-  setInterval(callback: () => void, milliseconds: number): unknown;
-  clearInterval(handle: unknown): void;
-}
-
-export interface DesktopUpdaterService {
-  readonly snapshot: DesktopUpdateSnapshot;
-  subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void): () => void;
-  start(): Effect.Effect<void>;
-  stop(): Effect.Effect<void>;
-  checkForUpdates(): Effect.Effect<void>;
-  downloadUpdate(): Effect.Effect<void>;
-  requestRestart(): Effect.Effect<void>;
-  confirmRestart(): Effect.Effect<void>;
-  cancelRestart(): Effect.Effect<void>;
-  quitAndInstall(): void;
-  recordInstallRejection(): Promise<void>;
-  /**
-   * Claims the next download-page attempt and returns the only way to report it.
-   * Opening the page is main's own operation, not the updater's, so the service
-   * never navigates — but the outcome is updater state, and it lands on the same
-   * snapshot the renderer already watches and the same diagnostic trail as every
-   * other updater failure.
-   *
-   * Ownership is claimed here, when the user presses, rather than when the launch
-   * settles. Two overlapping presses finish in whatever order the OS decides, and
-   * `openFailure` means *the last attempt*, so an older completion must not be
-   * able to overwrite a newer one's answer. The claim is what makes that order
-   * knowable.
-   *
-   * Both outcomes are reported, not just the failure: a launch that succeeds is
-   * what clears a previously published failure, so the user who retries and gets
-   * a browser stops being told the action failed.
-   */
-  beginDownloadPageAttempt(): ReportDownloadPageOutcome;
-}
-
-/** Reports one claimed attempt. Calling it twice reports the same attempt twice. */
-export type ReportDownloadPageOutcome = (outcome: DownloadPageOutcome) => Promise<void>;
-
-export type RestartReadiness = import('./restart-readiness.js').RestartReadiness;
-
-type SnapshotFacts = DesktopUpdateSnapshot extends infer Snapshot
-  ? Snapshot extends DesktopUpdateSnapshot
-    ? Omit<Snapshot, 'protocolVersion' | 'revision'>
-    : never
-  : never;
 /**
  * Two independent facts about one in-flight operation, because the three ways a
  * check can start need three different answers:
@@ -100,519 +52,13 @@ type ActiveOperation = {
   readonly manual: boolean;
 };
 
-/**
- * The published snapshot and its subscribers. Every service that can change what
- * the renderer sees owns one of these, because the revision rule is the whole
- * basis of the client's subscribe-then-reconcile: a revision that fails to
- * advance, or advances without a listener being told, is a renderer stuck on a
- * stale fact. One implementation, so the manual-install service cannot drift
- * from the coordinator on it.
- */
-class SnapshotStore {
-  readonly #listeners = new Set<(snapshot: DesktopUpdateSnapshot) => void>();
-  #snapshot: DesktopUpdateSnapshot;
-  #revision = 0;
+/** One electron-updater event, in the order the updater emitted it. */
+type UpdaterSignal = { readonly event: UpdaterEvent; readonly value: unknown };
 
-  constructor(facts: SnapshotFacts) {
-    this.#snapshot = {
-      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-      revision: 0,
-      ...facts,
-    } as DesktopUpdateSnapshot;
-  }
-
-  get snapshot() {
-    return this.#snapshot;
-  }
-
-  subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void) {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
-  clearListeners() {
-    this.#listeners.clear();
-  }
-
-  /** A publish that would change nothing is not a revision, so it is not a push. */
-  publish(facts: SnapshotFacts) {
-    const next = {
-      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-      revision: this.#revision + 1,
-      ...facts,
-    } as DesktopUpdateSnapshot;
-    if (sameFacts(this.#snapshot, next)) return;
-    this.#revision += 1;
-    this.#snapshot = next;
-    for (const listener of this.#listeners) listener(next);
-  }
-}
-
-export class UpdaterCoordinator implements DesktopUpdaterService {
-  readonly #updater: UpdaterAdapter;
-  readonly #timers: UpdaterTimers;
-  readonly #diagnostics: UpdaterDiagnosticSink;
-  readonly #platform: string;
-  readonly #installedVersion: string;
-  readonly #readRestartReadiness: () => Effect.Effect<RestartReadiness>;
-  readonly #isExitCommitted: () => boolean;
-  readonly #requestInstall: () => void;
-  readonly #store: SnapshotStore;
-  #generation = 0;
-  #started = false;
-  #stopped = false;
-  #active: ActiveOperation | undefined;
-  #repeatCheckTimer: unknown;
-  #transientTimer: unknown;
-  #readinessGeneration: number | undefined;
-
-  constructor(dependencies: {
-    readonly updater: UpdaterAdapter;
-    readonly timers: UpdaterTimers;
-    readonly diagnostics: UpdaterDiagnosticSink;
-    readonly platform: string;
-    readonly installedVersion: string;
-    readonly readRestartReadiness: () => Effect.Effect<RestartReadiness>;
-    readonly isExitCommitted: () => boolean;
-    readonly requestInstall: () => void;
-  }) {
-    this.#updater = dependencies.updater;
-    this.#timers = dependencies.timers;
-    this.#diagnostics = dependencies.diagnostics;
-    this.#platform = dependencies.platform;
-    this.#installedVersion = dependencies.installedVersion;
-    this.#readRestartReadiness = dependencies.readRestartReadiness;
-    this.#isExitCommitted = dependencies.isExitCommitted;
-    this.#requestInstall = dependencies.requestInstall;
-    this.#store = new SnapshotStore({ state: 'idle', installedVersion: this.#installedVersion });
-  }
-
-  get snapshot() {
-    return this.#store.snapshot;
-  }
-
-  subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void) {
-    return this.#store.subscribe(listener);
-  }
-
-  /**
-   * Looks immediately, and never downloads on its own.
-   *
-   * Both halves answer the same complaint: an update the user was never told
-   * about. The check runs at launch rather than on a timer, so the rail has the
-   * answer by the time they have finished looking at the window; and
-   * `autoDownload` is off, so finding an update produces news to act on instead
-   * of a silent ~150MB fetch whose only visible trace is the state after it.
-   */
-  start(): Effect.Effect<void> {
-    return Effect.sync(() => {
-      if (this.#started || this.#stopped) return;
-      this.#started = true;
-      this.#updater.allowPrerelease = false;
-      this.#updater.autoDownload = false;
-      this.#updater.autoInstallOnAppQuit = false;
-      this.#updater.autoRunAppAfterInstall = true;
-      for (const [event, listener] of this.#eventListeners) this.#updater.on(event, listener);
-      // Announced but not manual: the user sees that Isagi looked, and does not
-      // see a failure they did not ask for.
-      this.#beginCheck({ announce: true, manual: false });
-      this.#repeatCheckTimer = this.#timers.setInterval(
-        () => this.#runScheduledCheck(),
-        updaterSchedule.repeatCheckMs,
-      );
-    });
-  }
-
-  stop(): Effect.Effect<void> {
-    return Effect.promise(async () => {
-      if (this.#stopped) return;
-      this.#stopped = true;
-      this.#generation += 1;
-      this.#active = undefined;
-      this.#readinessGeneration = undefined;
-      this.#clearTimer('repeat');
-      this.#clearTimer('transient');
-      if (this.#started) {
-        for (const [event, listener] of this.#eventListeners) this.#updater.off(event, listener);
-      }
-      this.#store.clearListeners();
-      await this.#diagnostics.flush();
-    });
-  }
-
-  checkForUpdates(): Effect.Effect<void> {
-    return Effect.sync(() => this.#beginCheck({ announce: true, manual: true }));
-  }
-
-  /**
-   * Fetches the update the last check found. Only the user starts this, which is
-   * why it is an intent of its own rather than something `update_available`
-   * drifts into on a timer.
-   *
-   * A failed download is a legal starting point as well as `update_available`:
-   * the provider still knows what it found, so the retry is another download
-   * rather than a second round trip through the check.
-   */
-  downloadUpdate(): Effect.Effect<void> {
-    return Effect.sync(() => this.#beginDownload());
-  }
-
-  requestRestart(): Effect.Effect<void> {
-    return Effect.gen({ self: this }, function* () {
-      if (
-        this.#stopped ||
-        this.#store.snapshot.state !== 'ready' ||
-        this.#readinessGeneration !== undefined ||
-        this.#isExitCommitted()
-      )
-        return;
-      const generation = this.#generation;
-      this.#readinessGeneration = generation;
-      // The marker is single-flight state, not a result. Clearing it in a
-      // finalizer keeps a defect or an interrupted read from latching restart
-      // off for the rest of the session.
-      const readiness = yield* this.#readRestartReadiness().pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (this.#readinessGeneration === generation) this.#readinessGeneration = undefined;
-          }),
-        ),
-      );
-      if (
-        !this.#ownsGeneration(generation) ||
-        this.#store.snapshot.state !== 'ready' ||
-        this.#isExitCommitted()
-      )
-        return;
-      if (readiness.kind === 'clear') {
-        this.#beginInstallation();
-        return;
-      }
-      const targetVersion = this.#store.snapshot.targetVersion;
-      this.#store.publish({
-        state: 'restart_confirmation',
-        installedVersion: this.#installedVersion,
-        targetVersion,
-        activity:
-          readiness.kind === 'working_agents'
-            ? { kind: 'working', workingAgentCount: readiness.workingAgentCount }
-            : { kind: 'unknown' },
-      });
-    });
-  }
-
-  confirmRestart(): Effect.Effect<void> {
-    return Effect.sync(() => {
-      if (this.#store.snapshot.state !== 'restart_confirmation') return;
-      this.#beginInstallation();
-    });
-  }
-
-  cancelRestart(): Effect.Effect<void> {
-    return Effect.sync(() => {
-      if (this.#store.snapshot.state !== 'restart_confirmation' || this.#isExitCommitted()) return;
-      this.#store.publish({
-        state: 'ready',
-        installedVersion: this.#installedVersion,
-        targetVersion: this.#store.snapshot.targetVersion,
-      });
-    });
-  }
-
-  quitAndInstall(): void {
-    this.#updater.quitAndInstall();
-  }
-
-  recordInstallRejection(): Promise<void> {
-    return this.#writeLifecycle(
-      'exit_rejection',
-      'The update installer rejected after desktop shutdown.',
-    );
-  }
-
-  /**
-   * A composition that runs the real updater never publishes
-   * `manual_update_required`, so there is no snapshot here for an outcome to land
-   * on and nothing for attempts to race over. The diagnostic is still written: an
-   * intent that reached a self-updating build at all is worth a line in the trail.
-   */
-  beginDownloadPageAttempt(): ReportDownloadPageOutcome {
-    return (outcome) =>
-      outcome === 'opened'
-        ? Promise.resolve()
-        : this.#writeLifecycle(DOWNLOAD_PAGE_FAILURE.code, DOWNLOAD_PAGE_FAILURE.summary);
-  }
-
-  /**
-   * The check is over the moment an update is found. Nothing is in flight after
-   * this, because nothing else happens until the user presses — so the active
-   * operation is cleared rather than rolled into a download phase.
-   */
-  readonly #onUpdateAvailable: UpdaterListener = (value) => {
-    const active = this.#active;
-    if (!active || active.phase !== 'check' || !this.#ownsGeneration(active.generation)) return;
-    this.#active = undefined;
-    this.#store.publish({
-      state: 'update_available',
-      installedVersion: this.#installedVersion,
-      targetVersion: updateVersion(value),
-    });
-  };
-
-  readonly #onUpdateNotAvailable: UpdaterListener = () => {
-    const active = this.#active;
-    if (!active || !this.#ownsGeneration(active.generation)) return;
-    this.#active = undefined;
-    if (active.manual) {
-      this.#store.publish({ state: 'up_to_date', installedVersion: this.#installedVersion });
-      this.#transientTimer = this.#timers.setTimeout(() => {
-        this.#transientTimer = undefined;
-        if (!this.#active && this.#store.snapshot.state === 'up_to_date') {
-          this.#store.publish({ state: 'idle', installedVersion: this.#installedVersion });
-        }
-      }, updaterSchedule.upToDateMs);
-    } else {
-      this.#store.publish({ state: 'idle', installedVersion: this.#installedVersion });
-    }
-  };
-
-  readonly #onDownloadProgress: UpdaterListener = (value) => {
-    if (!this.#active || this.#active.phase !== 'download' || !this.#ownsActiveGeneration()) return;
-    const targetVersion = this.#targetVersion();
-    this.#store.publish({
-      state: 'downloading',
-      installedVersion: this.#installedVersion,
-      targetVersion,
-      progressPercent: normalizedProgress(value),
-    });
-  };
-
-  readonly #onUpdateDownloaded: UpdaterListener = (value) => {
-    if (!this.#active || this.#active.phase !== 'download' || !this.#ownsActiveGeneration()) return;
-    const targetVersion = updateVersion(value) || this.#targetVersion();
-    this.#active = undefined;
-    this.#store.publish({
-      state: 'ready',
-      installedVersion: this.#installedVersion,
-      targetVersion,
-    });
-  };
-
-  readonly #onUpdateCancelled: UpdaterListener = () =>
-    this.#handleFailure('download', 'update_cancelled');
-  readonly #onError: UpdaterListener = (error) => {
-    if (!this.#active || !this.#ownsActiveGeneration()) {
-      void this.#writeDiagnostic('lifecycle', 'idle_error', error);
-      return;
-    }
-    this.#handleFailure(this.#active.phase, 'updater_error', error);
-  };
-
-  get #eventListeners(): readonly (readonly [UpdaterEvent, UpdaterListener])[] {
-    return [
-      ['error', this.#onError],
-      ['update-available', this.#onUpdateAvailable],
-      ['update-not-available', this.#onUpdateNotAvailable],
-      ['download-progress', this.#onDownloadProgress],
-      ['update-downloaded', this.#onUpdateDownloaded],
-      ['update-cancelled', this.#onUpdateCancelled],
-    ];
-  }
-
-  #runScheduledCheck() {
-    if (suppressesScheduledCheck(this.#store.snapshot)) return;
-    this.#beginCheck({ announce: false, manual: false });
-  }
-
-  /**
-   * The lock here is only the restart one, deliberately narrower than the
-   * scheduled path's: a check the user pressed is allowed to run from a state a
-   * timer may not disturb, because they asked and a timer did not.
-   */
-  #beginCheck(options: { readonly announce: boolean; readonly manual: boolean }) {
-    if (!this.#started || this.#stopped || this.#active || isRestartLocked(this.#store.snapshot))
-      return;
-    this.#clearTimer('transient');
-    const generation = this.#generation;
-    this.#active = { generation, phase: 'check', ...options };
-    if (options.announce)
-      this.#store.publish({ state: 'checking', installedVersion: this.#installedVersion });
-    void this.#updater.checkForUpdates().catch((error: unknown) => {
-      if (!this.#active || this.#active.phase !== 'check' || !this.#ownsGeneration(generation))
-        return;
-      this.#handleFailure('check', 'check_rejected', error);
-    });
-  }
-
-  #beginDownload() {
-    if (!this.#started || this.#stopped || this.#active) return;
-    const targetVersion = downloadableVersion(this.#store.snapshot);
-    if (targetVersion === undefined) return;
-    this.#clearTimer('transient');
-    const generation = this.#generation;
-    this.#active = { generation, phase: 'download', announce: true, manual: true };
-    this.#store.publish({
-      state: 'downloading',
-      installedVersion: this.#installedVersion,
-      targetVersion,
-      progressPercent: 0,
-    });
-    void this.#updater.downloadUpdate().catch((error: unknown) => {
-      if (!this.#active || this.#active.phase !== 'download' || !this.#ownsGeneration(generation))
-        return;
-      this.#handleFailure('download', 'download_rejected', error);
-    });
-  }
-
-  #handleFailure(operation: 'check' | 'download', code: string, error?: unknown) {
-    const active = this.#active;
-    if (!active || !this.#ownsGeneration(active.generation)) return;
-    this.#active = undefined;
-    // Read before the transition: the failure snapshot replaces the downloading
-    // one, and the target version is only still available on the outgoing state.
-    const targetVersion = this.#targetVersion();
-    void this.#writeDiagnostic(operation, code, error);
-    if (operation === 'check' && !active.manual) {
-      // A check the user did not ask for never spends the rail on its failure.
-      // One that announced itself still has to take its own token back down —
-      // otherwise the launch check leaves `checking…` on screen forever — but a
-      // silent poll leaves the rail exactly as it found it, including an older
-      // failure the user has not dealt with yet.
-      if (active.announce && this.#store.snapshot.state === 'checking')
-        this.#store.publish({ state: 'idle', installedVersion: this.#installedVersion });
-      return;
-    }
-    this.#store.publish(
-      operation === 'check'
-        ? {
-            state: 'failed',
-            installedVersion: this.#installedVersion,
-            operation: 'check',
-            code: 'check_failed',
-          }
-        : {
-            state: 'failed',
-            installedVersion: this.#installedVersion,
-            operation: 'download',
-            code: 'download_failed',
-            targetVersion,
-          },
-    );
-  }
-
-  #writeDiagnostic(operation: 'check' | 'download' | 'lifecycle', code: string, error: unknown) {
-    return this.#write(operation, code, errorMessage(error));
-  }
-
-  #writeLifecycle(code: string, summary: string) {
-    return this.#write('lifecycle', code, summary);
-  }
-
-  #write(operation: 'check' | 'download' | 'lifecycle', code: string, summary: string) {
-    return this.#diagnostics.write({
-      operation,
-      platform: this.#platform,
-      installedVersion: this.#installedVersion,
-      ...(this.#targetVersion() ? { targetVersion: this.#targetVersion() } : {}),
-      code,
-      summary,
-    });
-  }
-
-  #targetVersion() {
-    return 'targetVersion' in this.#store.snapshot
-      ? (this.#store.snapshot.targetVersion ?? '')
-      : '';
-  }
-
-  #beginInstallation() {
-    if (
-      this.#stopped ||
-      (this.#store.snapshot.state !== 'ready' &&
-        this.#store.snapshot.state !== 'restart_confirmation') ||
-      this.#isExitCommitted()
-    )
-      return;
-    const targetVersion = this.#store.snapshot.targetVersion;
-    this.#store.publish({
-      state: 'installing',
-      installedVersion: this.#installedVersion,
-      targetVersion,
-    });
-    this.#requestInstall();
-  }
-
-  #ownsActiveGeneration() {
-    return this.#active ? this.#ownsGeneration(this.#active.generation) : false;
-  }
-
-  #ownsGeneration(generation: number) {
-    return !this.#stopped && generation === this.#generation;
-  }
-
-  #clearTimer(kind: 'repeat' | 'transient') {
-    if (kind === 'repeat' && this.#repeatCheckTimer !== undefined) {
-      this.#timers.clearInterval(this.#repeatCheckTimer);
-      this.#repeatCheckTimer = undefined;
-    } else if (kind === 'transient' && this.#transientTimer !== undefined) {
-      this.#timers.clearTimeout(this.#transientTimer);
-      this.#transientTimer = undefined;
-    }
-  }
-}
-
-/**
- * The compositions that never load Electron Updater. The descriptor is a union
- * rather than a state string plus optional dependencies because the two states
- * differ in what they can be asked to do: `manual_update_required` is the only
- * composition where opening the download page is reachable, so it must be able
- * to persist that failure, and requiring the sink here makes a silent no-op
- * regression impossible rather than merely discouraged.
- */
-export type StaticUpdaterDescriptor =
-  | { readonly state: 'disabled' }
-  | {
-      readonly state: 'manual_update_required';
-      readonly diagnostics: UpdaterDiagnosticSink;
-      readonly platform: string;
-    };
-
-export function createStaticUpdaterService(
-  installedVersion: string,
-  descriptor: StaticUpdaterDescriptor,
-): DesktopUpdaterService {
-  if (descriptor.state === 'disabled') {
-    return {
-      ...inertUpdaterService,
-      snapshot: {
-        protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-        revision: 0,
-        installedVersion,
-        state: 'disabled',
-      },
-    };
-  }
-  return new ManualUpdateService(installedVersion, descriptor.diagnostics, descriptor.platform);
-}
-
-/**
- * Everything a build with no updater can be asked to do, which is nothing. The
- * snapshot is supplied by the caller because that is the only fact these
- * compositions differ on.
- */
-const inertUpdaterService: Omit<DesktopUpdaterService, 'snapshot'> = {
-  subscribe: () => () => undefined,
-  start: () => Effect.void,
-  stop: () => Effect.void,
-  checkForUpdates: () => Effect.void,
-  downloadUpdate: () => Effect.void,
-  requestRestart: () => Effect.void,
-  confirmRestart: () => Effect.void,
-  cancelRestart: () => Effect.void,
-  quitAndInstall: () => undefined,
-  recordInstallRejection: () => Promise.resolve(),
-  beginDownloadPageAttempt: () => () => Promise.resolve(),
-};
+/** `checkForUpdates()` / `downloadUpdate()` rejected; `cause` is the updater's own error. */
+class UpdaterOperationRejected extends Data.TaggedError('UpdaterOperationRejected')<{
+  readonly cause: unknown;
+}> {}
 
 const DOWNLOAD_PAGE_FAILURE = {
   code: 'download_page_rejected',
@@ -620,88 +66,456 @@ const DOWNLOAD_PAGE_FAILURE = {
 } as const;
 
 /**
- * The build that cannot replace itself. It runs no updater and reaches no
- * provider, so its state never changes on its own — but it is not inert: opening
- * the release page is a real operation the user owns, and whether it opened is
- * the one fact this composition can still learn and has to report.
+ * The self-updating composition: electron-updater driven by the policy below.
  *
- * It publishes that outcome onto the same snapshot every other update state
- * arrives on, rather than answering the intent directly, so the renderer keeps a
- * single source of update truth and the failure survives a reload or a second
- * window instead of living in one promise's resolution.
+ * Building it is starting it. It looks immediately, and never downloads on its own.
+ *
+ * Both halves answer the same complaint: an update the user was never told
+ * about. The check runs at launch rather than on a timer, so the rail has the
+ * answer by the time they have finished looking at the window; and
+ * `autoDownload` is off, so finding an update produces news to act on instead
+ * of a silent ~150MB fetch whose only visible trace is the state after it.
+ *
+ * Every event handler and intent body runs under one lock, in arrival order, so
+ * the policy reads and writes its state without interleaving. Closing the scope
+ * is `stop`: late events are ignored, listeners are detached, the schedule and
+ * the transient are interrupted, and diagnostic writes still in flight finish.
  */
-class ManualUpdateService implements DesktopUpdaterService {
-  readonly #store: SnapshotStore;
-  /** The most recently claimed attempt. Only it may speak for the snapshot. */
-  #attempts = 0;
+export const makeSelfUpdatingUpdater = Effect.gen(function* () {
+  const config = yield* DesktopUpdaterConfig;
+  const diagnostics = yield* UpdaterDiagnostics;
+  const httpClient = yield* HttpClient.HttpClient;
+  const { installedVersion, platform } = config;
+  const updater = config.loadUpdater();
+  const store = yield* makeSnapshotStore({ state: 'idle', installedVersion });
+  const lock = yield* Semaphore.make(1);
+  const serialized = <A>(effect: Effect.Effect<A>) => Semaphore.withPermits(lock, 1)(effect);
+  const diagnosticWrites = yield* makeTrackedDiagnosticWrites(diagnostics);
+  /** In-flight `checkForUpdates()` / `downloadUpdate()` promises. */
+  const operations = yield* FiberSet.make<void, never>();
+  /** The pending return from `up_to_date` to `idle`. */
+  const transient = yield* FiberHandle.make<void, never>();
 
-  constructor(
-    private readonly installedVersion: string,
-    private readonly diagnostics: UpdaterDiagnosticSink,
-    private readonly platform: string,
-  ) {
-    this.#store = new SnapshotStore({
+  let generation = 0;
+  let stopped = false;
+  let active: ActiveOperation | undefined;
+  let readinessGeneration: number | undefined;
+
+  const ownsGeneration = (candidate: number) => !stopped && candidate === generation;
+  const ownsActiveGeneration = () => (active ? ownsGeneration(active.generation) : false);
+
+  const targetVersion = () => {
+    const snapshot = store.current();
+    return 'targetVersion' in snapshot ? (snapshot.targetVersion ?? '') : '';
+  };
+
+  const record = (
+    operation: 'check' | 'download' | 'lifecycle',
+    code: string,
+    summary: string,
+  ): UpdaterDiagnosticRecord => ({
+    operation,
+    platform,
+    installedVersion,
+    ...(targetVersion() ? { targetVersion: targetVersion() } : {}),
+    code,
+    summary,
+  });
+
+  const writeDiagnostic = (
+    operation: 'check' | 'download' | 'lifecycle',
+    code: string,
+    error: unknown,
+  ) => Effect.suspend(() => diagnosticWrites.start(record(operation, code, errorMessage(error))));
+
+  // Readiness records name no target version: the read is about the runtime, not the update.
+  const diagnoseReadiness = (category: RestartReadinessDiagnosticCategory) =>
+    diagnosticWrites.start({
+      operation: 'readiness',
+      platform,
       installedVersion,
-      state: 'manual_update_required',
-      reason: 'unsupported_installation',
-      openFailure: null,
+      code: `restart_readiness_${category}`,
+      summary: `Restart readiness failed during ${category}.`,
     });
-  }
 
-  get snapshot() {
-    return this.#store.snapshot;
-  }
-
-  subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void) {
-    return this.#store.subscribe(listener);
-  }
-
-  start = () => Effect.void;
-  checkForUpdates = () => Effect.void;
-  downloadUpdate = () => Effect.void;
-  requestRestart = () => Effect.void;
-  confirmRestart = () => Effect.void;
-  cancelRestart = () => Effect.void;
-  quitAndInstall = () => undefined;
-  recordInstallRejection = () => Promise.resolve();
-
-  stop(): Effect.Effect<void> {
-    return Effect.promise(async () => {
-      this.#store.clearListeners();
-      await this.diagnostics.flush();
-    });
-  }
-
-  beginDownloadPageAttempt(): ReportDownloadPageOutcome {
-    this.#attempts += 1;
-    const attempt = this.#attempts;
-    return (outcome) => this.#report(attempt, outcome);
-  }
-
-  async #report(attempt: number, outcome: DownloadPageOutcome): Promise<void> {
-    // Latest press wins. A launch the user has already superseded may not speak
-    // for the rail, whichever way it went — but it is still a real thing that
-    // happened, so a superseded failure keeps its line in the diagnostic trail.
-    if (attempt === this.#attempts) {
-      // Published before the diagnostic is awaited: the user is waiting on the
-      // rail, and a slow or broken log must not delay or suppress the answer.
-      this.#store.publish({
-        installedVersion: this.installedVersion,
-        state: 'manual_update_required',
-        reason: 'unsupported_installation',
-        openFailure: outcome === 'failed' ? 'download_page_open_failed' : null,
-      });
+  const handleFailure = Effect.fnUntraced(function* (
+    operation: 'check' | 'download',
+    code: string,
+    error?: unknown,
+  ) {
+    const failed = active;
+    if (!failed || !ownsGeneration(failed.generation)) return;
+    active = undefined;
+    // Read before the transition: the failure snapshot replaces the downloading
+    // one, and the target version is only still available on the outgoing state.
+    const failedVersion = targetVersion();
+    yield* writeDiagnostic(operation, code, error);
+    if (operation === 'check' && !failed.manual) {
+      // A check the user did not ask for never spends the rail on its failure.
+      // One that announced itself still has to take its own token back down —
+      // otherwise the launch check leaves `checking…` on screen forever — but a
+      // silent poll leaves the rail exactly as it found it, including an older
+      // failure the user has not dealt with yet.
+      if (failed.announce && store.current().state === 'checking')
+        yield* store.publish({ state: 'idle', installedVersion });
+      return;
     }
-    if (outcome === 'opened') return;
-    await this.diagnostics.write({
-      operation: 'lifecycle',
-      platform: this.platform,
-      installedVersion: this.installedVersion,
-      code: DOWNLOAD_PAGE_FAILURE.code,
-      summary: DOWNLOAD_PAGE_FAILURE.summary,
+    yield* store.publish(
+      operation === 'check'
+        ? { state: 'failed', installedVersion, operation: 'check', code: 'check_failed' }
+        : {
+            state: 'failed',
+            installedVersion,
+            operation: 'download',
+            code: 'download_failed',
+            targetVersion: failedVersion,
+          },
+    );
+  });
+
+  /**
+   * The check is over the moment an update is found. Nothing is in flight after
+   * this, because nothing else happens until the user presses — so the active
+   * operation is cleared rather than rolled into a download phase.
+   */
+  const onUpdateAvailable = Effect.fnUntraced(function* (value: unknown) {
+    const current = active;
+    if (!current || current.phase !== 'check' || !ownsGeneration(current.generation)) return;
+    active = undefined;
+    yield* store.publish({
+      state: 'update_available',
+      installedVersion,
+      targetVersion: updateVersion(value),
     });
-  }
-}
+  });
+
+  const clearUpToDate = Effect.suspend(() =>
+    !active && store.current().state === 'up_to_date'
+      ? store.publish({ state: 'idle', installedVersion })
+      : Effect.void,
+  );
+
+  const onUpdateNotAvailable = Effect.fnUntraced(function* () {
+    const current = active;
+    if (!current || !ownsGeneration(current.generation)) return;
+    active = undefined;
+    if (current.manual) {
+      yield* store.publish({ state: 'up_to_date', installedVersion });
+      yield* FiberHandle.run(
+        transient,
+        Effect.sleep(updaterSchedule.upToDate).pipe(Effect.andThen(serialized(clearUpToDate))),
+      );
+    } else {
+      yield* store.publish({ state: 'idle', installedVersion });
+    }
+  });
+
+  const onDownloadProgress = Effect.fnUntraced(function* (value: unknown) {
+    if (!active || active.phase !== 'download' || !ownsActiveGeneration()) return;
+    yield* store.publish({
+      state: 'downloading',
+      installedVersion,
+      targetVersion: targetVersion(),
+      progressPercent: normalizedProgress(value),
+    });
+  });
+
+  const onUpdateDownloaded = Effect.fnUntraced(function* (value: unknown) {
+    if (!active || active.phase !== 'download' || !ownsActiveGeneration()) return;
+    const downloadedVersion = updateVersion(value) || targetVersion();
+    active = undefined;
+    yield* store.publish({ state: 'ready', installedVersion, targetVersion: downloadedVersion });
+  });
+
+  const onError = (error: unknown) =>
+    Effect.suspend(() => {
+      if (!active || !ownsActiveGeneration())
+        return writeDiagnostic('lifecycle', 'idle_error', error);
+      return handleFailure(active.phase, 'updater_error', error);
+    });
+
+  const handle = (signal: UpdaterSignal): Effect.Effect<void> => {
+    switch (signal.event) {
+      case 'error':
+        return onError(signal.value);
+      case 'update-available':
+        return onUpdateAvailable(signal.value);
+      case 'update-not-available':
+        return onUpdateNotAvailable();
+      case 'download-progress':
+        return onDownloadProgress(signal.value);
+      case 'update-downloaded':
+        return onUpdateDownloaded(signal.value);
+      case 'update-cancelled':
+        return handleFailure('download', 'update_cancelled');
+    }
+  };
+
+  /**
+   * Runs `checkForUpdates()` / `downloadUpdate()` outside the lock. A rejection
+   * is a failure of the operation it started only while that operation is still
+   * the active one; otherwise an event has already settled it.
+   */
+  const runOperation = (
+    phase: 'check' | 'download',
+    started: number,
+    code: 'check_rejected' | 'download_rejected',
+    operation: () => Promise<unknown>,
+  ) =>
+    FiberSet.run(
+      operations,
+      Effect.tryPromise({
+        try: operation,
+        catch: (cause) => new UpdaterOperationRejected({ cause }),
+      }).pipe(
+        Effect.asVoid,
+        Effect.catchTag('UpdaterOperationRejected', (rejection) =>
+          serialized(
+            Effect.suspend(() =>
+              !active || active.phase !== phase || !ownsGeneration(started)
+                ? Effect.void
+                : handleFailure(phase, code, rejection.cause),
+            ),
+          ),
+        ),
+      ),
+    );
+
+  /**
+   * The lock here is only the restart one, deliberately narrower than the
+   * scheduled path's: a check the user pressed is allowed to run from a state a
+   * timer may not disturb, because they asked and a timer did not.
+   */
+  const beginCheck = Effect.fnUntraced(function* (options: {
+    readonly announce: boolean;
+    readonly manual: boolean;
+  }) {
+    if (stopped || active || isRestartLocked(store.current())) return;
+    yield* FiberHandle.clear(transient);
+    const started = generation;
+    active = { generation: started, phase: 'check', ...options };
+    if (options.announce) yield* store.publish({ state: 'checking', installedVersion });
+    yield* runOperation('check', started, 'check_rejected', () => updater.checkForUpdates());
+  });
+
+  const beginDownload = Effect.fnUntraced(function* () {
+    if (stopped || active) return;
+    const version = downloadableVersion(store.current());
+    if (version === undefined) return;
+    yield* FiberHandle.clear(transient);
+    const started = generation;
+    active = { generation: started, phase: 'download', announce: true, manual: true };
+    yield* store.publish({
+      state: 'downloading',
+      installedVersion,
+      targetVersion: version,
+      progressPercent: 0,
+    });
+    yield* runOperation('download', started, 'download_rejected', () => updater.downloadUpdate());
+  });
+
+  const runScheduledCheck = Effect.suspend(() =>
+    suppressesScheduledCheck(store.current())
+      ? Effect.void
+      : beginCheck({ announce: false, manual: false }),
+  );
+
+  const quitAndInstall = () => updater.quitAndInstall();
+
+  const beginInstallation = Effect.suspend(() => {
+    const snapshot = store.current();
+    if (
+      stopped ||
+      (snapshot.state !== 'ready' && snapshot.state !== 'restart_confirmation') ||
+      config.isExitCommitted()
+    )
+      return Effect.void;
+    return store
+      .publish({ state: 'installing', installedVersion, targetVersion: snapshot.targetVersion })
+      .pipe(Effect.andThen(Effect.sync(() => config.requestInstall(quitAndInstall))));
+  });
+
+  const readiness = readRestartReadiness(config.runtimeUrl, diagnoseReadiness).pipe(
+    Effect.provideService(HttpClient.HttpClient, httpClient),
+  );
+
+  // The lock is held for the begin and finish sections only, never across the
+  // readiness read: events and other intents keep flowing while it is in flight.
+  const requestRestart = Effect.gen(function* () {
+    const claimed = yield* serialized(
+      Effect.sync(() => {
+        if (
+          stopped ||
+          store.current().state !== 'ready' ||
+          readinessGeneration !== undefined ||
+          config.isExitCommitted()
+        )
+          return undefined;
+        readinessGeneration = generation;
+        return generation;
+      }),
+    );
+    if (claimed === undefined) return;
+    // The marker is single-flight state, not a result. Clearing it in a
+    // finalizer keeps a defect or an interrupted read from latching restart
+    // off for the rest of the session.
+    yield* Effect.gen(function* () {
+      const answer = yield* readiness;
+      yield* serialized(
+        Effect.suspend(() => {
+          const snapshot = store.current();
+          if (!ownsGeneration(claimed) || snapshot.state !== 'ready' || config.isExitCommitted())
+            return Effect.void;
+          if (answer.kind === 'clear') return beginInstallation;
+          return store.publish({
+            state: 'restart_confirmation',
+            installedVersion,
+            targetVersion: snapshot.targetVersion,
+            activity:
+              answer.kind === 'working_agents'
+                ? { kind: 'working', workingAgentCount: answer.workingAgentCount }
+                : { kind: 'unknown' },
+          });
+        }),
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (readinessGeneration === claimed) readinessGeneration = undefined;
+        }),
+      ),
+    );
+  });
+
+  // Start: configure the updater, attach its listeners, announce the launch
+  // check, and arm the four-hourly poll.
+  updater.allowPrerelease = false;
+  updater.autoDownload = false;
+  updater.autoInstallOnAppQuit = false;
+  updater.autoRunAppAfterInstall = true;
+
+  // Listeners only enqueue; one consumer applies the events in arrival order
+  // under the lock. They are attached here, before the launch check goes out,
+  // and detached when the scope closes.
+  const signals = yield* Queue.unbounded<UpdaterSignal>();
+  yield* Effect.acquireRelease(
+    Effect.sync(() =>
+      updaterEvents.map((event) => {
+        const listener: UpdaterListener = (value) => {
+          Queue.offerUnsafe(signals, { event, value });
+        };
+        updater.on(event, listener);
+        return [event, listener] as const;
+      }),
+    ),
+    (listeners) =>
+      Effect.sync(() => {
+        for (const [event, listener] of listeners) updater.off(event, listener);
+      }),
+  );
+  yield* Stream.fromQueue(signals).pipe(
+    Stream.runForEach((signal) => serialized(handle(signal))),
+    Effect.forkScoped,
+  );
+
+  // Announced but not manual: the user sees that Isagi looked, and does not
+  // see a failure they did not ask for.
+  yield* serialized(beginCheck({ announce: true, manual: false }));
+  // setInterval semantics: the first scheduled check runs one period after launch.
+  yield* serialized(runScheduledCheck).pipe(
+    Effect.schedule(Schedule.spaced(updaterSchedule.repeatCheck)),
+    Effect.forkScoped,
+  );
+
+  // Registered last, so it runs first: nothing in flight may own a generation
+  // once stopping has begun.
+  yield* Effect.addFinalizer(() =>
+    serialized(
+      Effect.sync(() => {
+        stopped = true;
+        generation += 1;
+        active = undefined;
+        readinessGeneration = undefined;
+      }),
+    ),
+  );
+
+  const service: DesktopUpdater['Service'] = {
+    status: store.status,
+    checkForUpdates: serialized(beginCheck({ announce: true, manual: true })).pipe(
+      Effect.withSpan('DesktopUpdater.checkForUpdates'),
+    ),
+    /**
+     * Fetches the update the last check found. Only the user starts this, which is
+     * why it is an intent of its own rather than something `update_available`
+     * drifts into on a timer.
+     *
+     * A failed download is a legal starting point as well as `update_available`:
+     * the provider still knows what it found, so the retry is another download
+     * rather than a second round trip through the check.
+     */
+    downloadUpdate: serialized(beginDownload()).pipe(
+      Effect.withSpan('DesktopUpdater.downloadUpdate'),
+    ),
+    requestRestart: requestRestart.pipe(Effect.withSpan('DesktopUpdater.requestRestart')),
+    confirmRestart: serialized(
+      Effect.suspend(() =>
+        store.current().state === 'restart_confirmation' ? beginInstallation : Effect.void,
+      ),
+    ).pipe(Effect.withSpan('DesktopUpdater.confirmRestart')),
+    cancelRestart: serialized(
+      Effect.suspend(() => {
+        const snapshot = store.current();
+        if (snapshot.state !== 'restart_confirmation' || config.isExitCommitted())
+          return Effect.void;
+        return store.publish({
+          state: 'ready',
+          installedVersion,
+          targetVersion: snapshot.targetVersion,
+        });
+      }),
+    ).pipe(Effect.withSpan('DesktopUpdater.cancelRestart')),
+    /**
+     * A composition that runs the real updater never publishes
+     * `manual_update_required`, so there is no snapshot here for an outcome to land
+     * on and nothing for attempts to race over. The diagnostic is still written: an
+     * intent that reached a self-updating build at all is worth a line in the trail.
+     */
+    beginDownloadPageAttempt: Effect.succeed((outcome) =>
+      outcome === 'opened'
+        ? Effect.void
+        : Effect.suspend(() =>
+            diagnosticWrites.complete(
+              record('lifecycle', DOWNLOAD_PAGE_FAILURE.code, DOWNLOAD_PAGE_FAILURE.summary),
+            ),
+          ),
+    ),
+    installer: {
+      quitAndInstall,
+      // Written straight to the trail, not through the scope's tracked writes:
+      // this runs after the desktop runtime has been disposed.
+      recordInstallRejection: Effect.suspend(() =>
+        diagnostics.write(
+          record(
+            'lifecycle',
+            'exit_rejection',
+            'The update installer rejected after desktop shutdown.',
+          ),
+        ),
+      ),
+    },
+  };
+  return service;
+});
+
+const updaterEvents: readonly UpdaterEvent[] = [
+  'error',
+  'update-available',
+  'update-not-available',
+  'download-progress',
+  'update-downloaded',
+  'update-cancelled',
+];
 
 /**
  * The version a download may be started for, or `undefined` when there is
@@ -747,13 +561,6 @@ function isRestartLocked(snapshot: DesktopUpdateSnapshot) {
   );
 }
 
-export const systemUpdaterTimers: UpdaterTimers = {
-  setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
-  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
-  setInterval: (callback, milliseconds) => setInterval(callback, milliseconds),
-  clearInterval: (handle) => clearInterval(handle as NodeJS.Timeout),
-};
-
 function updateVersion(value: unknown): string {
   if (typeof value !== 'object' || value === null || !('version' in value)) return '';
   return typeof (value as UpdateInfo).version === 'string' ? (value as UpdateInfo).version : '';
@@ -770,10 +577,4 @@ function normalizedProgress(value: unknown): number {
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return typeof error === 'string' ? error : 'Unknown updater failure.';
-}
-
-function sameFacts(left: DesktopUpdateSnapshot, right: DesktopUpdateSnapshot) {
-  const { revision: _leftRevision, ...leftFacts } = left;
-  const { revision: _rightRevision, ...rightFacts } = right;
-  return JSON.stringify(leftFacts) === JSON.stringify(rightFacts);
 }

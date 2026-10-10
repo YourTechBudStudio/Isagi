@@ -1,13 +1,14 @@
-import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, ManagedRuntime, SubscriptionRef } from 'effect';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 
 import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
+import { DesktopShell, makeDesktopLayer } from './desktop-layer.js';
+import { DesktopLogger } from './desktop-logger.js';
 import { configureDevelopmentUserData } from './development.js';
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 import {
@@ -20,13 +21,14 @@ import {
   type RendererTarget,
 } from './renderer-policy.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
-import { createRuntimeLifecycle } from './runtime.js';
+import { RuntimeProcess } from './runtime-process/index.js';
+import { RuntimeProcessConfigElectron } from './runtime.js';
 import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
 import {
-  composeDesktopUpdater,
   decodeDesktopUpdateIntent,
+  DesktopUpdater,
+  DesktopUpdaterConfig,
   dispatchDesktopUpdateIntent,
-  type DesktopUpdaterService,
 } from './updater/index.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -37,8 +39,6 @@ const DEVELOPMENT_ICON_PATH = join(
 );
 const TRAFFIC_LIGHT_POSITION = { x: 18, y: 18 };
 const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
-const RUNTIME_STATUS_CHANNEL = 'isagi:runtime-status-changed';
-const DESKTOP_UPDATE_CHANNEL = 'isagi:desktop-update-changed';
 const isMac = process.platform === 'darwin';
 const isDev = !app.isPackaged;
 const desktopRoot = join(currentDirectory, '../..');
@@ -47,69 +47,77 @@ const repositoryRoot = join(desktopRoot, '../..');
 app.setAppUserModelId(APP_ID);
 if (isDev) configureDevelopmentUserData(repositoryRoot);
 
-const runtimeLifecycle = createRuntimeLifecycle();
 let mainWindow: BrowserWindow | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
 let exitRequested = false;
-let desktopUpdater: DesktopUpdaterService | undefined;
-let unsubscribeDesktopUpdate: (() => void) | undefined;
+/** Captured once the desktop runtime has built; the installer path runs after that runtime is disposed. */
+let updaterInstaller: DesktopUpdater['Service']['installer'] | undefined;
+
 const shutdown = new DesktopShutdownCoordinator({
-  desktopUpdater: () => desktopUpdater,
-  runtimeLifecycle,
+  dispose: () => desktop.dispose(),
   destroyRenderer: () => {
+    // Nothing can receive a snapshot past this point (`send` drops it), and the
+    // installing state the renderer last saw is the honest final one.
     exitRequested = true;
-    // Nothing can receive a snapshot past this point, and the installing state
-    // the renderer last saw is the honest final one.
-    unsubscribeDesktopUpdate?.();
-    unsubscribeDesktopUpdate = undefined;
     destroyRendererForExit(mainWindow);
   },
   exit: (code) => app.exit(code),
-  diagnoseInstallRejection: () => desktopUpdater?.recordInstallRejection(),
+  diagnoseInstallRejection: () =>
+    updaterInstaller &&
+    Effect.runPromise(updaterInstaller.recordInstallRejection.pipe(Effect.provide(DesktopLogger))),
 });
 
-runtimeLifecycle.subscribe((snapshot) => {
-  if (snapshot.state === 'failed') {
-    console.error('[desktop] Managed runtime failed', {
-      reason: snapshot.reason,
-      diagnostic: snapshot.diagnostic,
-    });
-    void preservePackagedRuntimeFailure(snapshot).finally(() => requestExit({ code: 1 }));
-    return;
-  }
-  publishRuntimeStatus(snapshot);
+const desktopShell = DesktopShell.of({
+  send: (channel, payload) => {
+    if (exitRequested) return;
+    const webContents = mainWindow?.webContents;
+    if (!webContents || webContents.isDestroyed()) return;
+    webContents.send(channel, payload);
+  },
+  requestExit: (code) => void requestExit({ code }),
+  isPackaged: app.isPackaged,
+  logsDirectory: () => app.getPath('logs'),
 });
 
-async function preservePackagedRuntimeFailure(
-  snapshot: Extract<typeof runtimeLifecycle.snapshot, { readonly state: 'failed' }>,
-) {
-  if (!app.isPackaged) return;
-  const logDirectory = app.getPath('logs');
-  const logPath = join(logDirectory, 'managed-runtime-failure.json');
-  try {
-    await mkdir(logDirectory, { recursive: true });
-    await writeFile(
-      logPath,
-      `${JSON.stringify({ recordedAt: new Date().toISOString(), ...snapshot }, null, 2)}\n`,
-      'utf8',
-    );
-    console.error(`[desktop] Managed runtime failure record written to ${logPath}`);
-  } catch (error) {
-    console.error(
-      `[desktop] Failed to preserve managed runtime failure record at ${logPath}`,
-      error,
-    );
-  }
+/**
+ * The process's one Effect runtime. Nothing builds until its first use, which is after `whenReady`, so Electron's
+ * `app` is only read once it is ready; disposing it (shutdown) stops the updater, then the runtime process.
+ */
+const desktop = ManagedRuntime.make(
+  makeDesktopLayer({
+    shell: desktopShell,
+    runtimeProcessConfig: RuntimeProcessConfigElectron,
+    updaterConfig: (runtimeUrl) =>
+      DesktopUpdaterConfig.layerElectron(app, {
+        runtimeUrl,
+        isExitCommitted: () => shutdown.committed,
+        requestInstall: (install) => void shutdown.request({ kind: 'install_update', install }),
+      }),
+  }),
+);
+
+/**
+ * Runs `effect` on the desktop runtime from an Electron callback. Rejects with what it failed with, except when shutdown
+ * interrupted it by disposing the runtime under it: the quit is proceeding, so that settles with `undefined` instead of
+ * surfacing as a failure (or as an error Electron logs for an IPC handler whose renderer is already gone).
+ */
+async function runDesktop<A, E>(
+  effect: Effect.Effect<A, E, ManagedRuntime.ManagedRuntime.Services<typeof desktop>>,
+): Promise<A | undefined> {
+  const exit = await desktop.runPromiseExit(effect);
+  if (Exit.isSuccess(exit)) return exit.value;
+  if (exitRequested && Cause.hasInterruptsOnly(exit.cause)) return undefined;
+  throw Cause.squash(exit.cause);
 }
 
 function createWindow() {
-  return Effect.runPromise(createWindowEffect());
+  return runDesktop(createWindowEffect());
 }
 
 function createWindowEffect() {
   return Effect.gen(function* () {
-    console.info(
-      `[desktop] creating Isagi window: mode=${isDev ? 'dev' : 'packaged'} chrome=${
+    yield* Effect.logInfo(
+      `creating Isagi window: mode=${isDev ? 'dev' : 'packaged'} chrome=${
         isMac ? 'mac-hiddenInset@18,18' : 'native'
       }`,
     );
@@ -220,11 +228,14 @@ function installRendererContainment(window: BrowserWindow, target: RendererTarge
 }
 
 function startRuntime() {
-  runtimeStartPromise ??= Effect.runPromiseExit(runtimeLifecycle.start()).then((exit) => {
-    if (Exit.isFailure(exit)) {
-      console.error(Cause.pretty(exit.cause));
-    }
-  });
+  runtimeStartPromise ??= desktop
+    .runPromiseExit(RuntimeProcess.use((runtimeProcess) => runtimeProcess.start))
+    .then((exit) => {
+      // Shutdown interrupts a start still in flight; that is not a failure to report.
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        console.error(Cause.pretty(exit.cause));
+      }
+    });
   return runtimeStartPromise;
 }
 
@@ -247,42 +258,33 @@ function tryPromise<T>(run: () => Promise<T>) {
   return Effect.tryPromise({ try: run, catch: toError });
 }
 
-function publishRuntimeStatus(snapshot: typeof runtimeLifecycle.snapshot) {
-  send(RUNTIME_STATUS_CHANNEL, snapshot);
-}
-
-function send(channel: string, payload: unknown) {
-  const webContents = mainWindow?.webContents;
-  if (!webContents || webContents.isDestroyed()) return;
-  webContents.send(channel, payload);
-}
-
 ipcMain.handle('isagi:runtime-url', (event) => {
   assertAuthorizedIpcSender(mainWindow, event);
   return resolveRuntimeUrlForIpc(
-    () => Effect.runPromise(runtimeLifecycle.getUrl()),
+    () => desktop.runPromise(RuntimeProcess.use((runtimeProcess) => runtimeProcess.url)),
     () => exitRequested,
   );
 });
 
 ipcMain.handle('isagi:runtime-status', (event) => {
   assertAuthorizedIpcSender(mainWindow, event);
-  return runtimeLifecycle.snapshot;
+  return runDesktop(
+    RuntimeProcess.use((runtimeProcess) => SubscriptionRef.get(runtimeProcess.status)),
+  );
 });
 
 ipcMain.handle('isagi:desktop-update', (event) => {
   assertAuthorizedIpcSender(mainWindow, event);
-  return desktopUpdater?.snapshot;
+  return runDesktop(DesktopUpdater.use((updater) => SubscriptionRef.get(updater.status)));
 });
 
 ipcMain.handle('isagi:desktop-update-intent', async (event, payload: unknown) => {
   assertAuthorizedIpcSender(mainWindow, event);
-  const updater = desktopUpdater;
-  if (!updater) return;
-  await dispatchDesktopUpdateIntent(decodeDesktopUpdateIntent(payload), {
-    service: updater,
-    openExternal: (url) => shell.openExternal(url),
-  });
+  const intent = decodeDesktopUpdateIntent(payload);
+  // Confirming a restart hands the process to the installer, whose shutdown disposes the runtime under this intent.
+  await runDesktop(
+    dispatchDesktopUpdateIntent(intent, { openExternal: (url) => shell.openExternal(url) }),
+  );
 });
 
 ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
@@ -321,22 +323,13 @@ app
   .whenReady()
   .then(async () => {
     if (isDev && app.dock) app.dock.setIcon(DEVELOPMENT_ICON_PATH);
-    desktopUpdater = await composeDesktopUpdater(app, {
-      getRuntimeUrl: () => runtimeLifecycle.getUrl(),
-      isExitCommitted: () => shutdown.committed,
-      requestInstall: () => {
-        const updater = desktopUpdater;
-        if (!updater) return;
-        void shutdown.request({ kind: 'install_update', install: () => updater.quitAndInstall() });
-      },
-    });
-    // One subscription for the process, established before the window exists.
-    // A snapshot published before the renderer can listen is not lost: the
-    // renderer reconciles the current snapshot when it subscribes.
-    unsubscribeDesktopUpdate = desktopUpdater.subscribe((snapshot) =>
-      send(DESKTOP_UPDATE_CHANNEL, snapshot),
-    );
-    await Effect.runPromise(desktopUpdater.start());
+    // A quit before the app was ready has already disposed the desktop runtime.
+    if (exitRequested) return;
+    // The first use builds the desktop runtime: the updater starts (its launch check
+    // included) and the renderer bridge subscribes, both before the window exists. A
+    // snapshot published before the renderer can listen is not lost: the renderer
+    // reconciles the current snapshot when it subscribes.
+    updaterInstaller = await runDesktop(DesktopUpdater.useSync((updater) => updater.installer));
     return createWindow();
   })
   .catch((error: unknown) => {

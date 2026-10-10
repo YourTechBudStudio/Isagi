@@ -2,8 +2,8 @@ import { Effect, Schema } from 'effect';
 
 import { desktopUpdateIntentSchema, type DesktopUpdateIntent } from '@isagi/contracts';
 
-import type { DesktopUpdaterService } from './coordinator.js';
 import { openDownloadPage } from './download-page.js';
+import { DesktopUpdater } from './service.js';
 
 // Excess properties are rejected rather than silently stripped. This channel is
 // a trust boundary, and "closed union" should mean the payload is exactly one of
@@ -25,8 +25,8 @@ export function decodeDesktopUpdateIntent(payload: unknown): DesktopUpdateIntent
 }
 
 /**
- * Every intent is awaited to completion, not merely accepted. That is what lets
- * the renderer bind its transient `Restart to update` disabled state to the
+ * Every intent is awaited to completion, not merely accepted (main's IPC handler
+ * runs this effect and awaits it). That is what lets the renderer bind its transient `Restart to update` disabled state to the
  * invoke promise: `request_restart` settles once the runtime activity read has
  * resolved, which is the operation the user is actually waiting on.
  *
@@ -36,29 +36,26 @@ export function decodeDesktopUpdateIntent(payload: unknown): DesktopUpdateIntent
  * the user through the snapshot like every other one rather than through the
  * invoke's resolution.
  */
-export async function dispatchDesktopUpdateIntent(
+export const dispatchDesktopUpdateIntent = Effect.fn('DesktopUpdater.dispatchIntent')(function* (
   intent: DesktopUpdateIntent,
-  dependencies: {
-    readonly service: DesktopUpdaterService;
-    readonly openExternal: (url: string) => Promise<void>;
-  },
-): Promise<void> {
-  const { service } = dependencies;
+  dependencies: { readonly openExternal: (url: string) => Promise<void> },
+) {
+  const updater = yield* DesktopUpdater;
   switch (intent.type) {
     case 'check_for_updates':
-      return Effect.runPromise(service.checkForUpdates());
+      return yield* updater.checkForUpdates;
     case 'download_update':
-      return Effect.runPromise(service.downloadUpdate());
+      return yield* updater.downloadUpdate;
     case 'request_restart':
-      return Effect.runPromise(service.requestRestart());
+      return yield* updater.requestRestart;
     case 'confirm_restart':
-      return Effect.runPromise(service.confirmRestart());
+      return yield* updater.confirmRestart;
     case 'cancel_restart':
-      return Effect.runPromise(service.cancelRestart());
+      return yield* updater.cancelRestart;
     case 'open_download_page':
-      return openDownloadPage({
+      return yield* openDownloadPage({
         openExternal: dependencies.openExternal,
-        beginAttempt: () => service.beginDownloadPageAttempt(),
+        beginAttempt: updater.beginDownloadPageAttempt,
       });
   }
-}
+});
