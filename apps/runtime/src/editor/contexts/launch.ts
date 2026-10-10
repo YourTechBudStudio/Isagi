@@ -24,7 +24,7 @@ import type { EditorContextRow } from './types.js';
  * What the launch may do to the service's own state, expressed as three narrow
  * capabilities rather than as the state itself.
  *
- * The service keeps the readiness map, the probe fibers, the registration gate,
+ * The service keeps the readiness map, the probe fiber map, the registration order,
  * and the probe implementation. Handing them over would make this module a
  * co-owner of runtime state it does not supervise and cannot clean up, and the
  * file split would then be a relocation rather than a boundary. What this module
@@ -82,78 +82,78 @@ export interface EditorLaunchDependencies extends EditorLaunchCapabilities {
  * Hence one explicit mask with `restore` at exactly two points rather than a
  * blanket `uninterruptible`.
  */
-export function launchEditorIncarnation(input: {
-  readonly deps: EditorLaunchDependencies;
-  readonly row: EditorContextRow;
-  readonly installation: ResolvedEditorInstallation;
-}): Effect.Effect<void, DatabaseError | EditorError | EditorLaunchFailed> {
-  const { deps, row, installation } = input;
+export const launchEditorIncarnation = Effect.fn('EditorContextService.launchIncarnation')(
+  function* (input: {
+    readonly deps: EditorLaunchDependencies;
+    readonly row: EditorContextRow;
+    readonly installation: ResolvedEditorInstallation;
+  }): Effect.fn.Return<void, DatabaseError | EditorError | EditorLaunchFailed> {
+    const { deps, row, installation } = input;
 
-  // Persist, then raise, always in that order and never one without the other:
-  // the row carries the reason for every future reader and the error carries it
-  // to the caller that asked. A write that converged away has no row to report
-  // against, so it reports the truth instead.
-  const fail = (
-    reason: EditorAttemptFailureReason,
-    detail: string | null,
-  ): Effect.Effect<never, DatabaseError | EditorError | EditorLaunchFailed> =>
-    deps.commitAttemptFailure({ editorContextId: row.id, reason, detail }).pipe(
-      Effect.flatMap((outcome) =>
-        Effect.fail(
-          outcome === 'applied'
-            ? new EditorLaunchFailed({
-                editorContextId: row.id,
-                reason,
-                detail,
-              })
-            : missingContext(row.id),
+    // Persist, then raise, always in that order and never one without the other:
+    // the row carries the reason for every future reader and the error carries it
+    // to the caller that asked. A write that converged away has no row to report
+    // against, so it reports the truth instead.
+    const fail = (
+      reason: EditorAttemptFailureReason,
+      detail: string | null,
+    ): Effect.Effect<never, DatabaseError | EditorError | EditorLaunchFailed> =>
+      deps.commitAttemptFailure({ editorContextId: row.id, reason, detail }).pipe(
+        Effect.flatMap((outcome) =>
+          Effect.fail(
+            outcome === 'applied'
+              ? new EditorLaunchFailed({
+                  editorContextId: row.id,
+                  reason,
+                  detail,
+                })
+              : missingContext(row.id),
+          ),
         ),
-      ),
-    );
-
-  const prepare = Effect.gen(function* () {
-    // Re-read rather than trusting a path captured earlier: a worktree can be
-    // moved or removed between placement and launch, and the process must open
-    // the checkout that exists now.
-    const worktree = yield* deps.workspace.findWorktree(row.worktreeId);
-    if (!worktree) return yield* fail('launch_target_missing', null);
-
-    const port = yield* deps.portProbe.obtainEphemeralPort.pipe(
-      Effect.catchTag('LoopbackPortUnavailable', (error) =>
-        fail('port_allocation_failed', describeOperationalCause(error.cause)),
-      ),
-    );
-
-    const socketPath = editorSessionSocketPath(
-      installation.sessionSocketDirectory,
-      row.id,
-      randomBytes(3).toString('hex'),
-    );
-    if (Buffer.byteLength(socketPath) > maxSessionSocketPathBytes) {
-      // Refused before anything is allocated: the platform would reject the
-      // bind, and a spawn that is certain to fail is not worth a process row.
-      return yield* fail(
-        'session_socket_unavailable',
-        `session socket path exceeds ${maxSessionSocketPathBytes} bytes`,
       );
-    }
 
-    const spec = editorLaunchSpec({
-      installation,
-      worktreePath: worktree.path,
-      port,
-      socketPath,
-    });
-    return { cwd: worktree.path, port, socketPath, spec };
-  }).pipe(
-    // Nothing is allocated yet, so an interruption here has exactly one durable
-    // consequence to record: the attempt never happened. Without this the row
-    // would stay `in_progress` for the rest of the runtime's life, with the pane
-    // stuck on "launching" and the settled-state affordance refusing to act.
-    Effect.onInterrupt(() => commitInterruptedAttempt(deps, row.id)),
-  );
+    const prepare = Effect.gen(function* () {
+      // Re-read rather than trusting a path captured earlier: a worktree can be
+      // moved or removed between placement and launch, and the process must open
+      // the checkout that exists now.
+      const worktree = yield* deps.workspace.findWorktree(row.worktreeId);
+      if (!worktree) return yield* fail('launch_target_missing', null);
 
-  return Effect.gen(function* () {
+      const port = yield* deps.portProbe.obtainEphemeralPort.pipe(
+        Effect.catchTag('LoopbackPortUnavailable', (error) =>
+          fail('port_allocation_failed', describeOperationalCause(error.cause)),
+        ),
+      );
+
+      const socketPath = editorSessionSocketPath(
+        installation.sessionSocketDirectory,
+        row.id,
+        randomBytes(3).toString('hex'),
+      );
+      if (Buffer.byteLength(socketPath) > maxSessionSocketPathBytes) {
+        // Refused before anything is allocated: the platform would reject the
+        // bind, and a spawn that is certain to fail is not worth a process row.
+        return yield* fail(
+          'session_socket_unavailable',
+          `session socket path exceeds ${maxSessionSocketPathBytes} bytes`,
+        );
+      }
+
+      const spec = editorLaunchSpec({
+        installation,
+        worktreePath: worktree.path,
+        port,
+        socketPath,
+      });
+      return { cwd: worktree.path, port, socketPath, spec };
+    }).pipe(
+      // Nothing is allocated yet, so an interruption here has exactly one durable
+      // consequence to record: the attempt never happened. Without this the row
+      // would stay `in_progress` for the rest of the runtime's life, with the pane
+      // stuck on "launching" and the settled-state affordance refusing to act.
+      Effect.onInterrupt(() => commitInterruptedAttempt(deps, row.id)),
+    );
+
     const prepared = yield* prepare;
 
     yield* Effect.uninterruptibleMask((restore) =>
@@ -227,8 +227,8 @@ export function launchEditorIncarnation(input: {
     // The process transitioned; a client that did not make this request learns
     // of it here rather than by polling.
     yield* deps.publishChanged(row.id);
-  });
-}
+  },
+);
 
 /**
  * Record an interrupted attempt without raising.
@@ -253,9 +253,8 @@ function commitInterruptedAttempt(deps: EditorLaunchCapabilities, editorContextI
     })
     .pipe(
       Effect.catchTag('DatabaseError', (error) =>
-        Effect.logWarning(
-          `[runtime] editor launch interruption could not be recorded editorContextId=${editorContextId} cause=${describeOperationalCause(error)}`,
-        ).pipe(
+        Effect.logWarning('Editor launch interruption could not be recorded').pipe(
+          Effect.annotateLogs({ editorContextId, cause: describeOperationalCause(error) }),
           Effect.andThen(
             // Never the error object itself: a later cause renderer could reach
             // its foreign cause.

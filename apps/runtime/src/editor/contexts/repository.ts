@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, type InferSelectModel, type SQL } from 'drizzle-orm';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 
 import type { EditorAttemptFailureReason } from '@isagi/contracts';
 
@@ -34,20 +34,19 @@ export type EditorContextTransitionOutcome = 'applied' | 'context_missing';
  * Raised when a transition's precondition did not hold on the persisted row.
  * It is the write-side twin of `EditorContextRowInvariantViolation`: that one
  * catches an impossible row on read, this one refuses to create it. Both are
- * defects, so both escape as such — this is raised *outside* `RuntimeDatabase`,
- * because inside it `Effect.try` would deliver a lifecycle bug as an ordinary
- * `DatabaseError`.
+ * defects: the transaction rolls back through its typed `abort`, and the
+ * repository then dies with this error rather than reporting a lifecycle bug as
+ * an ordinary `DatabaseError` or an outcome callers must pretend to handle.
  */
-export class EditorContextTransitionRejected extends Error {
-  constructor(
-    readonly editorContextId: number,
-    readonly transition: string,
-    readonly precondition: string,
-  ) {
-    super(
-      `Editor context ${editorContextId} cannot ${transition}: it requires that ${precondition}.`,
-    );
-    this.name = 'EditorContextTransitionRejected';
+export class EditorContextTransitionRejected extends Data.TaggedError(
+  'EditorContextTransitionRejected',
+)<{
+  readonly editorContextId: number;
+  readonly transition: string;
+  readonly precondition: string;
+}> {
+  override get message() {
+    return `Editor context ${this.editorContextId} cannot ${this.transition}: it requires that ${this.precondition}.`;
   }
 }
 
@@ -86,41 +85,39 @@ const make = Effect.gen(function* () {
     readonly values: Partial<typeof editorContexts.$inferInsert>;
   }) =>
     database
-      .transaction(input.operation, (db) => {
-        const matchesId = eq(editorContexts.id, input.editorContextId);
-        const changes = db
-          .update(editorContexts)
-          .set(input.values)
-          // `and` drops an undefined operand, so an unguarded transition
-          // narrows to the id alone without a second code path.
-          .where(and(matchesId, input.precondition?.clause))
-          .run().changes;
-        if (changes === 1) return { applied: true as const };
-        const survivor = db
-          .select({ id: editorContexts.id })
-          .from(editorContexts)
-          .where(matchesId)
-          .get();
-        return {
-          applied: false as const,
+      .transaction<EditorContextTransitionOutcome, EditorContextTransitionRejected>(
+        input.operation,
+        (db, abort) => {
+          const matchesId = eq(editorContexts.id, input.editorContextId);
+          const changes = db
+            .update(editorContexts)
+            .set(input.values)
+            // `and` drops an undefined operand, so an unguarded transition
+            // narrows to the id alone without a second code path.
+            .where(and(matchesId, input.precondition?.clause))
+            .run().changes;
+          if (changes === 1) return 'applied';
+          const survivor = db
+            .select({ id: editorContexts.id })
+            .from(editorContexts)
+            .where(matchesId)
+            .get();
           // A surviving row means the guard, not the row, refused the write.
-          refusedPrecondition: survivor ? (input.precondition?.describedAs ?? null) : null,
-        };
-      })
-      .pipe(
-        // Outside `use`/`transaction` on purpose: a defect raised inside would
-        // be caught by `Effect.try` and reported as a `DatabaseError`.
-        Effect.flatMap((result): Effect.Effect<EditorContextTransitionOutcome> => {
-          if (result.applied) return Effect.succeed('applied');
-          if (result.refusedPrecondition === null) return Effect.succeed('context_missing');
-          return Effect.die(
-            new EditorContextTransitionRejected(
-              input.editorContextId,
-              input.transitionName,
-              result.refusedPrecondition,
-            ),
+          if (!survivor || input.precondition === undefined) return 'context_missing';
+          return abort(
+            new EditorContextTransitionRejected({
+              editorContextId: input.editorContextId,
+              transition: input.transitionName,
+              precondition: input.precondition.describedAs,
+            }),
           );
-        }),
+        },
+      )
+      .pipe(
+        // The typed abort carries the rejection out of the transaction instead of
+        // `Effect.try` delivering it as a `DatabaseError`; it is then a defect,
+        // because a transition refused on a live row is a sequencing bug.
+        Effect.catchTag('EditorContextTransitionRejected', (rejected) => Effect.die(rejected)),
       );
 
   const holdsNoIncarnation = {
@@ -129,84 +126,87 @@ const make = Effect.gen(function* () {
   };
 
   return EditorContextRepository.of({
-    findByWorktree: (worktreeId) =>
-      database
-        .use('find_editor_context_by_worktree', (db) =>
-          selectJoined(db).where(eq(editorContexts.worktreeId, worktreeId)).get(),
-        )
-        .pipe(Effect.map(decodeOne)),
-    find: (editorContextId) =>
-      database
-        .use('find_editor_context', (db) =>
-          selectJoined(db).where(eq(editorContexts.id, editorContextId)).get(),
-        )
-        .pipe(Effect.map(decodeOne)),
-    findByActivePtyProcessId: (ptyProcessId) =>
-      database
-        .use('find_editor_context_by_active_process', (db) =>
+    findByWorktree: Effect.fn('EditorContextRepository.findByWorktree')(function* (worktreeId) {
+      const row = yield* database.use('find_editor_context_by_worktree', (db) =>
+        selectJoined(db).where(eq(editorContexts.worktreeId, worktreeId)).get(),
+      );
+      return decodeOne(row);
+    }),
+    find: Effect.fn('EditorContextRepository.find')(function* (editorContextId) {
+      const row = yield* database.use('find_editor_context', (db) =>
+        selectJoined(db).where(eq(editorContexts.id, editorContextId)).get(),
+      );
+      return decodeOne(row);
+    }),
+    findByActivePtyProcessId: Effect.fn('EditorContextRepository.findByActivePtyProcessId')(
+      function* (ptyProcessId) {
+        const row = yield* database.use('find_editor_context_by_active_process', (db) =>
           selectJoined(db).where(eq(editorContexts.activePtyProcessId, ptyProcessId)).get(),
-        )
-        .pipe(Effect.map(decodeOne)),
-    listForIds: (ids) =>
+        );
+        return decodeOne(row);
+      },
+    ),
+    listForIds: Effect.fn('EditorContextRepository.listForIds')(function* (ids) {
       // An empty `IN ()` is not portable SQL and Drizzle's handling of it is
       // not a contract worth depending on; the caller's empty case is
       // answered here.
-      ids.length === 0
-        ? Effect.succeed([])
-        : database
-            .use('list_editor_contexts_for_ids', (db) =>
-              selectJoined(db)
-                .where(inArray(editorContexts.id, [...ids]))
-                .all(),
-            )
-            .pipe(
-              Effect.map((rows) => rows.map((row) => editorContextRow(row.context, row.process))),
-            ),
-    create: (input) =>
-      database
-        .use('create_editor_context', (db) => {
-          const now = timestamp();
-          return db
-            .insert(editorContexts)
-            .values({
-              worktreeId: input.worktreeId,
-              activePtyProcessId: null,
-              endpointHost: null,
-              endpointPort: null,
-              sessionSocketPath: null,
-              attemptState: 'none',
-              attemptReason: null,
-              attemptDetail: null,
-              attemptStartedAt: null,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .returning()
-            .get();
-        })
-        .pipe(Effect.map((record) => editorContextRow(record, null))),
-    markAttemptInProgress: (editorContextId) => {
-      const now = timestamp();
-      return transition({
-        editorContextId,
-        operation: 'mark_editor_attempt_in_progress',
-        transitionName: 'open a launch attempt',
-        precondition: holdsNoIncarnation,
-        values: {
-          attemptState: 'in_progress',
-          attemptReason: null,
-          attemptDetail: null,
-          attemptStartedAt: now,
-          updatedAt: now,
-        },
+      if (ids.length === 0) return [];
+      const rows = yield* database.use('list_editor_contexts_for_ids', (db) =>
+        selectJoined(db)
+          .where(inArray(editorContexts.id, [...ids]))
+          .all(),
+      );
+      return rows.map((row) => editorContextRow(row.context, row.process));
+    }),
+    create: Effect.fn('EditorContextRepository.create')(function* (input) {
+      const record = yield* database.use('create_editor_context', (db) => {
+        const now = timestamp();
+        return db
+          .insert(editorContexts)
+          .values({
+            worktreeId: input.worktreeId,
+            activePtyProcessId: null,
+            endpointHost: null,
+            endpointPort: null,
+            sessionSocketPath: null,
+            attemptState: 'none',
+            attemptReason: null,
+            attemptDetail: null,
+            attemptStartedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning()
+          .get();
       });
-    },
-    clearIncarnationAndMarkInProgress: (editorContextId) => {
+      return editorContextRow(record, null);
+    }),
+    markAttemptInProgress: Effect.fn('EditorContextRepository.markAttemptInProgress')(
+      function* (editorContextId) {
+        const now = timestamp();
+        return yield* transition({
+          editorContextId,
+          operation: 'mark_editor_attempt_in_progress',
+          transitionName: 'open a launch attempt',
+          precondition: holdsNoIncarnation,
+          values: {
+            attemptState: 'in_progress',
+            attemptReason: null,
+            attemptDetail: null,
+            attemptStartedAt: now,
+            updatedAt: now,
+          },
+        });
+      },
+    ),
+    clearIncarnationAndMarkInProgress: Effect.fn(
+      'EditorContextRepository.clearIncarnationAndMarkInProgress',
+    )(function* (editorContextId) {
       const now = timestamp();
       // No precondition beyond the row existing: this transition's whole
       // purpose is to move an owned context to an unowned in-flight one, and
       // running it on an already-idle context is a replacement of nothing.
-      return transition({
+      return yield* transition({
         editorContextId,
         operation: 'clear_editor_incarnation_and_mark_in_progress',
         transitionName: 'release its incarnation and open a launch attempt',
@@ -222,9 +222,9 @@ const make = Effect.gen(function* () {
           updatedAt: now,
         },
       });
-    },
-    installIncarnation: (input) =>
-      transition({
+    }),
+    installIncarnation: Effect.fn('EditorContextRepository.installIncarnation')(function* (input) {
+      return yield* transition({
         editorContextId: input.editorContextId,
         operation: 'install_editor_incarnation',
         transitionName: 'install an incarnation',
@@ -246,9 +246,10 @@ const make = Effect.gen(function* () {
           attemptStartedAt: null,
           updatedAt: timestamp(),
         },
-      }),
-    markAttemptFailed: (input) =>
-      transition({
+      });
+    }),
+    markAttemptFailed: Effect.fn('EditorContextRepository.markAttemptFailed')(function* (input) {
+      return yield* transition({
         editorContextId: input.editorContextId,
         operation: 'mark_editor_attempt_failed',
         transitionName: `record a ${input.reason} failure`,
@@ -264,39 +265,45 @@ const make = Effect.gen(function* () {
           attemptStartedAt: null,
           updatedAt: timestamp(),
         },
-      }),
-    clearIncarnation: (editorContextId) =>
-      transition({
-        editorContextId,
-        operation: 'clear_editor_incarnation',
-        transitionName: 'return to idle',
-        values: {
-          activePtyProcessId: null,
-          endpointHost: null,
-          endpointPort: null,
-          sessionSocketPath: null,
-          attemptState: 'none',
-          attemptReason: null,
-          attemptDetail: null,
-          attemptStartedAt: null,
-          updatedAt: timestamp(),
-        },
-      }),
-    failInterruptedAttempts: database.use('fail_interrupted_editor_attempts', (db) =>
-      db
-        .update(editorContexts)
-        .set({
-          attemptState: 'failed',
-          attemptReason: 'launch_interrupted',
-          attemptDetail: null,
-          attemptStartedAt: null,
-          updatedAt: timestamp(),
-        })
-        .where(eq(editorContexts.attemptState, 'in_progress'))
-        .returning({ id: editorContexts.id })
-        .all()
-        .map((row) => row.id),
+      });
+    }),
+    clearIncarnation: Effect.fn('EditorContextRepository.clearIncarnation')(
+      function* (editorContextId) {
+        return yield* transition({
+          editorContextId,
+          operation: 'clear_editor_incarnation',
+          transitionName: 'return to idle',
+          values: {
+            activePtyProcessId: null,
+            endpointHost: null,
+            endpointPort: null,
+            sessionSocketPath: null,
+            attemptState: 'none',
+            attemptReason: null,
+            attemptDetail: null,
+            attemptStartedAt: null,
+            updatedAt: timestamp(),
+          },
+        });
+      },
     ),
+    failInterruptedAttempts: database
+      .use('fail_interrupted_editor_attempts', (db) =>
+        db
+          .update(editorContexts)
+          .set({
+            attemptState: 'failed',
+            attemptReason: 'launch_interrupted',
+            attemptDetail: null,
+            attemptStartedAt: null,
+            updatedAt: timestamp(),
+          })
+          .where(eq(editorContexts.attemptState, 'in_progress'))
+          .returning({ id: editorContexts.id })
+          .all()
+          .map((row) => row.id),
+      )
+      .pipe(Effect.withSpan('EditorContextRepository.failInterruptedAttempts')),
   });
 });
 

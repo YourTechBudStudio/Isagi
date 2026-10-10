@@ -57,6 +57,24 @@ export function editorCapabilityFromEnvironment(env: {
  *  connection; bounded so the attempt always settles. */
 export const editorProvisioningDeadline = Duration.minutes(10);
 
+/**
+ * Provisioning's inputs, read once at layer acquisition. Production uses the defaults; tests provide
+ * `Layer.succeed(EditorProvisioningSettings, {...})` with an explicit capability and, for the deadline tests, a short
+ * deadline.
+ *
+ * The capability is a reader rather than a value because the default must consult `process.env` when the layer is
+ * built, not when this reference is first resolved (a reference's default is computed once per process).
+ */
+export const EditorProvisioningSettings = Context.Reference<{
+  readonly readCapability: () => EditorCapability;
+  readonly deadline: Duration.Duration;
+}>('isagi/runtime/editor/EditorProvisioningSettings', {
+  defaultValue: () => ({
+    readCapability: () => editorCapabilityFromEnvironment(process.env),
+    deadline: editorProvisioningDeadline,
+  }),
+});
+
 const notApplicable: EditorProvisioningState = { status: 'not_applicable' };
 
 /**
@@ -91,150 +109,142 @@ function projectPhase(phase: EditorProvisioningPhase, version: string): EditorPr
   }
 }
 
-export interface EditorProvisioningOptions {
-  readonly capability: EditorCapability;
-  readonly deadline?: Duration.Input;
-}
-
 /**
- * The scoped implementation, with the capability passed in.
- *
- * `EditorProvisioning.layer` is the production binding that resolves the
- * capability from the environment exactly once, at layer acquisition; tests
- * drive this with an explicit value instead.
+ * The scoped implementation. The capability is resolved exactly once, at layer acquisition; everything below takes it
+ * as a value.
  */
-export function makeEditorProvisioning(options: EditorProvisioningOptions) {
-  return Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const io = yield* EditorInstallIo;
-    const scope = yield* Effect.scope;
-    const deadline = Duration.fromInputUnsafe(options.deadline ?? editorProvisioningDeadline);
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const io = yield* EditorInstallIo;
+  const scope = yield* Effect.scope;
+  const settings = yield* EditorProvisioningSettings;
+  const deadline = settings.deadline;
 
-    if (options.capability === null) return notApplicableService;
+  if (settings.readCapability() === null) return notApplicableService;
 
-    const version = codeServerManifest.version;
-    const phase = yield* Ref.make<EditorProvisioningPhase>({
-      kind: 'transient',
-      status: 'checking',
-    });
-    const setTransient = (status: 'checking' | 'downloading' | 'verifying' | 'extracting') =>
-      Ref.set(phase, { kind: 'transient', status });
-    const attempt = yield* Semaphore.make(1);
-    const attemptRequested = yield* Ref.make(false);
+  const version = codeServerManifest.version;
+  const phase = yield* Ref.make<EditorProvisioningPhase>({
+    kind: 'transient',
+    status: 'checking',
+  });
+  const setTransient = (status: 'checking' | 'downloading' | 'verifying' | 'extracting') =>
+    Ref.set(phase, { kind: 'transient', status });
+  const attempt = yield* Semaphore.make(1);
+  const attemptRequested = yield* Ref.make(false);
 
-    const settleFailed = (input: {
-      readonly reason: EditorProvisioningFailureReason;
-      readonly diagnostic: string | null;
-    }) =>
-      // One write, so a failed attempt cannot leave a stale installation behind
-      // for `requireReady` to hand out.
-      Ref.set(phase, { kind: 'failed', reason: input.reason, diagnostic: input.diagnostic }).pipe(
-        Effect.as({
-          status: 'failed',
-          version,
-          reason: input.reason,
-          diagnostic: input.diagnostic,
-        } satisfies EditorProvisioningState),
-      );
-
-    const runAttempt: Effect.Effect<EditorProvisioningState> = Effect.gen(function* () {
-      const platformKey = hostEditorPlatformKey();
-      if (platformKey === null) {
-        return yield* settleFailed({
-          reason: 'unsupported_platform',
-          diagnostic: 'Isagi does not ship a Code Server build for this platform.',
-        });
-      }
-
-      yield* setTransient('checking');
-      const result = yield* provisionCodeServer({
-        io,
-        paths: { toolsPath: directory.paths.toolsPath, editorsPath: directory.paths.editorsPath },
-        artifact: artifactForPlatform(codeServerManifest, platformKey),
-        platformKey,
+  const settleFailed = (input: {
+    readonly reason: EditorProvisioningFailureReason;
+    readonly diagnostic: string | null;
+  }) =>
+    // One write, so a failed attempt cannot leave a stale installation behind
+    // for `requireReady` to hand out.
+    Ref.set(phase, { kind: 'failed', reason: input.reason, diagnostic: input.diagnostic }).pipe(
+      Effect.as({
+        status: 'failed',
         version,
-        onPhase: setTransient,
-      }).pipe(
-        // The deadline interrupts the attempt, which aborts the in-flight
-        // request and runs the staging finalizer. It is reported as a download
-        // failure because that is the stage a long attempt overwhelmingly
-        // expires in, and the diagnostic says "timed out" rather than implying a
-        // transport fault.
-        Effect.timeoutOrElse({
-          duration: deadline,
-          orElse: () =>
-            Effect.fail(
-              new EditorProvisioningFailure({
-                reason: 'download_failed',
-                diagnostic: `Provisioning Code Server ${version} timed out after ${Duration.format(deadline)}.`,
-              }),
-            ),
-        }),
-        Effect.result,
-      );
-
-      if (result._tag === 'Failure') {
-        return yield* settleFailed({
-          reason: result.failure.reason,
-          diagnostic: result.failure.diagnostic,
-        });
-      }
-      yield* Ref.set(phase, { kind: 'ready', installation: result.success });
-      return { status: 'ready', version } satisfies EditorProvisioningState;
-    }).pipe(
-      // Modelled failures and the deadline settle through `Effect.result` above,
-      // but external interruption bypasses it entirely: the retry route runs the
-      // attempt under the HTTP request's abort signal, so a client that
-      // disconnects mid-download would otherwise leave the projection stuck in a
-      // transient state that no poller can ever see settle. The finalizer runs
-      // before interruption continues to propagate, so scope shutdown still
-      // tears the fiber down.
-      Effect.onInterrupt(() =>
-        settleFailed({
-          reason: 'install_unusable',
-          diagnostic: `Provisioning Code Server ${version} was interrupted before it finished.`,
-        }),
-      ),
+        reason: input.reason,
+        diagnostic: input.diagnostic,
+      } satisfies EditorProvisioningState),
     );
 
-    return EditorProvisioning.of({
-      start: Ref.getAndSet(attemptRequested, true).pipe(
-        Effect.flatMap((alreadyRequested) =>
-          alreadyRequested
-            ? Effect.void
-            : Effect.forkIn(attempt.withPermits(1)(runAttempt), scope).pipe(Effect.asVoid),
-        ),
-      ),
-      state: Effect.map(Ref.get(phase), (current) => projectPhase(current, version)),
-      retry: Effect.andThen(
-        // Marked before the attempt rather than after, so a boot `start` racing a
-        // user retry cannot schedule a second attempt behind it.
-        Ref.set(attemptRequested, true),
-        attempt
-          .withPermitsIfAvailable(1)(runAttempt)
-          .pipe(
-            Effect.flatMap(
-              Option.match({
-                // Non-blocking on purpose: a queued retry would stack a second
-                // 200 MB download behind the first for a button a user can press
-                // repeatedly.
-                onNone: () => Effect.fail(new EditorProvisioningBusy()),
-                onSome: (settled) => Effect.succeed(settled),
-              }),
-            ),
+  const runAttempt: Effect.Effect<EditorProvisioningState> = Effect.gen(function* () {
+    const platformKey = hostEditorPlatformKey();
+    if (platformKey === null) {
+      return yield* settleFailed({
+        reason: 'unsupported_platform',
+        diagnostic: 'Isagi does not ship a Code Server build for this platform.',
+      });
+    }
+
+    yield* setTransient('checking');
+    const result = yield* provisionCodeServer({
+      io,
+      paths: { toolsPath: directory.paths.toolsPath, editorsPath: directory.paths.editorsPath },
+      artifact: artifactForPlatform(codeServerManifest, platformKey),
+      platformKey,
+      version,
+      onPhase: setTransient,
+    }).pipe(
+      // The deadline interrupts the attempt, which aborts the in-flight
+      // request and runs the staging finalizer. It is reported as a download
+      // failure because that is the stage a long attempt overwhelmingly
+      // expires in, and the diagnostic says "timed out" rather than implying a
+      // transport fault.
+      Effect.timeoutOrElse({
+        duration: deadline,
+        orElse: () =>
+          Effect.fail(
+            new EditorProvisioningFailure({
+              reason: 'download_failed',
+              diagnostic: `Provisioning Code Server ${version} timed out after ${Duration.format(deadline)}.`,
+            }),
           ),
-      ),
-      requireReady: Effect.gen(function* () {
-        const current = yield* Ref.get(phase);
-        if (current.kind === 'ready') return current.installation;
-        return yield* new EditorUnavailable({
-          reason: 'editor_unavailable',
-          diagnostic: current.kind === 'failed' ? current.diagnostic : null,
-        });
       }),
-    });
+      Effect.result,
+    );
+
+    if (result._tag === 'Failure') {
+      return yield* settleFailed({
+        reason: result.failure.reason,
+        diagnostic: result.failure.diagnostic,
+      });
+    }
+    yield* Ref.set(phase, { kind: 'ready', installation: result.success });
+    return { status: 'ready', version } satisfies EditorProvisioningState;
+  }).pipe(
+    // Modelled failures and the deadline settle through `Effect.result` above,
+    // but external interruption bypasses it entirely: the retry route runs the
+    // attempt under the HTTP request's abort signal, so a client that
+    // disconnects mid-download would otherwise leave the projection stuck in a
+    // transient state that no poller can ever see settle. The finalizer runs
+    // before interruption continues to propagate, so scope shutdown still
+    // tears the fiber down.
+    Effect.onInterrupt(() =>
+      settleFailed({
+        reason: 'install_unusable',
+        diagnostic: `Provisioning Code Server ${version} was interrupted before it finished.`,
+      }),
+    ),
+  );
+
+  return EditorProvisioning.of({
+    start: Ref.getAndSet(attemptRequested, true).pipe(
+      Effect.flatMap((alreadyRequested) =>
+        alreadyRequested
+          ? Effect.void
+          : Effect.forkIn(attempt.withPermits(1)(runAttempt), scope).pipe(Effect.asVoid),
+      ),
+      Effect.withSpan('EditorProvisioning.start'),
+    ),
+    state: Effect.map(Ref.get(phase), (current) => projectPhase(current, version)),
+    retry: Effect.andThen(
+      // Marked before the attempt rather than after, so a boot `start` racing a
+      // user retry cannot schedule a second attempt behind it.
+      Ref.set(attemptRequested, true),
+      attempt
+        .withPermitsIfAvailable(1)(runAttempt)
+        .pipe(
+          Effect.flatMap(
+            Option.match({
+              // Non-blocking on purpose: a queued retry would stack a second
+              // 200 MB download behind the first for a button a user can press
+              // repeatedly.
+              onNone: () => Effect.fail(new EditorProvisioningBusy()),
+              onSome: (settled) => Effect.succeed(settled),
+            }),
+          ),
+        ),
+    ).pipe(Effect.withSpan('EditorProvisioning.retry')),
+    requireReady: Effect.gen(function* () {
+      const current = yield* Ref.get(phase);
+      if (current.kind === 'ready') return current.installation;
+      return yield* new EditorUnavailable({
+        reason: 'editor_unavailable',
+        diagnostic: current.kind === 'failed' ? current.diagnostic : null,
+      });
+    }),
   });
-}
+});
 
 /**
  * An undeclared runtime. Every method is a complete answer rather than a
@@ -250,12 +260,6 @@ const notApplicableService: EditorProvisioning['Service'] = {
     new EditorUnavailable({ reason: 'editor_unsupported_runtime', diagnostic: null }),
   ),
 };
-
-const make = Effect.suspend(() =>
-  // Read once, at layer acquisition. Everything below this line takes the
-  // capability as a value.
-  makeEditorProvisioning({ capability: editorCapabilityFromEnvironment(process.env) }),
-);
 
 export class EditorProvisioning extends Context.Service<
   EditorProvisioning,

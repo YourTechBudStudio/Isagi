@@ -16,8 +16,9 @@ import { codeServerManifest } from '../manifest.js';
 import {
   EditorProvisioning,
   EditorProvisioningBusy,
+  EditorProvisioningSettings,
   editorCapabilityFromEnvironment,
-  makeEditorProvisioning,
+  editorProvisioningDeadline,
   type EditorCapability,
 } from '../service.js';
 import { pinnedVersion, recordingInstallIo, type InstallIoBehaviour } from './test-support.js';
@@ -48,18 +49,26 @@ function withService<A, E>(
   },
   use: (service: EditorProvisioning['Service']) => Effect.Effect<A, E>,
 ) {
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const service = yield* makeEditorProvisioning({
-        capability: input.capability,
-        ...(input.deadline === undefined ? {} : { deadline: input.deadline }),
-      }).pipe(
-        Effect.provideService(DataDirectory, input.directory),
-        Effect.provideService(EditorInstallIo, input.io),
-      );
-      return yield* use(service);
-    }),
+  return Effect.flatMap(EditorProvisioning, use).pipe(
+    Effect.provide(
+      EditorProvisioning.layerNoDeps.pipe(
+        Layer.provide([
+          settingsLayer(input.capability, input.deadline),
+          Layer.succeed(DataDirectory, input.directory),
+          Layer.succeed(EditorInstallIo, input.io),
+        ]),
+      ),
+    ),
   );
+}
+
+/** The capability as an explicit value, and optionally a short deadline. */
+function settingsLayer(capability: EditorCapability, deadline?: Duration.Input) {
+  return Layer.succeed(EditorProvisioningSettings, {
+    readCapability: () => capability,
+    deadline:
+      deadline === undefined ? editorProvisioningDeadline : Duration.fromInputUnsafe(deadline),
+  });
 }
 
 test('the capability reader accepts only the exact declaration', () => {
@@ -425,10 +434,8 @@ test('a state Ref is not shared between two constructions of the service', async
   const roots = makeRoots();
   try {
     const recorder = recordingInstallIo();
-    const layer = Layer.effect(
-      EditorProvisioning,
-      makeEditorProvisioning({ capability: 'code_server' }),
-    ).pipe(
+    const layer = EditorProvisioning.layerNoDeps.pipe(
+      Layer.provide(settingsLayer('code_server')),
       Layer.provide(Layer.succeed(DataDirectory, roots.directory)),
       Layer.provide(Layer.succeed(EditorInstallIo, recorder.io)),
     );

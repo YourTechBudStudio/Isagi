@@ -1,6 +1,29 @@
-import { Duration, Effect } from 'effect';
+import { Context, Duration, Effect } from 'effect';
 
 import { editorOrigin } from './launch-spec.js';
+
+/**
+ * Runs one incarnation's readiness probe and reports its settlement through `onSettled`. Never fails; it ends by
+ * settling or by interruption.
+ */
+export type EditorProbeRunner = (input: {
+  readonly host: string;
+  readonly port: number;
+  readonly onSettled: (settlement: EditorReadinessSettlement) => Effect.Effect<void>;
+}) => Effect.Effect<void>;
+
+/**
+ * The probe the editor context service forks for every incarnation it launches: the real HTTP probe by default.
+ *
+ * A seam for the whole probe, not its HTTP internals. Service tests care about probe *lifecycle* — registered before
+ * start, ended by supersession or a terminal event, cleaned up at shutdown — and replacing the runner keeps them from
+ * also asserting the HTTP polling behaviour that `readiness.test.ts` owns. A test that wants the real probe on a
+ * scripted transport provides a runner that calls `probeWorkbench` with its own `request` and `timing`.
+ */
+export const EditorReadinessProbe = Context.Reference<{ readonly run: EditorProbeRunner }>(
+  'isagi/runtime/editor/EditorReadinessProbe',
+  { defaultValue: () => ({ run: (input) => probeWorkbench(input) }) },
+);
 
 /**
  * The string a served Code Server workbench document contains.

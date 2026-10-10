@@ -21,13 +21,9 @@ import type { PtyBackendShape as PtyBackend } from '../pty-processes/index.js';
 import { ptyProcesses } from '../pty-processes/tables.js';
 import { fakeBackendCatalog, PtyBackendCatalog, PtyRepository } from '../pty-processes/testing.js';
 import type { PtyBackendName } from '../pty-processes/testing.js';
+import { EditorReadinessProbe, type EditorProbeRunner } from './contexts/readiness.js';
 import { EditorContextRepository } from './contexts/repository.js';
-import {
-  EditorContextService,
-  makeEditorContextService,
-  type EditorContextServiceOptions,
-  type EditorProbeRunner,
-} from './contexts/service.js';
+import { EditorContextService } from './contexts/service.js';
 import type { EditorReadinessObservation } from './contexts/types.js';
 import type { ResolvedEditorInstallation } from './provisioning/install.js';
 import type { EditorProvisioning } from './provisioning/service.js';
@@ -205,6 +201,12 @@ export function editorBackendStub(
   } as PtyBackend;
 }
 
+/** What a test may change about the editor context service it builds. */
+export interface EditorContextServiceOptions {
+  /** Replaces the readiness probe the service forks per incarnation (`EditorReadinessProbe`). */
+  readonly probe?: EditorProbeRunner | undefined;
+}
+
 export interface EditorServiceHarnessInput {
   readonly dataRoot: string;
   /**
@@ -253,7 +255,11 @@ export function editorContextServiceLayer<E>(input: {
   readonly bus: Layer.Layer<InternalEvents, E>;
   readonly options?: EditorContextServiceOptions | undefined;
 }) {
-  return Layer.effect(EditorContextService, makeEditorContextService(input.options ?? {})).pipe(
+  const probe = input.options?.probe;
+  return EditorContextService.layerNoDeps.pipe(
+    Layer.provide(
+      probe === undefined ? Layer.empty : Layer.succeed(EditorReadinessProbe, { run: probe }),
+    ),
     Layer.provide(input.database),
     Layer.provide(input.workspace),
     Layer.provide(input.pty),
