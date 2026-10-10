@@ -4,50 +4,52 @@ import { harnessEnvForProcess } from '../env.js';
 import type { AgentSessionArtifacts } from '../ledger.js';
 import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
-export function buildClaudeLaunch(
+export const buildClaudeLaunch = Effect.fn('harnesses.buildClaudeLaunch')(function* (
   input: HarnessLaunchContext,
   dependencies: {
     readonly settingsPath: string;
     readonly artifacts: AgentSessionArtifacts['Service'];
   },
 ) {
-  return Effect.sync(() => {
-    console.info('[runtime] Claude harness launch envelope prepared', {
+  yield* Effect.logInfo('Claude harness launch envelope prepared').pipe(
+    Effect.annotateLogs({
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
       model: input.model,
       effort: input.effort,
       settingsPath: dependencies.settingsPath,
-    });
-    return {
-      command: 'claude',
-      args: [
-        ...(input.latestHarnessSessionId ? ['--resume', input.latestHarnessSessionId] : []),
-        ...(input.model ? ['--model', input.model] : []),
-        ...(input.effort ? ['--effort', input.effort] : []),
-        '--settings',
-        dependencies.settingsPath,
-      ],
-      cwd: input.cwd,
-      launchMode: 'user_shell' as const,
-      envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
-        harnessEnvForProcess({
-          agentSessionId: input.agentSessionId,
-          ptyProcessId,
-          artifacts: dependencies.artifacts,
-        }),
-    };
-  });
-}
+    }),
+  );
+  return {
+    command: 'claude',
+    args: [
+      ...(input.latestHarnessSessionId ? ['--resume', input.latestHarnessSessionId] : []),
+      ...(input.model ? ['--model', input.model] : []),
+      ...(input.effort ? ['--effort', input.effort] : []),
+      '--settings',
+      dependencies.settingsPath,
+    ],
+    cwd: input.cwd,
+    launchMode: 'user_shell' as const,
+    envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
+      harnessEnvForProcess({
+        agentSessionId: input.agentSessionId,
+        ptyProcessId,
+        artifacts: dependencies.artifacts,
+      }),
+  };
+});
 
-export function buildClaudeHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
-  return Effect.sync(() => {
-    console.info('[runtime] Claude headless launch envelope prepared', {
-      cwd: input.cwd,
-      model: input.model,
-      effort: input.effort,
-    });
+export const buildClaudeHeadlessLaunch = Effect.fn('harnesses.buildClaudeHeadlessLaunch')(
+  function* (input: HarnessHeadlessLaunchContext) {
+    yield* Effect.logInfo('Claude headless launch envelope prepared').pipe(
+      Effect.annotateLogs({
+        cwd: input.cwd,
+        model: input.model,
+        effort: input.effort,
+      }),
+    );
     return {
       command: 'claude',
       args: [
@@ -61,5 +63,5 @@ export function buildClaudeHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
       cwd: input.cwd,
       launchMode: 'user_shell' as const,
     };
-  });
-}
+  },
+);

@@ -104,7 +104,7 @@ const make = Effect.gen(function* () {
     yield* inventory.refresh;
     const cached = yield* inventory.getCached;
     if (cached._tag === 'Pending')
-      return yield* Effect.die('Inventory remained pending after refresh.');
+      return yield* Effect.die(new Error('Inventory remained pending after refresh.'));
     yield* reconcileCurrent(false);
     return { generation: cached.generation };
   });
@@ -121,47 +121,46 @@ const make = Effect.gen(function* () {
       return snapshotOf(current.harnesses, cached, rec, editor);
     }),
     refreshInventory: refresh,
-    acceptPolicy: (input) =>
-      Effect.gen(function* () {
-        // Prove reconciliation can run before committing: ensure inventory is
-        // Ready, refreshing once if it is still pending. If it cannot become
-        // Ready, fail BEFORE any config write so policy and revision stay
-        // untouched. This keeps the endpoint honest under ADR 0002 — a request
-        // failure never leaves a committed policy the caller cannot see.
-        let cached = yield* inventory.getCached;
-        if (cached._tag === 'Pending') {
-          yield* inventory.refresh;
-          cached = yield* inventory.getCached;
-        }
-        if (cached._tag === 'Pending')
-          return yield* Effect.fail(new ControlPlaneNotReady({ reason: 'inventory_unavailable' }));
+    acceptPolicy: Effect.fn('HarnessControlPlane.acceptPolicy')(function* (input) {
+      // Prove reconciliation can run before committing: ensure inventory is
+      // Ready, refreshing once if it is still pending. If it cannot become
+      // Ready, fail BEFORE any config write so policy and revision stay
+      // untouched. This keeps the endpoint honest under ADR 0002 — a request
+      // failure never leaves a committed policy the caller cannot see.
+      let cached = yield* inventory.getCached;
+      if (cached._tag === 'Pending') {
+        yield* inventory.refresh;
+        cached = yield* inventory.getCached;
+      }
+      if (cached._tag === 'Pending')
+        return yield* Effect.fail(new ControlPlaneNotReady({ reason: 'inventory_unavailable' }));
 
-        const accepted = yield* config.acceptHarnessPolicy({
-          expectedPolicyRevision: input.expectedPolicyRevision,
-          policy: input.policy as RuntimeHarnessPolicy,
-        });
-        // Inventory is Ready and the committed policy is valid, so reconciliation
-        // always yields a result. A null here would be a defect, never a
-        // post-commit ControlPlaneNotReady that could strand the caller's
-        // revision.
-        const result = yield* reconcileCurrent(false);
-        if (!result)
-          return yield* Effect.die(
-            new Error(
-              'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
-            ),
-          );
-        return {
-          acceptedPolicyRevision: accepted.harnesses.revision,
-          reconciledPolicyRevision: result.policyRevision,
-          inventoryGeneration: result.inventoryGeneration,
-          disposition:
-            accepted.harnesses.revision === result.policyRevision ? 'applied' : 'superseded',
-          reconciliation: result,
-        };
-      }),
-    assertCanCreateProcess: (harness) =>
-      Effect.gen(function* () {
+      const accepted = yield* config.acceptHarnessPolicy({
+        expectedPolicyRevision: input.expectedPolicyRevision,
+        policy: input.policy as RuntimeHarnessPolicy,
+      });
+      // Inventory is Ready and the committed policy is valid, so reconciliation
+      // always yields a result. A null here would be a defect, never a
+      // post-commit ControlPlaneNotReady that could strand the caller's
+      // revision.
+      const result = yield* reconcileCurrent(false);
+      if (!result)
+        return yield* Effect.die(
+          new Error(
+            'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
+          ),
+        );
+      return {
+        acceptedPolicyRevision: accepted.harnesses.revision,
+        reconciledPolicyRevision: result.policyRevision,
+        inventoryGeneration: result.inventoryGeneration,
+        disposition:
+          accepted.harnesses.revision === result.policyRevision ? 'applied' : 'superseded',
+        reconciliation: result,
+      };
+    }),
+    assertCanCreateProcess: Effect.fn('HarnessControlPlane.assertCanCreateProcess')(
+      function* (harness) {
         const current = yield* config.get;
         const cached = yield* inventory.getCached;
         const decision = harnessLaunchDecision(current.harnesses, cached, harness);
@@ -173,7 +172,8 @@ const make = Effect.gen(function* () {
               diagnostic: decision.diagnostic,
             }),
           );
-      }),
+      },
+    ),
   });
 });
 

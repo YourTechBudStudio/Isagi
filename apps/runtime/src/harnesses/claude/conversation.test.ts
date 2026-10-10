@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
+import { makeLogCapture, runScoped } from '@isagi/testing';
+
 import type { HarnessObservationRecord } from '../projection.js';
 import {
   nativeClaudeTranscriptPath,
@@ -748,25 +750,19 @@ test('Claude conversation finds native transcript by session id when stored unde
 });
 
 test('Claude conversation warns and returns empty for unreadable transcript paths', async () => {
-  const originalWarn = console.warn;
-  const warnings: unknown[][] = [];
-  console.warn = (...args: unknown[]) => {
-    warnings.push(args);
-  };
-  try {
-    const history = await Effect.runPromise(
-      readClaudeConversation({
-        agentSessionId: 10,
-        streams: [['claude-1', [stopRecord(0, '/missing/transcript.jsonl')]]],
-      }),
-    );
+  const logs = makeLogCapture();
+  const history = await runScoped(
+    readClaudeConversation({
+      agentSessionId: 10,
+      streams: [['claude-1', [stopRecord(0, '/missing/transcript.jsonl')]]],
+    }).pipe(Effect.provide(logs.layer)),
+  );
 
-    assert.deepEqual(history, []);
-    assert.equal(warnings.length, 1);
-    assert.equal(warnings[0]?.[0], '[runtime] Claude transcript could not be read');
-  } finally {
-    console.warn = originalWarn;
-  }
+  assert.deepEqual(history, []);
+  assert.deepEqual(
+    logs.lines.map((line) => [line.level, line.message, line.annotations.transcriptPath]),
+    [['Warn', 'Claude transcript could not be read', '/missing/transcript.jsonl']],
+  );
 });
 
 test('Claude conversation reads raw Stop transcript_path records', async () => {

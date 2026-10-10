@@ -1,16 +1,33 @@
 import { Effect, Layer } from 'effect';
 
+import type { DatabaseError } from '../platform/persistence/index.js';
 import {
   HarnessControlPlane,
   HarnessLaunchBlocked,
   type HarnessLaunchBlockReason,
 } from './control-plane/service.js';
+import { HarnessLedgerObserverInternals, type HarnessLedgerObserver } from './observer.service.js';
 
 /**
- * The observer's manual poll seam: drives one inventory-and-ledger pass synchronously so fixture
- * tests do not wait on the observer's own poll interval.
+ * The observer's poll steps, provided by `HarnessLedgerObserver.layer`/`layerNoDeps` beside the
+ * observer itself. Fixture tests drive a poll pass through it instead of waiting for the observer's
+ * own interval.
  */
-export { pollHarnessLedgerObserverForTest } from './observer.service.js';
+export { HarnessLedgerObserverInternals };
+
+/**
+ * Drives one observer poll pass (every live session) or, given an id, that one session's poll step.
+ * `observer` names the observer under test; the steps come from the layer that built it.
+ */
+export function pollHarnessLedgerObserverForTest(
+  _observer: HarnessLedgerObserver['Service'],
+  agentSessionId?: number,
+): Effect.Effect<void, DatabaseError, HarnessLedgerObserverInternals> {
+  return Effect.flatMap(HarnessLedgerObserverInternals, (internals) =>
+    agentSessionId === undefined ? internals.pollOnce : internals.pollAgentSession(agentSessionId),
+  );
+}
+
 export const allowAllHarnessControlPlane: HarnessControlPlane['Service'] = {
   start: Effect.void,
   snapshot: Effect.die('snapshot is not used'),

@@ -17,12 +17,15 @@ const make = Effect.gen(function* () {
   yield* prepareHarnessIntegrationArtifacts(directory.paths.root);
 
   return HarnessAdapterRegistry.of({
-    buildLaunch: (input) =>
-      harnessDefinition(input.harness).launch.interactive(input, {
+    buildLaunch: Effect.fn('HarnessAdapterRegistry.buildLaunch')(function* (input) {
+      return yield* harnessDefinition(input.harness).launch.interactive(input, {
         dataRoot: directory.paths.root,
         artifacts: sessionArtifacts,
-      }),
-    buildHeadlessLaunch: (input) => harnessDefinition(input.harness).launch.headless(input),
+      });
+    }),
+    buildHeadlessLaunch: Effect.fn('HarnessAdapterRegistry.buildHeadlessLaunch')(function* (input) {
+      return yield* harnessDefinition(input.harness).launch.headless(input);
+    }),
   });
 });
 

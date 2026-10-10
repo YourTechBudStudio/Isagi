@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import BetterSqlite from 'better-sqlite3';
 import { Effect } from 'effect';
 
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { HarnessObservationRecord } from '../projection.js';
 
 /**
@@ -188,17 +189,17 @@ function indexedCodexRolloutPath(input: {
     catch: (error) => error,
   }).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        if (!isMissingCodexIndexError(error)) {
-          console.warn('[runtime] Codex thread index could not be read', {
-            ...owningSession(input.agentSessionId),
-            harnessSessionId: input.harnessSessionId,
-            codexDirectory: input.codexDirectory,
-            error,
-          });
-        }
-        return null;
-      }),
+      isMissingCodexIndexError(error)
+        ? Effect.succeed(null)
+        : Effect.logWarning('Codex thread index could not be read').pipe(
+            Effect.annotateLogs({
+              ...owningSession(input.agentSessionId),
+              harnessSessionId: input.harnessSessionId,
+              codexDirectory: input.codexDirectory,
+              cause: describeOperationalCause(error),
+            }),
+            Effect.as(null),
+          ),
     ),
   );
 }
@@ -243,15 +244,15 @@ function readCodexConversationPage(input: {
     const historyBase = codexHistoryBase(currentEntries);
     if (!historyBase) return currentEntries;
     if (input.depth >= MAX_CODEX_HISTORY_DEPTH) {
-      warnCodexHistory(input, historyBase, 'history_depth_exceeded');
+      yield* warnCodexHistory(input, historyBase, 'history_depth_exceeded');
       return currentEntries;
     }
     if (input.visitedThreadIds.has(historyBase.threadId)) {
-      warnCodexHistory(input, historyBase, 'history_cycle');
+      yield* warnCodexHistory(input, historyBase, 'history_cycle');
       return currentEntries;
     }
     if (firstOrdinal(currentEntries) !== historyBase.endOrdinalExclusive) {
-      warnCodexHistory(input, historyBase, 'history_ordinal_mismatch');
+      yield* warnCodexHistory(input, historyBase, 'history_ordinal_mismatch');
       return currentEntries;
     }
 
@@ -285,7 +286,7 @@ function readCodexConversationPage(input: {
       return [...ancestorEntries, ...currentEntries];
     }
 
-    warnCodexHistory(input, historyBase, 'history_base_unavailable');
+    yield* warnCodexHistory(input, historyBase, 'history_base_unavailable');
     return currentEntries;
   });
 }
@@ -338,13 +339,15 @@ function warnCodexHistory(
     | 'history_depth_exceeded'
     | 'history_ordinal_mismatch',
 ) {
-  console.warn('[runtime] Codex paginated conversation history is degraded', {
-    code,
-    agentSessionId: input.agentSessionId,
-    harnessSessionId: input.rollout.harnessSessionId,
-    rolloutPath: input.rollout.path,
-    historyBaseThreadId: historyBase.threadId,
-  });
+  return Effect.logWarning('Codex paginated conversation history is degraded').pipe(
+    Effect.annotateLogs({
+      code,
+      agentSessionId: input.agentSessionId,
+      harnessSessionId: input.rollout.harnessSessionId,
+      rolloutPath: input.rollout.path,
+      historyBaseThreadId: historyBase.threadId,
+    }),
+  );
 }
 
 function findRolloutFiles(input: {
@@ -400,16 +403,17 @@ function readRolloutBuffer(input: {
     catch: (error) => error,
   }).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        if (input.missingIsExpected && isMissingFileError(error)) return null;
-        console.warn('[runtime] Codex rollout could not be read', {
-          ...owningSession(input.agentSessionId),
-          harnessSessionId: input.harnessSessionId,
-          rolloutPath: input.rolloutPath,
-          error,
-        });
-        return null;
-      }),
+      input.missingIsExpected && isMissingFileError(error)
+        ? Effect.succeed(null)
+        : Effect.logWarning('Codex rollout could not be read').pipe(
+            Effect.annotateLogs({
+              ...owningSession(input.agentSessionId),
+              harnessSessionId: input.harnessSessionId,
+              rolloutPath: input.rolloutPath,
+              cause: describeOperationalCause(error),
+            }),
+            Effect.as(null),
+          ),
     ),
   );
 }

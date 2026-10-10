@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import BetterSqlite from 'better-sqlite3';
 import { Effect } from 'effect';
 
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { HarnessConversationTurn } from '../definition-types.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
@@ -134,17 +135,17 @@ function readOpenCodeRows(input: {
     catch: (error) => error,
   }).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        if (!isMissingDatabaseError(error)) {
-          console.warn('[runtime] OpenCode conversation database could not be read', {
-            agentSessionId: input.agentSessionId,
-            harnessSessionId: input.harnessSessionId,
-            opencodeDirectory: input.opencodeDirectory,
-            error,
-          });
-        }
-        return null;
-      }),
+      isMissingDatabaseError(error)
+        ? Effect.succeed(null)
+        : Effect.logWarning('OpenCode conversation database could not be read').pipe(
+            Effect.annotateLogs({
+              agentSessionId: input.agentSessionId,
+              harnessSessionId: input.harnessSessionId,
+              opencodeDirectory: input.opencodeDirectory,
+              cause: describeOperationalCause(error),
+            }),
+            Effect.as(null),
+          ),
     ),
   );
 }
