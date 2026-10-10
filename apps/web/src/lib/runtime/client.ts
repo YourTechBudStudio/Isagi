@@ -479,6 +479,9 @@ export class RuntimeApi extends Context.Service<RuntimeApi, RuntimeApiShape>()(
   );
 }
 
+/** Never derived from the URL or its parser error, so it cannot echo credentials the URL carries. */
+const invalidRuntimeUrlMessage = 'The runtime URL is not a valid URL.';
+
 /**
  * The runtime API against whatever URL `currentRuntimeUrl` yields when each call runs.
  * `RuntimeApi.layer` passes the per-request resolver; tests pass `Effect.succeed(url)`.
@@ -503,18 +506,15 @@ export function makeRuntimeApi(
   /**
    * A socket or download URL under the runtime URL; no request is made. A runtime URL `new URL`
    * rejects (an external `localhost:4100`, say) is a runtime this client cannot reach, a typed
-   * failure as it is for requests, never a defect. The message is the parser's own (`Invalid URL`),
-   * which never echoes the value: a runtime URL can carry credentials.
+   * failure as it is for requests, never a defect. The message is fixed and the parser's error stays
+   * in `cause`: a runtime URL can carry credentials, and the parser's message differs by engine
+   * (Chromium and Node say `Invalid URL`; other engines may quote the input).
    */
   const atRuntimeUrl = (build: (runtimeUrl: string) => string) =>
     Effect.flatMap(currentRuntimeUrl, (runtimeUrl) =>
       Effect.try({
         try: () => build(runtimeUrl),
-        catch: (cause) =>
-          new RuntimeUrlUnavailable({
-            message: cause instanceof Error ? cause.message : String(cause),
-            cause,
-          }),
+        catch: (cause) => new RuntimeUrlUnavailable({ message: invalidRuntimeUrlMessage, cause }),
       }),
     );
 

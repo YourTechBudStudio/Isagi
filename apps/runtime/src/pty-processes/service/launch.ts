@@ -27,8 +27,8 @@ import {
   handleExit,
   releaseLaunch,
   reserveLaunch,
+  type PtyPendingExits,
   type PtyReservations,
-  type PtySupervisors,
 } from './lifecycle.js';
 import type { PtyPersistenceRetry } from './retry.js';
 import { spawnFailureMessage } from './runtime-namespace.js';
@@ -46,11 +46,12 @@ export interface PtyLaunchDependencies {
   readonly foreground: PtyForegroundState['Service'];
   readonly retry: PtyPersistenceRetry;
   /**
-   * One supervisor fiber per launched process, consuming its backend `events`. Owned by the PTY service scope, so a
-   * supervisor outlives the request that launched the process and is interrupted when the service shuts down. Its
-   * presence also tells observers that an exit may still be in flight (`isExitPending`).
+   * `supervisors` holds one supervisor fiber per launched process, consuming its backend `events`. Owned by the PTY
+   * service scope, so a supervisor outlives the request that launched the process and is interrupted when the service
+   * shuts down. A supervisor, or the deferred write it hands to `retry`, also tells observers that an exit may still
+   * be in flight (`isExitPending`).
    */
-  readonly supervisors: PtySupervisors;
+  readonly pendingExits: PtyPendingExits;
   readonly reservations: PtyReservations;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
@@ -393,13 +394,14 @@ function superviseProcess(
           deps.retry,
           deps.activeAttachments,
           deps.reservations.terminations,
+          deps.pendingExits.deferredWrites,
           ptyProcessId,
           { exitCode: event.exitCode, signal: event.signal },
         );
     }
   });
   return FiberMap.run(
-    deps.supervisors,
+    deps.pendingExits.supervisors,
     ptyProcessId,
     events.pipe(Stream.runForEach(onProcessEvent), Effect.annotateLogs({ ptyProcessId })),
   ).pipe(Effect.asVoid);

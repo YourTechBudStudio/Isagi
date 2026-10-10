@@ -163,7 +163,8 @@ test('runtime client resolves command log stream websocket URLs', () => {
 });
 
 test('runtime client fails socket URLs for a malformed runtime URL with RuntimeUrlUnavailable, not a defect', () => {
-  const client = runtimeApiAt('not a url');
+  // Malformed and carrying credentials: whatever the URL parser says about it, the message must not echo it.
+  const client = runtimeApiAt('http://user:secret@runtime.test:not-a-port');
 
   for (const resolve of [
     client.resolveRuntimeEventsWebSocketUrl(),
@@ -177,7 +178,9 @@ test('runtime client fails socket URLs for a malformed runtime URL with RuntimeU
     const failure = Cause.findErrorOption(exit.cause);
     assert.ok(Option.isSome(failure), 'a typed failure, not a defect');
     assert.equal(failure.value._tag, 'RuntimeUrlUnavailable');
-    assert.equal(failure.value.message, 'Invalid URL');
+    assert.equal(failure.value.message, 'The runtime URL is not a valid URL.');
+    assert.ok(!failure.value.message.includes('secret'));
+    assert.ok(failure.value.cause instanceof TypeError, 'the parser error stays in cause');
   }
 });
 

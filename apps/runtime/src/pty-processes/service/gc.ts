@@ -19,7 +19,7 @@ import type {
   PtyBackendGcSession,
 } from '../types.js';
 import { decodeBackendRef } from './backend-ref.js';
-import { isExitPending, type PtyLaunchReservations, type PtySupervisors } from './lifecycle.js';
+import { isExitPending, type PtyLaunchReservations, type PtyPendingExits } from './lifecycle.js';
 import { cleanupOrphanPtyLogs } from './logs.js';
 import { shellIntegrationSegments } from './shell-integration.js';
 
@@ -47,9 +47,9 @@ export function collectPtyGarbage(
     // this exclusion a spawn slower than the retention window could have its
     // row and its live process collected mid-launch.
     readonly pendingLaunches?: PtyLaunchReservations | undefined;
-    // The live supervisors: while one is present, a backend `missing` may be an exit it has not recorded yet
-    // (`isExitPending`), so that orphan row is kept for a later pass instead of being collected under it.
-    readonly supervisors?: PtySupervisors | undefined;
+    // Exits the backend reported but the row does not record yet (`isExitPending`): while one is pending, a backend
+    // `missing` is that exit, so the orphan row is kept for a later pass instead of being collected under its write.
+    readonly pendingExits?: PtyPendingExits | undefined;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -65,7 +65,7 @@ export function collectPtyGarbage(
         nowMs: options.nowMs ?? Date.now(),
         pinnedPtyProcessIds: options.pinnedPtyProcessIds ?? new Set(),
         pendingLaunches: options.pendingLaunches ?? new Map(),
-        supervisors: options.supervisors,
+        pendingExits: options.pendingExits,
       }),
     ).pipe(tagGcPhaseError('orphan_processes'));
     yield* diagnosticPhase(
@@ -175,7 +175,7 @@ function cleanupOrphanPtyProcesses(
     readonly nowMs: number;
     readonly pinnedPtyProcessIds: ReadonlySet<number>;
     readonly pendingLaunches: PtyLaunchReservations;
-    readonly supervisors: PtySupervisors | undefined;
+    readonly pendingExits: PtyPendingExits | undefined;
   },
 ) {
   return Effect.gen(function* () {
@@ -226,7 +226,7 @@ function cleanupOrphanPtyProcesses(
           statusReason: process.statusReason,
           cwd: process.cwd,
         },
-        cleanupOrphanPtyProcess(repository, catalog, process, options.supervisors),
+        cleanupOrphanPtyProcess(repository, catalog, process, options.pendingExits),
       );
     }
   });
@@ -236,14 +236,14 @@ function cleanupOrphanPtyProcess(
   repository: PtyRepository['Service'],
   catalog: PtyBackendCatalog['Service'],
   process: PtyProcessRow,
-  supervisors: PtySupervisors | undefined,
+  pendingExits: PtyPendingExits | undefined,
 ) {
   return Effect.gen(function* () {
     if (process.status === 'starting' || process.status === 'running') {
       const backendCleaned = yield* cleanupLiveOrphanPtyBackend(
         yield* catalog.forBackend(process.backend),
         process,
-        supervisors,
+        pendingExits,
       );
       if (!backendCleaned) return;
     }
@@ -261,7 +261,7 @@ function cleanupOrphanPtyProcess(
 function cleanupLiveOrphanPtyBackend(
   backend: PtyBackend,
   process: PtyProcessRow,
-  supervisors: PtySupervisors | undefined,
+  pendingExits: PtyPendingExits | undefined,
 ) {
   return Effect.gen(function* () {
     const ref = yield* decodeBackendRef(process).pipe(Effect.orElseSucceed(() => null));
@@ -279,9 +279,9 @@ function cleanupLiveOrphanPtyBackend(
       .inspect(ref)
       .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
     if (inspection.status === 'missing') {
-      // An exit the backend reported but the supervisor has not persisted yet: collecting the row now would race the
-      // supervisor's write. The next pass finds the row terminal and collects it then.
-      if (supervisors && isExitPending(supervisors, process.id)) {
+      // An exit the backend reported but the row does not record yet: collecting the row now would race that write.
+      // The next pass finds the row terminal and collects it then.
+      if (pendingExits && isExitPending(pendingExits, process.id)) {
         yield* Effect.logInfo(
           'Keeping orphan PTY process because its exit is still being recorded',
         ).pipe(Effect.annotateLogs({ backend: backend.name, ptyProcessId: process.id }));

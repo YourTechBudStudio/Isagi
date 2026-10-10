@@ -390,21 +390,29 @@ test('PTY GC keeps a missing orphan while its supervisor may still record the ex
         kill: () => Effect.die('a missing process must not be killed'),
       });
       const supervisors = yield* FiberMap.make<number, void, never>();
+      const deferredWrites = new Set<number>();
       yield* FiberMap.run(supervisors, process.id, Effect.never);
       const collect = collectPtyGarbage(
         repository,
         nodePtyCatalog(backend),
         'test-runtime',
         sessionsPath,
-        { nowMs: nowMs(), supervisors },
+        { nowMs: nowMs(), pendingExits: { supervisors, deferredWrites } },
       );
 
       yield* collect;
       assert.notEqual(yield* repository.findProcess(process.id), null);
       assert.equal(existsSync(process.logPath), true);
 
-      // The supervisor finished (its exit is recorded or was suppressed by a kill): the row is collectable again.
+      // The supervisor finished, but its exit write failed and the persistence retry now holds it: still pending.
       yield* FiberMap.remove(supervisors, process.id);
+      deferredWrites.add(process.id);
+      yield* collect;
+      assert.notEqual(yield* repository.findProcess(process.id), null);
+      assert.equal(existsSync(process.logPath), true);
+
+      // Nothing holds the exit any more (it is recorded, or a kill suppressed it): the row is collectable again.
+      deferredWrites.delete(process.id);
       yield* collect;
       assert.equal(yield* repository.findProcess(process.id), null);
       assert.equal(existsSync(process.logPath), false);

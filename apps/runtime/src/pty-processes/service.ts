@@ -40,8 +40,8 @@ import {
   isRowReserved,
   skipReservedRow,
   type DurablePtyTerminationReason,
+  type PtyPendingExits,
   type PtyReservations,
-  type PtySupervisors,
 } from './service/lifecycle.js';
 import {
   readPtyLogTail,
@@ -131,11 +131,14 @@ const make = Effect.gen(function* () {
   //   retry (drained last, while the repository is still open) -> supervisors -> shutdown sweep -> periodic loops
   //   (stopped first).
   const retry = yield* makePersistenceRetry;
-  const supervisors: PtySupervisors = yield* FiberMap.make<number, void, never>();
+  const pendingExits: PtyPendingExits = {
+    supervisors: yield* FiberMap.make<number, void, never>(),
+    deferredWrites: new Set(),
+  };
 
   mkdirSync(directory.paths.sessionsPath, { recursive: true });
   yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-  yield* reconcilePersistedProcesses(repository, catalog, eventBus, reservations, supervisors, {
+  yield* reconcilePersistedProcesses(repository, catalog, eventBus, reservations, pendingExits, {
     startup: true,
   });
   const collectGarbage = collectPtyGarbage(
@@ -143,7 +146,7 @@ const make = Effect.gen(function* () {
     catalog,
     namespace,
     directory.paths.sessionsPath,
-    { pinnedPtyProcessIds, pendingLaunches: reservations.launches, supervisors },
+    { pinnedPtyProcessIds, pendingLaunches: reservations.launches, pendingExits },
   );
   yield* collectGarbage;
 
@@ -155,7 +158,7 @@ const make = Effect.gen(function* () {
     eventBus,
     activeAttachments,
     terminations: reservations.terminations,
-    supervisors,
+    pendingExits,
     retry,
   };
 
@@ -165,7 +168,7 @@ const make = Effect.gen(function* () {
     eventBus,
     foreground,
     retry,
-    supervisors,
+    pendingExits,
     reservations,
     activeAttachments,
     runtimeNamespace: namespace,
@@ -221,7 +224,7 @@ const make = Effect.gen(function* () {
   yield* runPeriodically(
     'PTY status polling',
     settings.statusPollInterval,
-    reconcilePersistedProcesses(repository, catalog, eventBus, reservations, supervisors, {
+    reconcilePersistedProcesses(repository, catalog, eventBus, reservations, pendingExits, {
       startup: false,
     }),
   );
@@ -270,7 +273,7 @@ const make = Effect.gen(function* () {
         activeAttachments,
         pendingAttachments,
         reservations,
-        supervisors,
+        pendingExits,
         input,
       );
     }),
@@ -482,7 +485,7 @@ function attachToProcess(
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
   reservations: PtyReservations,
-  supervisors: PtySupervisors,
+  pendingExits: PtyPendingExits,
   input: {
     readonly ptyProcessId: number;
     readonly mode: PtyAttachmentMode;
@@ -545,7 +548,7 @@ function attachToProcess(
           backend,
           eventBus,
           reservations,
-          supervisors,
+          pendingExits,
           session,
           ref,
         );
@@ -704,7 +707,7 @@ export function reconcilePersistedProcesses(
   catalog: PtyBackendCatalog['Service'],
   eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
-  supervisors: PtySupervisors,
+  pendingExits: PtyPendingExits,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
@@ -756,8 +759,8 @@ export function reconcilePersistedProcesses(
           });
           break;
         case 'missing':
-          // An exit the backend reported but the supervisor has not persisted yet; its real code wins.
-          if (isExitPending(supervisors, session.id)) break;
+          // An exit the backend reported but the row does not record yet; its real code wins.
+          if (isExitPending(pendingExits, session.id)) break;
           yield* transitionIfChanged(repository, eventBus, session, {
             status: 'failed',
             statusReason:
@@ -774,7 +777,7 @@ function handleAttachFailure(
   backend: PtyBackendShape,
   eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
-  supervisors: PtySupervisors,
+  pendingExits: PtyPendingExits,
   session: PtyProcessRecord,
   ref: BackendSessionRef,
 ) {
@@ -783,9 +786,10 @@ function handleAttachFailure(
     // has no fixed cadence to bound a warning against, so logging here would
     // make diagnostics depend on how often a user tries to attach.
     if (isRowReserved(reservations, session.id)) return;
-    // Equally defer to a supervisor that may hold an exit the backend reported but has not persisted yet: a node-pty
-    // attach fails with "not live" in exactly that window, and the supervisor is about to write the real exit code.
-    if (isExitPending(supervisors, session.id)) return;
+    // Equally defer to an exit the backend reported but the row does not record yet: a node-pty attach fails with
+    // "not live" in exactly that window, and the supervisor (or the retry it handed a failed write to) is about to
+    // write the real exit code.
+    if (isExitPending(pendingExits, session.id)) return;
     if (session.backend === 'node_pty') {
       yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',

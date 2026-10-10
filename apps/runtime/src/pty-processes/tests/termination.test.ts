@@ -15,7 +15,8 @@ import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { PtyRepository } from '../repository.js';
 import { reconcilePersistedProcesses } from '../service.js';
 import type { ActiveAttachment } from '../service/attachments.js';
-import { handleExit, type PtySupervisors, type PtyTerminations } from '../service/lifecycle.js';
+import { cleanupPtyProcess } from '../service/cleanup.js';
+import { handleExit, type PtyPendingExits, type PtyTerminations } from '../service/lifecycle.js';
 import { terminatePtyProcess } from '../service/termination.js';
 import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
 import {
@@ -58,7 +59,7 @@ interface Harness {
   readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly terminations: PtyTerminations;
-  readonly supervisors: PtySupervisors;
+  readonly pendingExits: PtyPendingExits;
   readonly retry: ReturnType<typeof manualPtyPersistenceRetry>;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly ptyProcessId: number;
@@ -84,7 +85,10 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
           repository,
           bus: publishOnlyRecordingEventBus('termination tests do not subscribe'),
           terminations: new Map(),
-          supervisors: yield* FiberMap.make<number, void, never>(),
+          pendingExits: {
+            supervisors: yield* FiberMap.make<number, void, never>(),
+            deferredWrites: new Set(),
+          },
           retry: manualPtyPersistenceRetry(),
           activeAttachments: new Map(),
           ptyProcessId,
@@ -162,6 +166,7 @@ test('a kill that errors while an exit arrives is already_absent, and the exit i
               harness.retry,
               harness.activeAttachments,
               harness.terminations,
+              harness.pendingExits.deferredWrites,
               harness.ptyProcessId,
               { exitCode: 3, signal: null },
             );
@@ -192,6 +197,7 @@ test('an absent backend with a captured exit persists that exit and reports alre
             harness.retry,
             harness.activeAttachments,
             harness.terminations,
+            harness.pendingExits.deferredWrites,
             harness.ptyProcessId,
             { exitCode: 0, signal: null },
           ).pipe(Effect.as({ terminated: false })),
@@ -220,6 +226,7 @@ test('an affirmative kill discards its own captured exit and records killed', as
             harness.retry,
             harness.activeAttachments,
             harness.terminations,
+            harness.pendingExits.deferredWrites,
             harness.ptyProcessId,
             { exitCode: 0, signal: 'SIGTERM' },
           ).pipe(Effect.as({ terminated: true })),
@@ -371,6 +378,7 @@ test('a deferred captured-exit write keeps the row reserved until the retry land
             harness.retry,
             harness.activeAttachments,
             harness.terminations,
+            harness.pendingExits.deferredWrites,
             harness.ptyProcessId,
             { exitCode: 0, signal: null },
           ).pipe(Effect.as({ terminated: false })),
@@ -408,6 +416,7 @@ test('a captured-exit retry keeps trying until it settles', async () => {
             harness.retry,
             harness.activeAttachments,
             harness.terminations,
+            harness.pendingExits.deferredWrites,
             harness.ptyProcessId,
             { exitCode: 0, signal: null },
           ).pipe(Effect.as({ terminated: false })),
@@ -509,7 +518,7 @@ test('a poller pass leaves a reserved row alone instead of assigning it a compet
         catalog,
         harness.bus.service,
         { terminations: harness.terminations, launches: new Map() },
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
 
@@ -535,7 +544,7 @@ test('a poller pass still classifies rows no attempt has reserved', async () => 
         catalog,
         harness.bus.service,
         { terminations: harness.terminations, launches: new Map() },
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
 
@@ -554,13 +563,13 @@ test('a poller pass leaves a missing row alone while its supervisor may still ho
       const catalog = catalogWith(
         backendStub('node_pty', { inspect: () => Effect.succeed({ status: 'missing' as const }) }),
       );
-      yield* FiberMap.run(harness.supervisors, harness.ptyProcessId, Effect.never);
+      yield* FiberMap.run(harness.pendingExits.supervisors, harness.ptyProcessId, Effect.never);
       const reconcile = reconcilePersistedProcesses(
         harness.repository,
         catalog,
         harness.bus.service,
         { terminations: harness.terminations, launches: new Map() },
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
 
@@ -571,11 +580,108 @@ test('a poller pass leaves a missing row alone while its supervisor may still ho
       assert.deepEqual(harness.bus.events, []);
 
       // Once the supervisor is gone without having recorded an exit, `missing` is evidence again.
-      yield* FiberMap.remove(harness.supervisors, harness.ptyProcessId);
+      yield* FiberMap.remove(harness.pendingExits.supervisors, harness.ptyProcessId);
       yield* reconcile;
       const classified = yield* harness.repository.findProcess(harness.ptyProcessId);
       assert.equal(classified?.status, 'failed');
       assert.equal(classified?.statusReason, 'runtime_ephemeral_lost');
+    }),
+  );
+});
+
+// The supervisor's own exit write can fail (a transient database error). It then hands the write to the retry and its
+// events stream ends, so the supervisor leaves the map while the row still reads `running` and the backend answers
+// `missing`. The deferred write must keep the exit pending until the retry settles it, or a generic observer lands a
+// permanent `runtime_ephemeral_lost` over the real exit code in the retry window.
+function deferUnreservedExit(harness: Harness, exit: { exitCode: number; signal: null }) {
+  return handleExit(
+    repositoryFailingWrites(harness, 1).repository,
+    harness.bus.service,
+    harness.retry,
+    harness.activeAttachments,
+    harness.terminations,
+    harness.pendingExits.deferredWrites,
+    harness.ptyProcessId,
+    exit,
+  );
+}
+
+test('an unreserved exit whose write is deferred stays pending until the retry records it', async () => {
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      const catalog = catalogWith(
+        backendStub('node_pty', {
+          inspect: () => Effect.succeed({ status: 'missing' as const }),
+          kill: () => Effect.die('a process whose exit is pending must not be killed'),
+        }),
+      );
+      yield* deferUnreservedExit(harness, { exitCode: 0, signal: null });
+      assert.equal(harness.retry.pendingCount(), 1);
+      assert.equal(
+        FiberMap.hasUnsafe(harness.pendingExits.supervisors, harness.ptyProcessId),
+        false,
+      );
+
+      // The database recovered before the retry fired. Neither a poller pass nor a cleanup audit may pre-empt the exit.
+      yield* reconcilePersistedProcesses(
+        harness.repository,
+        catalog,
+        harness.bus.service,
+        { terminations: harness.terminations, launches: new Map() },
+        harness.pendingExits,
+        { startup: false },
+      );
+      const cleanup = yield* cleanupPtyProcess(
+        {
+          repository: harness.repository,
+          catalog,
+          eventBus: harness.bus.service,
+          activeAttachments: harness.activeAttachments,
+          terminations: harness.terminations,
+          pendingExits: harness.pendingExits,
+          retry: harness.retry,
+        },
+        { ptyProcessId: harness.ptyProcessId, reason: 'user_requested' },
+      );
+      assert.equal(cleanup, 'already_terminal');
+      const pending = yield* harness.repository.findProcess(harness.ptyProcessId);
+      assert.equal(pending?.status, 'running');
+      assert.equal(pending?.statusReason, null);
+      assert.equal(harness.bus.events.length, 0);
+
+      yield* harness.retry.runPending;
+
+      const recorded = yield* harness.repository.findProcess(harness.ptyProcessId);
+      assert.equal(recorded?.status, 'exited');
+      assert.equal(recorded?.statusReason, null);
+      assert.equal(recorded?.exitCode, 0);
+      assert.equal(harness.bus.events.length, 1);
+      assert.equal(harness.bus.events[0]?.type, 'pty_process_exited');
+      assert.equal(harness.pendingExits.deferredWrites.size, 0);
+      assert.equal(harness.retry.pendingCount(), 0);
+    }),
+  );
+});
+
+test('a deferred exit write rejected by a terminal row stops holding the exit as pending', async () => {
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      yield* deferUnreservedExit(harness, { exitCode: 3, signal: null });
+      assert.equal(harness.pendingExits.deferredWrites.has(harness.ptyProcessId), true);
+
+      // Another terminal fact got there first. A rejection settles the retry just as a write does.
+      yield* harness.repository.transitionProcess({
+        ptyProcessId: harness.ptyProcessId,
+        status: 'killed',
+        statusReason: 'user_requested',
+      });
+      yield* harness.retry.runPending;
+
+      const row = yield* harness.repository.findProcess(harness.ptyProcessId);
+      assert.equal(row?.status, 'killed');
+      assert.deepEqual(harness.bus.events, []);
+      assert.equal(harness.pendingExits.deferredWrites.size, 0);
+      assert.equal(harness.retry.pendingCount(), 0);
     }),
   );
 });

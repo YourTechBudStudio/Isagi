@@ -72,14 +72,31 @@ export function isRowReserved(reservations: PtyReservations, ptyProcessId: numbe
 export type PtySupervisors = FiberMap.FiberMap<number, void, never>;
 
 // The exit-in-flight window. A backend learns about an exit in its own callback, stops reporting the process as live
-// there, and only enqueues `Exited`; the supervisor persists it on a later scheduler turn. In between the row still
-// reads `running` while `inspect` answers `missing` and `attach` answers "not live". So while a row's supervisor is
-// still present, a `missing` verdict is not evidence that the process vanished: the supervisor is about to record the
-// real exit (code, signal), and a generic `runtime_ephemeral_lost`/`backend_process_missing` written first would win
-// permanently under terminal immutability. Only that verdict defers: the poller still reconciles a supervised row
-// whose backend answers `alive`.
-export function isExitPending(supervisors: PtySupervisors, ptyProcessId: number) {
-  return FiberMap.hasUnsafe(supervisors, ptyProcessId);
+// there, and only enqueues `Exited`; the row records it later. Until it does, the row still reads `running` while
+// `inspect` answers `missing` and `attach` answers "not live", so a `missing` verdict is not evidence that the process
+// vanished: the real exit (code, signal) is about to be recorded, and a generic
+// `runtime_ephemeral_lost`/`backend_process_missing` written first would win permanently under terminal immutability.
+//
+// Two holders cover the window end to end, and the second takes over before the first lets go:
+// - the row's supervisor, from the backend callback until it handles `Exited` and its stream ends;
+// - `deferredWrites`, when the supervisor's exit write failed and it handed that write to the persistence retry. The
+//   supervisor adds the id before its stream can end, and the retry removes it once the write applies or is rejected
+//   by an already-terminal row. A retry abandoned at shutdown leaves its id behind, like a termination reservation
+//   left to a retry does; the service is closing, and the next startup reconciles the row.
+export interface PtyPendingExits {
+  readonly supervisors: PtySupervisors;
+  readonly deferredWrites: PtyDeferredExitWrites;
+}
+
+export type PtyDeferredExitWrites = Set<number>;
+
+// Only the `missing` verdict defers to a pending exit: the poller still reconciles a supervised row whose backend
+// answers `alive`.
+export function isExitPending(pendingExits: PtyPendingExits, ptyProcessId: number) {
+  return (
+    FiberMap.hasUnsafe(pendingExits.supervisors, ptyProcessId) ||
+    pendingExits.deferredWrites.has(ptyProcessId)
+  );
 }
 
 // The poller's variant: same membership answer, plus the age report the fixed
@@ -204,6 +221,7 @@ export function handleExit(
   retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
+  deferredExitWrites: PtyDeferredExitWrites,
   ptyProcessId: number,
   exit: PtyExit,
 ) {
@@ -220,29 +238,46 @@ export function handleExit(
       );
       return;
     }
-    yield* persistExit(repository, eventBus, retry, activeAttachments, ptyProcessId, exit);
+    yield* persistExit(
+      repository,
+      eventBus,
+      retry,
+      activeAttachments,
+      deferredExitWrites,
+      ptyProcessId,
+      exit,
+    );
   });
 }
 
-// Persist an exit that no termination attempt is reserving.
+// Persist an exit that no termination attempt is reserving. If the first write fails, the exit stays pending
+// (`deferredExitWrites`) until the retry settles it: the supervisor running this ends as soon as the retry is
+// submitted, and without the entry an observer could relabel the clean exit as a generic `missing` failure in the
+// retry window — the same window `persistCapturedExitAndRelease` closes with its reservation.
 function persistExit(
   repository: PtyRepository['Service'],
   eventBus: InternalEvents['Service'],
   retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
+  deferredExitWrites: PtyDeferredExitWrites,
   ptyProcessId: number,
   exit: PtyExit,
 ) {
+  const settle = Effect.sync(() => {
+    deferredExitWrites.delete(ptyProcessId);
+  });
   return persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
     Effect.catch((error) =>
-      logPersistFailure('Failed to persist PTY exit', ptyProcessId, error).pipe(
-        Effect.andThen(
-          retry.submit(
-            `exit ptyProcessId=${ptyProcessId}`,
-            persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit),
+      Effect.gen(function* () {
+        deferredExitWrites.add(ptyProcessId);
+        yield* logPersistFailure('Failed to persist PTY exit', ptyProcessId, error);
+        yield* retry.submit(
+          `exit ptyProcessId=${ptyProcessId}`,
+          persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
+            Effect.andThen(settle),
           ),
-        ),
-      ),
+        );
+      }),
     ),
     Effect.asVoid,
   );

@@ -17,16 +17,24 @@ import { transitionProcessAndPublish } from './events.js';
 import {
   isExitPending,
   type DurablePtyTerminationReason,
-  type PtySupervisors,
+  type PtyPendingExits,
   type PtyTerminations,
 } from './lifecycle.js';
 import type { PtyPersistenceRetry } from './retry.js';
 import { terminatePtyProcess } from './termination.js';
 
-// What this cleanup attempt established about the incarnation, and nothing
-// more. `terminated` means it killed something live; `already_terminal` means
-// the incarnation is durably finished — either it already was, or this attempt
-// verified there is nothing behind it to kill.
+// What this cleanup attempt established about the incarnation's process, and
+// nothing more. `terminated` means it killed something live. `already_terminal`
+// means nothing is left behind the incarnation to kill: its row is already
+// terminal, or this attempt verified that the backend has nothing (`inspect`
+// answered `missing`, or a kill found the process already gone), or the backend
+// has reported an exit that is about to be recorded (`isExitPending`).
+//
+// The outcome describes the process, not the row. When a kill found the
+// process already gone, or an exit is about to be recorded, the row can still
+// read `running` when the caller sees this outcome, until the incarnation's own
+// terminal fact lands; a caller must not re-read the row expecting a terminal
+// status.
 //
 // Deliberately *not* an outcome: "probably gone". Every case where the process
 // truth could not be established travels on the error channel, because both
@@ -46,7 +54,7 @@ export interface PtyCleanupDependencies {
   readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
-  readonly supervisors: PtySupervisors;
+  readonly pendingExits: PtyPendingExits;
   readonly retry: PtyPersistenceRetry;
 }
 
@@ -111,10 +119,10 @@ export function cleanupPtyProcess(
     }
 
     if (inspection.status === 'missing') {
-      // The backend has reported this exit but its supervisor has not persisted it yet. Nothing is left to kill, and
-      // the supervisor is about to write the real exit code or signal, so this attempt writes nothing that could
-      // pre-empt it.
-      if (isExitPending(deps.supervisors, session.id)) return 'already_terminal' as const;
+      // The backend has reported this exit but the row does not record it yet. Nothing is left to kill, and the real
+      // exit code or signal is about to be written (by the supervisor, or by the retry it handed a failed write to), so
+      // this attempt writes nothing that could pre-empt it.
+      if (isExitPending(deps.pendingExits, session.id)) return 'already_terminal' as const;
       // Guarded: if some other observer already recorded this incarnation's
       // death, that first fact stands and this write is rejected. Either way
       // the process is accounted for.

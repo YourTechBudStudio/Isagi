@@ -17,7 +17,7 @@ import { PtyRepository } from '../repository.js';
 import { reconcilePersistedProcesses } from '../service.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from '../service/launch.js';
-import type { PtyReservations, PtySupervisors } from '../service/lifecycle.js';
+import type { PtyPendingExits, PtyReservations } from '../service/lifecycle.js';
 import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
 import {
   PtyStartError,
@@ -68,7 +68,7 @@ interface Harness {
   readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly reservations: PtyReservations;
-  readonly supervisors: PtySupervisors;
+  readonly pendingExits: PtyPendingExits;
   readonly sessionsPath: string;
   readonly dependencies: (
     backend: PtyBackendShape,
@@ -92,12 +92,15 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
         const repository = yield* PtyRepository;
         const bus = publishOnlyRecordingEventBus('launch allocation tests do not subscribe');
         const reservations: PtyReservations = { terminations: new Map(), launches: new Map() };
-        const supervisors = yield* FiberMap.make<number, void, never>();
+        const pendingExits: PtyPendingExits = {
+          supervisors: yield* FiberMap.make<number, void, never>(),
+          deferredWrites: new Set(),
+        };
         return yield* body({
           repository,
           bus,
           reservations,
-          supervisors,
+          pendingExits,
           sessionsPath: paths.paths.sessionsPath,
           dependencies: (backend, override) => ({
             repository: override ?? repository,
@@ -109,7 +112,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
               isWorking: () => false,
             },
             retry: manualPtyPersistenceRetry(),
-            supervisors,
+            pendingExits,
             reservations,
             activeAttachments: new Map(),
             runtimeNamespace: 'testns',
@@ -215,7 +218,7 @@ test('a poller pass between allocate and start leaves the row starting', async (
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
 
@@ -354,7 +357,7 @@ test('cancelling mid-spawn never terminalizes off an absence observation', async
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
       const adopted = yield* harness.repository.findProcess(allocation.ptyProcessId);
@@ -385,7 +388,7 @@ test('a hung spawn keeps its reservation and stays out of the poller', async () 
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
 
@@ -571,7 +574,7 @@ test('a post-launch persistence failure returns metadata without killing', async
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
-        harness.supervisors,
+        harness.pendingExits,
         { startup: false },
       );
       const healed = yield* harness.repository.findProcess(allocation.ptyProcessId);

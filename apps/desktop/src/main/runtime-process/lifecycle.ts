@@ -148,7 +148,12 @@ const make = Effect.gen(function* () {
     }
   };
 
-  /** Edge adapter: the only place Node's child-process callbacks are registered. */
+  /**
+   * Edge adapter: the only place Node's child-process callbacks are registered. Scoped: `terminate` is registered as
+   * soon as the child exists, before any listener is attached, so a throw while attaching (a defect the run reports as
+   * `process_error`) still signals the child when the run's scope closes. Uninterruptible like an `acquireRelease`
+   * acquire, so a stop cannot land between creating the child and registering its termination.
+   */
   const spawn = (specification: RuntimeSpawnSpecification) =>
     Effect.gen(function* () {
       const exited = yield* Deferred.make<ExitFacts>();
@@ -160,7 +165,27 @@ const make = Effect.gen(function* () {
       });
       const stdout = new LosslessLineDecoder();
       const stderr = new LosslessLineDecoder();
+      /** Removes exactly the listeners that were attached, so a partial attachment releases cleanly. */
+      const detach: Array<() => void> = [];
       let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        for (const line of stdout.end()) forward('stdout', line);
+        for (const line of stderr.end()) forward('stderr', line);
+        for (const remove of detach.splice(0)) remove();
+      };
+      const attached: AttachedChild = { child, exited, processError, readyUrl, release };
+      yield* Effect.addFinalizer(() => terminate(attached));
+
+      // Releasing before completing `exited` keeps the final partial lines ahead of whatever the exit causes.
+      const onExit = (code: number | null, exitSignal: NodeJS.Signals | null) => {
+        release();
+        Deferred.doneUnsafe(exited, Effect.succeed({ code, signal: exitSignal }));
+      };
+      const onError = (error: Error) => {
+        Deferred.doneUnsafe(processError, Effect.succeed(error));
+      };
       const onStdout = (chunk: Buffer) => {
         for (const line of stdout.write(chunk)) {
           forward('stdout', line);
@@ -170,30 +195,19 @@ const make = Effect.gen(function* () {
       const onStderr = (chunk: Buffer) => {
         for (const line of stderr.write(chunk)) forward('stderr', line);
       };
-      const onError = (error: Error) => {
-        Deferred.doneUnsafe(processError, Effect.succeed(error));
-      };
-      const release = () => {
-        if (released) return;
-        released = true;
-        for (const line of stdout.end()) forward('stdout', line);
-        for (const line of stderr.end()) forward('stderr', line);
-        child.stdout.off('data', onStdout);
-        child.stderr.off('data', onStderr);
-        child.off('error', onError);
-        child.off('exit', onExit);
-      };
-      // Releasing before completing `exited` keeps the final partial lines ahead of whatever the exit causes.
-      const onExit = (code: number | null, exitSignal: NodeJS.Signals | null) => {
-        release();
-        Deferred.doneUnsafe(exited, Effect.succeed({ code, signal: exitSignal }));
-      };
-      child.stdout.on('data', onStdout);
-      child.stderr.on('data', onStderr);
-      child.once('error', onError);
-      child.once('exit', onExit);
-      return { child, exited, processError, readyUrl, release } satisfies AttachedChild;
-    });
+      // `exit` first: once it is attached, `terminate` observes the exit even if a later attachment throws.
+      yield* Effect.sync(() => {
+        child.once('exit', onExit);
+        detach.push(() => child.off('exit', onExit));
+        child.once('error', onError);
+        detach.push(() => child.off('error', onError));
+        child.stdout.on('data', onStdout);
+        detach.push(() => child.stdout.off('data', onStdout));
+        child.stderr.on('data', onStderr);
+        detach.push(() => child.stderr.off('data', onStderr));
+      });
+      return attached;
+    }).pipe(Effect.uninterruptible);
 
   /**
    * The configured health check, with anything it throws (a defect, or a synchronous throw from building the check)
@@ -223,7 +237,7 @@ const make = Effect.gen(function* () {
           Effect.fail(failure('stage_invalid', { message: errorMessage(defect) })),
         ),
       );
-      const attached = yield* Effect.acquireRelease(spawn(specification), terminate);
+      const attached = yield* spawn(specification);
 
       // Until the runtime is ready, an exit or a process error ends startup.
       const exitBeforeReady = Deferred.await(attached.exited).pipe(

@@ -575,8 +575,40 @@ test('a defect in the supervising fiber is published as a terminal failure, neve
       );
       const snapshot = yield* snapshotOf(process);
       assert.equal(snapshot.state === 'failed' ? snapshot.reason : undefined, 'process_error');
+      // The child already existed when attaching failed: the failed run terminates it, without waiting for a stop.
+      assert.deepEqual(subject.signals, ['SIGTERM']);
+      assert.equal(subject.child.listenerCount('exit'), 0);
+      assert.equal(subject.child.listenerCount('error'), 0);
     }),
   );
+  assert.deepEqual(subject.signals, ['SIGTERM']);
+});
+
+test('a child whose exit cannot be observed is still terminated when attaching its listeners fails', async () => {
+  const subject = harness();
+  subject.child.once = (() => {
+    throw new Error('exit listener rejected');
+  }) as typeof subject.child.once;
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const started = yield* Effect.forkChild(Effect.result(process.start));
+      yield* settle;
+      const result = yield* Fiber.join(started);
+      assert.equal(failureReason(result), 'process_error');
+      assert.deepEqual(subject.signals, ['SIGTERM']);
+      // No exit listener, so the exit after SIGTERM goes unseen: termination escalates and stays bounded.
+      yield* TestClock.adjust(stopGrace);
+      yield* settle;
+      assert.deepEqual(subject.signals, ['SIGTERM', 'SIGKILL']);
+      yield* TestClock.adjust('1 second');
+      yield* settle;
+      assert.deepEqual(
+        subject.logs.map((record) => record.payload),
+        ['Managed runtime did not report exit after SIGKILL; abandoning observation.\n'],
+      );
+    }),
+  );
+  assert.deepEqual(subject.signals, ['SIGTERM', 'SIGKILL']);
 });
 
 test('a stop that outlives SIGKILL abandons observation and releases the child', async () => {

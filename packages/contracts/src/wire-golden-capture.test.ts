@@ -1,12 +1,17 @@
 /**
  * The wire-golden capture tool (`scripts/capture-wire-goldens.ts`) is how a deliberate, reviewed wire
- * change is recorded. These tests keep it runnable on the installed effect: every entry recaptured
- * with `--only` must be reproducible from the current schema, and a merge must touch only the named
- * entries so the rest of the frozen oracle stays as captured.
+ * change is recorded. These tests keep it runnable on the installed effect: every entry the tool
+ * wrote (an entry with its own `capturedWith` stamp) must be reproducible from the current schema,
+ * and a merge must touch only the named entries so the rest of the frozen oracle stays as captured.
+ *
+ * The reproducibility check does not depend on the exact installed effect version. After an effect
+ * bump it fails only when the sampler's output really changed for a stamped entry, and names the
+ * entries to recapture with `--only` (see `AGENTS.md`).
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { isDeepStrictEqual } from 'node:util';
 
 import { Schema } from 'effect';
 
@@ -25,20 +30,36 @@ import {
 const frozenText = readFileSync(goldensFile, 'utf8');
 const frozen = JSON.parse(frozenText) as WireGoldensFile;
 
-test('every golden recaptured on the installed effect is reproduced by the capture tool', () => {
+/** Entries the capture tool wrote: each carries the effect version it was captured with. */
+const stamped = frozen.goldens.filter((golden) => golden.capturedWith !== undefined);
+
+test('every golden the capture tool wrote is reproduced on the installed effect', () => {
+  assert.ok(stamped.length > 0, 'no golden carries its own capturedWith stamp');
   const schemas = collectSchemas();
-  const recaptured = frozen.goldens.filter((golden) => golden.capturedWith === installedEffect());
-  assert.ok(recaptured.length > 0, 'no golden was recaptured on the installed effect');
-  for (const { capturedWith: _stamp, ...stored } of recaptured) {
+  const unresolved: string[] = [];
+  const changed: string[] = [];
+  for (const { capturedWith: _stamp, ...stored } of stamped) {
     const schema = schemas.get(stored.name);
-    assert.ok(schema !== undefined, `${stored.name} no longer resolves`);
-    assert.deepEqual(captureGolden(stored.name, schema), stored);
+    if (schema === undefined) {
+      unresolved.push(stored.name);
+    } else if (!isDeepStrictEqual(captureGolden(stored.name, schema), stored)) {
+      changed.push(stored.name);
+    }
   }
+  assert.deepEqual(unresolved, [], `stamped goldens no longer resolve: ${unresolved.join(', ')}`);
+  assert.deepEqual(
+    changed,
+    [],
+    `sampler output changed on ${installedEffect()}; if no wire changed, recapture after the effect bump with --only ${changed.join(',')}`,
+  );
 });
 
 test('merging the stored entries back reproduces the frozen file byte for byte', () => {
-  const stored = frozen.goldens.filter((golden) => golden.capturedWith === installedEffect());
-  assert.equal(serializeGoldens(mergeGoldens(frozen, stored, installedEffect())), frozenText);
+  // Merge each entry back with its own stamp, so the merge cannot restamp it with the installed effect.
+  const byStamp = Map.groupBy(stamped, (golden) => golden.capturedWith ?? frozen.capturedWith);
+  let merged = frozen;
+  for (const [stamp, group] of byStamp) merged = mergeGoldens(merged, group, stamp);
+  assert.equal(serializeGoldens(merged), frozenText);
 });
 
 test('a merge replaces only the named entries and keeps the file stamp', () => {

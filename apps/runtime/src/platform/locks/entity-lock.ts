@@ -1,8 +1,11 @@
 import { Context, Effect, Layer, Semaphore } from 'effect';
 
 // Per-entity mutual exclusion for operations that must not interleave on the
-// same durable entity, lifted out of `session-lifecycle.service.ts` so the two
-// domains that need it cannot drift on the semantics.
+// same durable entity. It lives in `platform` so every domain that takes it
+// shares one set of semantics: durable sessions (`environment/sessions/lifecycle.ts`),
+// editor contexts (`editor/contexts/service.ts`, and `environment/surfaces`
+// when it opens or releases an editor) and project commands
+// (`commands/service.ts`).
 //
 // The keys are deliberately one closed union rather than an opaque string: a
 // lock is only useful when every caller agrees on what it names, and a free-form
