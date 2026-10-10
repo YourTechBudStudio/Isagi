@@ -14,27 +14,26 @@ type PtyProcessRecord = InferSelectModel<typeof ptyProcesses>;
 type AgentSessionRecord = InferSelectModel<typeof agentSessions>;
 type TerminalSessionRecord = InferSelectModel<typeof terminalSessions>;
 
-export function agentSessionRow(
+/** Joins a session row with its harness metadata file and active process. Runs once per row read: untraced. */
+export const agentSessionRow = Effect.fnUntraced(function* (
   artifacts: AgentSessionArtifacts['Service'],
   row: AgentSessionRecord,
   process: PtyProcessRecord | null,
-): Effect.Effect<AgentSessionRow> {
-  return Effect.gen(function* () {
-    const metadata = yield* artifacts.readMetadata(row.id);
-    return {
-      ...agentMetadataFields(metadata),
-      id: row.id,
-      worktreeId: row.worktreeId,
-      harness: row.harness,
-      cwd: row.cwd,
-      activePtyProcessId: row.activePtyProcessId,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      lastSeenAt: row.lastSeenAt,
-      activePtyProcess: process ? ptyProcessRow(process) : null,
-    };
-  });
-}
+): Effect.fn.Return<AgentSessionRow> {
+  const metadata = yield* artifacts.readMetadata(row.id);
+  return {
+    ...agentMetadataFields(metadata),
+    id: row.id,
+    worktreeId: row.worktreeId,
+    harness: row.harness,
+    cwd: row.cwd,
+    activePtyProcessId: row.activePtyProcessId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    lastSeenAt: row.lastSeenAt,
+    activePtyProcess: process ? ptyProcessRow(process) : null,
+  };
+});
 
 function agentMetadataFields(metadata: AgentSessionHarnessMetadataRead) {
   switch (metadata.status) {

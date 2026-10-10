@@ -5,13 +5,9 @@ import type { AttentionSource, AttentionState, TerminalAttentionState } from '@i
 
 import { AgentSessionArtifacts, HarnessLedgerObserver } from '../../harnesses/index.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
-import {
-  PtyForegroundState,
-  ptyProcessRow,
-  type PtyProcessRow,
-} from '../../pty-processes/index.js';
+import { PtyForegroundState, type PtyProcessRow } from '../../pty-processes/index.js';
 import { ptyProcesses } from '../../pty-processes/tables.js';
-import { agentSessionRow } from '../sessions/row-mappers.js';
+import { agentSessionRow, terminalSessionRow } from '../sessions/row-mappers.js';
 import { deriveAgentSessionState } from '../sessions/status.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
 import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from '../tables.js';
@@ -23,14 +19,18 @@ const make = Effect.gen(function* () {
   const observer = yield* HarnessLedgerObserver;
 
   const service = AgentSessionAttentionProjection.of({
-    agentSessionAttention: (session) =>
-      Effect.gen(function* () {
-        const harnessAttention = yield* observer.getAttention(session.id);
-        return deriveAgentSessionAttention(session, harnessAttention ?? 'idle');
-      }),
+    // Runs once per agent row on every attention read: untraced.
+    agentSessionAttention: Effect.fnUntraced(function* (session) {
+      const harnessAttention = yield* observer.getAttention(session.id);
+      return deriveAgentSessionAttention(session, harnessAttention ?? 'idle');
+    }),
     terminalSessionAttention: (session) => deriveTerminalSessionAttention(session, foreground),
-    listAttentionSources: Effect.suspend(() => listAttentionSources(artifacts, database, service)),
-    workingAgentCount: Effect.suspend(() => workingAgentCount(artifacts, database, service)),
+    listAttentionSources: Effect.suspend(() =>
+      listAttentionSources(artifacts, database, service),
+    ).pipe(Effect.withSpan('AgentSessionAttentionProjection.listAttentionSources')),
+    workingAgentCount: Effect.suspend(() => workingAgentCount(artifacts, database, service)).pipe(
+      Effect.withSpan('AgentSessionAttentionProjection.workingAgentCount'),
+    ),
   });
   return service;
 });
@@ -55,8 +55,8 @@ export class AgentSessionAttentionProjection extends Context.Service<
 }
 
 function workingAgentCount(
-  artifacts: import('../../harnesses/index.js').AgentSessionArtifacts['Service'],
-  database: import('../../platform/persistence/index.js').RuntimeDatabase['Service'],
+  artifacts: AgentSessionArtifacts['Service'],
+  database: RuntimeDatabase['Service'],
   attention: Pick<AgentSessionAttentionProjection['Service'], 'agentSessionAttention'>,
 ) {
   return Effect.gen(function* () {
@@ -80,8 +80,8 @@ function workingAgentCount(
 }
 
 function listAttentionSources(
-  artifacts: import('../../harnesses/index.js').AgentSessionArtifacts['Service'],
-  database: import('../../platform/persistence/index.js').RuntimeDatabase['Service'],
+  artifacts: AgentSessionArtifacts['Service'],
+  database: RuntimeDatabase['Service'],
   attention: Pick<
     AgentSessionAttentionProjection['Service'],
     'agentSessionAttention' | 'terminalSessionAttention'
@@ -155,35 +155,6 @@ function listAttentionSources(
 
 function attentionSourceKey(source: AttentionSource) {
   return `${source.source.kind}:${source.source.id}`;
-}
-
-function terminalSessionRow(
-  row: typeof terminalSessions.$inferSelect,
-  process: typeof ptyProcesses.$inferSelect | null,
-): TerminalSessionRow {
-  return {
-    id: row.id,
-    worktreeId: row.worktreeId,
-    cwd: row.cwd,
-    shellCommand: row.shellCommand,
-    shellArgs: decodeArgs(row.shellArgsJson),
-    shellArgsJson: row.shellArgsJson,
-    activePtyProcessId: row.activePtyProcessId,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    activePtyProcess: process ? ptyProcessRow(process) : null,
-  };
-}
-
-function decodeArgs(json: string) {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 function deriveAgentSessionAttention(

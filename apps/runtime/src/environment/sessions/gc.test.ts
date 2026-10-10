@@ -14,19 +14,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer } from 'effect';
+import { Effect, Exit, Layer, Scope } from 'effect';
+import { TestClock } from 'effect/testing';
+
+import { makeLogCapture, runScoped, runWithTestClock } from '@isagi/testing';
 
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
-import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
+import {
+  DatabaseError,
+  DataDirectory,
+  emptyOrphanSweepStats,
+  RuntimeDatabase,
+} from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { projects, worktrees } from '../../projects/tables.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { agentSessions } from '../tables.js';
 import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
-import { makeSessionGc } from './gc.js';
+import { collectSessionGarbage, SessionGc } from './gc.js';
 import { SessionLifecycle } from './lifecycle.js';
+import type { AgentSessionRow } from './types.js';
 
 // Two hours: past the one-hour folder grace and the one-minute row grace.
 const oldDate = new Date(Date.now() - 2 * 60 * 60_000);
@@ -35,7 +44,7 @@ test('the session GC tick deletes orphan agent folders and keeps live, young and
   const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-session-gc-folders-')));
   try {
     const root = join(dataRoot, 'sessions', 'agent-sessions');
-    await runWithSessionGc(dataRoot, ({ tick, artifacts }) =>
+    await runWithSessionGc(dataRoot, ({ artifacts }) =>
       Effect.gen(function* () {
         yield* seedWorktree();
         yield* seedAgentSession(11, new Date().toISOString());
@@ -45,7 +54,7 @@ test('the session GC tick deletes orphan agent folders and keeps live, young and
         backdateFolder(join(root, '13'));
         writeFileSync(join(root, '13', 'ledger.harness.jsonl'), '{}\n');
 
-        yield* tick;
+        yield* collectSessionGarbage;
       }),
     );
 
@@ -62,7 +71,7 @@ test('deleting an agent session removes its row and leaves its folder to the col
   const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-session-gc-row-only-')));
   try {
     const folder = join(dataRoot, 'sessions', 'agent-sessions', '10');
-    await runWithSessionGc(dataRoot, ({ tick, agents, artifacts }) =>
+    await runWithSessionGc(dataRoot, ({ agents, artifacts }) =>
       Effect.gen(function* () {
         yield* seedWorktree();
         yield* seedAgentSession(10, new Date().toISOString());
@@ -73,7 +82,7 @@ test('deleting an agent session removes its row and leaves its folder to the col
         assert.equal(existsSync(folder), true);
 
         backdateFolder(folder);
-        yield* tick;
+        yield* collectSessionGarbage;
         assert.equal(existsSync(folder), false);
       }),
     );
@@ -94,7 +103,7 @@ test('the session GC tick never follows links out of the agent folder root', asy
     mkdirSync(root, { recursive: true });
     symlinkSync(worktree, join(root, '30'));
 
-    await runWithSessionGc(dataRoot, ({ tick }) => tick);
+    await runWithSessionGc(dataRoot, () => collectSessionGarbage);
 
     assert.equal(existsSync(join(worktree, 'index.ts')), true);
     assert.equal(existsSync(join(worktree, '31')), true);
@@ -104,26 +113,23 @@ test('the session GC tick never follows links out of the agent folder root', asy
   }
 });
 
-test('a defect in the folder phase is logged and the next tick still runs the row phase', async (context) => {
+test('a defect in the folder phase is logged and the next tick still runs the row phase', async () => {
   const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-session-gc-defect-')));
-  const warnings: unknown[][] = [];
-  context.mock.method(console, 'warn', (...args: unknown[]) => {
-    warnings.push(args);
-  });
+  const logs = makeLogCapture();
   try {
     await runWithSessionGc(
       dataRoot,
-      ({ tick, agents }) =>
+      ({ agents }) =>
         Effect.gen(function* () {
           yield* seedWorktree();
           yield* seedAgentSession(10, oldDate.toISOString());
-          yield* tick;
+          yield* collectSessionGarbage;
           assert.equal(yield* agents.find(10), null);
 
           yield* seedAgentSession(11, oldDate.toISOString());
-          yield* tick;
+          yield* collectSessionGarbage;
           assert.equal(yield* agents.find(11), null);
-        }),
+        }).pipe(Effect.provide(logs.layer)),
       (artifacts) => ({
         ...artifacts,
         collectOrphanFolders: () =>
@@ -131,54 +137,195 @@ test('a defect in the folder phase is logged and the next tick still runs the ro
       }),
     );
 
-    const folderFailures = warnings.filter(
-      ([message]) => message === '[runtime] orphan agent folder GC failed',
+    const folderFailures = logs.lines.filter(
+      (line) => line.message === 'Orphan agent folder GC failed',
     );
     assert.equal(folderFailures.length, 2);
-    assert.match(String(folderFailures[0]?.[1]), /folder phase exploded/);
+    assert.equal(folderFailures[0]?.level, 'Warn');
+    assert.match(folderFailures[0]?.cause ?? '', /folder phase exploded/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 
+test('the GC tick runs once per interval on the layer scope', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const fake = makeFakeSessions([{ id: 1, worktreeId: 9 }]);
+      yield* Layer.build(SessionGc.layerNoDeps.pipe(Layer.provide(fake.layer)));
+      assert.equal(fake.state.listCalls, 0);
+      yield* TestClock.adjust('59 seconds');
+      assert.equal(fake.state.listCalls, 0);
+      yield* TestClock.adjust('1 second');
+      assert.equal(fake.state.listCalls, 1);
+      assert.equal(fake.state.folderPasses, 1);
+      assert.deepEqual(fake.state.rows, []);
+      assert.deepEqual(fake.state.deletedEvents, [1]);
+      yield* TestClock.adjust('1 minute');
+      assert.equal(fake.state.listCalls, 2);
+      assert.equal(fake.state.folderPasses, 2);
+    }),
+  ));
+
+test('a failed tick is logged as a warning and the next tick still runs', () => {
+  const logs = makeLogCapture();
+  return runWithTestClock(
+    Effect.gen(function* () {
+      const fake = makeFakeSessions([{ id: 1, worktreeId: 9 }]);
+      yield* Layer.build(SessionGc.layerNoDeps.pipe(Layer.provide(fake.layer)));
+      fake.state.failNext = true;
+      yield* TestClock.adjust('1 minute');
+      assert.deepEqual(
+        logs.lines.map((line) => [line.level, line.message]),
+        [['Warn', 'Orphan session GC failed']],
+      );
+      assert.match(logs.lines[0]?.cause ?? '', /disk I\/O error/);
+      assert.deepEqual(
+        fake.state.rows.map((row) => row.id),
+        [1],
+      );
+      // The folder phase ran although the row phase failed.
+      assert.equal(fake.state.folderPasses, 1);
+      yield* TestClock.adjust('1 minute');
+      assert.deepEqual(fake.state.rows, []);
+      assert.equal(logs.lines.length, 1);
+    }).pipe(Effect.provide(logs.layer)),
+  );
+});
+
+test('closing the layer scope stops the tick fiber (no leaked timer)', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const fake = makeFakeSessions([]);
+      const scope = yield* Scope.make();
+      yield* Layer.buildWithScope(SessionGc.layerNoDeps.pipe(Layer.provide(fake.layer)), scope);
+      yield* TestClock.adjust('1 minute');
+      assert.equal(fake.state.listCalls, 1);
+      yield* Scope.close(scope, Exit.void);
+      yield* TestClock.adjust('10 minutes');
+      assert.equal(fake.state.listCalls, 1);
+      assert.equal(fake.state.folderPasses, 1);
+    }),
+  ));
+
+/**
+ * In-memory session rows behind partial repository fakes, with call counters and an injectable list failure. Only
+ * agent rows are seeded; terminal rows are always empty.
+ */
+function makeFakeSessions(
+  seed: ReadonlyArray<{ readonly id: number; readonly worktreeId: number }>,
+) {
+  const state = {
+    rows: [...seed],
+    listCalls: 0,
+    folderPasses: 0,
+    failNext: false,
+    deletedEvents: [] as number[],
+  };
+  const layer = Layer.mergeAll(
+    Layer.mock(AgentSessionRepository)({
+      listOrphans: () =>
+        Effect.suspend(() => {
+          state.listCalls++;
+          if (state.failNext) {
+            state.failNext = false;
+            return Effect.fail(
+              new DatabaseError({
+                operation: 'list_orphan_agent_sessions',
+                cause: new Error('disk I/O error'),
+              }),
+            );
+          }
+          return Effect.succeed(state.rows.map((row) => fakeAgentRow(row.id, row.worktreeId)));
+        }),
+      delete: (id) =>
+        Effect.sync(() => {
+          state.rows = state.rows.filter((row) => row.id !== id);
+        }),
+      listIds: Effect.sync(() => new Set(state.rows.map((row) => row.id))),
+    }),
+    Layer.mock(TerminalSessionRepository)({ listOrphans: () => Effect.succeed([]) }),
+    Layer.mock(SessionLifecycle)({
+      hasActiveAttachment: () => Effect.succeed(false),
+      supersedeAttachment: () => Effect.void,
+    }),
+    Layer.mock(AgentSessionArtifacts)({
+      paths: () => assert.fail('paths is not used by the session GC'),
+      collectOrphanFolders: () =>
+        Effect.sync(() => {
+          state.folderPasses++;
+          return emptyOrphanSweepStats;
+        }),
+    }),
+    Layer.mock(InternalEvents)({
+      publish: (event) =>
+        Effect.sync(() => {
+          if (event.type === 'durable_session_deleted') {
+            state.deletedEvents.push(event.identity.sessionId);
+          }
+        }),
+    }),
+  );
+  return { state, layer };
+}
+
+function fakeAgentRow(id: number, worktreeId: number): AgentSessionRow {
+  return {
+    id,
+    worktreeId,
+    harness: 'pi',
+    cwd: '/repo/isagi',
+    harnessSessionId: null,
+    harnessMetadataStatus: 'valid',
+    harnessMetadataDiagnostic: null,
+    activePtyProcessId: null,
+    createdAt: oldDate.toISOString(),
+    updatedAt: oldDate.toISOString(),
+    lastSeenAt: null,
+    activePtyProcess: null,
+  };
+}
+
+/** Runs `body` against real repositories over a temporary data root, with the live clock. */
 function runWithSessionGc<E>(
   dataRoot: string,
   body: (input: {
-    readonly tick: Effect.Effect<void>;
     readonly agents: AgentSessionRepository['Service'];
     readonly artifacts: AgentSessionArtifacts['Service'];
-  }) => Effect.Effect<void, E, RuntimeDatabase>,
+  }) => Effect.Effect<
+    void,
+    E,
+    | RuntimeDatabase
+    | AgentSessionArtifacts
+    | AgentSessionRepository
+    | InternalEvents
+    | SessionLifecycle
+    | TerminalSessionRepository
+  >,
   wrapArtifacts: (
     artifacts: AgentSessionArtifacts['Service'],
   ) => AgentSessionArtifacts['Service'] = (artifacts) => artifacts,
 ) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
-  const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directory));
+  const artifacts = Layer.effect(
+    AgentSessionArtifacts,
+    Effect.gen(function* () {
+      return wrapArtifacts(yield* AgentSessionArtifacts);
+    }),
+  ).pipe(Layer.provide(AgentSessionArtifacts.layer.pipe(Layer.provide(directory))));
   const layer = Layer.mergeAll(
     AgentSessionRepository.layerNoDeps,
     TerminalSessionRepository.layer,
     SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer)),
     InternalEvents.layer,
-    artifacts,
-    database,
-  ).pipe(Layer.provide(artifacts), Layer.provide(database));
+  ).pipe(Layer.provideMerge(artifacts), Layer.provideMerge(database));
 
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const agents = yield* AgentSessionRepository;
-        const sessionArtifacts = wrapArtifacts(yield* AgentSessionArtifacts);
-        const { tick } = makeSessionGc({
-          agents,
-          terminals: yield* TerminalSessionRepository,
-          lifecycle: yield* SessionLifecycle,
-          events: yield* InternalEvents,
-          artifacts: sessionArtifacts,
-        });
-        yield* body({ tick, agents, artifacts: sessionArtifacts });
-      }).pipe(Effect.provide(layer)),
-    ),
+  return runScoped(
+    Effect.gen(function* () {
+      const agents = yield* AgentSessionRepository;
+      yield* body({ agents, artifacts: yield* AgentSessionArtifacts });
+    }).pipe(Effect.provide(layer)),
   );
 }
 

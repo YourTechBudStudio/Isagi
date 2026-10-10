@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 
 import { InternalEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
@@ -12,13 +12,21 @@ export interface TerminalSessionEnsureActiveOptions {
   readonly replaceEphemeralProcess?: boolean | undefined;
 }
 
-export class TerminalSessionError extends Error {
-  readonly _tag = 'TerminalSessionError';
-  constructor(
-    readonly code: 'session_not_found' | 'active_process_missing' | 'active_process_not_running',
-    message: string,
-  ) {
-    super(message);
+export type TerminalSessionErrorCode =
+  | 'session_not_found'
+  | 'active_process_missing'
+  | 'active_process_not_running';
+
+/**
+ * A terminal session operation was refused. Constructed positionally (`new TerminalSessionError(code, message)`), as
+ * it was before it became a tagged error, so existing call sites keep their shape.
+ */
+export class TerminalSessionError extends Data.TaggedError('TerminalSessionError')<{
+  readonly code: TerminalSessionErrorCode;
+  readonly message: string;
+}> {
+  constructor(code: TerminalSessionErrorCode, message: string) {
+    super({ code, message });
   }
 }
 
@@ -31,78 +39,73 @@ const make = Effect.gen(function* () {
   const publishChanged = (terminalSessionId: number) =>
     eventBus.publish({ type: 'terminal_session_changed', terminalSessionId });
 
-  const launchProcessForSession = (session: TerminalSessionRow) =>
-    Effect.gen(function* () {
-      const process = yield* pty.launch({
-        command: session.shellCommand,
-        args: session.shellArgs,
-        cwd: session.cwd,
-        shellIntegration: true,
-      });
-      yield* repository.setActivePtyProcess({
-        terminalSessionId: session.id,
-        ptyProcessId: process.ptyProcessId,
-      });
-      yield* publishChanged(session.id);
-      return process.ptyProcessId;
+  const launchProcessForSession = Effect.fnUntraced(function* (session: TerminalSessionRow) {
+    const process = yield* pty.launch({
+      command: session.shellCommand,
+      args: session.shellArgs,
+      cwd: session.cwd,
+      shellIntegration: true,
     });
-
-  const ensureActivePtyProcess = (
-    terminalSessionId: number,
-    options?: TerminalSessionEnsureActiveOptions,
-  ) =>
-    lifecycle.withRestoreLock(
-      { kind: 'terminal_session', sessionId: terminalSessionId },
-      Effect.gen(function* () {
-        const session = yield* findTerminalSessionOrFail(repository, terminalSessionId);
-        const process = session.activePtyProcess;
-        const replaceEphemeralProcess =
-          options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
-        const canReuseActiveProcess =
-          session.activePtyProcessId &&
-          !replaceEphemeralProcess &&
-          (process?.status === 'running' || process?.status === 'starting');
-        if (canReuseActiveProcess) {
-          return session.activePtyProcessId;
-        }
-        return yield* launchProcessForSession(session);
-      }),
-    );
+    yield* repository.setActivePtyProcess({
+      terminalSessionId: session.id,
+      ptyProcessId: process.ptyProcessId,
+    });
+    yield* publishChanged(session.id);
+    return process.ptyProcessId;
+  });
 
   return TerminalSessionService.of({
-    startFresh: (input) =>
-      Effect.gen(function* () {
-        const shellCommand = terminalShellCommand();
-        const terminalSessionId = yield* repository.create({
-          worktreeId: input.worktreeId,
-          cwd: input.cwd,
-          shellCommand,
-          shellArgs: [],
-        });
-        yield* publishChanged(terminalSessionId);
-        return { terminalSessionId };
-      }),
-    get: (terminalSessionId) => findTerminalSessionOrFail(repository, terminalSessionId),
-    ensureActivePtyProcess,
-    activePtyProcessId: (terminalSessionId) =>
-      Effect.gen(function* () {
+    startFresh: Effect.fn('TerminalSessionService.startFresh')(function* (input) {
+      const shellCommand = terminalShellCommand();
+      const terminalSessionId = yield* repository.create({
+        worktreeId: input.worktreeId,
+        cwd: input.cwd,
+        shellCommand,
+        shellArgs: [],
+      });
+      yield* publishChanged(terminalSessionId);
+      return { terminalSessionId };
+    }),
+    get: Effect.fn('TerminalSessionService.get')(function* (terminalSessionId) {
+      return yield* findTerminalSessionOrFail(repository, terminalSessionId);
+    }),
+    ensureActivePtyProcess: Effect.fn('TerminalSessionService.ensureActivePtyProcess')(
+      function* (terminalSessionId, options) {
+        return yield* lifecycle.withRestoreLock(
+          { kind: 'terminal_session', sessionId: terminalSessionId },
+          Effect.gen(function* () {
+            const session = yield* findTerminalSessionOrFail(repository, terminalSessionId);
+            const process = session.activePtyProcess;
+            const replaceEphemeralProcess =
+              options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+            const canReuseActiveProcess =
+              session.activePtyProcessId &&
+              !replaceEphemeralProcess &&
+              (process?.status === 'running' || process?.status === 'starting');
+            if (canReuseActiveProcess) {
+              return session.activePtyProcessId;
+            }
+            return yield* launchProcessForSession(session);
+          }),
+        );
+      },
+    ),
+    activePtyProcessId: Effect.fn('TerminalSessionService.activePtyProcessId')(
+      function* (terminalSessionId) {
         const session = yield* findTerminalSessionOrFail(repository, terminalSessionId);
         if (!session.activePtyProcessId || !session.activePtyProcess)
-          return yield* Effect.fail(
-            new TerminalSessionError(
-              'active_process_missing',
-              `Terminal session ${terminalSessionId} has no active PTY process.`,
-            ),
+          return yield* new TerminalSessionError(
+            'active_process_missing',
+            `Terminal session ${terminalSessionId} has no active PTY process.`,
           );
         if (session.activePtyProcess.status !== 'running')
-          return yield* Effect.fail(
-            new TerminalSessionError(
-              'active_process_not_running',
-              `Terminal session ${terminalSessionId} active process is not running.`,
-            ),
+          return yield* new TerminalSessionError(
+            'active_process_not_running',
+            `Terminal session ${terminalSessionId} active process is not running.`,
           );
         return session.activePtyProcessId;
-      }),
+      },
+    ),
   });
 });
 
@@ -136,20 +139,16 @@ export class TerminalSessionService extends Context.Service<
   );
 }
 
-function findTerminalSessionOrFail(
-  repository: import('./repository.js').TerminalSessionRepository['Service'],
+const findTerminalSessionOrFail = Effect.fnUntraced(function* (
+  repository: TerminalSessionRepository['Service'],
   terminalSessionId: number,
 ) {
-  return Effect.gen(function* () {
-    const session = yield* repository.find(terminalSessionId);
-    if (!session) {
-      return yield* Effect.fail(
-        new TerminalSessionError(
-          'session_not_found',
-          `Terminal session ${terminalSessionId} was not found.`,
-        ),
-      );
-    }
-    return session;
-  });
-}
+  const session = yield* repository.find(terminalSessionId);
+  if (!session) {
+    return yield* new TerminalSessionError(
+      'session_not_found',
+      `Terminal session ${terminalSessionId} was not found.`,
+    );
+  }
+  return session;
+});

@@ -1,285 +1,296 @@
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError } from '@isagi/contracts';
+import { apiEndpoints, type ApiError, type SessionLaunchRejectedError } from '@isagi/contracts';
 
-import { editorApiError } from '../../editor/index.js';
-import { HarnessLaunchBlocked } from '../../harnesses/index.js';
+import { editorApiError, type EditorUnavailable } from '../../editor/index.js';
+import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';
 import {
-  registerLegacyApiEndpoint,
-  type ApiRouteContext,
-  errorMessage,
+  registerApiEndpoint,
+  type ApiRejected,
+  type ApiRequest,
+  type Rejection,
   type RouteRuntime,
 } from '../../platform/http/index.js';
-import { DatabaseError } from '../../platform/persistence/index.js';
-import { SurfaceError, SurfaceOrderError } from './errors.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { SurfaceError, SurfaceOrderError } from './errors.js';
 import { SurfaceService } from './service.js';
 
+/**
+ * The surfaces routes, plus `editor.open`, which is a placement. Each endpoint maps the service's tagged failures next
+ * to it; `DatabaseError` passes through to the platform's `runtime_database_failed`, which every surfaces endpoint
+ * declares.
+ */
 export function registerSurfacesApi(
   fastify: FastifyInstance,
   runtime: RouteRuntime<SurfaceService>,
 ) {
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.get, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.getSurfaceDetail(params.surfaceId);
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.get, (request) =>
+    SurfaceService.use((surfaces) => surfaces.getSurfaceDetail(request.params.surfaceId)).pipe(
+      Effect.catchTag('SurfaceError', (error) => request.reject(surfaceRejection(error))),
+    ),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.rename, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.renameSurface({
-          surfaceId: params.surfaceId,
-          title: input.title,
-        });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.rename, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.renameSurface({ surfaceId: request.params.surfaceId, title: request.body.title }),
+    ).pipe(Effect.catchTag('SurfaceError', (error) => request.reject(surfaceRejection(error)))),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.delete, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.deleteSurface(params.surfaceId);
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.delete, (request) =>
+    SurfaceService.use((surfaces) => surfaces.deleteSurface(request.params.surfaceId)).pipe(
+      Effect.catchTag('SurfaceError', (error) => request.reject(surfaceRejection(error))),
+    ),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.deletePane, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.deleteSurfacePane({
-          surfaceId: params.surfaceId,
-          paneId: params.paneId,
-        });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.deletePane, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.deleteSurfacePane({
+        surfaceId: request.params.surfaceId,
+        paneId: request.params.paneId,
       }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+    ).pipe(Effect.catchTag('SurfaceError', (error) => request.reject(surfaceRejection(error)))),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.setWorktreeEnvironmentFocus, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.setWorktreeEnvironmentFocus({
-          worktreeId: params.worktreeId,
-          focus: input,
-        });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(
+    fastify,
+    runtime,
+    apiEndpoints.surfaces.setWorktreeEnvironmentFocus,
+    (request) =>
+      SurfaceService.use((surfaces) =>
+        surfaces.setWorktreeEnvironmentFocus({
+          worktreeId: request.params.worktreeId,
+          focus: request.body,
+        }),
+      ).pipe(
+        Effect.catchTag('SurfaceError', (error) =>
+          Effect.flatMap(environmentFocusRejection(error), request.reject),
+        ),
+      ),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.createSurface, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.createSurface({
-          worktreeId: params.worktreeId,
-          initialPane: input.initialPane,
-        });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.createSurface, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.createSurface({
+        worktreeId: request.params.worktreeId,
+        initialPane: request.body.initialPane,
       }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+    ).pipe(rejectPaneSessionFailures(request.reject)),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.splitPane, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.splitPane({ worktreeId: params.worktreeId, split: input });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.splitPane, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.splitPane({ worktreeId: request.params.worktreeId, split: request.body }),
+    ).pipe(rejectPaneSessionFailures(request.reject)),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.startPane, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.startPane({ surfaceId: params.surfaceId, start: input });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.startPane, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.startPane({ surfaceId: request.params.surfaceId, start: request.body }),
+    ).pipe(rejectPaneSessionFailures(request.reject)),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.setSplitWeights, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.setSplitWeights({ surfaceId: params.surfaceId, weights: input });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.setSplitWeights, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.setSplitWeights({ surfaceId: request.params.surfaceId, weights: request.body }),
+    ).pipe(Effect.catchTag('SurfaceError', (error) => request.reject(surfaceRejection(error)))),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.createPaneSession, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.createPaneSession({ worktreeId: params.worktreeId, create: input });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.createPaneSession, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.createPaneSession({ worktreeId: request.params.worktreeId, create: request.body }),
+    ).pipe(rejectPaneSessionFailures(request.reject)),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.claimPaneSession, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.claimPaneSession({ worktreeId: params.worktreeId, claim: input });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.claimPaneSession, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.claimPaneSession({ worktreeId: request.params.worktreeId, claim: request.body }),
+    ).pipe(rejectPaneSessionFailures(request.reject)),
+  );
 
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.moveOrder, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.moveSurfaceOrder({
-          worktreeId: params.worktreeId,
-          surfaceId: params.surfaceId,
-          beforeSurfaceId: input.beforeSurfaceId,
-        });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.surfaces.moveOrder, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.moveSurfaceOrder({
+        worktreeId: request.params.worktreeId,
+        surfaceId: request.params.surfaceId,
+        beforeSurfaceId: request.body.beforeSurfaceId,
       }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-  });
+    ).pipe(
+      Effect.catchTag('SurfaceOrderError', (error) => request.reject(surfaceOrderRejection(error))),
+    ),
+  );
 
   // Opening an editor is a placement: the surfaces service resolves (or creates) the pane and
-  // asks the editor domain for the context it binds there.
-  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.editor.open, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.openEditor({
-          worktreeId: params.worktreeId,
-          intoSurfaceId: input.intoSurfaceId,
-        });
+  // asks the editor domain for the context it binds there. It answers in the editor's error
+  // vocabulary.
+  registerApiEndpoint(fastify, runtime, apiEndpoints.editor.open, (request) =>
+    SurfaceService.use((surfaces) =>
+      surfaces.openEditor({
+        worktreeId: request.params.worktreeId,
+        intoSurfaceId: request.body.intoSurfaceId,
       }),
-    mapError: toEditorOpenApiError,
-  });
+    ).pipe(
+      Effect.catchTags({
+        SurfaceError: (error) => request.reject(editorOpenSurfaceRejection(error)),
+        EditorUnavailable: (error) => request.reject(editorOpenEditorRejection(error, request)),
+        DatabaseError: (error) => request.reject(editorOpenEditorRejection(error, request)),
+      }),
+    ),
+  );
+}
+
+/** The rejection union every surfaces endpoint but focus and reorder declares (`surfaceApiErrorSchema`). */
+type SurfaceRejection = Rejection<typeof apiEndpoints.surfaces.get>;
+type EnvironmentFocusRejection = Rejection<
+  typeof apiEndpoints.surfaces.setWorktreeEnvironmentFocus
+>;
+type SurfaceOrderRejection = Rejection<typeof apiEndpoints.surfaces.moveOrder>;
+type EditorOpenRejection = Rejection<typeof apiEndpoints.editor.open>;
+
+/**
+ * `SurfaceError`'s codes are exactly the contract's `surface_rejected` reasons, so the reason maps straight through
+ * and a code added to one without the other fails to compile here.
+ */
+export function surfaceRejection(error: SurfaceError) {
+  return {
+    code: 'surface_rejected',
+    status: 400,
+    message: error.message,
+    data: {
+      reason: error.code,
+      ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+      ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
+      ...(error.paneId ? { paneId: error.paneId } : {}),
+      ...(error.sessionId ? { sessionId: error.sessionId } : {}),
+    },
+  } satisfies SurfaceRejection;
 }
 
 /**
- * `editor.open` answers in the editor's error vocabulary. Its surface failures are mapped here;
- * every other failure (the editor's own, the database) goes to the editor mapper, which is total
- * over the editor error union.
+ * Setting the environment focus refuses only a missing worktree, surface, or pane. Any other surface code reaching
+ * this route is a runtime bug, not a reason the contract can carry.
  */
-function toEditorOpenApiError(error: unknown, context: ApiRouteContext): ApiError {
-  if (error instanceof SurfaceError) {
-    // Translated rather than delegated, because the editor's own refusal
-    // vocabulary already names it and the palette reads one reason set. The
-    // target-surface refusals (`surface_not_found`, `surface_not_empty`) are
-    // surfaces conditions and delegate as such; the rest are unreachable from
-    // `openEditor` in practice, but the type channel carries them, so
-    // delegation keeps this mapper total.
-    if (error.code === 'worktree_not_found')
-      return {
-        code: 'editor_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: 'worktree_not_found',
-          ...(error.worktreeId === undefined ? {} : { worktreeId: error.worktreeId }),
-        },
-      };
-    return toSurfaceApiError(error, context);
-  }
-  return editorApiError(error, context);
-}
-
-export function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
-  // Ahead of `SurfaceError`, whose reason mapping ends in a catch-all default.
-  // This reason is already the contract reason, so it maps straight through.
-  if (error instanceof SurfaceOrderError)
-    return {
-      code: 'surface_order_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: error.reason,
-        worktreeId: error.worktreeId,
-        surfaceId: error.surfaceId,
-        ...(error.beforeSurfaceId ? { beforeSurfaceId: error.beforeSurfaceId } : {}),
-      },
-    };
-  if (error instanceof HarnessLaunchBlocked)
-    return {
-      code: 'session_launch_rejected',
-      status: 400,
-      message: `Harness process creation is blocked: ${error.reason}.`,
-      requestId: context.requestId,
-      data: {
-        reason: error.reason,
-        ...(error.diagnostic ? { diagnostic: error.diagnostic } : {}),
-      },
-    };
-  if (error instanceof SurfaceError) {
-    if (context.endpointId === apiEndpoints.surfaces.setWorktreeEnvironmentFocus.id)
-      return {
+function environmentFocusRejection(error: SurfaceError): Effect.Effect<EnvironmentFocusRejection> {
+  switch (error.code) {
+    case 'worktree_not_found':
+    case 'surface_not_found':
+    case 'pane_not_found':
+      return Effect.succeed({
         code: 'worktree_environment_focus_rejected',
         status: 400,
         message: error.message,
-        requestId: context.requestId,
         data: {
           reason: error.code,
           ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
           ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
           ...(error.paneId ? { paneId: error.paneId } : {}),
         },
-      };
-
-    return {
-      code: 'surface_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: surfaceRejectionReason(error),
-        ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-        ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
-        ...(error.paneId ? { paneId: error.paneId } : {}),
-        ...(error.sessionId ? { sessionId: error.sessionId } : {}),
-      },
-    };
+      });
+    case 'session_not_found':
+    case 'session_worktree_mismatch':
+    case 'invalid_surface_title':
+    case 'layout_node_stale':
+    case 'surface_not_empty':
+      return Effect.die(
+        new Error(`Setting the environment focus cannot be refused with ${error.code}.`),
+      );
   }
+}
 
-  if (error instanceof DatabaseError) {
-    return {
-      code: 'runtime_database_failed',
-      status: 500,
-      message: `Database operation failed: ${error.operation}`,
-      requestId: context.requestId,
-      data: { operation: error.operation },
-    };
-  }
-
-  console.error(
-    `[runtime] Unhandled surface API handler error during ${context.endpointId}`,
-    error,
-  );
-
+function surfaceOrderRejection(error: SurfaceOrderError) {
   return {
-    code: 'api_unhandled_error',
-    status: 500,
-    message: errorMessage(error),
-    requestId: context.requestId,
-    data: { endpointId: context.endpointId },
+    code: 'surface_order_rejected',
+    status: 400,
+    message: error.message,
+    data: {
+      reason: error.reason,
+      worktreeId: error.worktreeId,
+      surfaceId: error.surfaceId,
+      ...(error.beforeSurfaceId ? { beforeSurfaceId: error.beforeSurfaceId } : {}),
+    },
+  } satisfies SurfaceOrderRejection;
+}
+
+/** The launch-gate refusal a pane-session route answers when the harness may not start a process here. */
+export function sessionLaunchRejection(
+  blocked: HarnessLaunchBlocked,
+): Omit<SessionLaunchRejectedError, 'requestId'> {
+  return {
+    code: 'session_launch_rejected',
+    status: 400,
+    message: `Harness process creation is blocked: ${blocked.reason}.`,
+    data: {
+      reason: blocked.reason,
+      ...(blocked.diagnostic ? { diagnostic: blocked.diagnostic } : {}),
+    },
   };
 }
 
-function surfaceRejectionReason(error: SurfaceError) {
-  switch (error.code) {
-    case 'surface_not_found':
-    case 'pane_not_found':
-    case 'invalid_surface_title':
-    case 'worktree_not_found':
-    case 'session_not_found':
-    case 'session_worktree_mismatch':
-    case 'layout_node_stale':
-    case 'surface_not_empty':
-      return error.code;
-    default:
-      return 'surface_not_found';
-  }
+/**
+ * The pane-session routes (create, split, start, create/claim session) share one failure set.
+ *
+ * - `HarnessLaunchBlocked` is answered `session_launch_rejected`, the code clients read for it. KNOWN CONTRACT GAP:
+ *   `surfaceApiErrorSchema` does not declare that code, so the boundary's runtime check against the endpoint's errors
+ *   turns it into `api_response_encoding_failed`, exactly as the untyped route did before. The cast is the one place
+ *   this file steps outside the typed rejection union; drop it once the contract declares the code.
+ * - `HarnessAdapterError` has no contract code. It is a defect at this boundary, which answers `api_unhandled_error`
+ *   with its message and logs it, as before.
+ */
+function rejectPaneSessionFailures(
+  reject: (rejection: SurfaceRejection) => Effect.Effect<never, ApiRejected<SurfaceRejection>>,
+) {
+  return <A, R>(
+    effect: Effect.Effect<
+      A,
+      DatabaseError | SurfaceError | HarnessLaunchBlocked | HarnessAdapterError,
+      R
+    >,
+  ) =>
+    effect.pipe(
+      Effect.catchTags({
+        SurfaceError: (error) => reject(surfaceRejection(error)),
+        HarnessLaunchBlocked: (blocked) =>
+          reject(sessionLaunchRejection(blocked) as unknown as SurfaceRejection),
+        HarnessAdapterError: (error) => Effect.die(error),
+      }),
+    );
+}
+
+/**
+ * `editor.open`'s surface failures. A missing worktree is translated into the editor's own refusal vocabulary, which
+ * already names it and which the palette reads; the target-surface refusals (`surface_not_found`,
+ * `surface_not_empty`) are surfaces conditions and keep the surfaces rejection, which the editor contract composes.
+ */
+function editorOpenSurfaceRejection(error: SurfaceError): EditorOpenRejection {
+  if (error.code === 'worktree_not_found')
+    return {
+      code: 'editor_rejected',
+      status: 400,
+      message: error.message,
+      data: {
+        reason: 'worktree_not_found',
+        ...(error.worktreeId === undefined ? {} : { worktreeId: error.worktreeId }),
+      },
+    };
+  return surfaceRejection(error);
+}
+
+/**
+ * `editor.open`'s editor and database failures, in the editor module's wording.
+ *
+ * TRANSITIONAL: built from `editorApiError`, the editor's untyped mapper, because the typed `editorRejection` lands
+ * with the editor module's own wave-R2 change; switch to it at the merge. The editor mapper is total over these two
+ * failures, so the cast only restates what its `editorApiErrorSchema` branch already returns.
+ */
+function editorOpenEditorRejection(
+  error: EditorUnavailable | DatabaseError,
+  request: ApiRequest<typeof apiEndpoints.editor.open>,
+): EditorOpenRejection {
+  const { code, status, message, ...rest }: ApiError = editorApiError(error, request);
+  return {
+    code,
+    status,
+    message,
+    ...('data' in rest ? { data: rest.data } : {}),
+  } as EditorOpenRejection;
 }

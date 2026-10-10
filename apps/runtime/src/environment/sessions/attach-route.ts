@@ -231,36 +231,19 @@ export function websocketError(error: SessionAttachError): {
       };
     case 'SessionAttachProtocolError':
       return { code: error.code, message: error.message };
+    // Every session error code is also a socket error code: a new code that is not fails to compile here.
     case 'AgentSessionError':
-      switch (error.code) {
-        case 'harness_metadata_missing':
-        case 'harness_metadata_invalid':
-        case 'active_process_missing':
-        case 'active_process_not_running':
-          return { code: error.code, message: error.message };
-        default:
-          return { code: 'session_not_found', message: error.message };
-      }
     case 'TerminalSessionError':
-      switch (error.code) {
-        case 'active_process_missing':
-        case 'active_process_not_running':
-          return { code: error.code, message: error.message };
-        default:
-          return { code: 'session_not_found', message: error.message };
-      }
+      return { code: error.code, message: error.message };
     case 'HarnessAdapterError':
       return error.code === 'unsupported_harness'
         ? { code: 'unsupported_harness', message: error.message }
         : { code: 'unknown', message: errorMessage(error) };
     case 'SessionLifecycleError':
-      switch (error.code) {
-        case 'attach_token_expired':
-        case 'attach_token_missing':
-          return { code: error.code, message: error.message };
-        default:
-          return { code: 'attach_token_invalid', message: error.message };
-      }
+      return {
+        code: error.code === 'attach_token_session_mismatch' ? 'attach_token_invalid' : error.code,
+        message: error.message,
+      };
     case 'PtyServiceError':
       return error.code === 'worktree_not_found'
         ? { code: 'session_not_found', message: error.message }

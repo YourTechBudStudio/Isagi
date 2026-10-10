@@ -1,9 +1,10 @@
 import { Effect, Result } from 'effect';
 
-import { HarnessLaunchBlocked } from '../../harnesses/index.js';
-import { AgentSessionError, type AgentSessionService } from '../agent-sessions/service.js';
+import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
 import type { SurfaceRepository } from '../surfaces/repository.js';
-import type { TerminalSessionService } from '../terminal-sessions/service.js';
+import type { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/service.js';
 import type { PaneSessionBinding } from './types.js';
 
 type RestoreOutcome =
@@ -22,6 +23,14 @@ interface RestoreDependencies {
   readonly terminalSessions: TerminalSessionService['Service'];
 }
 
+/** Everything restoring one binding can fail with. */
+type RestoreBindingError =
+  | DatabaseError
+  | AgentSessionError
+  | TerminalSessionError
+  | HarnessAdapterError
+  | HarnessLaunchBlocked;
+
 /**
  * Startup: relaunches (or reuses) the PTY process of every pane-bound agent and terminal session,
  * each in isolation, and logs a summary. Never fails: a binding that cannot be restored is logged
@@ -38,41 +47,35 @@ export function restorePaneBoundSessions(deps: RestoreDependencies): Effect.Effe
       concurrency: 'unbounded',
     });
 
-    const summary = summarize(outcomes);
-    console.info('[runtime][startup-restore] Completed pane-bound session restore', summary);
+    yield* Effect.logInfo('Completed pane-bound session restore').pipe(
+      Effect.annotateLogs(summarize(outcomes)),
+    );
   }).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        console.warn('[runtime][startup-restore] Skipped: binding discovery failed', {
-          errorTag: errorTag(error),
-          errorCode: errorCode(error),
-          message: errorMessage(error),
-        });
-      }),
+      Effect.logWarning('Skipped: binding discovery failed').pipe(
+        Effect.annotateLogs({
+          errorTag: error._tag,
+          errorCode: null,
+          message: error.message,
+        }),
+      ),
     ),
+    Effect.annotateLogs({ component: 'startup-restore' }),
   );
 }
 
-function restoreBinding(deps: RestoreDependencies, binding: PaneSessionBinding) {
-  return Effect.gen(function* () {
-    const { agentSessions, terminalSessions } = deps;
-    return yield* restoreWithIsolation(
-      binding,
-      binding.sessionKind === 'agent_session'
-        ? agentSessions.ensureActivePtyProcess(binding.sessionId, {
-            replaceEphemeralProcess: true,
-          })
-        : terminalSessions.ensureActivePtyProcess(binding.sessionId, {
-            replaceEphemeralProcess: true,
-          }),
-    );
-  });
-}
-
-function restoreWithIsolation(
+function restoreBinding(
+  deps: RestoreDependencies,
   binding: PaneSessionBinding,
-  restore: Effect.Effect<number, unknown>,
-) {
+): Effect.Effect<RestoreOutcome> {
+  const restore: Effect.Effect<number, RestoreBindingError> =
+    binding.sessionKind === 'agent_session'
+      ? deps.agentSessions.ensureActivePtyProcess(binding.sessionId, {
+          replaceEphemeralProcess: true,
+        })
+      : deps.terminalSessions.ensureActivePtyProcess(binding.sessionId, {
+          replaceEphemeralProcess: true,
+        });
   return Effect.gen(function* () {
     const result = yield* Effect.result(restore);
     if (Result.isSuccess(result)) {
@@ -84,14 +87,13 @@ function restoreWithIsolation(
 
     const error = result.failure;
     const kind = unrecoverableMetadataError(error) ? 'skipped_unrecoverable' : 'failed';
-    console.warn('[runtime][startup-restore] Failed for pane-bound session', {
-      ...bindingDiagnostic(binding),
-      outcome: kind,
-      errorTag: errorTag(error),
-      errorCode: errorCode(error),
-      ...harnessLaunchDiagnostic(error),
-      message: errorMessage(error),
-    });
+    yield* Effect.logWarning('Failed for pane-bound session').pipe(
+      Effect.annotateLogs({
+        ...bindingDiagnostic(binding),
+        outcome: kind,
+        ...failureDiagnostic(error),
+      }),
+    );
     return { kind, binding } satisfies RestoreOutcome;
   });
 }
@@ -116,39 +118,30 @@ function bindingDiagnostic(binding: PaneSessionBinding) {
   };
 }
 
-function unrecoverableMetadataError(error: unknown) {
+function unrecoverableMetadataError(error: RestoreBindingError) {
   return (
-    error instanceof AgentSessionError &&
+    error._tag === 'AgentSessionError' &&
     (error.code === 'harness_metadata_missing' || error.code === 'harness_metadata_invalid')
   );
 }
 
-function errorTag(error: unknown) {
-  if (typeof error === 'object' && error !== null && '_tag' in error) {
-    const tagged = error as Record<string, unknown>;
-    return String(tagged['_tag']);
+/** What a failed binding restore reports: the error's tag and code, and for a blocked harness launch, why. */
+function failureDiagnostic(error: RestoreBindingError) {
+  switch (error._tag) {
+    case 'HarnessLaunchBlocked':
+      return {
+        errorTag: error._tag,
+        errorCode: null,
+        harness: error.harness,
+        errorReason: error.reason,
+        errorDiagnostic: error.diagnostic,
+        message: `Harness ${error.harness} launch blocked: ${error.reason}.`,
+      };
+    case 'AgentSessionError':
+    case 'TerminalSessionError':
+    case 'HarnessAdapterError':
+      return { errorTag: error._tag, errorCode: error.code, message: error.message };
+    case 'DatabaseError':
+      return { errorTag: error._tag, errorCode: null, message: error.message };
   }
-  return error instanceof Error ? error.name : typeof error;
-}
-
-function errorCode(error: unknown) {
-  return typeof error === 'object' && error !== null && 'code' in error
-    ? String((error as { readonly code: unknown }).code)
-    : null;
-}
-
-function harnessLaunchDiagnostic(error: unknown) {
-  if (!(error instanceof HarnessLaunchBlocked)) return {};
-  return {
-    harness: error.harness,
-    errorReason: error.reason,
-    errorDiagnostic: error.diagnostic,
-  };
-}
-
-function errorMessage(error: unknown) {
-  if (error instanceof HarnessLaunchBlocked) {
-    return `Harness ${error.harness} launch blocked: ${error.reason}.`;
-  }
-  return error instanceof Error ? error.message : String(error);
 }

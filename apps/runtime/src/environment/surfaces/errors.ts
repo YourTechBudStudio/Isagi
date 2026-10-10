@@ -5,11 +5,10 @@ import type { SurfaceOrderRejectionReason } from '@isagi/contracts';
 // The surfaces domain's expected-failure channel.
 //
 // These live in their own module rather than beside the service because the
-// service is no longer their only constructor: `open-editor.ts` raises
-// `SurfaceError` from its pre-lock worktree guard, and `editor/api.ts` names
-// both classes while mapping a composed operation's failures. Importing them
-// from `surfaces.service.ts` — which imports `open-editor.ts` — would close a
-// module cycle between two eagerly-evaluated modules.
+// service is not their only constructor: `open-editor.ts` raises
+// `SurfaceError` from its pre-lock worktree guard and the repository aborts
+// creating transactions with it. Importing them from `service.ts` — which
+// imports both — would close a module cycle between eagerly-evaluated modules.
 
 export class SurfaceError extends Data.TaggedError('SurfaceError')<{
   readonly code:
@@ -29,9 +28,9 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
 }> {}
 
 /**
- * Kept separate from `SurfaceError` because `surfaceRejectionReason` ends in a
- * catch-all default: a reorder reason added to that union and left unmapped
- * would surface as `surface_not_found`. This one maps straight through.
+ * Kept separate from `SurfaceError` because reordering has its own contract
+ * error (`surface_order_rejected`) and reason set; its reason maps straight
+ * through to that contract.
  */
 export class SurfaceOrderError extends Data.TaggedError('SurfaceOrderError')<{
   readonly reason: SurfaceOrderRejectionReason;

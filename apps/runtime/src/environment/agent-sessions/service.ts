@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Result } from 'effect';
+import { Context, Data, Effect, Layer, Result } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
@@ -25,20 +25,23 @@ export interface AgentSessionEnsureActiveOptions extends HarnessLaunchOptions {
   readonly replaceEphemeralProcess?: boolean | undefined;
 }
 
-export class AgentSessionError extends Error {
-  readonly _tag = 'AgentSessionError';
-  constructor(
-    readonly code:
-      | 'session_not_found'
-      | 'active_process_missing'
-      | 'active_process_not_running'
-      | 'harness_metadata_missing'
-      | 'harness_metadata_invalid'
-      | 'harness_mismatch'
-      | 'active_process_mismatch',
-    message: string,
-  ) {
-    super(message);
+export type AgentSessionErrorCode =
+  | 'session_not_found'
+  | 'active_process_missing'
+  | 'active_process_not_running'
+  | 'harness_metadata_missing'
+  | 'harness_metadata_invalid';
+
+/**
+ * An agent session operation was refused. Constructed positionally (`new AgentSessionError(code, message)`), as it was
+ * before it became a tagged error, so existing call sites keep their shape.
+ */
+export class AgentSessionError extends Data.TaggedError('AgentSessionError')<{
+  readonly code: AgentSessionErrorCode;
+  readonly message: string;
+}> {
+  constructor(code: AgentSessionErrorCode, message: string) {
+    super({ code, message });
   }
 }
 
@@ -53,62 +56,63 @@ const make = Effect.gen(function* () {
   const publishChanged = (agentSessionId: number) =>
     eventBus.publish({ type: 'agent_session_changed', agentSessionId });
 
-  const launchProcessForSession = (session: AgentSessionRow, options?: HarnessLaunchOptions) =>
-    Effect.gen(function* () {
-      yield* controlPlane.assertCanCreateProcess(session.harness);
-      const launch = yield* agentLaunchEnvelope(harnesses, session, options);
-      const process = yield* pty.launch(launch);
-      yield* repository.setActivePtyProcess({
-        agentSessionId: session.id,
-        ptyProcessId: process.ptyProcessId,
-      });
-      yield* eventBus.publish({
-        type: 'agent_session_active_process_changed',
-        agentSessionId: session.id,
-        ptyProcessId: process.ptyProcessId,
-      });
-      return process.ptyProcessId;
+  const launchProcessForSession = Effect.fnUntraced(function* (
+    session: AgentSessionRow,
+    options?: HarnessLaunchOptions,
+  ) {
+    yield* controlPlane.assertCanCreateProcess(session.harness);
+    const launch = yield* agentLaunchEnvelope(harnesses, session, options);
+    const process = yield* pty.launch(launch);
+    yield* repository.setActivePtyProcess({
+      agentSessionId: session.id,
+      ptyProcessId: process.ptyProcessId,
     });
-
-  const ensureActivePtyProcess = (
-    agentSessionId: number,
-    options?: AgentSessionEnsureActiveOptions,
-  ) =>
-    lifecycle.withRestoreLock(
-      { kind: 'agent_session', sessionId: agentSessionId },
-      Effect.gen(function* () {
-        const session = yield* findAgentSessionOrFail(repository, agentSessionId);
-        yield* validateHarnessMetadata(session);
-        const process = session.activePtyProcess;
-        const replaceEphemeralProcess =
-          options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
-        const canReuseActiveProcess =
-          session.activePtyProcessId &&
-          !replaceEphemeralProcess &&
-          (process?.status === 'running' || process?.status === 'starting');
-        if (canReuseActiveProcess) {
-          return session.activePtyProcessId;
-        }
-        return yield* launchProcessForSession(session, options);
-      }),
-    );
+    yield* eventBus.publish({
+      type: 'agent_session_active_process_changed',
+      agentSessionId: session.id,
+      ptyProcessId: process.ptyProcessId,
+    });
+    return process.ptyProcessId;
+  });
 
   return AgentSessionService.of({
-    startFresh: (input) =>
-      Effect.gen(function* () {
-        yield* controlPlane.assertCanCreateProcess(input.harness);
-        const agentSessionId = yield* repository.create({
-          worktreeId: input.worktreeId,
-          harness: input.harness,
-          cwd: input.cwd,
-        });
-        yield* publishChanged(agentSessionId);
-        return { agentSessionId };
-      }),
-    get: (agentSessionId) => findAgentSessionOrFail(repository, agentSessionId),
-    ensureActivePtyProcess,
-    stopUnlessPlaced: (input) =>
-      lifecycle.withRestoreLock(
+    startFresh: Effect.fn('AgentSessionService.startFresh')(function* (input) {
+      yield* controlPlane.assertCanCreateProcess(input.harness);
+      const agentSessionId = yield* repository.create({
+        worktreeId: input.worktreeId,
+        harness: input.harness,
+        cwd: input.cwd,
+      });
+      yield* publishChanged(agentSessionId);
+      return { agentSessionId };
+    }),
+    get: Effect.fn('AgentSessionService.get')(function* (agentSessionId) {
+      return yield* findAgentSessionOrFail(repository, agentSessionId);
+    }),
+    ensureActivePtyProcess: Effect.fn('AgentSessionService.ensureActivePtyProcess')(
+      function* (agentSessionId, options) {
+        return yield* lifecycle.withRestoreLock(
+          { kind: 'agent_session', sessionId: agentSessionId },
+          Effect.gen(function* () {
+            const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+            yield* validateHarnessMetadata(session);
+            const process = session.activePtyProcess;
+            const replaceEphemeralProcess =
+              options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+            const canReuseActiveProcess =
+              session.activePtyProcessId &&
+              !replaceEphemeralProcess &&
+              (process?.status === 'running' || process?.status === 'starting');
+            if (canReuseActiveProcess) {
+              return session.activePtyProcessId;
+            }
+            return yield* launchProcessForSession(session, options);
+          }),
+        );
+      },
+    ),
+    stopUnlessPlaced: Effect.fn('AgentSessionService.stopUnlessPlaced')(function* (input) {
+      return yield* lifecycle.withRestoreLock(
         { kind: 'agent_session', sessionId: input.agentSessionId },
         Effect.gen(function* () {
           const placement = yield* repository.findPlacement(input.agentSessionId);
@@ -120,26 +124,24 @@ const make = Effect.gen(function* () {
             ? ({ kind: 'stopped' } as const)
             : ({ kind: 'stop_failed', cause: stopped.failure } as const);
         }),
-      ),
-    activePtyProcessId: (agentSessionId) =>
-      Effect.gen(function* () {
+      );
+    }),
+    activePtyProcessId: Effect.fn('AgentSessionService.activePtyProcessId')(
+      function* (agentSessionId) {
         const session = yield* findAgentSessionOrFail(repository, agentSessionId);
         if (!session.activePtyProcessId || !session.activePtyProcess)
-          return yield* Effect.fail(
-            new AgentSessionError(
-              'active_process_missing',
-              `Agent session ${agentSessionId} has no active PTY process.`,
-            ),
+          return yield* new AgentSessionError(
+            'active_process_missing',
+            `Agent session ${agentSessionId} has no active PTY process.`,
           );
         if (session.activePtyProcess.status !== 'running')
-          return yield* Effect.fail(
-            new AgentSessionError(
-              'active_process_not_running',
-              `Agent session ${agentSessionId} active process is not running.`,
-            ),
+          return yield* new AgentSessionError(
+            'active_process_not_running',
+            `Agent session ${agentSessionId} active process is not running.`,
           );
         return session.activePtyProcessId;
-      }),
+      },
+    ),
   });
 });
 
@@ -193,56 +195,48 @@ export class AgentSessionService extends Context.Service<
   );
 }
 
-function findAgentSessionOrFail(
-  repository: import('./repository.js').AgentSessionRepository['Service'],
+const findAgentSessionOrFail = Effect.fnUntraced(function* (
+  repository: AgentSessionRepository['Service'],
   agentSessionId: number,
 ) {
-  return Effect.gen(function* () {
-    const session = yield* repository.find(agentSessionId);
-    if (!session) {
-      return yield* Effect.fail(
-        new AgentSessionError(
-          'session_not_found',
-          `Agent session ${agentSessionId} was not found.`,
-        ),
-      );
-    }
-    return session;
-  });
-}
+  const session = yield* repository.find(agentSessionId);
+  if (!session) {
+    return yield* new AgentSessionError(
+      'session_not_found',
+      `Agent session ${agentSessionId} was not found.`,
+    );
+  }
+  return session;
+});
 
-function validateHarnessMetadata(session: AgentSessionRow) {
-  if (session.harnessMetadataStatus === 'missing') {
-    console.warn('[runtime] Agent session restoration blocked: missing harness metadata', {
+/** Restoring a session whose harness metadata is missing or invalid would lose its resume identity, so it is refused. */
+const validateHarnessMetadata = Effect.fnUntraced(function* (session: AgentSessionRow) {
+  if (session.harnessMetadataStatus === 'valid') return;
+  const missing = session.harnessMetadataStatus === 'missing';
+  yield* Effect.logWarning(
+    missing
+      ? 'Agent session restoration blocked: missing harness metadata'
+      : 'Agent session restoration blocked: invalid harness metadata',
+  ).pipe(
+    Effect.annotateLogs({
       agentSessionId: session.id,
       harness: session.harness,
       diagnostic: session.harnessMetadataDiagnostic,
-    });
-    return Effect.fail(
-      new AgentSessionError(
+    }),
+  );
+  return yield* missing
+    ? new AgentSessionError(
         'harness_metadata_missing',
         `Agent session ${session.id} cannot be restored because harness metadata is missing.`,
-      ),
-    );
-  }
-  if (session.harnessMetadataStatus === 'invalid') {
-    console.warn('[runtime] Agent session restoration blocked: invalid harness metadata', {
-      agentSessionId: session.id,
-      harness: session.harness,
-      diagnostic: session.harnessMetadataDiagnostic,
-    });
-    return Effect.fail(
-      new AgentSessionError(
+      )
+    : new AgentSessionError(
         'harness_metadata_invalid',
         `Agent session ${session.id} cannot be restored because harness metadata is invalid.`,
-      ),
-    );
-  }
-  return Effect.void;
-}
+      );
+});
 
 function agentLaunchEnvelope(
-  harnesses: import('../../harnesses/index.js').HarnessAdapterRegistry['Service'],
+  harnesses: HarnessAdapterRegistry['Service'],
   session: AgentSessionRow,
   options?: HarnessLaunchOptions,
 ) {
@@ -255,5 +249,3 @@ function agentLaunchEnvelope(
     effort: options?.effort,
   });
 }
-
-export type { AgentSessionRepository } from './repository.js';

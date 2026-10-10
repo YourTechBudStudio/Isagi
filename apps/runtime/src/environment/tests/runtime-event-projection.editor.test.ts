@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, Logger } from 'effect';
+import { Effect, Layer } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
+import { makeLogCapture } from '@isagi/testing';
 
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
@@ -51,8 +52,7 @@ function harness(input: {
 
 async function runProjection(placement: Effect.Effect<Placement | null, DatabaseError>) {
   const published: RuntimeEvent[] = [];
-  const logged: string[] = [];
-  const capture = Logger.layer([Logger.make(({ message }) => void logged.push(String(message)))]);
+  const logs = makeLogCapture();
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -60,10 +60,10 @@ async function runProjection(placement: Effect.Effect<Placement | null, Database
         yield* internal.publish({ type: 'editor_context_changed', editorContextId: 42 });
         // The subscriber is a forked loop; give it turns to drain.
         yield* Effect.sleep('25 millis');
-      }).pipe(Effect.provide(harness({ placement, published })), Effect.provide(capture)),
+      }).pipe(Effect.provide(harness({ placement, published })), Effect.provide(logs.layer)),
     ),
   );
-  return { published, logged };
+  return { published, logged: logs.lines };
 }
 
 test('a placed editor context publishes exactly one public event carrying identity and placement', async () => {
@@ -103,7 +103,11 @@ test('a failed placement lookup drops the event but leaves a diagnostic breadcru
   // tearing down the loop that serves every other event.
   assert.deepEqual(published, []);
   assert.equal(logged.length, 1);
-  assert.match(logged[0] ?? '', /lookup=editor_context_placement/);
-  assert.match(logged[0] ?? '', /entityId=42/);
-  assert.match(logged[0] ?? '', /cause=Database operation findPaneForSession failed/);
+  assert.equal(logged[0]?.message, 'Runtime event projection lookup failed');
+  assert.equal(logged[0]?.annotations.lookup, 'editor_context_placement');
+  assert.equal(logged[0]?.annotations.entityId, 42);
+  assert.match(
+    String(logged[0]?.annotations.cause),
+    /Database operation findPaneForSession failed/,
+  );
 });
