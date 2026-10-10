@@ -1,7 +1,11 @@
 import { and, desc, eq, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
+import {
+  DatabaseError,
+  RuntimeDatabase,
+  type RuntimeDrizzleDatabase,
+} from '../../platform/persistence/index.js';
 import { worktreeSetupRuns, worktreeSetupSteps, worktreeSetupTrust } from '../tables.js';
 
 export type WorktreeSetupTrustRow = InferSelectModel<typeof worktreeSetupTrust>;
@@ -36,8 +40,8 @@ export interface CreateSetupStepInput {
 const make = Effect.gen(function* () {
   const database = yield* RuntimeDatabase;
   return WorktreeSetupRepository.of({
-    findTrust: (input) =>
-      database.use(
+    findTrust: Effect.fn('WorktreeSetupRepository.findTrust')(function* (input) {
+      return yield* database.use(
         'find_worktree_setup_trust',
         (db) =>
           db
@@ -50,79 +54,28 @@ const make = Effect.gen(function* () {
               ),
             )
             .get() ?? null,
-      ),
-    setTrustedHash: (input) =>
-      database.use('set_worktree_setup_trust_hash', (db) => {
-        const now = timestamp();
-        const existing = db
-          .select({ id: worktreeSetupTrust.id })
-          .from(worktreeSetupTrust)
-          .where(
-            and(
-              eq(worktreeSetupTrust.projectId, input.projectId),
-              eq(worktreeSetupTrust.scope, input.scope),
-            ),
-          )
-          .get();
-        const values = {
+      );
+    }),
+    setTrustedHash: Effect.fn('WorktreeSetupRepository.setTrustedHash')(function* (input) {
+      return yield* database.use('set_worktree_setup_trust_hash', (db) =>
+        upsertTrust(db, input, {
           trustedHash: input.hash,
           alwaysTrustProject: input.alwaysTrustProject,
           hooksDisabled: false,
-          updatedAt: now,
-        };
-        if (existing) {
-          db.update(worktreeSetupTrust)
-            .set(values)
-            .where(eq(worktreeSetupTrust.id, existing.id))
-            .run();
-        } else {
-          db.insert(worktreeSetupTrust)
-            .values({
-              projectId: input.projectId,
-              scope: input.scope,
-              ...values,
-              createdAt: now,
-            })
-            .run();
-        }
-      }),
-    disableHooks: (input) =>
-      database.use('disable_worktree_setup_hooks', (db) => {
-        const now = timestamp();
-        const existing = db
-          .select({ id: worktreeSetupTrust.id })
-          .from(worktreeSetupTrust)
-          .where(
-            and(
-              eq(worktreeSetupTrust.projectId, input.projectId),
-              eq(worktreeSetupTrust.scope, input.scope),
-            ),
-          )
-          .get();
-        const values = {
+        }),
+      );
+    }),
+    disableHooks: Effect.fn('WorktreeSetupRepository.disableHooks')(function* (input) {
+      return yield* database.use('disable_worktree_setup_hooks', (db) =>
+        upsertTrust(db, input, {
           trustedHash: null,
           alwaysTrustProject: false,
           hooksDisabled: true,
-          updatedAt: now,
-        };
-        if (existing) {
-          db.update(worktreeSetupTrust)
-            .set(values)
-            .where(eq(worktreeSetupTrust.id, existing.id))
-            .run();
-        } else {
-          db.insert(worktreeSetupTrust)
-            .values({
-              projectId: input.projectId,
-              scope: input.scope,
-              ...values,
-              createdAt: now,
-            })
-            .run();
-        }
-      }),
-    createRunWithSteps: (input) =>
-      database.transaction('create_worktree_setup_run_with_steps', (db) => {
+        }),
+      );
+    }),
+    createRunWithSteps: Effect.fn('WorktreeSetupRepository.createRunWithSteps')(function* (input) {
+      return yield* database.transaction('create_worktree_setup_run_with_steps', (db) => {
         const run = db
           .insert(worktreeSetupRuns)
           .values(input.run)
@@ -134,18 +87,51 @@ const make = Effect.gen(function* () {
             .run();
         }
         return run.id;
-      }),
-    listRunSteps: (runId) =>
-      database.use('list_worktree_setup_run_steps', (db) =>
+      });
+    }),
+    listRunSteps: Effect.fn('WorktreeSetupRepository.listRunSteps')(function* (runId) {
+      return yield* database.use('list_worktree_setup_run_steps', (db) =>
         db
           .select()
           .from(worktreeSetupSteps)
           .where(eq(worktreeSetupSteps.runId, runId))
           .orderBy(worktreeSetupSteps.hookIndex, desc(worktreeSetupSteps.id))
           .all(),
-      ),
+      );
+    }),
   });
 });
+
+/** Writes the project's trust row for `scope`, creating it on first use. */
+function upsertTrust(
+  db: RuntimeDrizzleDatabase,
+  target: { readonly projectId: number; readonly scope: 'post_create' },
+  trust: {
+    readonly trustedHash: string | null;
+    readonly alwaysTrustProject: boolean;
+    readonly hooksDisabled: boolean;
+  },
+) {
+  const now = timestamp();
+  const existing = db
+    .select({ id: worktreeSetupTrust.id })
+    .from(worktreeSetupTrust)
+    .where(
+      and(
+        eq(worktreeSetupTrust.projectId, target.projectId),
+        eq(worktreeSetupTrust.scope, target.scope),
+      ),
+    )
+    .get();
+  const values = { ...trust, updatedAt: now };
+  if (existing) {
+    db.update(worktreeSetupTrust).set(values).where(eq(worktreeSetupTrust.id, existing.id)).run();
+  } else {
+    db.insert(worktreeSetupTrust)
+      .values({ projectId: target.projectId, scope: target.scope, ...values, createdAt: now })
+      .run();
+  }
+}
 
 export class WorktreeSetupRepository extends Context.Service<
   WorktreeSetupRepository,

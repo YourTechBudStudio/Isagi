@@ -3,7 +3,8 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
 import { WorktreeSetupError } from '../setup/service.js';
 import type { WorktreeSetupService } from '../setup/service.js';
 import type { LiveWorkspaceOptions } from '../testing.js';

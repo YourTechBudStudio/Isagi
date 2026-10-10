@@ -10,13 +10,13 @@ import { Git, type GitCommandError, listGitWorktrees } from '../platform/git/ind
 import type { DatabaseError } from '../platform/persistence/index.js';
 import type { ProjectRow, ProjectRepository } from '../projects/index.js';
 import { directoryAvailability } from './directory-availability.js';
+import type { WorkspaceError } from './errors.js';
 import { checkNewDirectory } from './new-directory.js';
 
 /**
- * Detached creation fails with its own tagged error rather than new `WorkspaceError` codes, for the
- * reason `ProjectOrderError` does: `WorkspaceError` is shared by endpoint mappers that end in a
- * catch-all default, so an unmapped code would be reported as some other failure. Callers switch on
- * `reason` exhaustively.
+ * Detached creation fails with its own tagged error rather than new `WorkspaceError` codes: it has no
+ * workspace endpoint, its callers (workflow checkpoints) switch on `reason` exhaustively, and its fields
+ * (destination issue, whether anything was created) mean nothing to a `WorkspaceError` mapper.
  */
 export class DetachedWorktreeError extends Data.TaggedError('DetachedWorktreeError')<{
   readonly reason:
@@ -57,7 +57,9 @@ export interface DetachedWorktreeDependencies {
   readonly repository: ProjectRepository['Service'];
   readonly git: Git['Service'];
   /** The service's own post-create reconciliation, passed in so it stays private and single. */
-  readonly reconcile: (project: ProjectRow) => Effect.Effect<unknown, unknown>;
+  readonly reconcile: (
+    project: ProjectRow,
+  ) => Effect.Effect<unknown, WorkspaceError | DatabaseError>;
 }
 
 /**

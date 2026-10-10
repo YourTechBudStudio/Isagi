@@ -1,19 +1,21 @@
-import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, cp, lstat, mkdir, rm, stat, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
-import { Data, Effect } from 'effect';
+import { Data, Duration, Effect, Option, Result } from 'effect';
 import { glob } from 'tinyglobby';
 
 import type { WorktreeSetupResult } from '@isagi/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import { stripAnsi } from '../../platform/process/index.js';
+import { spawnProcessGroup, stripAnsi, terminateGroup } from '../../platform/process/index.js';
 import type { WorktreeHooksConfig, WorktreePostCreateHook } from '../../projects/index.js';
 import { WorktreeSetupRepository, type CreateSetupStepInput } from './repository.js';
 
 const maxOutputExcerptBytes = 32 * 1024;
+
+/** How long a timed-out command hook gets between `SIGTERM` and `SIGKILL` of its process group. */
+const commandTerminationGrace = Duration.seconds(1);
 
 type StepDetails = Partial<
   Omit<
@@ -22,123 +24,127 @@ type StepDetails = Partial<
   >
 >;
 
+type SetupStep = Omit<CreateSetupStepInput, 'runId'>;
+
+type CopyHook = Extract<WorktreePostCreateHook, { type: 'copy' }>;
+type SymlinkHook = Extract<WorktreePostCreateHook, { type: 'symlink' }>;
+type CommandHook = Extract<WorktreePostCreateHook, { type: 'command' }>;
+
+interface HookOutcome {
+  readonly status: 'succeeded' | 'skipped';
+  readonly details: StepDetails;
+}
+
+/**
+ * One hook failed. Never leaves the runner: `runHook` records it as the failed step, so `message` and `details` are
+ * what the user sees in the setup result.
+ */
 export class WorktreeSetupRunError extends Data.TaggedError('WorktreeSetupRunError')<{
   readonly message: string;
   readonly cause?: unknown;
   readonly details?: StepDetails | undefined;
 }> {}
 
-export type WorktreeSetupRunnerError = DatabaseError | WorktreeSetupRunError;
-
 type WorktreePostCreateSetupResult =
   | Extract<WorktreeSetupResult, { status: 'succeeded' }>
   | Extract<WorktreeSetupResult, { status: 'failed' }>;
 
-export function runPostCreateSetup(input: {
+/**
+ * Runs the project's post-create hooks in order, stopping at the first failure, and records the run and its steps.
+ * A failing hook is a `failed` result, not a failure: the only failure is the database write. Interrupting the run
+ * kills a running command hook's whole process group and records nothing.
+ */
+export const runPostCreateSetup = Effect.fn('workspace.runPostCreateSetup')(function* (input: {
   readonly config: WorktreeHooksConfig;
   readonly hash: string;
   readonly projectRootPath: string;
   readonly worktreeId: number;
   readonly worktreePath: string;
-}): Effect.Effect<
-  WorktreePostCreateSetupResult,
-  WorktreeSetupRunnerError,
-  WorktreeSetupRepository
-> {
-  return Effect.gen(function* () {
-    const repository = yield* WorktreeSetupRepository;
-    const steps: Omit<CreateSetupStepInput, 'runId'>[] = [];
-    let failed: Omit<CreateSetupStepInput, 'runId'> | null = null;
-    const runStartedAt = timestamp();
+}): Effect.fn.Return<WorktreePostCreateSetupResult, DatabaseError, WorktreeSetupRepository> {
+  const repository = yield* WorktreeSetupRepository;
+  const steps: SetupStep[] = [];
+  let failed: SetupStep | null = null;
+  const runStartedAt = timestamp();
 
-    for (let index = 0; index < input.config.postCreate.length; index += 1) {
-      const hook = input.config.postCreate[index]!;
-      const step = yield* runHook({
-        hook,
-        hookIndex: index + 1,
-        projectRootPath: input.projectRootPath,
-        worktreePath: input.worktreePath,
-      });
-      steps.push(step);
-      if (step.status === 'failed') {
-        failed = step;
-        break;
-      }
-    }
-
-    const runId = yield* repository.createRunWithSteps({
-      run: {
-        worktreeId: input.worktreeId,
-        lifecycle: 'post_create',
-        hookConfigHash: input.hash,
-        status: failed ? 'failed' : 'succeeded',
-        startedAt: runStartedAt,
-        completedAt: timestamp(),
-      },
-      steps,
+  for (let index = 0; index < input.config.postCreate.length; index += 1) {
+    const step = yield* runHook({
+      hook: input.config.postCreate[index]!,
+      hookIndex: index + 1,
+      projectRootPath: input.projectRootPath,
+      worktreePath: input.worktreePath,
     });
-
-    if (failed) {
-      return {
-        status: 'failed',
-        runId,
-        failedHookIndex: failed.hookIndex,
-        failedHookType: failed.hookType,
-        message: failed.message ?? 'Worktree setup hook failed.',
-        ...(failed.command ? { command: failed.command } : {}),
-        ...(failed.src ? { src: failed.src } : {}),
-        ...(failed.dest ? { dest: failed.dest } : {}),
-        ...(failed.exitCode !== undefined ? { exitCode: failed.exitCode } : {}),
-        ...(failed.signal !== undefined ? { signal: failed.signal } : {}),
-        ...(failed.outputExcerpt ? { outputExcerpt: failed.outputExcerpt } : {}),
-      } satisfies WorktreeSetupResult;
+    steps.push(step);
+    if (step.status === 'failed') {
+      failed = step;
+      break;
     }
+  }
 
-    return { status: 'succeeded', runId } satisfies WorktreeSetupResult;
+  const runId = yield* repository.createRunWithSteps({
+    run: {
+      worktreeId: input.worktreeId,
+      lifecycle: 'post_create',
+      hookConfigHash: input.hash,
+      status: failed ? 'failed' : 'succeeded',
+      startedAt: runStartedAt,
+      completedAt: timestamp(),
+    },
+    steps,
   });
-}
 
-function runHook(input: {
+  if (failed) {
+    return {
+      status: 'failed',
+      runId,
+      failedHookIndex: failed.hookIndex,
+      failedHookType: failed.hookType,
+      message: failed.message ?? 'Worktree setup hook failed.',
+      ...(failed.command ? { command: failed.command } : {}),
+      ...(failed.src ? { src: failed.src } : {}),
+      ...(failed.dest ? { dest: failed.dest } : {}),
+      ...(failed.exitCode !== undefined ? { exitCode: failed.exitCode } : {}),
+      ...(failed.signal !== undefined ? { signal: failed.signal } : {}),
+      ...(failed.outputExcerpt ? { outputExcerpt: failed.outputExcerpt } : {}),
+    } satisfies WorktreeSetupResult;
+  }
+
+  return { status: 'succeeded', runId } satisfies WorktreeSetupResult;
+});
+
+const runHook = Effect.fnUntraced(function* (input: {
   readonly hook: WorktreePostCreateHook;
   readonly hookIndex: number;
   readonly projectRootPath: string;
   readonly worktreePath: string;
-}): Effect.Effect<Omit<CreateSetupStepInput, 'runId'>, WorktreeSetupRunError> {
+}) {
   const startedAt = timestamp();
-  return runHookOperation(input).pipe(
-    Effect.map((result) => ({
-      hookIndex: input.hookIndex,
-      hookType: input.hook.type,
-      status: result.status,
-      startedAt,
-      completedAt: timestamp(),
-      ...result.details,
-    })),
-    Effect.catch((error) =>
-      Effect.succeed({
-        hookIndex: input.hookIndex,
-        hookType: input.hook.type,
-        status: 'failed' as const,
-        startedAt,
+  const step = { hookIndex: input.hookIndex, hookType: input.hook.type, startedAt };
+  return yield* runHookOperation(input).pipe(
+    Effect.map(
+      (outcome): SetupStep => ({
+        ...step,
+        status: outcome.status,
+        completedAt: timestamp(),
+        ...outcome.details,
+      }),
+    ),
+    Effect.catchTag('WorktreeSetupRunError', (error) =>
+      Effect.succeed<SetupStep>({
+        ...step,
+        status: 'failed',
         completedAt: timestamp(),
         message: error.message,
         ...error.details,
       }),
     ),
   );
-}
+});
 
 function runHookOperation(input: {
   readonly hook: WorktreePostCreateHook;
   readonly projectRootPath: string;
   readonly worktreePath: string;
-}): Effect.Effect<
-  {
-    readonly status: 'succeeded' | 'skipped';
-    readonly details: StepDetails;
-  },
-  WorktreeSetupRunError
-> {
+}): Effect.Effect<HookOutcome, WorktreeSetupRunError> {
   switch (input.hook.type) {
     case 'copy':
       return runCopyHook(input.hook, input.projectRootPath, input.worktreePath);
@@ -149,244 +155,201 @@ function runHookOperation(input: {
   }
 }
 
-function runCopyHook(
-  hook: Extract<WorktreePostCreateHook, { type: 'copy' }>,
-  projectRootPath: string,
-  worktreePath: string,
-) {
-  return Effect.tryPromise({
-    try: async () => {
-      const srcRoot = resolveRelativeRoot(projectRootPath, hook.src, 'copy.src');
-      const destRoot = resolveRelativeRoot(worktreePath, hook.dest, 'copy.dest');
-      const sourceStat = await statIfExists(srcRoot);
-      if (!sourceStat) {
-        throw new WorktreeSetupRunError({
-          message: `copy.src ${hook.src} does not exist in the project root.`,
-        });
-      }
+const runCopyHook = Effect.fnUntraced(
+  function* (hook: CopyHook, projectRootPath: string, worktreePath: string) {
+    const srcRoot = yield* Effect.fromResult(
+      resolveRelativeRoot(projectRootPath, hook.src, 'copy.src'),
+    );
+    const destRoot = yield* Effect.fromResult(
+      resolveRelativeRoot(worktreePath, hook.dest, 'copy.dest'),
+    );
+    const sourceStat = yield* statIfExists(srcRoot);
+    if (!sourceStat) {
+      return yield* new WorktreeSetupRunError({
+        message: `copy.src ${hook.src} does not exist in the project root.`,
+      });
+    }
 
-      // A file source copies straight to dest; include/exclude only filter directory sources.
-      let copies: readonly { readonly src: string; readonly dest: string }[];
-      if (sourceStat.isDirectory()) {
-        const matches = await glob([...(hook.include ?? ['**/*'])], {
+    // A file source copies straight to dest; include/exclude only filter directory sources.
+    const copies: { readonly src: string; readonly dest: string }[] = [];
+    if (sourceStat.isDirectory()) {
+      const matches = yield* fsTry(() =>
+        glob([...(hook.include ?? ['**/*'])], {
           cwd: srcRoot,
           dot: true,
           ignore: [...(hook.exclude ?? [])],
           onlyFiles: true,
+        }),
+      );
+      for (const match of matches) {
+        copies.push({
+          src: yield* Effect.fromResult(resolveRelativeRoot(srcRoot, match, 'copy.include')),
+          dest: yield* Effect.fromResult(resolveRelativeRoot(destRoot, match, 'copy.dest')),
         });
-        copies = matches.map((match) => ({
-          src: resolveRelativeRoot(srcRoot, match, 'copy.include'),
-          dest: resolveRelativeRoot(destRoot, match, 'copy.dest'),
-        }));
-      } else {
-        if (hook.include || hook.exclude) {
-          throw new WorktreeSetupRunError({
-            message: `copy.include and copy.exclude apply to directory sources only; copy.src ${hook.src} is a file.`,
-          });
-        }
-        copies = [{ src: srcRoot, dest: destRoot }];
       }
-
-      let copied = 0;
-      let skipped = 0;
-      for (const { src, dest } of copies) {
-        if (!hook.overwrite && (await pathExists(dest))) {
-          skipped += 1;
-          continue;
-        }
-        await mkdir(dirname(dest), { recursive: true });
-        await cp(src, dest, { force: hook.overwrite, preserveTimestamps: true });
-        copied += 1;
+    } else {
+      if (hook.include || hook.exclude) {
+        return yield* new WorktreeSetupRunError({
+          message: `copy.include and copy.exclude apply to directory sources only; copy.src ${hook.src} is a file.`,
+        });
       }
-      return {
-        status: 'succeeded' as const,
-        details: {
-          src: hook.src,
-          dest: hook.dest,
-          message: `Copied ${copied} file${copied === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}.`,
-        },
-      };
-    },
-    catch: (cause) =>
-      new WorktreeSetupRunError({
-        message: errorMessage(cause),
-        cause,
-        details: { src: hook.src, dest: hook.dest },
-      }),
-  });
-}
+      copies.push({ src: srcRoot, dest: destRoot });
+    }
 
-function runSymlinkHook(
-  hook: Extract<WorktreePostCreateHook, { type: 'symlink' }>,
+    let copied = 0;
+    let skipped = 0;
+    for (const { src, dest } of copies) {
+      if (!hook.overwrite && (yield* pathExists(dest))) {
+        skipped += 1;
+        continue;
+      }
+      yield* fsTry(() => mkdir(dirname(dest), { recursive: true }));
+      yield* fsTry(() => cp(src, dest, { force: hook.overwrite, preserveTimestamps: true }));
+      copied += 1;
+    }
+    return {
+      status: 'succeeded',
+      details: {
+        src: hook.src,
+        dest: hook.dest,
+        message: `Copied ${copied} file${copied === 1 ? '' : 's'}${skipped ? `, skipped ${skipped}` : ''}.`,
+      },
+    } satisfies HookOutcome;
+  },
+  // Every copy failure names the hook's src and dest, so the failed step says which copy broke.
+  (effect, hook) =>
+    Effect.mapError(
+      effect,
+      (error) =>
+        new WorktreeSetupRunError({
+          message: error.message,
+          cause: error.cause,
+          details: { src: hook.src, dest: hook.dest },
+        }),
+    ),
+);
+
+const runSymlinkHook = Effect.fnUntraced(function* (
+  hook: SymlinkHook,
   projectRootPath: string,
   worktreePath: string,
 ) {
-  return Effect.tryPromise({
-    try: async () => {
-      const src = resolveRelativeRoot(projectRootPath, hook.src, 'symlink.src');
-      const dest = resolveRelativeRoot(worktreePath, hook.dest, 'symlink.dest');
-      const sourceStat = await lstat(src);
-      if (await pathExists(dest)) {
-        if (!hook.overwrite) {
-          return {
-            status: 'skipped' as const,
-            details: { src: hook.src, dest: hook.dest, message: 'Destination already exists.' },
-          };
-        }
-        await rm(dest, { recursive: true, force: true });
-      }
-      await mkdir(dirname(dest), { recursive: true });
-      await symlink(relative(dirname(dest), src), dest, sourceStat.isDirectory() ? 'dir' : 'file');
+  const src = yield* Effect.fromResult(
+    resolveRelativeRoot(projectRootPath, hook.src, 'symlink.src'),
+  );
+  const dest = yield* Effect.fromResult(
+    resolveRelativeRoot(worktreePath, hook.dest, 'symlink.dest'),
+  );
+  const sourceStat = yield* fsTry(() => lstat(src));
+  if (yield* pathExists(dest)) {
+    if (!hook.overwrite) {
       return {
-        status: 'succeeded' as const,
-        details: { src: hook.src, dest: hook.dest, message: 'Created symlink.' },
-      };
-    },
-    catch: (cause) => new WorktreeSetupRunError({ message: errorMessage(cause), cause }),
-  });
-}
-
-function runCommandHook(
-  hook: Extract<WorktreePostCreateHook, { type: 'command' }>,
-  worktreePath: string,
-) {
-  return Effect.callback<
-    {
-      readonly status: 'succeeded';
-      readonly details: StepDetails;
-    },
-    WorktreeSetupRunError
-  >((resume) => {
-    let cwd: string;
-    let timeoutMs: number;
-    try {
-      cwd = resolveRelativeRoot(worktreePath, hook.cwd, 'command.cwd');
-      timeoutMs = parseDurationMs(hook.timeout);
-    } catch (error) {
-      resume(
-        Effect.fail(
-          error instanceof WorktreeSetupRunError
-            ? error
-            : new WorktreeSetupRunError({ message: errorMessage(error), cause: error }),
-        ),
-      );
-      return;
+        status: 'skipped',
+        details: { src: hook.src, dest: hook.dest, message: 'Destination already exists.' },
+      } satisfies HookOutcome;
     }
-    const output = new TailBuffer(maxOutputExcerptBytes);
-    const child = spawn(hook.run, {
-      cwd,
-      detached: true,
-      env: { ...process.env, ...hook.env },
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let timedOut = false;
-    let finished = false;
-    let killTimer: NodeJS.Timeout | null = null;
-    const terminate = () => {
-      if (finished) {
-        return;
-      }
-      killChildProcessGroup(child.pid, 'SIGTERM');
-      killTimer = setTimeout(() => {
-        if (!finished) {
-          killChildProcessGroup(child.pid, 'SIGKILL');
-        }
-      }, 1000);
-      killTimer.unref();
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      terminate();
-    }, timeoutMs);
-    timer.unref();
+    yield* fsTry(() => rm(dest, { recursive: true, force: true }));
+  }
+  yield* fsTry(() => mkdir(dirname(dest), { recursive: true }));
+  yield* fsTry(() =>
+    symlink(relative(dirname(dest), src), dest, sourceStat.isDirectory() ? 'dir' : 'file'),
+  );
+  return {
+    status: 'succeeded',
+    details: { src: hook.src, dest: hook.dest, message: 'Created symlink.' },
+  } satisfies HookOutcome;
+});
 
-    child.stdout?.on('data', (chunk) => output.push(Buffer.from(chunk)));
-    child.stderr?.on('data', (chunk) => output.push(Buffer.from(chunk)));
-    child.on('error', (cause) => {
-      finished = true;
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-      resume(Effect.fail(new WorktreeSetupRunError({ message: errorMessage(cause), cause })));
-    });
-    child.on('close', (exitCode, signal) => {
-      finished = true;
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-      const outputExcerpt = output.text();
-      if (exitCode === 0 && !timedOut) {
-        resume(
-          Effect.succeed({
-            status: 'succeeded' as const,
-            details: {
-              command: hook.run,
-              message: 'Command completed.',
-              outputExcerpt,
-            },
-          }),
-        );
-        return;
-      }
-      const message = timedOut
-        ? `Command timed out after ${hook.timeout}.`
-        : `Command exited with ${exitCode ?? signal ?? 'unknown status'}.`;
-      resume(
-        Effect.fail(
-          new WorktreeSetupRunError({
-            message,
-            cause: { exitCode, signal, outputExcerpt },
-            details: {
-              command: hook.run,
-              message,
-              exitCode,
-              signal,
-              outputExcerpt,
-            },
-          }),
-        ),
-      );
-    });
+/**
+ * Runs the hook's command line through the shell as the leader of its own process group, keeping the tail of its
+ * merged output. Past its `timeout` the group gets `SIGTERM`, then `SIGKILL` after `commandTerminationGrace`; the
+ * step records the leader's exit either way. Interruption closes the scope that owns the group, which `SIGKILL`s it.
+ */
+const runCommandHook = Effect.fnUntraced(function* (hook: CommandHook, worktreePath: string) {
+  // The hook's own fields are checked before anything is spawned.
+  const cwd = yield* Effect.fromResult(resolveRelativeRoot(worktreePath, hook.cwd, 'command.cwd'));
+  const timeout = yield* Effect.fromResult(parseDuration(hook.timeout));
+  const output = new TailBuffer(maxOutputExcerptBytes);
 
-    return Effect.sync(() => {
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-      terminate();
-    });
+  const { exit, timedOut } = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const group = yield* spawnProcessGroup({
+        command: hook.run,
+        shell: true,
+        cwd,
+        env: { ...process.env, ...hook.env },
+        onOutput: (chunk) => output.push(chunk),
+      });
+      const settled = yield* Effect.timeoutOption(group.exit, timeout);
+      if (Option.isSome(settled)) return { exit: settled.value, timedOut: false };
+      yield* terminateGroup(group, commandTerminationGrace);
+      // Waits for `close`, so the step carries the signal that stopped the leader and every chunk written before it.
+      return { exit: yield* group.exit, timedOut: true };
+    }),
+  ).pipe(
+    // The spawn error's own message (`spawn /bin/sh ENOENT`), as the failed step has always reported it.
+    Effect.mapError(
+      (error) => new WorktreeSetupRunError({ message: errorMessage(error.cause), cause: error }),
+    ),
+  );
+
+  const outputExcerpt = output.text();
+  if (exit.exitCode === 0 && !timedOut) {
+    return {
+      status: 'succeeded',
+      details: { command: hook.run, message: 'Command completed.', outputExcerpt },
+    } satisfies HookOutcome;
+  }
+  const message = timedOut
+    ? `Command timed out after ${hook.timeout}.`
+    : `Command exited with ${exit.exitCode ?? exit.signal ?? 'unknown status'}.`;
+  return yield* new WorktreeSetupRunError({
+    message,
+    cause: { exitCode: exit.exitCode, signal: exit.signal, outputExcerpt },
+    details: {
+      command: hook.run,
+      message,
+      exitCode: exit.exitCode,
+      signal: exit.signal,
+      outputExcerpt,
+    },
   });
-}
+});
 
-export function parseDurationMs(input: string) {
+/** Parses a hook duration such as `500ms`, `30s`, `10m` or `1h`. */
+function parseDuration(input: string): Result.Result<Duration.Duration, WorktreeSetupRunError> {
   const match = /^(\d+)(ms|s|m|h)$/i.exec(input.trim());
   if (!match) {
-    throw new WorktreeSetupRunError({
-      message: `Invalid duration ${input}. Use values like 500ms, 30s, 10m, or 1h.`,
-    });
+    return Result.fail(
+      new WorktreeSetupRunError({
+        message: `Invalid duration ${input}. Use values like 500ms, 30s, 10m, or 1h.`,
+      }),
+    );
   }
   const amount = Number(match[1]);
   const unit = match[2]!.toLowerCase();
   switch (unit) {
     case 'ms':
-      return amount;
+      return Result.succeed(Duration.millis(amount));
     case 's':
-      return amount * 1000;
+      return Result.succeed(Duration.seconds(amount));
     case 'm':
-      return amount * 60 * 1000;
+      return Result.succeed(Duration.minutes(amount));
     case 'h':
-      return amount * 60 * 60 * 1000;
+      return Result.succeed(Duration.hours(amount));
     default:
-      throw new WorktreeSetupRunError({ message: `Invalid duration unit ${unit}.` });
+      return Result.fail(new WorktreeSetupRunError({ message: `Invalid duration unit ${unit}.` }));
   }
 }
 
-function resolveRelativeRoot(root: string, candidate: string, field: string) {
+/** Resolves a hook path that must be relative to `root` and stay inside it. */
+function resolveRelativeRoot(
+  root: string,
+  candidate: string,
+  field: string,
+): Result.Result<string, WorktreeSetupRunError> {
   if (isAbsolute(candidate)) {
-    throw new WorktreeSetupRunError({ message: `${field} must be relative.` });
+    return Result.fail(new WorktreeSetupRunError({ message: `${field} must be relative.` }));
   }
   const resolved = resolve(root, candidate);
   const relativePath = relative(root, resolved);
@@ -397,44 +360,41 @@ function resolveRelativeRoot(root: string, candidate: string, field: string) {
     relativePath.startsWith('..\\') ||
     isAbsolute(relativePath)
   ) {
-    throw new WorktreeSetupRunError({ message: `${field} must stay inside its root.` });
+    return Result.fail(
+      new WorktreeSetupRunError({ message: `${field} must stay inside its root.` }),
+    );
   }
-  return resolved;
+  return Result.succeed(resolved);
 }
 
-async function statIfExists(path: string) {
-  try {
-    return await stat(path);
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw cause;
-  }
+/** A filesystem call whose failure fails the hook with the error's own message. */
+function fsTry<A>(operation: () => Promise<A>) {
+  return Effect.tryPromise({
+    try: operation,
+    catch: (cause) => new WorktreeSetupRunError({ message: errorMessage(cause), cause }),
+  });
 }
 
-async function pathExists(path: string) {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function killChildProcessGroup(pid: number | undefined, signal: NodeJS.Signals) {
-  if (!pid) {
-    return;
-  }
-  try {
-    process.kill(-pid, signal);
-  } catch {
+function statIfExists(path: string) {
+  return fsTry(async () => {
     try {
-      process.kill(pid, signal);
-    } catch {
-      // The process may already have exited between the close/error path and cleanup.
+      return await stat(path);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      throw cause;
     }
-  }
+  });
+}
+
+function pathExists(path: string) {
+  return Effect.promise(() =>
+    access(path, constants.F_OK).then(
+      () => true,
+      () => false,
+    ),
+  );
 }
 
 function timestamp() {

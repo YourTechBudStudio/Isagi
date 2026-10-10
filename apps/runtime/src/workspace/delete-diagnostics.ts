@@ -44,8 +44,8 @@ export class WorktreeDeleteDiagnosticsReader extends Context.Service<
     Effect.gen(function* () {
       const database = yield* RuntimeDatabase;
       return WorktreeDeleteDiagnosticsReader.of({
-        read: (worktreeId) =>
-          database.use('read_worktree_delete_diagnostics', (db) => {
+        read: Effect.fn('WorktreeDeleteDiagnosticsReader.read')(function* (worktreeId) {
+          return yield* database.use('read_worktree_delete_diagnostics', (db) => {
             const surfaces = db
               .select({ id: worktreeSurfaces.id })
               .from(worktreeSurfaces)
@@ -107,7 +107,8 @@ export class WorktreeDeleteDiagnosticsReader extends Context.Service<
                 terminals.map((terminal) => terminal.activePtyProcessId),
               ),
             } satisfies WorktreeDeleteDiagnostics;
-          }),
+          });
+        }),
       });
     }),
   );

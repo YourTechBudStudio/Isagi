@@ -4,15 +4,18 @@ import test from 'node:test';
 import { Effect, Layer } from 'effect';
 import type Fastify from 'fastify';
 
-import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
+import type { DeleteWorktreeOutput } from '@isagi/contracts';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
+import { ProjectConfigError } from '../../projects/index.js';
 import {
   ProjectOrderError,
   WorkspaceError,
   WorkspaceService,
   WorktreeOrderError,
+  StateFileError,
 } from '../index.js';
+import { WorktreeSetupError } from '../setup/service.js';
 import { withWorkspaceApi as withWorkspaceApiLayer } from './api-test-support.js';
 
 test('durable session inventory route returns the complete identity set', async () => {
@@ -20,17 +23,14 @@ test('durable session inventory route returns the complete identity set', async 
     { kind: 'agent_session' as const, sessionId: 7, worktreeId: 2 },
     { kind: 'terminal_session' as const, sessionId: 9, worktreeId: 3 },
   ];
-  await withWorkspaceApi(
-    fakeWorkspaceService({ durableSessions: Effect.succeed({ sessions }) }),
-    async (fastify) => {
-      const response = await fastify.inject({
-        method: 'GET',
-        url: '/api/v1/workspace/durable-sessions',
-      });
-      assert.equal(response.statusCode, 200);
-      assert.deepEqual(response.json().data, { sessions });
-    },
-  );
+  await withWorkspaceApi({ durableSessions: Effect.succeed({ sessions }) }, async (fastify) => {
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/v1/workspace/durable-sessions',
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json().data, { sessions });
+  });
 });
 
 test('worktree delete route decodes params and body through the contract path', async () => {
@@ -44,13 +44,13 @@ test('worktree delete route decodes params and body through the contract path', 
   } | null = null;
 
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       deleteWorktree: (request) =>
         Effect.sync(() => {
           input = request;
           return deleteWorktreeOutput;
         }),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'DELETE',
@@ -78,7 +78,7 @@ test('worktree delete route decodes params and body through the contract path', 
 
 test('worktree delete route maps domain failures to delete rejection envelopes', async () => {
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       deleteWorktree: (request) =>
         Effect.fail(
           new WorkspaceError({
@@ -89,7 +89,7 @@ test('worktree delete route maps domain failures to delete rejection envelopes',
             path: '/repo/isagi-feature',
           }),
         ),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'DELETE',
@@ -118,7 +118,7 @@ test('worktree delete route maps domain failures to delete rejection envelopes',
 
 test('worktree delete route maps PTY teardown failures to stable delete rejection reason', async () => {
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       deleteWorktree: (request) =>
         Effect.fail(
           new WorkspaceError({
@@ -128,7 +128,7 @@ test('worktree delete route maps PTY teardown failures to stable delete rejectio
             worktreeId: request.worktreeId,
           }),
         ),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'DELETE',
@@ -158,13 +158,13 @@ test('project order route decodes params and a null append anchor', async () => 
   let input: { readonly projectId: number; readonly beforeProjectId: number | null } | null = null;
 
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveProjectOrder: (request) =>
         Effect.sync(() => {
           input = request;
           return { projectId: request.projectId };
         }),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -183,13 +183,13 @@ test('project order route carries an explicit anchor through to the service', as
   let input: { readonly projectId: number; readonly beforeProjectId: number | null } | null = null;
 
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveProjectOrder: (request) =>
         Effect.sync(() => {
           input = request;
           return { projectId: request.projectId };
         }),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -204,7 +204,7 @@ test('project order route carries an explicit anchor through to the service', as
 });
 
 test('project order route rejects a body whose anchor is not an identifier', async () => {
-  await withWorkspaceApi(fakeWorkspaceService(), async (fastify) => {
+  await withWorkspaceApi({}, async (fastify) => {
     const response = await fastify.inject({
       method: 'PUT',
       url: '/api/v1/projects/3/order',
@@ -219,7 +219,7 @@ test('project order route rejects a body whose anchor is not an identifier', asy
 
 test('project order route maps a missing anchor to a stable rejection envelope', async () => {
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveProjectOrder: (request) =>
         Effect.fail(
           new ProjectOrderError({
@@ -231,7 +231,7 @@ test('project order route maps a missing anchor to a stable rejection envelope',
               : { beforeProjectId: request.beforeProjectId }),
           }),
         ),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -262,13 +262,13 @@ test('worktree order route decodes both path identifiers and the anchor', async 
   } | null = null;
 
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveWorktreeOrder: (request) =>
         Effect.sync(() => {
           input = request;
           return { projectId: request.projectId, worktreeId: request.worktreeId };
         }),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -285,7 +285,7 @@ test('worktree order route decodes both path identifiers and the anchor', async 
 
 test('worktree order route reports an attempt to move the root as a stable reason', async () => {
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveWorktreeOrder: (request) =>
         Effect.fail(
           new WorktreeOrderError({
@@ -295,7 +295,7 @@ test('worktree order route reports an attempt to move the root as a stable reaso
             worktreeId: request.worktreeId,
           }),
         ),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -319,7 +319,7 @@ test('worktree order route reports an attempt to move the root as a stable reaso
 
 test('worktree order route reports a cross-project anchor rather than adopting it', async () => {
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveWorktreeOrder: (request) =>
         Effect.fail(
           new WorktreeOrderError({
@@ -332,7 +332,7 @@ test('worktree order route reports a cross-project anchor rather than adopting i
               : { beforeWorktreeId: request.beforeWorktreeId }),
           }),
         ),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -357,12 +357,12 @@ test('worktree order route reports a cross-project anchor rather than adopting i
 
 test('order routes map database failures to the shared runtime envelope', async () => {
   await withWorkspaceApi(
-    fakeWorkspaceService({
+    {
       moveProjectOrder: () =>
         Effect.fail(
           new DatabaseError({ operation: 'move_project_order', cause: new Error('disk is gone') }),
         ),
-    }),
+    },
     async (fastify) => {
       const response = await fastify.inject({
         method: 'PUT',
@@ -421,7 +421,7 @@ const worktreeOpenCollisions = [
 for (const collision of worktreeOpenCollisions) {
   test(`worktrees.open answers 409 and carries the identifiers for ${collision.label}`, async () => {
     await withWorkspaceApi(
-      fakeWorkspaceService({ openWorktree: () => Effect.fail(collision.error) }),
+      { openWorktree: () => Effect.fail(collision.error) },
       async (fastify) => {
         const response = await fastify.inject({
           method: 'POST',
@@ -490,7 +490,7 @@ for (const route of commandCleanupGatedRoutes) {
       worktreeId: 11,
     });
 
-    await withWorkspaceApi(fakeWorkspaceService(route.service(error)), async (fastify) => {
+    await withWorkspaceApi(route.service(error), async (fastify) => {
       const response = await fastify.inject({
         method: route.method,
         url: route.url,
@@ -507,56 +507,185 @@ for (const route of commandCleanupGatedRoutes) {
   });
 }
 
-function withWorkspaceApi<A>(
-  service: WorkspaceService['Service'],
-  run: (fastify: Fastify.FastifyInstance) => Promise<A>,
-) {
-  return withWorkspaceApiLayer(Layer.succeed(WorkspaceService, service), run);
+test('projects.relocate answers an already-registered path with 409 and the conflicting project', async () => {
+  await withWorkspaceApi(
+    {
+      relocateProject: (input) =>
+        Effect.fail(
+          new WorkspaceError({
+            code: 'project_path_already_registered',
+            message: 'Project path /repo/other is already registered.',
+            conflictingProjectId: 4,
+            path: '/repo/other',
+            projectId: input.projectId,
+          }),
+        ),
+    },
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/projects/3/relocate',
+        payload: { path: '/repo/other' },
+      });
+      const body = response.json() as ErrorBody;
+
+      assert.equal(response.statusCode, 409);
+      assert.equal(body.error?.code, 'project_relocation_rejected');
+      assert.deepEqual(body.error?.data, {
+        reason: 'project_path_already_registered',
+        projectId: 3,
+        path: '/repo/other',
+        conflictingProjectId: 4,
+      });
+    },
+  );
+});
+
+test('setup routes report an invalid project configuration as worktree_setup_rejected', async () => {
+  await withWorkspaceApi(
+    {
+      preflightWorktreeSetup: (input) =>
+        Effect.fail(
+          new ProjectConfigError({
+            code: 'setup_config_invalid',
+            message: 'The project configuration is not valid.',
+            path: '/repo/isagi/.isagi/config.yaml',
+            projectId: input.projectId,
+          }),
+        ),
+    },
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/projects/1/worktrees/setup/preflight',
+      });
+      const body = response.json() as ErrorBody;
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(body.error?.code, 'worktree_setup_rejected');
+      assert.deepEqual(body.error?.data, { reason: 'setup_config_invalid', projectId: 1 });
+    },
+  );
+});
+
+test('worktrees.open reports a setup trust refusal as part of opening', async () => {
+  await withWorkspaceApi(
+    {
+      openWorktree: (input) =>
+        Effect.fail(
+          new WorktreeSetupError({
+            code: 'setup_trust_required',
+            message: 'Approve this project’s worktree setup hooks before creating the worktree.',
+            hash: 'abc',
+            projectId: input.projectId,
+          }),
+        ),
+    },
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/projects/1/worktrees/open',
+        payload: { branch: 'feature/new' },
+      });
+      const body = response.json() as ErrorBody;
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(body.error?.code, 'worktree_open_rejected');
+      assert.deepEqual(body.error?.data, { reason: 'setup_trust_required', projectId: 1 });
+    },
+  );
+});
+
+test('active context route reports a worktree outside the project as a stable rejection', async () => {
+  await withWorkspaceApi(
+    {
+      setActiveContext: (input) =>
+        Effect.fail(
+          new WorkspaceError({
+            code: 'worktree_not_found',
+            message: 'Worktree 99 was not found for project 1.',
+            projectId: input.activeContext.projectId ?? undefined,
+            worktreeId: input.activeContext.worktreeId ?? undefined,
+          }),
+        ),
+    },
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/workspace/active-context',
+        payload: { activeContext: { projectId: 1, worktreeId: 99 }, revision: 3 },
+      });
+      const body = response.json() as ErrorBody;
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(body.error?.code, 'workspace_active_context_rejected');
+      assert.deepEqual(body.error?.data, {
+        reason: 'worktree_not_found',
+        projectId: 1,
+        worktreeId: 99,
+      });
+    },
+  );
+});
+
+test('workspace snapshot route reports a state file failure as the shared state file envelope', async () => {
+  await withWorkspaceApi(
+    {
+      get: Effect.fail(
+        new StateFileError({ operation: 'read_state_file', cause: new Error('EIO') }),
+      ),
+    },
+    async (fastify) => {
+      const response = await fastify.inject({ method: 'GET', url: '/api/v1/workspace' });
+      const body = response.json() as ErrorBody;
+
+      assert.equal(response.statusCode, 500);
+      assert.equal(body.error?.code, 'runtime_state_file_failed');
+      assert.deepEqual(body.error?.data, { operation: 'read_state_file' });
+    },
+  );
+});
+
+/**
+ * A code the endpoint's own method never produces is a runtime bug, not a rejection to relabel: before typed routes it
+ * fell through a catch-all to some other reason or to `api_response_encoding_failed`.
+ */
+test('a workspace failure the route cannot produce answers api_unhandled_error', async () => {
+  await withWorkspaceApi(
+    {
+      deleteProject: (projectId) =>
+        Effect.fail(
+          new WorkspaceError({
+            code: 'branch_exists',
+            message: 'Branch feature/new already exists.',
+            projectId,
+          }),
+        ),
+    },
+    async (fastify) => {
+      const response = await fastify.inject({ method: 'DELETE', url: '/api/v1/projects/1' });
+      const body = response.json() as ErrorBody;
+
+      assert.equal(response.statusCode, 500);
+      assert.equal(body.error?.code, 'api_unhandled_error');
+      assert.equal(body.error?.message, 'Branch feature/new already exists.');
+    },
+  );
+});
+
+interface ErrorBody {
+  readonly error?: { readonly code?: string; readonly message?: string; readonly data?: unknown };
 }
 
-function fakeWorkspaceService(
-  overrides: Partial<WorkspaceService['Service']> = {},
-): WorkspaceService['Service'] {
-  return {
-    get: Effect.succeed(workspaceSnapshot),
-    publishRestoredActivation: Effect.die(
-      'publishRestoredActivation is not used by workspace API tests',
-    ),
-    durableSessions: Effect.succeed({ sessions: [] }),
-    deleteProject: () => Effect.die('deleteProject is not used by workspace API tests'),
-    getActiveContext: Effect.succeed({ activeContext: { projectId: null, worktreeId: null } }),
-    listProjectBranches: () => Effect.succeed({ branches: [] }),
-    preflightWorktreeSetup: (input) =>
-      Effect.succeed({ projectId: input.projectId, status: 'not_configured', summary: [] }),
-    trustWorktreeSetup: () => Effect.die('trustWorktreeSetup is not used by workspace API tests'),
-    openWorktree: () => Effect.die('openWorktree is not used by workspace API tests'),
-    createDetachedWorktree: () =>
-      Effect.die('createDetachedWorktree has no workspace route and is not used by API tests'),
-    checkNewDirectory: () =>
-      Effect.die('checkNewDirectory has no workspace route and is not used by API tests'),
-    preflightWorktreeCreation: () =>
-      Effect.die('preflightWorktreeCreation has no route and is not used by API tests'),
-    runWorktreeSetup: () =>
-      Effect.die('runWorktreeSetup has no route and is not used by API tests'),
-    preflightDeleteWorktree: (input) =>
-      Effect.succeed({
-        projectId: input.projectId,
-        worktreeId: input.worktreeId,
-        path: '/repo/isagi-feature',
-        branch: 'feature/delete-me',
-        isRoot: false,
-        dirty: false,
-      }),
-    deleteWorktree: () => Effect.succeed(deleteWorktreeOutput),
-    registerProject: () => Effect.die('registerProject is not used by workspace API tests'),
-    relocateProject: () => Effect.die('relocateProject is not used by workspace API tests'),
-    reconcileWorkspace: () => Effect.die('reconcileWorkspace is not used by workspace API tests'),
-    setActiveContext: () => Effect.die('setActiveContext is not used by workspace API tests'),
-    moveProjectOrder: (input) => Effect.succeed({ projectId: input.projectId }),
-    moveWorktreeOrder: (input) =>
-      Effect.succeed({ projectId: input.projectId, worktreeId: input.worktreeId }),
-    ...overrides,
-  };
+/**
+ * Runs the real workspace routes against a partial service: members a test does not provide die as unimplemented, so
+ * a route that calls an unexpected method fails loudly.
+ */
+function withWorkspaceApi<A>(
+  service: Partial<WorkspaceService['Service']>,
+  run: (fastify: Fastify.FastifyInstance) => Promise<A>,
+) {
+  return withWorkspaceApiLayer(Layer.mock(WorkspaceService, service), run);
 }
 
 const deleteWorktreeOutput = {
@@ -568,7 +697,3 @@ const deleteWorktreeOutput = {
     branch: 'feature/delete-me',
   },
 } satisfies DeleteWorktreeOutput;
-
-const workspaceSnapshot = {
-  projects: [],
-} satisfies WorkspaceSnapshot;
