@@ -41,71 +41,77 @@ export type LoadedWorktreeCommandCatalog =
       };
     };
 
-export function loadWorktreeHooks(input: {
+/**
+ * Reads the project's worktree hooks from `<root>/.isagi/config.yaml`. A missing file or an empty `postCreate` list is
+ * `not_configured`; an unreadable, unparsable or invalid file fails with `ProjectConfigError`.
+ */
+export const loadWorktreeHooks = Effect.fn('projects.loadWorktreeHooks')(function* (input: {
   readonly projectId?: number | undefined;
   readonly rootPath: string;
-}): Effect.Effect<LoadedWorktreeHooks, ProjectConfigError> {
+}): Effect.fn.Return<LoadedWorktreeHooks, ProjectConfigError> {
   const configPath = join(input.rootPath, '.isagi', 'config.yaml');
-  return Effect.gen(function* () {
-    const exists = yield* pathExists(configPath);
-    if (!exists) {
-      return { status: 'not_configured' as const };
-    }
+  const exists = yield* pathExists(configPath);
+  if (!exists) {
+    return { status: 'not_configured' as const };
+  }
 
-    const contents = yield* Effect.tryPromise({
-      try: () => readFile(configPath, 'utf8'),
-      catch: (cause) =>
-        new ProjectConfigError({
-          code: 'setup_config_invalid',
-          message: `Could not read project config at ${configPath}.`,
-          path: configPath,
-          projectId: input.projectId,
-          cause,
-        }),
-    });
-
-    const parsed = yield* Effect.try({
-      try: () => parse(contents),
-      catch: (cause) =>
-        new ProjectConfigError({
-          code: 'setup_config_invalid',
-          message: `Could not parse project config at ${configPath}.`,
-          path: configPath,
-          projectId: input.projectId,
-          cause,
-        }),
-    });
-
-    const config = yield* Effect.try({
-      try: () => normalizeWorktreeHooksConfig(parsed),
-      catch: (cause) =>
-        new ProjectConfigError({
-          code: 'setup_config_invalid',
-          message: cause instanceof Error ? cause.message : `Invalid worktree hooks config.`,
-          path: configPath,
-          projectId: input.projectId,
-          cause,
-        }),
-    });
-
-    if (!config || config.postCreate.length === 0) {
-      return { status: 'not_configured' as const };
-    }
-
-    return {
-      status: 'configured' as const,
-      config,
-      hash: hashWorktreeHooks(config),
-      summary: summarizeWorktreeHooks(config),
-    };
+  const contents = yield* Effect.tryPromise({
+    try: () => readFile(configPath, 'utf8'),
+    catch: (cause) =>
+      new ProjectConfigError({
+        code: 'setup_config_invalid',
+        message: `Could not read project config at ${configPath}.`,
+        path: configPath,
+        projectId: input.projectId,
+        cause,
+      }),
   });
-}
 
-export function loadWorktreeCommandCatalog(input: {
-  readonly worktreeRootPath: string;
-}): Effect.Effect<LoadedWorktreeCommandCatalog> {
-  const configPath = join(input.worktreeRootPath, '.isagi', 'config.yaml');
-  return Effect.gen(function* () {
+  const parsed = yield* Effect.try({
+    try: () => parse(contents),
+    catch: (cause) =>
+      new ProjectConfigError({
+        code: 'setup_config_invalid',
+        message: `Could not parse project config at ${configPath}.`,
+        path: configPath,
+        projectId: input.projectId,
+        cause,
+      }),
+  });
+
+  const config = yield* Effect.try({
+    try: () => normalizeWorktreeHooksConfig(parsed),
+    catch: (cause) =>
+      new ProjectConfigError({
+        code: 'setup_config_invalid',
+        message: cause instanceof Error ? cause.message : `Invalid worktree hooks config.`,
+        path: configPath,
+        projectId: input.projectId,
+        cause,
+      }),
+  });
+
+  if (!config || config.postCreate.length === 0) {
+    return { status: 'not_configured' as const };
+  }
+
+  return {
+    status: 'configured' as const,
+    config,
+    hash: hashWorktreeHooks(config),
+    summary: summarizeWorktreeHooks(config),
+  };
+});
+
+/**
+ * Reads the worktree's command catalog from `<worktree>/.isagi/config.yaml`. Never fails: a missing file is an empty
+ * catalog, and an unreadable, unparsable or invalid file is a `config_error` diagnostic the caller shows to the user.
+ */
+export const loadWorktreeCommandCatalog = Effect.fn('projects.loadWorktreeCommandCatalog')(
+  function* (input: {
+    readonly worktreeRootPath: string;
+  }): Effect.fn.Return<LoadedWorktreeCommandCatalog> {
+    const configPath = join(input.worktreeRootPath, '.isagi', 'config.yaml');
     const contents = yield* Effect.tryPromise({
       try: () => readFile(configPath, 'utf8'),
       catch: (cause) =>
@@ -146,8 +152,8 @@ export function loadWorktreeCommandCatalog(input: {
       config: config.success,
       path: configPath,
     };
-  });
-}
+  },
+);
 
 function pathExists(path: string) {
   return Effect.promise(() =>

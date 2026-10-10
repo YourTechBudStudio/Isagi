@@ -31,6 +31,17 @@ const portPathFields = new Set(['label', 'path']);
 
 const lifecycleEvents = new Set(['postCreate', 'activate', 'deactivate', 'preDelete']);
 
+/**
+ * A project config that does not normalize. The message is user-facing: it names the offending field.
+ *
+ * Only these pure normalizers throw it, and they are called only through the `Effect.try` in `service.ts`, which turns
+ * it into the module's typed result (`ProjectConfigError` for hooks, a `command_config_invalid` diagnostic for
+ * commands). Anything else thrown from here is a bug.
+ */
+class ProjectConfigInvalid extends Error {
+  override readonly name = 'ProjectConfigInvalid';
+}
+
 export function normalizeWorktreeHooksConfig(input: unknown): WorktreeHooksConfig | null {
   if (!isRecord(input)) {
     return null;
@@ -48,7 +59,7 @@ export function normalizeWorktreeHooksConfig(input: unknown): WorktreeHooksConfi
     return null;
   }
   if (!Array.isArray(postCreate)) {
-    throw new Error('worktrees.hooks.postCreate must be a list.');
+    throw new ProjectConfigInvalid('worktrees.hooks.postCreate must be a list.');
   }
 
   const decoded = decode(worktreeHooksSchema, { postCreate }, 'worktrees.hooks');
@@ -64,7 +75,7 @@ export function normalizeCommandCatalogConfig(
   }
 
   if (!Array.isArray(input.commands)) {
-    throw new Error('commands must be a list.');
+    throw new ProjectConfigInvalid('commands must be a list.');
   }
 
   const seenNames = new Set<string>();
@@ -81,7 +92,7 @@ export function normalizeCommandCatalogConfig(
 
 function normalizePostCreateHook(input: unknown): WorktreePostCreateHook {
   if (!isRecord(input)) {
-    throw new Error('Each postCreate hook must be an object.');
+    throw new ProjectConfigInvalid('Each postCreate hook must be an object.');
   }
   switch (input.type) {
     case 'copy':
@@ -91,7 +102,7 @@ function normalizePostCreateHook(input: unknown): WorktreePostCreateHook {
     case 'command':
       return normalizeCommandHook(decode(commandHookSchema, input, 'command'));
     default:
-      throw new Error('Each postCreate hook needs type copy, symlink, or command.');
+      throw new ProjectConfigInvalid('Each postCreate hook needs type copy, symlink, or command.');
   }
 }
 
@@ -134,7 +145,7 @@ function normalizeCommandEntry(
   },
 ): WorktreeCommandConfig {
   if (!isRecord(input)) {
-    throw new Error(`${options.field} must be an object.`);
+    throw new ProjectConfigInvalid(`${options.field} must be an object.`);
   }
 
   assertKnownFields(input, commandFields, options.field);
@@ -144,7 +155,7 @@ function normalizeCommandEntry(
   const decoded = decode(worktreeCommandSchema, input, options.field);
   const name = normalizeCommandName(decoded.name, `${options.field}.name`);
   if (options.seenNames.has(name)) {
-    throw new Error(`Duplicate command name: ${name}.`);
+    throw new ProjectConfigInvalid(`Duplicate command name: ${name}.`);
   }
   options.seenNames.add(name);
 
@@ -184,7 +195,7 @@ function assertRawPortKnownFields(value: unknown, field: string) {
   value.forEach((entry, index) => {
     const entryField = `${field}[${index}]`;
     if (!isRecord(entry)) {
-      throw new Error(`${entryField} must be an object.`);
+      throw new ProjectConfigInvalid(`${entryField} must be an object.`);
     }
     assertKnownFields(entry, portFields, entryField);
     const paths = entry.paths;
@@ -194,7 +205,7 @@ function assertRawPortKnownFields(value: unknown, field: string) {
     paths.forEach((path, pathIndex) => {
       const pathField = `${entryField}.paths[${pathIndex}]`;
       if (!isRecord(path)) {
-        throw new Error(`${pathField} must be an object.`);
+        throw new ProjectConfigInvalid(`${pathField} must be an object.`);
       }
       assertKnownFields(path, portPathFields, pathField);
     });
@@ -221,7 +232,7 @@ function normalizeCommandPorts(
   return input.map((entry, index) => {
     const entryField = `${field}[${index}]`;
     if ((entry.port === undefined) === (entry.envVar === undefined)) {
-      throw new Error(`${entryField} must declare exactly one of port or envVar.`);
+      throw new ProjectConfigInvalid(`${entryField} must declare exactly one of port or envVar.`);
     }
 
     const paths = (entry.paths ?? []).map((path, pathIndex) =>
@@ -230,7 +241,9 @@ function normalizeCommandPorts(
 
     if (entry.port !== undefined) {
       if (seenPorts.has(entry.port)) {
-        throw new Error(`${entryField}.port ${entry.port} is declared more than once.`);
+        throw new ProjectConfigInvalid(
+          `${entryField}.port ${entry.port} is declared more than once.`,
+        );
       }
       seenPorts.add(entry.port);
       return { kind: 'fixed', port: entry.port, paths };
@@ -238,12 +251,14 @@ function normalizeCommandPorts(
 
     const envVar = entry.envVar as string;
     if (seenEnvVars.has(envVar)) {
-      throw new Error(`${entryField}.envVar ${envVar} is declared more than once.`);
+      throw new ProjectConfigInvalid(`${entryField}.envVar ${envVar} is declared more than once.`);
     }
     // A name set in both places is contradictory intent: the allocated value
     // would silently win. Rejecting is louder than resolving it by precedence.
     if (Object.hasOwn(env, envVar)) {
-      throw new Error(`${entryField}.envVar collides with env.${envVar}; remove one.`);
+      throw new ProjectConfigInvalid(
+        `${entryField}.envVar collides with env.${envVar}; remove one.`,
+      );
     }
     seenEnvVars.add(envVar);
     return { kind: 'allocated', envVar, paths };
@@ -256,10 +271,10 @@ function normalizeCommandPortPath(
   field: string,
 ): CommandPortPathConfig {
   if (path.label.trim() !== path.label) {
-    throw new Error(`${field}.label must not have leading or trailing whitespace.`);
+    throw new ProjectConfigInvalid(`${field}.label must not have leading or trailing whitespace.`);
   }
   if (seenLabels.has(path.label)) {
-    throw new Error(`${field}.label ${path.label} is declared more than once.`);
+    throw new ProjectConfigInvalid(`${field}.label ${path.label} is declared more than once.`);
   }
   seenLabels.add(path.label);
   return { label: path.label, path: path.path };
@@ -294,7 +309,7 @@ function normalizeLifecycle(
     return defaultCommandLifecycle;
   }
   if (!isRecord(input)) {
-    throw new Error(`${field} must be an object.`);
+    throw new ProjectConfigInvalid(`${field} must be an object.`);
   }
 
   assertKnownFields(input, lifecycleEvents, field);
@@ -342,7 +357,7 @@ function normalizeLifecycleEvent<Action extends 'start' | 'stop'>(
 
 function normalizeCommandName(value: string, field: string) {
   if (value.trim() !== value) {
-    throw new Error(`${field} must not have leading or trailing whitespace.`);
+    throw new ProjectConfigInvalid(`${field} must not have leading or trailing whitespace.`);
   }
   return value;
 }
@@ -353,7 +368,7 @@ function normalizeCommandEnv(value: Readonly<Record<string, string>> | undefined
   }
   for (const key of Object.keys(value)) {
     if (key === '') {
-      throw new Error(`${field} keys must be non-empty strings.`);
+      throw new ProjectConfigInvalid(`${field} keys must be non-empty strings.`);
     }
   }
   return value;
@@ -371,7 +386,7 @@ function normalizeCommandEnvFiles(
 
 function requiredSafeRelativePath(value: string, field: string, worktreeRootPath: string) {
   if (isAbsolute(value)) {
-    throw new Error(`${field} must be relative to the worktree root.`);
+    throw new ProjectConfigInvalid(`${field} must be relative to the worktree root.`);
   }
   const resolved = resolve(worktreeRootPath, value);
   const relativePath = relative(worktreeRootPath, resolved);
@@ -382,7 +397,7 @@ function requiredSafeRelativePath(value: string, field: string, worktreeRootPath
     relativePath.startsWith('..\\') ||
     isAbsolute(relativePath)
   ) {
-    throw new Error(`${field} must stay inside the worktree root.`);
+    throw new ProjectConfigInvalid(`${field} must stay inside the worktree root.`);
   }
   return value;
 }
@@ -394,7 +409,7 @@ function assertKnownFields(
 ) {
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) {
-      throw new Error(`${field}.${key} is not a supported field.`);
+      throw new ProjectConfigInvalid(`${field}.${key} is not a supported field.`);
     }
   }
 }
@@ -408,7 +423,7 @@ function decode<S extends Schema.Decoder<unknown>>(
   if (Result.isSuccess(decoded)) {
     return decoded.success;
   }
-  throw new Error(formatSchemaError(decoded.failure, field));
+  throw new ProjectConfigInvalid(formatSchemaError(decoded.failure, field));
 }
 
 const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1({
