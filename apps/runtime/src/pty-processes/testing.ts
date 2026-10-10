@@ -1,8 +1,8 @@
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 
-import type { PtyBackendCatalog } from './backend.js';
+import { resolveRegisteredBackend, type PtyBackendCatalog } from './backend.js';
 import type { PtyService } from './service.js';
-import type { PtyRetryScheduler } from './service/retry.js';
+import type { PtyPersistenceRetry } from './service/retry.js';
 import { terminatePtyProcesses } from './service/termination.js';
 import type {
   PtyBackendName,
@@ -30,52 +30,46 @@ export function fakeBackendCatalog(input: {
   } satisfies Record<PtyBackendName, PtyBackendShape>;
   return {
     configured: backends[input.configured],
-    forBackend: (name) => {
-      if (!Object.hasOwn(backends, name)) {
-        throw new Error(`Unknown persisted PTY backend ${String(name)}.`);
-      }
-      return backends[name];
-    },
+    forBackend: (name) => resolveRegisteredBackend(backends, name),
     all: Object.values(backends),
   };
 }
 
 /**
- * Test-only retry scheduler. Deferred terminal writes are the riskiest part of
+ * Test-only persistence retry. Deferred terminal writes are the riskiest part of
  * the termination lifecycle, so tests must be able to advance failure → success
- * deterministically instead of waiting on wall-clock timers — and must be able
- * to assert that a resolved retry left no further work behind.
+ * deterministically instead of waiting out a backoff — and must be able to
+ * assert that a resolved retry left no further work behind.
  */
-export interface ManualPtyRetryScheduler extends PtyRetryScheduler {
+export interface ManualPtyPersistenceRetry extends PtyPersistenceRetry {
   readonly pendingCount: () => number;
-  // Runs the jobs scheduled so far. A job that fails again re-schedules itself,
-  // which lands in the queue for the next `runPending`, so a test spells out how
-  // many attempts it is granting.
+  // Gives every submitted retry one attempt. An attempt that fails again stays
+  // pending for the next `runPending`, as the real retry keeps trying, so a test
+  // spells out how many attempts it is granting.
   readonly runPending: Effect.Effect<void>;
 }
 
-export function manualPtyRetryScheduler(): ManualPtyRetryScheduler {
-  let pending: Effect.Effect<void>[] = [];
-  let stopped = false;
+export function manualPtyPersistenceRetry(): ManualPtyPersistenceRetry {
+  let pending: Effect.Effect<void, unknown>[] = [];
   return {
-    schedule: (_label, job) => {
-      if (stopped) return;
-      pending.push(job);
-    },
-    // Mirrors the real scheduler's policy: queued work gets its attempt while
-    // dependencies are still up, and anything it re-queues after that is
-    // refused.
-    shutdown: Effect.suspend(() => {
-      stopped = true;
-      const jobs = pending;
-      pending = [];
-      return Effect.forEach(jobs, (job) => job, { discard: true });
-    }),
+    submit: (_label, attempt) =>
+      Effect.sync(() => {
+        pending.push(attempt);
+      }),
     pendingCount: () => pending.length,
     runPending: Effect.suspend(() => {
-      const jobs = pending;
+      const attempts = pending;
       pending = [];
-      return Effect.forEach(jobs, (job) => job, { discard: true });
+      return Effect.forEach(
+        attempts,
+        (attempt) =>
+          Effect.exit(attempt).pipe(
+            Effect.map((exit) => {
+              if (Exit.isFailure(exit)) pending.push(attempt);
+            }),
+          ),
+        { discard: true },
+      );
     }),
   };
 }

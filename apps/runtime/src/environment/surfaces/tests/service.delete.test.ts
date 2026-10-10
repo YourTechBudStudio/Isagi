@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
+import { makeLogCapture } from '@isagi/testing';
+
 import {
   EditorContextRepository,
   insertPtyProcess as insertEditorPtyProcess,
@@ -256,11 +258,7 @@ test('delete surface best-effort terminates live PTYs', async () => {
 
 test('delete surface still succeeds when live PTY termination fails', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-termination-failed-'));
-  const warnings: unknown[] = [];
-  const originalConsoleWarn = console.warn;
-  console.warn = (...message: unknown[]) => {
-    warnings.push(message);
-  };
+  const logs = makeLogCapture();
 
   try {
     const output = await Effect.runPromise(
@@ -296,15 +294,20 @@ test('delete surface still succeeds when live PTY termination fails', async () =
             },
           }),
         ),
+        Effect.provide(logs.layer),
       ),
     );
 
     assert.equal(output.deleted.deletedSurfaceId, output.surface.surfaceId);
     assert.deepEqual(output.deleted.deletedPaneIds, [output.surface.paneId]);
     assert.equal(Result.isFailure(output.detail), true);
-    assert.equal(warnings.length, 1);
+    assert.deepEqual(
+      logs.lines
+        .filter((line) => line.level === 'Warn')
+        .map((line) => [line.message, line.annotations.ptyProcessId !== undefined]),
+      [['Failed to terminate PTY process', true]],
+    );
   } finally {
-    console.warn = originalConsoleWarn;
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });

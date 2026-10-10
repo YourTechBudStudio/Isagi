@@ -10,6 +10,7 @@ import {
   terminalSessionPtyWebSocketEndpoint,
   type PtyStreamOutputMessageSet,
 } from '@isagi/contracts';
+import { makeFiberProbe } from '@isagi/testing';
 
 import { HarnessAdapterError } from '../../harnesses/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
@@ -408,6 +409,153 @@ test('PTY websocket API supersede detaches the displaced viewer before the repla
   }
 });
 
+test('closing an attach socket mid-replay releases its subscription and replay fiber', async () => {
+  let detached = false;
+  let replayInterrupted = false;
+  const fiberProbe = makeFiberProbe();
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, fakeAgentSessionService()),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          planReplayBytes: 0,
+          onAttachStarted: () => {},
+          attachPromise: async () => fakeAttachment(() => (detached = true), 5),
+          replay: (send) =>
+            Effect.sync(() => send({ type: 'replay_start', bytes: 5 })).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  replayInterrupted = true;
+                }),
+              ),
+            ),
+        }),
+      ),
+      sessionLifecycleLayer,
+      fiberProbe.layer,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10);
+    const fibersBeforeConnect = fiberProbe.counts.active;
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    const messages = collectJsonMessages(ws);
+    await messages.waitForType('replay_start', 'replay start');
+    assert.equal(detached, false);
+    assert.ok(fiberProbe.counts.active > fibersBeforeConnect);
+
+    const closed = onceClose(ws);
+    ws.terminate();
+    await closed;
+    await waitUntil(
+      () => detached && replayInterrupted && fiberProbe.counts.active === fibersBeforeConnect,
+      'attachment release and connection fibers ending',
+    );
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('input sent before replay ends is applied after replay, in order', async () => {
+  const journal: string[] = [];
+  let releaseReplay!: () => void;
+  const replayGate = new Promise<void>((resolve) => {
+    releaseReplay = resolve;
+  });
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, fakeAgentSessionService()),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          planReplayBytes: 0,
+          onAttachStarted: () => {},
+          attachPromise: async () => fakeAttachment(() => {}, 5),
+          replay: (send) =>
+            Effect.gen(function* () {
+              send({ type: 'replay_start', bytes: 5 });
+              journal.push('replay_start');
+              yield* Effect.promise(() => replayGate);
+              send({ type: 'output', data: 'hello', replay: true });
+              send({ type: 'replay_end' });
+              journal.push('replay_end');
+            }),
+          write: (data) =>
+            Effect.sync(() => {
+              journal.push(`write:${data}`);
+            }),
+          resize: ({ cols, rows }) =>
+            Effect.sync(() => {
+              journal.push(`resize:${cols}x${rows}`);
+            }),
+        }),
+      ),
+      sessionLifecycleLayer,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10);
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    const messages = collectJsonMessages(ws);
+    await messages.waitForType('replay_start', 'replay start');
+    ws.send(JSON.stringify({ type: 'input', data: 'a' }));
+    ws.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }));
+    ws.send(JSON.stringify({ type: 'input', data: 'b' }));
+    // Frames are decoded in arrival order, so once this malformed one is answered the three above are queued.
+    ws.send('{');
+    await messages.waitForType('error', 'invalid message error');
+    assert.deepEqual(messages.items.at(-1), { type: 'error', code: 'invalid_message' });
+    assert.deepEqual(journal, ['replay_start']);
+
+    releaseReplay();
+    await waitUntil(() => journal.length === 5, 'queued input applied');
+    assert.deepEqual(journal, [
+      'replay_start',
+      'replay_end',
+      'write:a',
+      'resize:120x40',
+      'write:b',
+    ]);
+    await messages.waitForType('replay_end', 'replay end');
+    assert.deepEqual(
+      messages.items.filter(
+        (item) =>
+          typeof item === 'object' && item !== null && 'type' in item && item.type !== 'error',
+      ),
+      [
+        { type: 'session', status: 'running', exitCode: null, signal: null },
+        { type: 'replay_start', bytes: 5 },
+        { type: 'output', data: 'hello', replay: true },
+        { type: 'replay_end' },
+      ],
+    );
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
 function fakeAgentSessionService(
   overrides: Partial<AgentSessionService['Service']> = {},
 ): AgentSessionService['Service'] {
@@ -431,6 +579,8 @@ function fakeTerminalSessionService(): TerminalSessionService['Service'] {
 }
 
 function fakePtyService(input: {
+  /** The plan's replay cursor; `null` (the default) is a backend without one, which replays before attaching. */
+  readonly planReplayBytes?: number | null | undefined;
   readonly onAttachStarted: () => void;
   readonly attachPromise: () => Promise<ReturnType<typeof fakeAttachment>>;
   readonly onAttachSend?:
@@ -451,17 +601,21 @@ function fakePtyService(input: {
     getAttachmentPlan: () =>
       Effect.succeed({
         session: fakeRunningProcess(),
-        replayBytes: null,
+        replayBytes: input.planReplayBytes ?? null,
         live: true,
         replaySource: 'file_log',
       }),
+    // Like the real service, the attachment lasts as long as the caller's scope.
     attach: ({ send }) =>
-      Effect.promise(() => {
-        const promise = input.attachPromise();
-        input.onAttachStarted();
-        input.onAttachSend?.(send);
-        return promise;
-      }),
+      Effect.acquireRelease(
+        Effect.promise(() => {
+          const promise = input.attachPromise();
+          input.onAttachStarted();
+          input.onAttachSend?.(send);
+          return promise;
+        }),
+        (attachment) => attachment.detach,
+      ),
     replay: ({ send }) => input.replay?.(send) ?? Effect.void,
     write: ({ data }) => input.write?.(data) ?? Effect.void,
     writeInput: ({ data }) => input.write?.(data) ?? Effect.void,
@@ -565,14 +719,19 @@ async function waitUntil(predicate: () => boolean, label: string) {
   }
 }
 
-function fakeAttachment(onUnsubscribe: () => void = () => {}) {
+/** `detach` is idempotent, as `PtyAttachment` promises: a displaced viewer detaches early and again at scope close. */
+function fakeAttachment(onDetach: () => void = () => {}, replayBytes: number | null = null) {
+  let detached = false;
   return {
     session: fakeRunningProcess(),
     attachmentId: Symbol('test-attachment'),
-    replayBytes: null,
+    replayBytes,
     live: true,
-    detach: Effect.sync(onUnsubscribe),
-    unsubscribe: onUnsubscribe,
+    detach: Effect.sync(() => {
+      if (detached) return;
+      detached = true;
+      onDetach();
+    }),
   } satisfies PtyAttachment;
 }
 

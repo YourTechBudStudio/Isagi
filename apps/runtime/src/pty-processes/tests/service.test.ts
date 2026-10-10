@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer, Result } from 'effect';
+import { Effect, Layer, Result, Stream } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
@@ -259,6 +259,7 @@ test('PTY process service rejects concurrent websocket attachments for the same 
           { concurrency: 'unbounded' },
         );
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           serviceTestLayer(
             dataRoot,
@@ -301,6 +302,7 @@ test('PTY read-only attachments expose no writable attachment id', async () => {
           .pipe(Effect.result);
         return { attachment, writeResult };
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           serviceTestLayer(
             dataRoot,
@@ -375,7 +377,7 @@ test('PTY read-only supersede awaits displaced detach before replacement attach'
               yield* attachment.detach;
             }),
         });
-      }).pipe(Effect.provide(serviceTestLayer(dataRoot, backend))),
+      }).pipe(Effect.scoped, Effect.provide(serviceTestLayer(dataRoot, backend))),
     );
 
     assert.deepEqual(events.slice(0, 4), ['attach', 'displace', 'detach', 'attach']);
@@ -390,10 +392,13 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
     available: Effect.succeed(true),
     launch: (input) =>
       Effect.succeed({
-        schemaVersion: 1,
-        backend: 'node_pty',
-        ptyProcessId: input.ptyProcessId,
-        pid: 1234,
+        ref: {
+          schemaVersion: 1,
+          backend: 'node_pty',
+          ptyProcessId: input.ptyProcessId,
+          pid: 1234,
+        },
+        events: Stream.empty,
       }),
     attach: () =>
       Effect.callback((resume) => {
@@ -404,7 +409,6 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
               replayBytes: 0,
               write: () => Effect.void,
               resize: () => Effect.void,
-              detach: Effect.void,
             }),
           );
         }, 25);
@@ -433,10 +437,13 @@ function launchCaptureBackend(
       Effect.sync(() => {
         onLaunch(input.env);
         return {
-          schemaVersion: 1,
-          backend: 'node_pty',
-          ptyProcessId: input.ptyProcessId,
-          pid: 1234,
+          ref: {
+            schemaVersion: 1,
+            backend: 'node_pty',
+            ptyProcessId: input.ptyProcessId,
+            pid: 1234,
+          },
+          events: Stream.empty,
         };
       }),
     attach: () => Effect.die('launch environment test should not attach'),
@@ -456,27 +463,33 @@ function singleAttachmentBackend(events: string[]): PtyBackendShape {
     available: Effect.succeed(true),
     launch: (input) =>
       Effect.succeed({
-        schemaVersion: 1,
-        backend: 'node_pty',
-        ptyProcessId: input.ptyProcessId,
-        pid: 1234,
+        ref: {
+          schemaVersion: 1,
+          backend: 'node_pty',
+          ptyProcessId: input.ptyProcessId,
+          pid: 1234,
+        },
+        events: Stream.empty,
       }),
     attach: () =>
-      Effect.sync(() => {
-        if (attached) throw new Error('already attached');
-        attached = true;
-        events.push('attach');
-        return {
-          replayBytes: 0,
-          write: () => Effect.void,
-          resize: () => Effect.void,
-          detach: Effect.sync(() => {
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          if (attached) throw new Error('already attached');
+          attached = true;
+          events.push('attach');
+          return {
+            replayBytes: 0,
+            write: () => Effect.void,
+            resize: () => Effect.void,
+          };
+        }),
+        () =>
+          Effect.sync(() => {
             if (!attached) return;
             attached = false;
             events.push('detach');
           }),
-        };
-      }),
+      ),
     writeInput: () => Effect.void,
     replay: (input) =>
       Effect.sync(() => {
@@ -495,10 +508,13 @@ function writeInputBackend(writes: string[]): PtyBackendShape {
     available: Effect.succeed(true),
     launch: (input) =>
       Effect.succeed({
-        schemaVersion: 1,
-        backend: 'node_pty',
-        ptyProcessId: input.ptyProcessId,
-        pid: 1234,
+        ref: {
+          schemaVersion: 1,
+          backend: 'node_pty',
+          ptyProcessId: input.ptyProcessId,
+          pid: 1234,
+        },
+        events: Stream.empty,
       }),
     writeInput: ({ data }) =>
       Effect.sync(() => {
@@ -583,14 +599,15 @@ test('a command-style caller reads the terminal fact of a process that died duri
             dataRoot,
             launchCaptureBackend(() => {}, {
               launch: (input) =>
-                Effect.sync(() => {
-                  input.onExit({ exitCode: 3, signal: null });
-                  return {
+                Effect.succeed({
+                  ref: {
                     schemaVersion: 1,
                     backend: 'node_pty',
                     ptyProcessId: input.ptyProcessId,
                     pid: 42,
-                  } as const;
+                  } as const,
+                  // The process died before the spawn even returned.
+                  events: Stream.make({ _tag: 'Exited' as const, exitCode: 3, signal: null }),
                 }),
             }),
           ),

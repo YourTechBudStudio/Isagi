@@ -165,18 +165,19 @@ test(
 );
 
 function launchLeakyRoot(backend: PtyBackend, ptyProcessId: number, pidFile: string) {
-  return backend.launch({
-    ptyProcessId,
-    backendSessionName: null,
-    command: process.execPath,
-    args: ['-e', leakyRootScript, pidFile],
-    cwd: process.cwd(),
-    env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
-    cols: 80,
-    rows: 24,
-    logPath: null,
-    onExit: () => {},
-  });
+  return backend
+    .launch({
+      ptyProcessId,
+      backendSessionName: null,
+      command: process.execPath,
+      args: ['-e', leakyRootScript, pidFile],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      cols: 80,
+      rows: 24,
+      logPath: null,
+    })
+    .pipe(Effect.map((launched) => launched.ref));
 }
 
 function stopWith(backend: PtyBackend, operation: 'terminate' | 'kill', ref: BackendSessionRef) {

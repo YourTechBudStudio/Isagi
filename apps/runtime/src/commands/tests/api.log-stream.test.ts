@@ -228,6 +228,64 @@ test('command log stream replays to the attach cursor without a gap or duplicate
   );
 });
 
+test('an attach socket receives exit and closes when its PTY process exits', async () => {
+  let liveSend: ((message: PtyStreamOutputMessageSet) => void) | null = null;
+  const latestRun = {
+    id: 1,
+    startedAt: '2026-06-19T00:00:00.000Z',
+    completedAt: null,
+    status: 'running' as const,
+    ptyProcessId: 20,
+    hasPtyProcess: true,
+    diagnostic: null,
+  };
+
+  await withCommandsApi(
+    commandService({
+      readLogMetadata: () =>
+        Effect.succeed({ worktreeId: 10, commandName: 'dev', status: 'running', latestRun }),
+    }),
+    async (fastify) => {
+      const ws = await fastify.injectWS('/api/v1/worktrees/10/commands/log-stream?commandName=dev');
+      const messagesPromise = receiveMessagesUntilClose(ws);
+      await waitUntil(() => liveSend !== null, 'live attachment');
+      liveSend!({ type: 'output', data: 'bye\n' });
+      liveSend!({ type: 'exit', exitCode: 0, signal: null });
+      // Resolves when the client sees the server close the socket.
+      const messages = await messagesPromise;
+
+      assert.deepEqual(messages, [
+        {
+          type: 'command_log_state',
+          worktreeId: 10,
+          commandName: 'dev',
+          status: 'running',
+          latestRun,
+          live: true,
+        },
+        { type: 'replay_start', bytes: 0 },
+        { type: 'replay_end' },
+        { type: 'output', data: 'bye\n' },
+        { type: 'exit', exitCode: 0, signal: null },
+      ]);
+    },
+    {
+      pty: fakeCommandLogPtyService({
+        attach: (input) =>
+          Effect.sync(() => {
+            liveSend = input.send;
+            return fakeAttachment({ replayBytes: 0 });
+          }),
+        replay: (input) =>
+          Effect.sync(() => {
+            input.send({ type: 'replay_start', bytes: input.bytes ?? 0 });
+            input.send({ type: 'replay_end' });
+          }),
+      }),
+    },
+  );
+});
+
 test('command log stream falls back to replay-only output after stale live attach failure', async () => {
   let metadataReads = 0;
   let planReads = 0;
