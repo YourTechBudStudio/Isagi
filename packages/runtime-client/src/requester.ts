@@ -133,9 +133,18 @@ export const makeRequesters = Effect.fnUntraced(function* (runtimeUrl: string) {
     return Effect.gen(function* () {
       const url = yield* urlFor(endpoint.id, endpoint.path, params, query);
       // `JSON.stringify` of the caller's value with `content-type: application/json`, exactly the
-      // bytes the runtime has always received; the body is not schema-encoded.
+      // bytes the runtime has always received; the body is not schema-encoded. A value
+      // `JSON.stringify` rejects (a `bigint`, a cycle) is a request that cannot be sent: a transport
+      // failure carrying the serializer's error, never a thrown defect.
       const httpRequest = endpoint.body
-        ? HttpClientRequest.bodyJsonUnsafe(HttpClientRequest.make(endpoint.method)(url), body)
+        ? yield* HttpClientRequest.bodyJson(
+            HttpClientRequest.make(endpoint.method)(url),
+            body,
+          ).pipe(
+            Effect.mapError(
+              (error) => new RuntimeTransportError({ endpointId: endpoint.id, cause: error.cause }),
+            ),
+          )
         : HttpClientRequest.make(endpoint.method)(url);
       const response = yield* send(endpoint.id, httpRequest);
       const payload = yield* readJson(endpoint.id, response);

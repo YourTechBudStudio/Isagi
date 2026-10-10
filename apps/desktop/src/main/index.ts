@@ -56,8 +56,11 @@ let updaterInstaller: DesktopUpdater['Service']['installer'] | undefined;
 const shutdown = new DesktopShutdownCoordinator({
   dispose: () => desktop.dispose(),
   destroyRenderer: () => {
-    // Nothing can receive a snapshot past this point (`send` drops it), and the
-    // installing state the renderer last saw is the honest final one.
+    // Nothing can receive a snapshot past this point (`send` drops it). That
+    // includes an install's `installing` snapshot: the updater publishes it just
+    // before requesting the install, but the bridge streams it asynchronously,
+    // so it arrives after this flag is set and is dropped. The renderer never
+    // shows it; the window is destroyed in this same tick.
     exitRequested = true;
     destroyRendererForExit(mainWindow);
   },

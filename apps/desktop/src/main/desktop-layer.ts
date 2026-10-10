@@ -74,15 +74,28 @@ const exitAfterRuntimeFailure = Effect.fnUntraced(function* (
     reason: snapshot.reason,
     diagnostic: snapshot.diagnostic,
   });
-  if (shell.isPackaged) yield* preserveRuntimeFailure(shell.logsDirectory(), snapshot);
+  if (shell.isPackaged) yield* preserveRuntimeFailure(shell.logsDirectory, snapshot);
   shell.requestExit(1);
 });
 
 /**
  * A packaged build has no terminal a user could read the failure from, so the snapshot is kept as
- * `managed-runtime-failure.json` in the logs directory. Never fails: a record that cannot be written is logged.
+ * `managed-runtime-failure.json` in the logs directory. Never fails: a record that cannot be written is logged, and so
+ * is a logs directory Electron cannot name (`app.getPath` throws), so the exit that follows always happens.
  */
-const preserveRuntimeFailure = (logDirectory: string, snapshot: FailedRuntimeSnapshot) => {
+const preserveRuntimeFailure = (logsDirectory: () => string, snapshot: FailedRuntimeSnapshot) =>
+  Effect.try(logsDirectory).pipe(
+    Effect.matchEffect({
+      onSuccess: (logDirectory) => writeRuntimeFailure(logDirectory, snapshot),
+      onFailure: (error) =>
+        Effect.logError(
+          'Failed to preserve managed runtime failure record: no logs directory',
+          error.cause,
+        ),
+    }),
+  );
+
+const writeRuntimeFailure = (logDirectory: string, snapshot: FailedRuntimeSnapshot) => {
   const logPath = join(logDirectory, 'managed-runtime-failure.json');
   return Effect.tryPromise(async () => {
     await mkdir(logDirectory, { recursive: true });

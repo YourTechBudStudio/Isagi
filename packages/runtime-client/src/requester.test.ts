@@ -283,6 +283,21 @@ test('a malformed runtime URL fails as a transport error and sends nothing', asy
   assert.deepEqual(runtime.seen, []);
 });
 
+test('a body JSON cannot encode fails as a transport error and sends nothing', async () => {
+  const runtime = fakeRuntime(() => json(workspaceEnvelope));
+
+  const error = await runtime.run(
+    RuntimeClient.use((client) =>
+      client.request(apiEndpoints.projects.add, { path: '/repo', size: 1n } as never),
+    ).pipe(Effect.flip),
+  );
+
+  assert.ok(error instanceof RuntimeTransportError);
+  assert.equal(error.endpointId, apiEndpoints.projects.add.id);
+  assert.ok(error.cause instanceof TypeError);
+  assert.deepEqual(runtime.seen, []);
+});
+
 test('a failed request rejects Effect.runPromise with the tagged error itself', async () => {
   const layer = RuntimeClient.layer(runtimeUrl).pipe(Layer.provide(RuntimeHttpClient));
   const originalFetch = globalThis.fetch;

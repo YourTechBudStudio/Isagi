@@ -5,6 +5,7 @@ import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import {
   PtyInspectError,
   PtyKillError,
+  PtyLogError,
   PtyResizeError,
   PtyServiceError,
   PtyStartError,
@@ -62,6 +63,12 @@ test('every PTY error renders its authored label and coordinates', () => {
   assert.equal(
     describeOperationalCause(new PtyTerminationInProgressError({ ptyProcessId: 7 })),
     'PTY termination already in progress (ptyProcess=7)',
+  );
+  assert.equal(
+    describeOperationalCause(
+      new PtyLogError({ operation: 'create', ptyProcessId: 8, cause: new Error(SENTINEL) }),
+    ),
+    'PTY log create failed (ptyProcess=8): Error',
   );
 });
 

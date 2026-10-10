@@ -4,11 +4,13 @@
 // Deferreds. Everything else (readiness, health, the post-ready watch, termination) is one supervising fiber forked
 // into the layer's scope, so closing that scope (disposing the desktop runtime) always stops the child.
 import {
+  Cause,
   Context,
   Data,
   Deferred,
   Duration,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Option,
@@ -194,11 +196,13 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * The configured health check, with anything it throws (a defect) reported as a failed check: whatever goes wrong
-   * there must settle `start`, never leave it waiting.
+   * The configured health check, with anything it throws (a defect, or a synchronous throw from building the check)
+   * reported as a failed check: whatever goes wrong there must settle `start`, never leave it waiting.
    */
   const checkHealth = (url: string) =>
-    config.checkHealth(url).pipe(Effect.catchDefect((defect) => Effect.fail(toError(defect))));
+    Effect.suspend(() => config.checkHealth(url)).pipe(
+      Effect.catchDefect((defect) => Effect.fail(toError(defect))),
+    );
 
   /** `SIGTERM`, the grace period, `SIGKILL`, one more second, then stop watching. Never fails. */
   const terminate = (attached: AttachedChild) =>
@@ -304,14 +308,7 @@ const make = Effect.gen(function* () {
       Effect.matchEffect({
         onSuccess: () => publish({ ownership: 'external', state: 'ready' }),
         onFailure: (error) =>
-          publish({
-            ownership: 'external',
-            state: 'unreachable',
-            reason: 'external_health_check_failed',
-            diagnostic: {
-              message: 'The configured external runtime did not pass its health check.',
-            },
-          }).pipe(
+          publish(externalUnreachable).pipe(
             Effect.andThen(
               Effect.sync(() =>
                 log('stderr', `[external] health check failed: ${errorMessageWithoutUrl(error)}\n`),
@@ -324,6 +321,49 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  /**
+   * The lifecycle invariant, held for every way the run fiber can end: unless a stop interrupted it, an exit that has
+   * not already published a terminal outcome publishes one and settles `ready`. The paths above do this themselves
+   * (a managed failure inside the run's scope, before `terminate`); this is the backstop for whatever escapes them, so
+   * a defect in `prepare`, `checkHealth`, `publish`, the log sink or a finalizer can never leave `start` waiting.
+   */
+  const settleRunExit = (target: RuntimeTarget, exit: Exit.Exit<void>) =>
+    Effect.suspend(() => {
+      if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) return Effect.void;
+      // Interrupted by a stop or by the layer scope closing, with a defect alongside (a failing finalizer): the stop
+      // owns the outcome, so the defect is only logged.
+      const stopping = phase !== 'started' || Cause.hasInterrupts(exit.cause);
+      const defect = Cause.squash(exit.cause);
+      if (target.ownership === 'external') {
+        // Logged and reported like a failed health check, without the message: it could carry the external URL.
+        const logged = Effect.logError(
+          `External runtime supervision ended unexpectedly: ${errorMessageWithoutUrl(defect)}`,
+        );
+        // An external runtime whose outcome is already known loads through as it is.
+        if (stopping || Deferred.isDoneUnsafe(ready)) return logged;
+        return logged.pipe(
+          Effect.andThen(publish(externalUnreachable)),
+          Effect.andThen(Deferred.succeed(ready, target.url)),
+        );
+      }
+      const logged = Effect.logError('Managed runtime supervision ended unexpectedly', exit.cause);
+      // A stored failure has already been published and has settled `ready`.
+      if (stopping || terminalFailure) return logged;
+      const lifecycleFailure = failure('process_error', { message: errorMessage(defect) });
+      terminalFailure = lifecycleFailure;
+      return logged.pipe(
+        Effect.andThen(
+          publish({
+            ownership: 'managed',
+            state: 'failed',
+            reason: lifecycleFailure.reason,
+            diagnostic: lifecycleFailure.diagnostic,
+          }),
+        ),
+        Effect.andThen(Deferred.fail(ready, lifecycleFailure)),
+      );
+    });
+
   const start = Effect.gen(function* () {
     if (phase === 'stopping' || phase === 'stopped') return yield* stoppingFailure();
     if (terminalFailure) return yield* terminalFailure;
@@ -331,9 +371,12 @@ const make = Effect.gen(function* () {
       phase = 'started';
       const target = config.target;
       // Forked into the layer scope, not the caller's: a caller that stops waiting (an IPC invoke torn down with its
-      // window) must not cancel the runtime everyone else waits on.
+      // window) must not cancel the runtime everyone else waits on. Suspended, so even building the run happens inside
+      // the fiber whose exit `settleRunExit` observes.
       run = yield* Effect.forkIn(
-        target.ownership === 'managed' ? runManaged(target.prepare) : runExternal(target.url),
+        Effect.suspend(() =>
+          target.ownership === 'managed' ? runManaged(target.prepare) : runExternal(target.url),
+        ).pipe(Effect.onExit((exit) => settleRunExit(target, exit))),
         layerScope,
       );
     }
@@ -401,6 +444,13 @@ function observeReadyLine(
     );
   }
 }
+
+const externalUnreachable = {
+  ownership: 'external',
+  state: 'unreachable',
+  reason: 'external_health_check_failed',
+  diagnostic: { message: 'The configured external runtime did not pass its health check.' },
+} as const satisfies SnapshotFacts;
 
 function exitsWithin(attached: AttachedChild, duration: Duration.Duration) {
   return Deferred.await(attached.exited).pipe(

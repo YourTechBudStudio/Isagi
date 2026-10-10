@@ -2,11 +2,21 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { Deferred, Duration, Effect, Fiber, Layer, Result, Stream, SubscriptionRef } from 'effect';
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Result,
+  Stream,
+  SubscriptionRef,
+} from 'effect';
 import { TestClock } from 'effect/testing';
 
 import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
-import { runWithTestClock } from '@isagi/testing';
+import { makeLogCapture, runWithTestClock } from '@isagi/testing';
 
 import {
   RuntimeLifecycleFailure,
@@ -14,7 +24,7 @@ import {
   RuntimeProcessConfig,
   type RuntimeTarget,
 } from './lifecycle.js';
-import type { RuntimeLogRecord } from './logging.js';
+import type { RuntimeLogRecord, RuntimeLogSink } from './logging.js';
 import type { RuntimeChildProcess, RuntimeProcessAdapter } from './process-adapter.js';
 
 class FakeStream extends EventEmitter {
@@ -61,6 +71,7 @@ function harness(
     readonly spawnError?: Error;
     readonly exitOnTerm?: boolean;
     readonly exitOnKill?: boolean;
+    readonly log?: RuntimeLogSink;
   } = {},
 ) {
   const child = new FakeChild();
@@ -91,7 +102,7 @@ function harness(
           target: options.target ?? managedTarget(),
           adapter,
           checkHealth: options.checkHealth ?? (() => Effect.void),
-          log: (record) => logs.push(record),
+          log: options.log ?? ((record) => logs.push(record)),
           readinessTimeout,
           stopGrace,
         }),
@@ -468,6 +479,81 @@ test('a health check that dies settles start like a failed check', async () => {
       yield* settle;
       assert.deepEqual(managed.signals, ['SIGTERM']);
     }),
+  );
+});
+
+test('a health check that throws instead of returning an effect is a failed check, never a stuck connecting', async () => {
+  const throwingCheck = (): Effect.Effect<void, Error> => {
+    throw new TypeError('Invalid URL');
+  };
+  const external = harness({
+    target: { ownership: 'external', url: 'localhost:4100' },
+    checkHealth: throwingCheck,
+  });
+  await external.run((process) =>
+    Effect.gen(function* () {
+      const started = yield* Effect.forkChild(Effect.exit(process.start));
+      yield* settle;
+      assert.ok(started.pollUnsafe(), 'start must settle');
+      assert.ok(Exit.isSuccess(yield* Fiber.join(started)), 'an external runtime loads through');
+      const snapshot = yield* snapshotOf(process);
+      assert.equal(snapshot.state, 'unreachable');
+      assert.deepEqual(external.logs, [
+        { stream: 'stderr', payload: '[external] health check failed: Invalid URL\n' },
+      ]);
+    }),
+  );
+
+  const managed = harness({ checkHealth: throwingCheck });
+  await managed.run((process) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.forkChild(Effect.result(process.start));
+      yield* settle;
+      ready(managed.child);
+      const unhealthy = yield* Fiber.join(result);
+      assert.equal(failureReason(unhealthy), 'health_check_failed');
+      assert.equal(
+        Result.isFailure(unhealthy) ? unhealthy.failure.diagnostic.message : undefined,
+        'Invalid URL',
+      );
+      assert.equal((yield* snapshotOf(process)).state, 'failed');
+    }),
+  );
+});
+
+test('a defect that escapes the run is still published and settles every waiter', async () => {
+  const capture = makeLogCapture();
+  const subject = harness({
+    target: { ownership: 'external', url: 'https://user:secret@runtime.example.test' },
+    checkHealth: () => Effect.fail(new Error('unreachable')),
+    // The external failure path logs through the sink after publishing; a sink that throws there is a defect no
+    // handler inside the run expects.
+    log: () => {
+      throw new Error('log sink closed for https://user:secret@runtime.example.test');
+    },
+  });
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const first = yield* Effect.forkChild(Effect.exit(process.start));
+      yield* settle;
+      assert.ok(first.pollUnsafe(), 'start must settle');
+      assert.ok(Exit.isSuccess(yield* Fiber.join(first)));
+      // Later callers get the same settled outcome instead of waiting forever.
+      const second = yield* Effect.forkChild(Effect.exit(process.start));
+      yield* settle;
+      assert.ok(second.pollUnsafe(), 'a later start must settle too');
+      const snapshot = yield* snapshotOf(process);
+      assert.equal(snapshot.state, 'unreachable');
+      assert.deepEqual(
+        capture.lines.map((line) => [line.level, line.message]),
+        [
+          [
+            'Error',
+            'External runtime supervision ended unexpectedly: log sink closed for <external-runtime>',
+          ],
+        ],
+      );
+    }).pipe(Effect.provide(capture.layer)),
   );
 });
 

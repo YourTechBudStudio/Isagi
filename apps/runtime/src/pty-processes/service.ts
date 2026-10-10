@@ -143,7 +143,7 @@ const make = Effect.gen(function* () {
     catalog,
     namespace,
     directory.paths.sessionsPath,
-    { pinnedPtyProcessIds, pendingLaunches: reservations.launches },
+    { pinnedPtyProcessIds, pendingLaunches: reservations.launches, supervisors },
   );
   yield* collectGarbage;
 

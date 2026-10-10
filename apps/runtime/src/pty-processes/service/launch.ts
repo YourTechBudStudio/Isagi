@@ -11,6 +11,7 @@ import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyForegroundState } from '../foreground-state.js';
 import { appendLog, type PtyRepository } from '../repository.js';
 import {
+  PtyLogError,
   type LaunchedBackendSession,
   type LaunchPtyProcessInput,
   type PtyBackend as PtyBackendShape,
@@ -156,7 +157,7 @@ function makeAllocation(
  * writes, cancellation cleanup) is uninterruptible, and `start`'s `ensuring`
  * releases the reservation on every exit including interruption.
  *
- * Total for every uninterrupted path: expected pre-spawn (`DatabaseError`) and
+ * Total for every uninterrupted path: expected pre-spawn (`DatabaseError`, `PtyLogError`) and
  * spawn (`PtyStartError`) failures fold into the row and metadata is still
  * returned, because the pre-launch metadata write already made the incarnation
  * inspectable and killable. Defects stay defects and are never dressed up as a
@@ -245,7 +246,7 @@ function prepareLaunch(
   deps: PtyLaunchDependencies,
   input: LaunchPtyProcessInput,
   ptyProcessId: number,
-): Effect.Effect<PreparedLaunch, DatabaseError> {
+): Effect.Effect<PreparedLaunch, DatabaseError | PtyLogError> {
   return Effect.gen(function* () {
     // `foreground.clear` and `envForProcess` have empty expected-error channels
     // by contract, so nothing they raise is folded into a launch failure.
@@ -296,8 +297,14 @@ function prepareLaunch(
       deps.runtimeNamespace,
       deps.sessionsPath,
     );
-    if (backendMetadata.logPath && !existsSync(backendMetadata.logPath)) {
-      appendLog(backendMetadata.logPath, '');
+    const logPath = backendMetadata.logPath;
+    if (logPath && !existsSync(logPath)) {
+      // A log that cannot be created is an expected launch failure (full disk, refused permission, a removed sessions
+      // directory): it folds into the row like any other pre-spawn failure instead of dying as a defect.
+      yield* Effect.try({
+        try: () => appendLog(logPath, ''),
+        catch: (cause) => new PtyLogError({ operation: 'create', ptyProcessId, cause }),
+      });
     }
     // This is the write that makes the incarnation inspectable and killable,
     // which is why it precedes the spawn and why nothing after the spawn needs
@@ -415,7 +422,25 @@ function foldSpawnFailure(
     const failedProcess = yield* deps.repository
       .findProcess(metadata.ptyProcessId)
       .pipe(Effect.orElseSucceed(() => null));
-    if (failedProcess?.logPath) appendLog(failedProcess.logPath, message);
+    const failedLogPath = failedProcess?.logPath;
+    if (failedLogPath) {
+      // Best effort: the message only explains the failure in the log, so an unwritable log must not keep the row from
+      // being marked failed.
+      yield* Effect.try({
+        try: () => appendLog(failedLogPath, message),
+        catch: (cause) =>
+          new PtyLogError({ operation: 'append', ptyProcessId: metadata.ptyProcessId, cause }),
+      }).pipe(
+        Effect.catch((logError) =>
+          Effect.logWarning('Could not write the PTY launch failure to its log').pipe(
+            Effect.annotateLogs({
+              ptyProcessId: metadata.ptyProcessId,
+              cause: describeOperationalCause(logError),
+            }),
+          ),
+        ),
+      );
+    }
     yield* markLaunchFailed(deps, metadata.ptyProcessId, 'Could not mark failed PTY launch');
   });
 }

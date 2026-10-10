@@ -18,12 +18,16 @@ export class RuntimeServer extends Context.Service<
 
 /**
  * The HTTP/WebSocket server as one scoped resource over the runtime's services. Building it starts the runtime;
- * closing its scope shuts it down in reverse order of acquisition:
+ * closing its scope shuts it down in this order:
  *
  * 1. request and WebSocket fibers are interrupted (an in-flight request is still answered, an open socket is closed by
  *    its connection's scope);
  * 2. Fastify closes;
- * 3. the module services and the platform are released (by `MainLayer`'s scope, which owns `AppLayer`).
+ * 3. `MainLayer`'s scope, which owns `AppLayer`, releases the service graph in reverse order along layer dependency
+ *    edges only: a service is released before every service its layer depends on (a shared layer stays alive until
+ *    its last dependent is released), so the platform goes after the modules that use it. `Layer.mergeAll` releases
+ *    its members concurrently, so two modules with no dependency edge between them shut down in no particular order.
+ *    A finalizer that needs another module still running must depend on that module's layer.
  *
  * A failure anywhere during construction, including startup after `listen`, closes whatever was already acquired.
  */

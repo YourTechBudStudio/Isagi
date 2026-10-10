@@ -66,7 +66,8 @@ function harness(
   options: {
     readonly selfUpdating?: boolean;
     readonly isPackaged?: boolean;
-    readonly logsDirectory?: string;
+    /** A path, or the shell's own `logsDirectory` (one that throws, as `app.getPath` can). */
+    readonly logsDirectory?: string | (() => string);
     /** Like `onRequestExit`: main's coordinator hands over to the installer by disposing the runtime first. */
     readonly requestInstall?: (
       install: () => void,
@@ -142,6 +143,7 @@ function harness(
       }),
     );
 
+  const logsDirectory = options.logsDirectory;
   const shell = DesktopShell.of({
     send: (channel, payload) => void sends.push({ channel, payload }),
     requestExit: (code) => {
@@ -149,7 +151,10 @@ function harness(
       options.onRequestExit?.(runtime as ManagedRuntime.ManagedRuntime<unknown, never>);
     },
     isPackaged: options.isPackaged ?? false,
-    logsDirectory: () => options.logsDirectory ?? assert.fail('no logs directory in this test'),
+    logsDirectory:
+      typeof logsDirectory === 'function'
+        ? logsDirectory
+        : () => logsDirectory ?? assert.fail('no logs directory in this test'),
   });
 
   const runtime = ManagedRuntime.make(
@@ -300,6 +305,35 @@ test('a failed managed runtime is logged, preserved when packaged, and exits non
       ],
     ],
   );
+});
+
+test('a failed runtime still exits nonzero when the logs directory cannot be named', async () => {
+  const subject = harness({
+    isPackaged: true,
+    logsDirectory: () => {
+      throw new Error("Failed to get 'logs' path");
+    },
+  });
+  try {
+    const started = subject.runtime.runPromiseExit(RuntimeProcess.use((process) => process.start));
+    await until(() => subject.spawns() === 1);
+    subject.child.exit(1, null);
+    await started;
+    await until(() => subject.exits.length === 1);
+    assert.deepEqual(subject.exits, [1]);
+    assert.deepEqual(
+      subject.logs.map((line) => [line.level, line.message.split(' {')[0]]),
+      [
+        ['Error', 'Managed runtime failed'],
+        [
+          'Error',
+          "Failed to preserve managed runtime failure record: no logs directory Error: Failed to get 'logs' path",
+        ],
+      ],
+    );
+  } finally {
+    await subject.runtime.dispose();
+  }
 });
 
 test('an unpackaged failed runtime exits nonzero without writing a failure record', async () => {

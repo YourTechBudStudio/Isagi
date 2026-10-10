@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 
 import type {
   AddProjectOutput,
@@ -160,6 +160,25 @@ test('runtime client resolves command log stream websocket URLs', () => {
     Effect.runSync(client.resolveCommandLogStreamWebSocketUrl(10, 'dev server')),
     'wss://runtime.test/api/v1/worktrees/10/commands/log-stream?commandName=dev+server',
   );
+});
+
+test('runtime client fails socket URLs for a malformed runtime URL with RuntimeUrlUnavailable, not a defect', () => {
+  const client = runtimeApiAt('not a url');
+
+  for (const resolve of [
+    client.resolveRuntimeEventsWebSocketUrl(),
+    client.resolveCommandLogStreamWebSocketUrl(10, 'dev server'),
+    client.resolveTerminalSessionPtyWebSocketUrl(3, 'token'),
+    client.resolveAgentSessionPtyWebSocketUrl(4),
+    client.workflowCheckpointFileUrl(5, 'notes.md'),
+  ]) {
+    const exit = Effect.runSyncExit(resolve);
+    assert.ok(Exit.isFailure(exit), 'the URL must not resolve');
+    const failure = Cause.findErrorOption(exit.cause);
+    assert.ok(Option.isSome(failure), 'a typed failure, not a defect');
+    assert.equal(failure.value._tag, 'RuntimeUrlUnavailable');
+    assert.equal(failure.value.message, 'Invalid URL');
+  }
 });
 
 test('runtime client calls surface title and delete endpoints', async () => {

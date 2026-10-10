@@ -471,6 +471,66 @@ test('a spawn failure whose fold write also fails still returns metadata', async
   );
 });
 
+// The process log lives under the data root's `sessions` directory, which a user can remove, fill or lock while the
+// runtime runs. A log write that fails is an expected launch failure: it must fold into the row, not die as a defect
+// that leaves the row `starting` and fails the caller with an unhandled error.
+test('a log that cannot be created folds into a failed launch and still returns metadata', async () => {
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      const allocation = yield* allocateLaunch(
+        harness.dependencies(
+          backendStub('node_pty', {
+            launch: () => Effect.die('the backend must not be reached without a log'),
+          }),
+        ),
+        { command: 'pnpm', args: ['dev'], cwd: '/repo/isagi' },
+      );
+      rmSync(harness.sessionsPath, { recursive: true, force: true });
+
+      const metadata = yield* allocation.start;
+
+      assert.equal(metadata.ptyProcessId, allocation.ptyProcessId);
+      const row = yield* harness.repository.findProcess(allocation.ptyProcessId);
+      assert.equal(row?.status, 'failed');
+      assert.equal(row?.statusReason, 'backend_launch_failed');
+      assert.equal(harness.reservations.launches.size, 0);
+    }),
+  );
+});
+
+test('a spawn failure whose log cannot be appended still marks the launch failed', async () => {
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      const allocation = yield* allocateLaunch(
+        harness.dependencies(
+          backendStub('node_pty', {
+            launch: () =>
+              Effect.suspend(() => {
+                rmSync(harness.sessionsPath, { recursive: true, force: true });
+                return Effect.fail(
+                  new PtyStartError({
+                    command: 'pnpm',
+                    cwd: '/repo/isagi',
+                    cause: new Error('nope'),
+                  }),
+                );
+              }),
+          }),
+        ),
+        { command: 'pnpm', args: ['dev'], cwd: '/repo/isagi' },
+      );
+
+      const metadata = yield* allocation.start;
+
+      assert.equal(metadata.ptyProcessId, allocation.ptyProcessId);
+      const row = yield* harness.repository.findProcess(allocation.ptyProcessId);
+      assert.equal(row?.status, 'failed');
+      assert.equal(row?.statusReason, 'backend_launch_failed');
+      assert.equal(harness.reservations.launches.size, 0);
+    }),
+  );
+});
+
 test('a post-launch persistence failure returns metadata without killing', async () => {
   await withHarness((harness) =>
     Effect.gen(function* () {

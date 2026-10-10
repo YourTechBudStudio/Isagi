@@ -92,7 +92,7 @@ import {
   type RuntimeEndpointError,
 } from '@isagi/runtime-client';
 
-import { resolveRuntimeUrl, type RuntimeUrlUnavailable } from './resolve.js';
+import { resolveRuntimeUrl, RuntimeUrlUnavailable } from './resolve.js';
 
 /** A typed endpoint call's failure: the runtime-client failures, or no runtime URL to call. */
 export type RuntimeCallError<Endpoint> = RuntimeEndpointError<Endpoint> | RuntimeUrlUnavailable;
@@ -500,9 +500,23 @@ export function makeRuntimeApi(
     endpoint: Endpoint,
     ...args: ApiEndpointRequestArgs<Endpoint>
   ) => withHttpApi((api) => api.request(endpoint, ...args));
-  /** A socket or download URL under the runtime URL; no request is made. */
+  /**
+   * A socket or download URL under the runtime URL; no request is made. A runtime URL `new URL`
+   * rejects (an external `localhost:4100`, say) is a runtime this client cannot reach, a typed
+   * failure as it is for requests, never a defect. The message is the parser's own (`Invalid URL`),
+   * which never echoes the value: a runtime URL can carry credentials.
+   */
   const atRuntimeUrl = (build: (runtimeUrl: string) => string) =>
-    Effect.map(currentRuntimeUrl, build);
+    Effect.flatMap(currentRuntimeUrl, (runtimeUrl) =>
+      Effect.try({
+        try: () => build(runtimeUrl),
+        catch: (cause) =>
+          new RuntimeUrlUnavailable({
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          }),
+      }),
+    );
 
   return {
     fetchClientSettings: () => request(apiEndpoints.clientSettings),

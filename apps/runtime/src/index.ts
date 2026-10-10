@@ -9,7 +9,7 @@ import { formatStartupFailure } from './app/startup-diagnostics.js';
 
 /**
  * The runtime process: build the server and every service, then run until SIGINT/SIGTERM interrupts it, which
- * releases everything in reverse order (`app/http-server.ts`) and exits 0.
+ * releases everything (in the order `app/http-server.ts` describes) and exits 0.
  *
  * The logger is provided outermost so it reaches layer construction, request fibers and background fibers alike. A
  * construction failure becomes the `ISAGI_RUNTIME_STARTUP_FAILED` line the desktop host reports, then exit 1.

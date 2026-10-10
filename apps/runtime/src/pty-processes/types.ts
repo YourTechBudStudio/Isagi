@@ -226,6 +226,26 @@ export class PtyKillError
   }
 }
 
+/**
+ * A process log file the runtime could not create or append to (a full disk, a refused permission, a removed sessions
+ * directory). Its path is process data, so only the PTY id is rendered.
+ */
+export class PtyLogError
+  extends Data.TaggedError('PtyLogError')<{
+    readonly operation: 'create' | 'append';
+    readonly ptyProcessId: number;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return {
+      label: `PTY log ${this.operation} failed${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
+
 // A termination attempt is already reserved for this row. The second caller is
 // rejected rather than joined: reusing the first attempt's outcome would lend
 // its affirmative kill to a cause that did not commit it. Internal to

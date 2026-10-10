@@ -44,7 +44,11 @@ import {
 } from './policy.js';
 import { invalidateKeys, runApp } from './runtime.js';
 import { advance, controllable, flush, makeTestRegistry } from './testing.js';
-import { v3PolicyBaseline, v3QueryDefaults, type V3QueryFamily } from './v3-policy-baseline.js';
+import {
+  v3PolicyBaseline,
+  v3QueryDefaults,
+  type V3QueryFamily,
+} from './v3-policy-baseline.test-support.js';
 
 const setup = (t: TestContext) => {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
@@ -370,9 +374,10 @@ test('registry-level retry off (tests/fixtures): first failure surfaces', async 
 
 // --- The policy table -----------------------------------------------------------------------------
 //
-// Every runtime-fact cache of the v3 app (`v3-policy-baseline.ts`, 19 key families) against what
-// the resource now declares. The tests above prove that `query()`, `pollWhile` and `observe` behave
-// as their declared policy says; this table proves each resource declares the policy v3 applied.
+// Every runtime-fact cache of the v3 app (`v3-policy-baseline.test-support.ts`, 19 key families)
+// against what the resource now declares. The tests above prove that `query()`, `pollWhile` and
+// `observe` behave as their declared policy says; this table proves each resource declares the
+// policy v3 applied.
 // Expectations are the baseline unless a row's `delta` says otherwise; a delta is deliberate
 // (web-state §2.3 or §4.1), cited, and recorded in the review ledger.
 
