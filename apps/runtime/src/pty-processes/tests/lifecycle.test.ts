@@ -26,7 +26,7 @@ import { TestClock } from 'effect/testing';
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 import { expectNoProcessMatching, runScoped, runWithTestClock } from '@isagi/testing';
 
-import { CliAccessNone } from '../../cli-access/index.js';
+import { CliAccessNone } from '../../cli-access/testing.js';
 import { publishOnlyRecordingEventBus } from '../../platform/events/testing.js';
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';

@@ -35,7 +35,7 @@ export type UsePtyStreamInput<Message extends PtyStreamMessage> = {
   readonly resetKey: string;
   readonly connectKey: string;
   readonly initialInteractive: boolean;
-  readonly resolveUrl: () => Effect.Effect<string, unknown>;
+  readonly resolveUrl: () => Effect.Effect<string, Error>;
   readonly decodeMessage: (data: unknown) => Message | null;
   readonly onDomainMessage: (message: Message, transport: PtyStreamTransportController) => void;
   readonly onExit: (

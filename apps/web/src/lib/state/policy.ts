@@ -169,8 +169,31 @@ export const patch = <A, E>(
 export const invalidatedBy = (get: Atom.AtomContext, keys: ReadonlyArray<string>): void => {
   if (keys.length === 0) return;
   const reactivity = AsyncResult.getOrThrow(get(appReactivityAtom));
-  get.addFinalizer(reactivity.registerUnsafe(keys, () => get.refreshSelf()));
+  // An observed node rebuilds synchronously inside `refreshSelf` and registers a fresh handler
+  // into the very `Set` that `Reactivity.invalidateUnsafe` is iterating, and `Set` iteration visits
+  // entries added during it. With two nodes on one key they would refresh each other forever. A
+  // handler born during a refresh therefore sits out the dispatch that rebuilt it (its node has
+  // just started a fresh read) and takes part from the next microtask on.
+  let armed = refreshing === 0;
+  if (!armed)
+    queueMicrotask(() => {
+      armed = true;
+    });
+  get.addFinalizer(
+    reactivity.registerUnsafe(keys, () => {
+      if (!armed) return;
+      refreshing += 1;
+      try {
+        get.refreshSelf();
+      } finally {
+        refreshing -= 1;
+      }
+    }),
+  );
 };
+
+/** How many `invalidatedBy` refreshes are on the stack (see `invalidatedBy`). */
+let refreshing = 0;
 
 /**
  * A per-observer override on the same data: a different view over `view`. `staleTime: 0`

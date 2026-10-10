@@ -9,7 +9,8 @@ import { Cause, ConfigProvider, Effect, Exit, Layer } from 'effect';
 import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
 import { expectNoNewHandles, makeLogCapture } from '@isagi/testing';
 
-import { CliAccess, noCliAccess } from '../../cli-access/index.js';
+import { CliAccess } from '../../cli-access/index.js';
+import { noCliAccess } from '../../cli-access/testing.js';
 import { HttpServerLayer } from '../http-server.js';
 import { AppLayer } from '../layer.js';
 import { bootRuntime, type BootedRuntime } from './runtime-harness.js';

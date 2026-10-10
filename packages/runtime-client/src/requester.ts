@@ -97,6 +97,13 @@ export const makeRequesters = Effect.fnUntraced(function* (runtimeUrl: string) {
       ),
     );
 
+  // A malformed runtime URL is a runtime the client cannot reach, not a defect: `new URL` throws on it.
+  const urlFor = (endpointId: string, path: string, params: unknown, query: unknown) =>
+    Effect.try({
+      try: () => endpointUrl(runtimeUrl, path, params, query),
+      catch: (cause) => new RuntimeTransportError({ endpointId, cause }),
+    });
+
   const readJson = (endpointId: string, response: HttpClientResponse.HttpClientResponse) =>
     response.json.pipe(Effect.mapError((cause) => new RuntimeDecodeError({ endpointId, cause })));
 
@@ -123,13 +130,13 @@ export const makeRequesters = Effect.fnUntraced(function* (runtimeUrl: string) {
     const body = endpoint.body
       ? values[(endpoint.params ? 1 : 0) + (endpoint.query ? 1 : 0)]
       : undefined;
-    const url = endpointUrl(runtimeUrl, endpoint.path, params, query);
-    // `JSON.stringify` of the caller's value with `content-type: application/json`, exactly the
-    // bytes the runtime has always received; the body is not schema-encoded.
-    const httpRequest = endpoint.body
-      ? HttpClientRequest.bodyJsonUnsafe(HttpClientRequest.make(endpoint.method)(url), body)
-      : HttpClientRequest.make(endpoint.method)(url);
     return Effect.gen(function* () {
+      const url = yield* urlFor(endpoint.id, endpoint.path, params, query);
+      // `JSON.stringify` of the caller's value with `content-type: application/json`, exactly the
+      // bytes the runtime has always received; the body is not schema-encoded.
+      const httpRequest = endpoint.body
+        ? HttpClientRequest.bodyJsonUnsafe(HttpClientRequest.make(endpoint.method)(url), body)
+        : HttpClientRequest.make(endpoint.method)(url);
       const response = yield* send(endpoint.id, httpRequest);
       const payload = yield* readJson(endpoint.id, response);
       if (!isOk(response)) {
@@ -148,10 +155,8 @@ export const makeRequesters = Effect.fnUntraced(function* (runtimeUrl: string) {
   // still is the envelope and decodes exactly as `request` decodes one.
   const requestContent: ContentRequester = (endpoint, params, query) =>
     Effect.gen(function* () {
-      const response = yield* send(
-        endpoint.id,
-        HttpClientRequest.get(endpointUrl(runtimeUrl, endpoint.path, params, query)),
-      );
+      const url = yield* urlFor(endpoint.id, endpoint.path, params, query);
+      const response = yield* send(endpoint.id, HttpClientRequest.get(url));
       if (!isOk(response)) {
         const payload = yield* readJson(endpoint.id, response);
         return yield* failWithEnvelope(endpoint.id, endpoint.errors, payload);

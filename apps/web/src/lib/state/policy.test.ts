@@ -211,6 +211,24 @@ test('invalidation: observed refetches now (interrupting the in-flight read); un
   unmount();
 });
 
+test('invalidation: two observed queries on one key each refetch once', async (t) => {
+  let reads = 0;
+  const first = query(() => Effect.sync(() => ++reads), { keys: ['shared'] });
+  const second = query(() => Effect.sync(() => ++reads), { keys: ['shared'] });
+  const registry = makeTestRegistry();
+  dispose(t, registry);
+  t.after(registry.mount(first));
+  t.after(registry.mount(second));
+  await flush();
+  assert.equal(reads, 2);
+  invalidateKeys(registry, ['shared']);
+  await flush();
+  assert.equal(reads, 4, 'each query read once more, and the invalidation ended');
+  invalidateKeys(registry, ['shared']);
+  await flush();
+  assert.equal(reads, 6, 'the rebuilt nodes still answer the next invalidation');
+});
+
 test('refreshAndRead: cancel the in-flight read, await a read that began after the call', async (t) => {
   setup(t);
   const req = workspaceRead();

@@ -19,6 +19,7 @@ import {
   type WebSocketLike,
   type WsConnection,
 } from '../platform/http/index.js';
+import type { DatabaseError } from '../platform/persistence/index.js';
 import { WorkflowEngine } from '../workflows/index.js';
 
 /** The services the runtime events socket uses. */
@@ -61,7 +62,7 @@ const streamRuntimeEvents = Effect.fn('runtimeEvents.connection')(function* (
     ),
     // An event the contract rejects ends the connection; the client reconnects and re-reads.
     Effect.catch((error) =>
-      Effect.logError('[runtime] Runtime event websocket encoding failed', error).pipe(
+      Effect.logError('Runtime event websocket encoding failed', error).pipe(
         Effect.andThen(ws.close),
       ),
     ),
@@ -79,12 +80,12 @@ const streamRuntimeEvents = Effect.fn('runtimeEvents.connection')(function* (
 function answerClientMessage(ws: WsConnection, raw: string) {
   const message = decodeClientMessage(raw);
   if (Option.isNone(message)) {
-    return Effect.logWarning('[runtime] Runtime event websocket received invalid client message');
+    return Effect.logWarning('Runtime event websocket received invalid client message');
   }
   return handleClientMessage(message.value).pipe(
     Effect.flatMap(ws.send),
     Effect.catch((error) =>
-      Effect.logError('[runtime] Runtime event websocket client message failed', error).pipe(
+      Effect.logError('Runtime event websocket client message failed', error).pipe(
         Effect.andThen(ws.close),
       ),
     ),
@@ -101,7 +102,7 @@ function decodeClientMessage(raw: string): Option.Option<RuntimeEventInputMessag
 
 function handleClientMessage(
   message: RuntimeEventInputMessage,
-): Effect.Effect<RuntimeEvent, unknown, RuntimeEventsRouteServices> {
+): Effect.Effect<RuntimeEvent, DatabaseError, RuntimeEventsRouteServices> {
   switch (message.type) {
     case 'attention_snapshot_requested':
       return Effect.gen(function* () {

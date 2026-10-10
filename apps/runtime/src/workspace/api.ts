@@ -56,7 +56,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
         WorkspaceError: notProduced,
       }),
     ),
@@ -69,7 +68,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
         WorkspaceError: notProduced,
       }),
     ),
@@ -86,7 +84,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -102,7 +99,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -126,7 +122,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -146,7 +141,6 @@ export function registerWorkspaceApi(
         StateFileError: (error) => request.reject(workspaceRejections.stateFile(error)),
         ProjectConfigError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -175,7 +169,6 @@ export function registerWorkspaceApi(
         StateFileError: notProduced,
         ProjectConfigError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -197,7 +190,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -227,7 +219,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
         WorkspaceError: notProduced,
       }),
     ),
@@ -259,7 +250,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
         WorkspaceError: notProduced,
       }),
     ),
@@ -283,7 +273,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -302,7 +291,6 @@ export function registerWorkspaceApi(
         GitCommandError: notProduced,
         StateFileError: notProduced,
         ProjectPathValidationError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -321,7 +309,6 @@ export function registerWorkspaceApi(
         GitCommandError: notProduced,
         StateFileError: notProduced,
         ProjectPathValidationError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -362,7 +349,6 @@ export function registerWorkspaceApi(
         },
         StateFileError: notProduced,
         ProjectPathValidationError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -383,7 +369,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );
@@ -405,7 +390,6 @@ export function registerWorkspaceApi(
         ProjectConfigError: notProduced,
         ProjectPathValidationError: notProduced,
         WorktreeSetupError: notProduced,
-        WorktreeSetupRunError: notProduced,
       }),
     ),
   );

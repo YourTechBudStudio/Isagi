@@ -191,28 +191,20 @@ function rejectWorkflow(request: WorkflowRequest) {
 /**
  * Launch makes one owning-service call — the worktree preflight — so the workspace's own
  * endpoint-independent failures can surface beneath it, each read the way every workspace route
- * reports it. The workspace builders return untyped payloads; the boundary still checks every
- * rejection against the endpoint's declared error schema before it is sent.
+ * reports it. Each workspace builder is typed as the exact contract error it builds, and the
+ * workflow error union declares all three, so no cast is needed.
  */
 function launchRejections(request: WorkflowRequest) {
-  const reject = (
-    rejection: ReturnType<(typeof workspaceRejections)[keyof typeof workspaceRejections]>,
-  ) => request.reject(rejection as WorkflowRejection);
   return {
     WorkflowEngineError: rejectWorkflow(request),
     ProjectConfigError: (
       error: Extract<PlacementInfrastructureError, { _tag: 'ProjectConfigError' }>,
-    ) => reject(workspaceRejections.projectConfig(error)),
+    ) => request.reject(workspaceRejections.projectConfig(error)),
     WorktreeSetupError: (
       error: Extract<PlacementInfrastructureError, { _tag: 'WorktreeSetupError' }>,
-    ) => reject(workspaceRejections.worktreeSetup(error)),
+    ) => request.reject(workspaceRejections.worktreeSetup(error)),
     StateFileError: (error: Extract<PlacementInfrastructureError, { _tag: 'StateFileError' }>) =>
-      reject(workspaceRejections.stateFile(error)),
-    // A setup hook's run failing is not something the preflight does; if it ever surfaced here it
-    // would be a runtime bug, answered `api_unhandled_error` and logged as one.
-    WorktreeSetupRunError: (
-      error: Extract<PlacementInfrastructureError, { _tag: 'WorktreeSetupRunError' }>,
-    ) => Effect.die(error),
+      request.reject(workspaceRejections.stateFile(error)),
   } as const;
 }
 

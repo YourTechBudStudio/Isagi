@@ -29,11 +29,16 @@ export const SCANNED_DIRS = [
 const SELF = 'scripts/architecture/';
 
 /**
- * `Effect.run{Promise,Sync,Fork,Callback}` with optional `Exit`/`With` suffixes (v3 and v4 names), `run*` called on a
- * runtime value named `runtime`/`managedRuntime`/`rt`, and `ManagedRuntime.make`.
+ * Every way a program is handed an Effect runner:
+ * - `Effect.run{Promise,Sync,Fork,Callback}` with optional `Exit`/`With` suffixes (v3 and v4 names);
+ * - `run*` called on a runtime value named `runtime`/`managedRuntime`/`rt`, and `ManagedRuntime.make`;
+ * - `FiberSet`/`FiberMap`/`FiberHandle` `.runtime`/`.runtimePromise`, which return plain functions that fork or run
+ *   effects from non-Effect callers (Fastify handlers, author promises, synchronous engine callbacks);
+ * - `AtomRegistry.make`, the web's atom runtime root;
+ * - `Runtime.makeRunMain` and a `runMain(...)` call, the process entry.
  */
 export const RUN_SITE =
-  /\bEffect\.run(?:Promise|Sync|Fork|Callback)(?:Exit)?(?:With)?\b|\b(?:runtime|managedRuntime|rt)\.run(?:Promise|Sync|Fork|Callback)(?:Exit)?\b|\bManagedRuntime\.make\b/g;
+  /\bEffect\.run(?:Promise|Sync|Fork|Callback)(?:Exit)?(?:With)?\b|\b(?:runtime|managedRuntime|rt)\.run(?:Promise|Sync|Fork|Callback)(?:Exit)?\b|\bManagedRuntime\.make\b|\b(?:FiberSet|FiberMap|FiberHandle)\.runtime(?:Promise)?\b|\bAtomRegistry\.make\b|\bRuntime\.makeRunMain\b|\brunMain\(/g;
 
 /**
  * Reads and validates the allowlist. A missing or malformed file is an error, not an empty list.

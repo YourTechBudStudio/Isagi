@@ -2,7 +2,6 @@ import type { ApiError } from '@isagi/contracts';
 
 import { GitCommandError, ProjectPathValidationError } from '../git/index.js';
 import { DataDirectoryError, DatabaseError } from '../persistence/index.js';
-import { withRequestId, type ApiRouteContext } from './errors.js';
 
 /**
  * How a platform failure that is not any one domain's rejection reaches a client.
@@ -84,17 +83,4 @@ export function isInfrastructureError(error: unknown): error is InfrastructureEr
     error instanceof DatabaseError ||
     error instanceof DataDirectoryError
   );
-}
-
-/**
- * The untyped mapping used by `mapError` functions of routes still on `registerLegacyApiEndpoint`.
- *
- * Returning `null` rather than a fallback is deliberate: it says "not mine", and leaves each
- * boundary to decide what an unrecognised error means there. Every caller already ends in its own
- * logged `api_unhandled_error`, which stays the single place an unknown failure is reported.
- */
-export function infrastructureApiError(error: unknown, context: ApiRouteContext): ApiError | null {
-  return isInfrastructureError(error)
-    ? withRequestId(infrastructureRejection(error), context.requestId)
-    : null;
 }

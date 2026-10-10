@@ -1,5 +1,6 @@
 import { Effect, Result } from 'effect';
 
+import type { GitCommandError } from '../../platform/git/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { applyFailure, type StepFailure } from '../engine/chain.js';
 import type { SavedResult } from '../engine/results.js';
@@ -151,7 +152,7 @@ function captureMessage(failure: CheckpointCaptureFailed | DatabaseError): strin
     : `Checkpoint capture failed: ${text}`;
 }
 
-function gitDetail(cause: unknown): string {
-  const stderr = (cause as { readonly stderr?: unknown }).stderr;
-  return typeof stderr === 'string' && stderr.trim() !== '' ? stderr.trim() : errorMessage(cause);
+function gitDetail(error: GitCommandError): string {
+  const stderr = error.stderr.trim();
+  return stderr !== '' ? stderr : errorMessage(error);
 }

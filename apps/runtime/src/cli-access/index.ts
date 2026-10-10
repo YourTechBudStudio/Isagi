@@ -1,2 +1,2 @@
 export { CliAccessLayer } from './layer.js';
-export { CliAccess, CliAccessNone, CliShimError, noCliAccess } from './service.js';
+export { CliAccess, CliShimError } from './service.js';

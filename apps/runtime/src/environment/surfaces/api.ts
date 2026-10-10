@@ -1,14 +1,13 @@
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError, type SessionLaunchRejectedError } from '@isagi/contracts';
+import { apiEndpoints, type SessionLaunchRejectedError } from '@isagi/contracts';
 
-import { editorApiError, type EditorUnavailable } from '../../editor/index.js';
+import { editorRejection } from '../../editor/index.js';
 import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';
 import {
   registerApiEndpoint,
   type ApiRejected,
-  type ApiRequest,
   type Rejection,
   type RouteRuntime,
 } from '../../platform/http/index.js';
@@ -132,8 +131,8 @@ export function registerSurfacesApi(
     ).pipe(
       Effect.catchTags({
         SurfaceError: (error) => request.reject(editorOpenSurfaceRejection(error)),
-        EditorUnavailable: (error) => request.reject(editorOpenEditorRejection(error, request)),
-        DatabaseError: (error) => request.reject(editorOpenEditorRejection(error, request)),
+        EditorUnavailable: (error) => request.reject(editorRejection(error)),
+        DatabaseError: (error) => request.reject(editorRejection(error)),
       }),
     ),
   );
@@ -229,10 +228,8 @@ export function sessionLaunchRejection(
 /**
  * The pane-session routes (create, split, start, create/claim session) share one failure set.
  *
- * - `HarnessLaunchBlocked` is answered `session_launch_rejected`, the code clients read for it. KNOWN CONTRACT GAP:
- *   `surfaceApiErrorSchema` does not declare that code, so the boundary's runtime check against the endpoint's errors
- *   turns it into `api_response_encoding_failed`, exactly as the untyped route did before. The cast is the one place
- *   this file steps outside the typed rejection union; drop it once the contract declares the code.
+ * - `HarnessLaunchBlocked` is answered `session_launch_rejected`, the code clients read for it (declared by
+ *   `surfaceApiErrorSchema`).
  * - `HarnessAdapterError` has no contract code. It is a defect at this boundary, which answers `api_unhandled_error`
  *   with its message and logs it, as before.
  */
@@ -249,8 +246,7 @@ function rejectPaneSessionFailures(
     effect.pipe(
       Effect.catchTags({
         SurfaceError: (error) => reject(surfaceRejection(error)),
-        HarnessLaunchBlocked: (blocked) =>
-          reject(sessionLaunchRejection(blocked) as unknown as SurfaceRejection),
+        HarnessLaunchBlocked: (blocked) => reject(sessionLaunchRejection(blocked)),
         HarnessAdapterError: (error) => Effect.die(error),
       }),
     );
@@ -273,24 +269,4 @@ function editorOpenSurfaceRejection(error: SurfaceError): EditorOpenRejection {
       },
     };
   return surfaceRejection(error);
-}
-
-/**
- * `editor.open`'s editor and database failures, in the editor module's wording.
- *
- * TRANSITIONAL: built from `editorApiError`, the editor's untyped mapper, because the typed `editorRejection` lands
- * with the editor module's own wave-R2 change; switch to it at the merge. The editor mapper is total over these two
- * failures, so the cast only restates what its `editorApiErrorSchema` branch already returns.
- */
-function editorOpenEditorRejection(
-  error: EditorUnavailable | DatabaseError,
-  request: ApiRequest<typeof apiEndpoints.editor.open>,
-): EditorOpenRejection {
-  const { code, status, message, ...rest }: ApiError = editorApiError(error, request);
-  return {
-    code,
-    status,
-    message,
-    ...('data' in rest ? { data: rest.data } : {}),
-  } as EditorOpenRejection;
 }

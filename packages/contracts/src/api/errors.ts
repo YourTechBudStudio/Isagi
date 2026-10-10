@@ -615,7 +615,16 @@ export const workspaceReconcileApiErrorSchema = Schema.Union([
   ...storageFailures,
 ]);
 
-export const surfaceApiErrorSchema = Schema.Union([surfaceRejectedErrorSchema, ...storageFailures]);
+/**
+ * The surfaces routes' failures. A pane-session route (create, split, start, create/claim session)
+ * can also be refused by the harness launch gate, which every client reads as
+ * `session_launch_rejected`.
+ */
+export const surfaceApiErrorSchema = Schema.Union([
+  surfaceRejectedErrorSchema,
+  sessionLaunchRejectedErrorSchema,
+  ...storageFailures,
+]);
 
 /**
  * Request-boundary refusals: the operation was not attempted. Presented by the

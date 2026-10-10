@@ -13,6 +13,7 @@ import type {
   SurfaceDetail,
 } from '@isagi/contracts';
 
+import { HarnessLaunchBlocked } from '../../../harnesses/index.js';
 import { SurfaceError, SurfaceOrderError, SurfaceService } from '../../index.js';
 import { registerSurfacesApi } from '../api.js';
 
@@ -142,6 +143,42 @@ test('surface start-pane route decodes the new pane and maps a non-empty surface
       assert.equal(refused.statusCode, 400);
       assert.equal(error.error?.code, 'surface_rejected');
       assert.deepEqual(error.error?.data, { reason: 'surface_not_empty', surfaceId: 42 });
+    },
+  );
+});
+
+test('a pane-session route answers a blocked harness launch with session_launch_rejected', async () => {
+  await withSurfacesApi(
+    fakeSurfaceService({
+      createSurface: () =>
+        Effect.fail(
+          new HarnessLaunchBlocked({
+            harness: 'codex',
+            reason: 'harness_probe_failed',
+            diagnostic: 'probe timed out',
+          }),
+        ),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/worktrees/10/surfaces',
+        payload: { initialPane: { kind: 'agent_session', harness: 'codex' } },
+      });
+      const payload = response.json() as {
+        error?: { code?: string; message?: string; data?: unknown };
+      };
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(payload.error?.code, 'session_launch_rejected');
+      assert.equal(
+        payload.error?.message,
+        'Harness process creation is blocked: harness_probe_failed.',
+      );
+      assert.deepEqual(payload.error?.data, {
+        reason: 'harness_probe_failed',
+        diagnostic: 'probe timed out',
+      });
     },
   );
 });

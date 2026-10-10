@@ -35,6 +35,21 @@
     "eslint/no-restricted-imports": [
       "error",
       {
+        "paths": [
+          {
+            "name": "zustand",
+            "message": "Use effect/reactivity atoms (ADR 0001)."
+          },
+          {
+            "name": "@tanstack/react-query",
+            "message": "Use effect/reactivity atoms (ADR 0001)."
+          },
+          {
+            "name": "@effect/atom-react",
+            "importNames": ["RegistryProvider"],
+            "message": "RegistryProvider creates a second registry; provide the app registry via RegistryContext."
+          }
+        ],
         "patterns": [
           {
             "group": [

@@ -1,17 +1,11 @@
 import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/contracts';
 
-import {
-  registerApiEndpoint,
-  type ApiRouteContext,
-  type Rejection,
-  type RouteRuntime,
-  unhandledApiError,
-} from '../platform/http/index.js';
-import { DatabaseError } from '../platform/persistence/index.js';
-import {
+import { registerApiEndpoint, type Rejection, type RouteRuntime } from '../platform/http/index.js';
+import type { DatabaseError } from '../platform/persistence/index.js';
+import type {
   EditorDiagnosticsUnavailable,
   EditorError,
   EditorLaunchFailed,
@@ -19,15 +13,14 @@ import {
 import { EditorContextService } from './contexts/service.js';
 import type { EditorLayer } from './layer.js';
 import {
-  EditorUnavailable,
+  type EditorUnavailable,
   EditorProvisioning,
-  EditorProvisioningBusy,
+  type EditorProvisioningBusy,
 } from './provisioning/service.js';
 
 // The editor runtime routes. Opening an editor is a placement, so `editor.open`
 // is registered by the environment's surface routes, which map its editor
-// failures through `editorRejection` (or, on the legacy helper, `editorApiError`)
-// below.
+// failures through `editorRejection` below.
 
 /** Every failure an editor route, or the editor half of `editor.open`, can answer with. */
 export type EditorFailure =
@@ -158,30 +151,4 @@ export function editorRejection(error: EditorFailure): EditorRejection {
         data: { operation: error.operation },
       };
   }
-}
-
-/**
- * TRANSITIONAL (plan R20): the untyped form of `editorRejection`, for `editor.open` while the environment's surface
- * routes still register it with `registerLegacyApiEndpoint`. Deleted with the legacy helper in S4.Z; new callers use
- * `editorRejection` with `request.reject`.
- */
-export function editorApiError(error: unknown, context: ApiRouteContext): ApiError {
-  if (isEditorFailure(error)) {
-    const { code, status, message, data } = editorRejection(error);
-    return { code, status, message, requestId: context.requestId, data };
-  }
-  // The legacy helper does not log what its mapper could not classify, so this is the only trace of the failure.
-  console.error(`[runtime] Unhandled editor API handler error during ${context.endpointId}`, error);
-  return unhandledApiError(context, error);
-}
-
-function isEditorFailure(error: unknown): error is EditorFailure {
-  return (
-    error instanceof EditorUnavailable ||
-    error instanceof EditorProvisioningBusy ||
-    error instanceof EditorError ||
-    error instanceof EditorLaunchFailed ||
-    error instanceof EditorDiagnosticsUnavailable ||
-    error instanceof DatabaseError
-  );
 }

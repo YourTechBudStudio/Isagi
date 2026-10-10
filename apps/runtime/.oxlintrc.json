@@ -6,7 +6,14 @@
     {
       "files": ["src/**"],
       "rules": {
-        "import/no-cycle": "error"
+        "import/no-cycle": "error",
+        "eslint/no-console": "error"
+      }
+    },
+    {
+      "files": ["src/**/*.test.ts"],
+      "rules": {
+        "eslint/no-console": "off"
       }
     }
   ]

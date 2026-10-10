@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Layer, Option } from 'effect';
 
-import { CliAccessNone } from '../../cli-access/index.js';
+import { CliAccessNone } from '../../cli-access/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';

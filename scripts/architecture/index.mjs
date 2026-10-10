@@ -4,7 +4,7 @@
 //   enforce  print every violation; any violation fails the run (exit 1)
 //   report   print only the count and exit 0; used while a stage drives a new check's count to zero
 // `reportRules` (optional) lists rule ids whose violations stay report-only even under `enforce`: they are printed and
-// counted but never fail the run (plan R27: module-boundaries R9 until its last five files move). A violation belongs
+// counted but never fail the run (used while a stage drives one rule of an enforced check to zero). A violation belongs
 // to rule `X` when its message starts with `X ` (module-boundaries messages start with their rule id).
 // A check that throws fails the run in either mode: a broken checker must not read as a clean tree.
 // To see a report-mode check's violations, run its script directly (e.g. `node scripts/architecture/<check>.mjs`).
@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { checkDependencyPolicy } from './dependency-policy.mjs';
+import { checkEffectConventions } from './effect-conventions.mjs';
 import { checkEffectRunSites } from './effect-run-sites.mjs';
 import { checkEffectV3Apis } from './effect-v3-apis.mjs';
 import { checkModuleBoundaries } from './module-boundaries.mjs';
@@ -24,22 +25,26 @@ import { isMainModule } from './source-files.mjs';
 /** @type {RegisteredCheck[]} */
 export const CHECKS = [
   { check: 'effect-run-sites', mode: 'enforce', run: (repoRoot) => checkEffectRunSites(repoRoot) },
-  // Enforced since S3.7 (every rule at 0); R9 stays report-only until its last five files move (plan R27, S4.Z).
+  // Every rule enforced, R9 (externals) included since S4.Z (plan R27).
   {
     check: 'module-boundaries',
     mode: 'enforce',
-    reportRules: ['R9'],
     run: (repoRoot) => checkModuleBoundaries(repoRoot),
   },
-  // D1 (banned React Query/Zustand) stays report-only until the web state port removes them (S4.Z enforces it).
+  // Every rule enforced, D1 (banned React Query/Zustand and v3-era packages) included since S4.Z.
   {
     check: 'dependency-policy',
     mode: 'enforce',
-    reportRules: ['D1'],
     run: (repoRoot) => checkDependencyPolicy(repoRoot),
   },
   // Enforced since the S2 port: no Effect v3-only API name or banned v3-era package import may come back.
   { check: 'effect-v3-apis', mode: 'enforce', run: (repoRoot) => checkEffectV3Apis(repoRoot) },
+  // Enforced since S4.Z: the Effect convention rules E1-E7 on production files (plan R6).
+  {
+    check: 'effect-conventions',
+    mode: 'enforce',
+    run: (repoRoot) => checkEffectConventions(repoRoot),
+  },
 ];
 
 const MODES = new Set(['enforce', 'report']);

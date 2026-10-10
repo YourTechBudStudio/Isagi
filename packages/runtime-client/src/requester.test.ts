@@ -9,6 +9,7 @@ import {
   type ApiError,
   type ApiInfrastructureError,
   type WorkspaceSnapshot,
+  workflowContentEndpoints,
 } from '@isagi/contracts';
 import { runScoped } from '@isagi/testing';
 
@@ -256,6 +257,30 @@ test('the requester classifies fetch failures as transport errors', async () => 
   assert.equal(error.endpointId, apiEndpoints.workspace.get.id);
   assert.equal(error.cause, networkDown);
   assert.equal(error.message, `Could not reach runtime endpoint ${apiEndpoints.workspace.get.id}.`);
+});
+
+test('a malformed runtime URL fails as a transport error and sends nothing', async () => {
+  const runtime = fakeRuntime(() => json(workspaceEnvelope));
+
+  const [plain, content] = await runtime.run(
+    Effect.gen(function* () {
+      const client = yield* RuntimeClient.make('not a url');
+      const plainFailure = yield* client.request(apiEndpoints.workspace.get).pipe(Effect.flip);
+      const contentFailure = yield* client
+        .requestContent(
+          workflowContentEndpoints.getCheckpointFile,
+          { checkpointId: 2 },
+          { path: 'a.txt' },
+        )
+        .pipe(Effect.flip);
+      return [plainFailure, contentFailure] as const;
+    }),
+  );
+
+  assert.ok(plain instanceof RuntimeTransportError);
+  assert.equal(plain.endpointId, apiEndpoints.workspace.get.id);
+  assert.ok(content instanceof RuntimeTransportError);
+  assert.deepEqual(runtime.seen, []);
 });
 
 test('a failed request rejects Effect.runPromise with the tagged error itself', async () => {

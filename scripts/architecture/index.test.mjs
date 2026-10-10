@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { ERROR_SUBCLASS_ALLOWLIST } from './effect-conventions.mjs';
 import { ALLOWLIST_PATH } from './effect-run-sites.mjs';
 import { CHECKS, runArchitectureChecks } from './index.mjs';
 import { CONFIG_PATH } from './module-boundaries.mjs';
@@ -132,12 +133,12 @@ test('malformed reportRules are a configuration error', () => {
   }
 });
 
-test('the registry enforces module-boundaries with R9 report-only (plan R27)', () => {
+test('the registry enforces every module-boundaries rule, R9 included (plan R27)', () => {
   assert.deepEqual(
     CHECKS.filter(({ check }) => check === 'module-boundaries').map(
       ({ check, mode, reportRules }) => ({ check, mode, reportRules }),
     ),
-    [{ check: 'module-boundaries', mode: 'enforce', reportRules: ['R9'] }],
+    [{ check: 'module-boundaries', mode: 'enforce', reportRules: undefined }],
   );
 });
 
@@ -150,12 +151,21 @@ test('the registry enforces effect-run-sites', () => {
   );
 });
 
-test('the registry enforces dependency-policy D2/D3 and keeps D1 report-only until S4.Z', () => {
+test('the registry enforces every dependency-policy rule, D1 included', () => {
   assert.deepEqual(
     CHECKS.filter(({ check }) => check === 'dependency-policy').map(
       ({ check, mode, reportRules }) => ({ check, mode, reportRules }),
     ),
-    [{ check: 'dependency-policy', mode: 'enforce', reportRules: ['D1'] }],
+    [{ check: 'dependency-policy', mode: 'enforce', reportRules: undefined }],
+  );
+});
+
+test('the registry enforces effect-conventions', () => {
+  assert.deepEqual(
+    CHECKS.filter(({ check }) => check === 'effect-conventions').map(
+      ({ check, mode, reportRules }) => ({ check, mode, reportRules }),
+    ),
+    [{ check: 'effect-conventions', mode: 'enforce', reportRules: undefined }],
   );
 });
 
@@ -188,20 +198,34 @@ test('the CLI runs the registry against the given repo root and sets the exit co
     writeFileSync(join(repo, 'pnpm-lock.yaml'), 'packages:\n  effect@4.0.2:\n');
     writeFileSync(
       join(repo, CONFIG_PATH),
-      JSON.stringify({ root: 'apps/runtime/src', compositionRoot: ['a.ts'], modules: {} }),
+      JSON.stringify({
+        root: 'apps/runtime/src',
+        compositionRoot: [
+          'a.ts',
+          ...Object.keys(ERROR_SUBCLASS_ALLOWLIST).map((file) =>
+            file.slice('apps/runtime/src/'.length),
+          ),
+        ],
+        modules: {},
+      }),
     );
+    // effect-conventions fails on a stale `extends Error` allowlist entry, so the fixture keeps those classes.
+    for (const [file, classes] of Object.entries(ERROR_SUBCLASS_ALLOWLIST)) {
+      mkdirSync(dirname(join(repo, file)), { recursive: true });
+      writeFileSync(
+        join(repo, file),
+        Object.keys(classes)
+          .map((name) => `export class ${name} extends Error {}`)
+          .join('\n'),
+      );
+    }
     const clean = spawnSync(process.execPath, [indexPath, repo], { encoding: 'utf8' });
     assert.equal(clean.status, 0, clean.stderr);
     assert.match(clean.stdout, /effect-run-sites \[enforce\]: 0 violation\(s\)/);
-    assert.match(
-      clean.stdout,
-      /module-boundaries \[enforce\]: 0 violation\(s\), 0 report-only \(R9\)/,
-    );
-    assert.match(
-      clean.stdout,
-      /dependency-policy \[enforce\]: 0 violation\(s\), 0 report-only \(D1\)/,
-    );
+    assert.match(clean.stdout, /module-boundaries \[enforce\]: 0 violation\(s\)\n/);
+    assert.match(clean.stdout, /dependency-policy \[enforce\]: 0 violation\(s\)\n/);
     assert.match(clean.stdout, /effect-v3-apis \[enforce\]: 0 violation\(s\)/);
+    assert.match(clean.stdout, /effect-conventions \[enforce\]: 0 violation\(s\)/);
 
     writeFileSync(join(repo, 'apps/runtime/src/a.ts'), 'void Effect.runPromise(e);');
     const failing = spawnSync(process.execPath, [indexPath, repo], { encoding: 'utf8' });

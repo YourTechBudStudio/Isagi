@@ -1,7 +1,7 @@
 /**
  * The editor module's public surface: Code Server provisioning and durable editor contexts.
  */
-export { editorApiError, editorRejection, registerEditorRoutes } from './api.js';
+export { editorRejection, registerEditorRoutes } from './api.js';
 export type { EditorFailure, EditorRejection } from './api.js';
 export { deriveEditorContextFacts } from './contexts/projection.js';
 // The canonical `editor_contexts` decoder. Exported because the surfaces read composition joins

@@ -5,7 +5,7 @@ import { basename, join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer, Stream } from 'effect';
 
-import { CliAccessNone } from '../cli-access/index.js';
+import { CliAccessNone } from '../cli-access/testing.js';
 import type { InternalEvent, InternalEvents } from '../platform/events/index.js';
 import { recordingInternalEventBusLayer } from '../platform/events/testing.js';
 import { EntityLock } from '../platform/locks/index.js';

@@ -77,6 +77,13 @@ describe('effect-run-sites', () => {
       'managedRuntime.runPromiseExit(e)',
       'rt.runSync(e)',
       'ManagedRuntime.make(layer)',
+      'const run = yield* FiberSet.runtime(set)<never>();',
+      'const run = yield* FiberSet.runtimePromise(set)<never>();',
+      'const run = yield* FiberMap.runtime(map)<never>();',
+      'const run = yield* FiberHandle.runtimePromise(handle)<never>();',
+      'const registry = AtomRegistry.make({ scheduleTask });',
+      'const runMainWith = Runtime.makeRunMain(({ fiber, teardown }) => {});',
+      'runMain(main, { disableErrorReporting: true });',
     ];
     using f = fixture(
       Object.fromEntries(
@@ -94,6 +101,9 @@ describe('effect-run-sites', () => {
     using f = fixture({
       'apps/runtime/src/a.ts': [
         'const fiber = yield* FiberSet.run(set, effect);',
+        'const fiber = yield* FiberMap.run(map, key, effect);',
+        'export const runMain = <A, E>(effect: Effect.Effect<A, E>) => runMainWith(effect);',
+        'const registry = AtomRegistry.layer;',
         'const r = yield* Effect.runtime<never>();',
         'const flags = rt.runtimeFlags;',
         'export const runPromiseLater = () => undefined;',

@@ -5,7 +5,6 @@ import type { ProjectOrderRejectionReason, WorktreeOrderRejectionReason } from '
 import type { GitCommandError, ProjectPathValidationError } from '../platform/git/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
 import type { ProjectConfigError } from '../projects/index.js';
-import type { WorktreeSetupRunError } from './setup/runner.js';
 import type { WorktreeSetupError } from './setup/service.js';
 import type { StateFileError } from './state-file.js';
 
@@ -69,10 +68,7 @@ export class WorktreeOrderError extends Data.TaggedError('WorktreeOrderError')<{
   readonly beforeWorktreeId?: number | undefined;
 }> {}
 
-/**
- * What the shared workspace methods declare. `WorktreeSetupRunError` no longer leaves the setup runner (a failed hook
- * is a `failed` setup result), but stays in the union while other modules still name it.
- */
+/** What the shared workspace methods declare. */
 export type WorkspaceServiceError =
   | DatabaseError
   | GitCommandError
@@ -80,7 +76,6 @@ export type WorkspaceServiceError =
   | ProjectPathValidationError
   | StateFileError
   | WorktreeSetupError
-  | WorktreeSetupRunError
   | WorkspaceError;
 
 /**

@@ -77,11 +77,3 @@ export class CliAccess extends Context.Service<
 >()('isagi/runtime/cli-access/CliAccess') {
   static readonly layer = Layer.effect(CliAccess, make);
 }
-
-/** For tests that launch PTYs: publishes nothing and adds nothing to a launch's environment. */
-export const noCliAccess: CliAccess['Service'] = {
-  publishRuntimeUrl: () => Effect.void,
-  launchEnvironment: () => Effect.succeed({}),
-};
-
-export const CliAccessNone: Layer.Layer<CliAccess> = Layer.succeed(CliAccess, noCliAccess);

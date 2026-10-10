@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
-import { Layer, Result, Schema } from 'effect';
+import { Effect, Layer, Result, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -34,7 +34,7 @@ import {
   type RuntimeEvent,
   type WireSchema,
 } from '@isagi/contracts';
-import { makeFiberProbe } from '@isagi/testing';
+import { expectNoProcessMatching, makeFiberProbe } from '@isagi/testing';
 
 import { RuntimeLogger } from '../logger.js';
 import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
@@ -221,7 +221,7 @@ describe('runtime smoke', () => {
     });
     assert.equal(deleted.deletedSurfaceId, surfaceId);
     assert.deepEqual(deleted.deletedPaneIds, [paneId]);
-    await expectNoProcessMatching(marker, 2_000);
+    await Effect.runPromise(expectNoProcessMatching(marker, { withinMs: 2_000 }));
   });
 
   test('flow 12: the runtime shuts down cleanly once its sockets are closed', async () => {
@@ -281,7 +281,7 @@ describe('runtime smoke: shutdown with open sockets', () => {
         'the runtime to close both sockets',
         2_000,
       );
-      await expectNoProcessMatching(marker, 2_000);
+      await Effect.runPromise(expectNoProcessMatching(marker, { withinMs: 2_000 }));
       await expectNoNewHandles(runtime.handleBaseline);
       assert.deepEqual(failureLines(shutdownLogs), []);
     } finally {
@@ -574,14 +574,6 @@ async function processesMatching(pattern: string): Promise<string[]> {
       else resolve(stdout.split('\n').filter((line) => line.trim() !== ''));
     });
   });
-}
-
-async function expectNoProcessMatching(pattern: string, timeoutMs: number) {
-  await waitFor(
-    async () => (await processesMatching(pattern)).length === 0,
-    `no process matching ${pattern}`,
-    timeoutMs,
-  );
 }
 
 async function killProcessesMatching(pattern: string) {

@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber, FiberMap, Layer, Stream } from 'effect';
 
-import { noCliAccess } from '../../cli-access/index.js';
+import { noCliAccess } from '../../cli-access/testing.js';
 import {
   publishOnlyRecordingEventBus,
   type RecordingEventBus,

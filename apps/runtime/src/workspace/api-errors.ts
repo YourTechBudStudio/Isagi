@@ -1,16 +1,12 @@
 import type {
-  ApiError,
   runtimeStateFileFailedErrorSchema,
   WorktreeSetupRejectedError,
   WorktreeSetupRejectionReason,
 } from '@isagi/contracts';
 
-import { ProjectConfigError } from '../projects/index.js';
-import { WorktreeSetupError } from './setup/service.js';
-import { StateFileError } from './state-file.js';
-
-/** An API error payload before the boundary stamps the request id onto it. */
-export type WorkspaceRejection = Omit<ApiError, 'requestId'>;
+import type { ProjectConfigError } from '../projects/index.js';
+import type { WorktreeSetupError } from './setup/service.js';
+import type { StateFileError } from './state-file.js';
 
 type WorktreeSetupRejection = Omit<WorktreeSetupRejectedError, 'requestId'>;
 type StateFileRejection = Omit<typeof runtimeStateFileFailedErrorSchema.Type, 'requestId'>;
@@ -52,39 +48,6 @@ export const workspaceRejections = {
     data: { operation: error.operation },
   }),
 } as const;
-
-/**
- * The workspace rejection for `error`, or `null` when it is not one of the three workspace
- * failures. Returning `null` leaves each boundary to decide what an unrecognised error means there,
- * exactly like the platform's `infrastructureApiError`.
- */
-function workspaceRejectionFor(error: unknown): WorkspaceRejection | null {
-  if (error instanceof ProjectConfigError) return workspaceRejections.projectConfig(error);
-  if (error instanceof WorktreeSetupError) return workspaceRejections.worktreeSetup(error);
-  if (error instanceof StateFileError) return workspaceRejections.stateFile(error);
-  return null;
-}
-
-/**
- * TRANSITIONAL (plan R20): `workspaceRejectionFor` stamped with the request id, for the untyped
- * `mapError` of routes still on `registerLegacyApiEndpoint` (today: the workflow routes). Typed
- * endpoints use `workspaceRejections` in their `catchTags`; this goes when the last legacy caller
- * does. The field order is the wire order every other mapper uses.
- */
-export function workspaceApiError(
-  error: unknown,
-  context: { readonly requestId: string },
-): ApiError | null {
-  const rejection = workspaceRejectionFor(error);
-  if (!rejection) return null;
-  return {
-    code: rejection.code,
-    status: rejection.status,
-    message: rejection.message,
-    requestId: context.requestId,
-    ...(rejection.data === undefined ? {} : { data: rejection.data }),
-  };
-}
 
 /**
  * The service's word for a setup refusal, translated to the wire's.
