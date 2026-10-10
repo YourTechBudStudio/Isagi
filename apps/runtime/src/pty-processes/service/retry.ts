@@ -39,7 +39,7 @@ export const makePersistenceRetry: Effect.Effect<PtyPersistenceRetry, never, Sco
         yield* Effect.raceFirst(Effect.sleep(persistenceRetryDelay), Deferred.await(draining));
         const exit = yield* Effect.exit(attempt);
         if (Exit.isSuccess(exit)) return;
-        yield* Effect.logError('PTY persistence retry failed').pipe(
+        yield* Effect.logWarning('PTY persistence retry failed').pipe(
           Effect.annotateLogs({ label, cause: describeOperationalCause(Cause.squash(exit.cause)) }),
         );
         if (yield* Deferred.isDone(draining)) return yield* abandon(label);

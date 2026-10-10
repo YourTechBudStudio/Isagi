@@ -163,6 +163,49 @@ test('socket: an undecodable message is logged and the connection keeps going', 
   assert.equal(Object.keys(registry.get(attentionSourcesAtom)).length, 1);
 });
 
+test('socket: a throw while applying one event loses that event only; the socket and loop keep going', async (t) => {
+  // Effect's default logger writes to `console.log`.
+  const logged = t.mock.method(console, 'log', () => {});
+  const { registry, connection, sockets } = connectionSession(t);
+  t.after(registry.mount(connection));
+  // Not a terminal-facts listener: the facts channel isolates its listeners, so this reaches the
+  // connection loop the way any other synchronous throw while applying an event (a store
+  // listener, an observed read rebuilt by an invalidation) would.
+  let throwOnce = true;
+  t.after(
+    registry.subscribe(attentionSourcesAtom, () => {
+      if (!throwOnce) return;
+      throwOnce = false;
+      throw new Error('attention listener bug');
+    }),
+  );
+  await flush();
+  sockets[0]!.open();
+  await flush();
+
+  sockets[0]!.message(JSON.stringify(attentionSnapshot()));
+  await flush();
+  assert.equal(throwOnce, false, 'the listener threw while the event was applied');
+  assert.equal(sockets[0]!.closed, false, 'the socket stays open');
+  assert.equal(registry.get(connection)._tag, 'Initial', 'the connection loop is still running');
+
+  sockets[0]!.message(JSON.stringify(attentionSnapshot(2)));
+  await flush();
+  assert.equal(Object.keys(registry.get(attentionSourcesAtom)).length, 2, 'the next event applies');
+
+  sockets[0]!.close();
+  await tick(500);
+  assert.equal(sockets.length, 2, 'and a close still reconnects');
+  assert.ok(
+    logged.mock.calls.some((call) =>
+      call.arguments.some((argument) =>
+        String(argument).includes('[workspace] runtime event handling failed'),
+      ),
+    ),
+    'the failure was logged',
+  );
+});
+
 test('socket: a runtime URL that cannot be resolved goes to the same backoff', async (t) => {
   let failing = true;
   const { registry, connection, sockets } = connectionSession(t, { urlFails: () => failing });
@@ -191,21 +234,19 @@ test('socket: a socket error closes it and reconnects', async (t) => {
   assert.equal(sockets.length, 2);
 });
 
-function attentionSnapshot(): RuntimeEvent {
+function attentionSnapshot(sourceCount = 1): RuntimeEvent {
   return {
     id: 'evt_attention',
     type: 'attention_snapshot',
     occurredAt: '2026-06-12T00:00:00.000Z',
     payload: {
-      sources: [
-        {
-          worktreeId: 2,
-          surfaceId: 3,
-          paneId: 4,
-          source: { kind: 'agent_session', id: 1 },
-          attention: 'working',
-        },
-      ],
+      sources: Array.from({ length: sourceCount }, (_, index) => ({
+        worktreeId: 2,
+        surfaceId: 3,
+        paneId: 4 + index,
+        source: { kind: 'agent_session' as const, id: 1 + index },
+        attention: 'working' as const,
+      })),
     },
   };
 }

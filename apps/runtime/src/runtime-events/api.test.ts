@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import websocket from '@fastify/websocket';
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import Fastify from 'fastify';
 
 import type { RuntimeEvent } from '@isagi/contracts';
@@ -208,6 +208,96 @@ test('server shutdown with an open events socket closes it without failure logs'
   }
 });
 
+test('a defect answering a snapshot request is logged and closes the socket so the client reconnects', async () => {
+  const logs = makeLogCapture();
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      RuntimeEvents.layer,
+      Layer.succeed(AgentSessionAttentionProjection, {
+        agentSessionAttention: () => Effect.succeed('idle' as const),
+        terminalSessionAttention: () => 'idle' as const,
+        workingAgentCount: Effect.succeed(0),
+        listAttentionSources: Effect.die(new Error('attention projection bug')),
+      }),
+      logs.layer,
+    ),
+  );
+
+  try {
+    // The server closes this socket; a short close timeout ends the injected stream after the handshake.
+    await fastify.register(websocket, { options: { closeTimeout: 50 } });
+    registerRuntimeEventsRoutes(fastify, runtime as never);
+    await fastify.ready();
+
+    const ws = await fastify.injectWS('/api/v1/events');
+    try {
+      const closed = waitForClose(ws);
+      ws.send(JSON.stringify({ type: 'attention_snapshot_requested' }));
+      await closed;
+
+      const failures = logs.lines.filter((line) => line.level === 'Error');
+      assert.equal(failures.length, 1, JSON.stringify(logs.lines));
+      assert.equal(failures[0]?.message, 'Runtime event websocket client message failed');
+      assert.match(failures[0]?.cause ?? '', /attention projection bug/);
+    } finally {
+      ws.terminate();
+    }
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('a defect delivering an event is logged and closes the socket so the client reconnects', async () => {
+  const logs = makeLogCapture();
+  const fastify = Fastify({ logger: false });
+  // The real bus, whose subscription stream dies on the first event it delivers.
+  const dyingRuntimeEvents = Layer.effect(
+    RuntimeEvents,
+    Effect.gen(function* () {
+      const bus = yield* RuntimeEvents;
+      return RuntimeEvents.of({
+        publish: bus.publish,
+        subscribe: Effect.map(
+          bus.subscribe,
+          Stream.mapEffect(() => Effect.die(new Error('event delivery bug'))),
+        ),
+      });
+    }),
+  ).pipe(Layer.provide(RuntimeEvents.layer));
+  const runtime = ManagedRuntime.make(Layer.mergeAll(dyingRuntimeEvents, logs.layer));
+
+  try {
+    await fastify.register(websocket, { options: { closeTimeout: 50 } });
+    registerRuntimeEventsRoutes(fastify, runtime as never);
+    await fastify.ready();
+
+    const ws = await fastify.injectWS('/api/v1/events');
+    try {
+      const closed = waitForClose(ws);
+      await new Promise((resolve) => setImmediate(resolve));
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const eventBus = yield* RuntimeEvents;
+          yield* eventBus.publish(agentSessionChangedEvent());
+        }),
+      );
+      await closed;
+
+      const failures = logs.lines.filter((line) => line.level === 'Error');
+      assert.equal(failures.length, 1, JSON.stringify(logs.lines));
+      assert.equal(failures[0]?.message, 'Runtime event websocket delivery failed');
+      assert.match(failures[0]?.cause ?? '', /event delivery bug/);
+    } finally {
+      ws.terminate();
+    }
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
 test('runtime events websocket streams a suspended command_changed through the contract path', async () => {
   // The widened status rides the existing event: no new event type, no envelope
   // change, and the client decodes it or the test fails at the boundary.
@@ -296,6 +386,27 @@ function agentSessionChangedEvent() {
       diagnosticCode: 'harness_metadata_missing',
     },
   } satisfies RuntimeEvent;
+}
+
+/** Resolves once the client side of an injected socket has closed; fails after a second. */
+function waitForClose(ws: {
+  readonly readyState: number;
+  once: (event: 'close', listener: () => void) => void;
+}) {
+  return new Promise<void>((resolve, reject) => {
+    if (ws.readyState === 3) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(
+      () => reject(new Error('Timed out waiting for the runtime events socket to close.')),
+      1_000,
+    );
+    ws.once('close', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
 }
 
 function takeMessage(ws: { once: (event: 'message', listener: (data: Buffer) => void) => void }) {

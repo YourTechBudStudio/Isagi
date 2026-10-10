@@ -20,11 +20,29 @@ export class ServerWaitFailed extends Data.TaggedError('ServerWaitFailed')<{
   }
 }
 
-/** Succeeds once the runtime at `runtimeUrl` answers its health endpoint with the contract's healthy payload. */
+/**
+ * The runtime URL cannot serve as a base for the health endpoint (a scheme-less `localhost:4100`, say). The message is
+ * the parser's own (`Invalid URL`), which never echoes the value: an external runtime URL can carry credentials.
+ */
+export class InvalidRuntimeUrl extends Data.TaggedError('InvalidRuntimeUrl')<{
+  readonly cause: unknown;
+}> {
+  override get message() {
+    return errorMessage(this.cause);
+  }
+}
+
+/**
+ * Succeeds once the runtime at `runtimeUrl` answers its health endpoint with the contract's healthy payload. A
+ * `runtimeUrl` that is not a valid base URL fails at once (it is a failure, not a defect, so the caller can report it).
+ */
 export const waitForRuntimeHealth = Effect.fn('desktop.waitForRuntimeHealth')(function* (
   runtimeUrl: string,
 ) {
-  const healthUrl = new URL(`${apiBasePath}${apiEndpoints.health.path}`, runtimeUrl).toString();
+  const healthUrl = yield* Effect.try({
+    try: () => new URL(`${apiBasePath}${apiEndpoints.health.path}`, runtimeUrl).toString(),
+    catch: (cause) => new InvalidRuntimeUrl({ cause }),
+  });
   const client = yield* RuntimeClient.make(runtimeUrl);
   // The contract's `ok: true` literal makes a decoded payload a healthy one.
   const attempt = client.request(apiEndpoints.health).pipe(

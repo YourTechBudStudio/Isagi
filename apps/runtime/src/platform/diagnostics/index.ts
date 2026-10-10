@@ -3,6 +3,7 @@ export {
   describeOperationalCause,
   describeSafely,
   type SafeDescription,
+  safeSystemErrorCode,
   type SafeDiagnostic,
 } from './operational-cause.js';
 export { boundedDiagnostic } from './bounded.js';

@@ -14,7 +14,12 @@ import {
 import type { ActiveAttachment } from './attachments.js';
 import { decodeBackendRef } from './backend-ref.js';
 import { transitionProcessAndPublish } from './events.js';
-import type { DurablePtyTerminationReason, PtyTerminations } from './lifecycle.js';
+import {
+  isExitPending,
+  type DurablePtyTerminationReason,
+  type PtySupervisors,
+  type PtyTerminations,
+} from './lifecycle.js';
 import type { PtyPersistenceRetry } from './retry.js';
 import { terminatePtyProcess } from './termination.js';
 
@@ -41,6 +46,7 @@ export interface PtyCleanupDependencies {
   readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
+  readonly supervisors: PtySupervisors;
   readonly retry: PtyPersistenceRetry;
 }
 
@@ -105,6 +111,10 @@ export function cleanupPtyProcess(
     }
 
     if (inspection.status === 'missing') {
+      // The backend has reported this exit but its supervisor has not persisted it yet. Nothing is left to kill, and
+      // the supervisor is about to write the real exit code or signal, so this attempt writes nothing that could
+      // pre-empt it.
+      if (isExitPending(deps.supervisors, session.id)) return 'already_terminal' as const;
       // Guarded: if some other observer already recorded this incarnation's
       // death, that first fact stands and this write is rejected. Either way
       // the process is accounted for.

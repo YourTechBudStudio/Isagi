@@ -12,7 +12,7 @@ import {
 import { registerHarnessesRoutes } from './api.js';
 import { ControlPlaneNotReady, HarnessControlPlane } from './control-plane/service.js';
 import { AgentSessionArtifacts } from './ledger.js';
-import { HarnessLedgerObserver, HarnessLedgerObserverInternals } from './observer.service.js';
+import { HarnessLedgerObserver } from './observer.service.js';
 import { HarnessAdapterRegistry } from './registry.js';
 
 const policyBody = {
@@ -29,7 +29,6 @@ function routesOver(acceptPolicy: HarnessControlPlane['Service']['acceptPolicy']
   return Layer.mergeAll(
     Layer.mock(HarnessControlPlane)({ acceptPolicy }),
     Layer.mock(HarnessLedgerObserver)({}),
-    Layer.mock(HarnessLedgerObserverInternals)({}),
     Layer.mock(HarnessAdapterRegistry)({}),
     Layer.mock(AgentSessionArtifacts)({
       paths: () => ({ directory: '/unused', metadataPath: '/unused/harness.json' }),

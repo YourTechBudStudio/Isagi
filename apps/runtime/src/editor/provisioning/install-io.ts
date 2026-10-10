@@ -185,8 +185,8 @@ function installIo(sessionSocketDirectory: string): EditorInstallIo['Service'] {
       );
     }),
 
-    assertExecutable: (path) =>
-      Effect.tryPromise({
+    assertExecutable: Effect.fn('EditorInstallIo.assertExecutable')(function* (path) {
+      yield* Effect.tryPromise({
         try: () => access(path, fsConstants.X_OK),
         catch: (cause) =>
           new EditorInstallIoError({
@@ -195,10 +195,13 @@ function installIo(sessionSocketDirectory: string): EditorInstallIo['Service'] {
             output: null,
             cause,
           }),
-      }),
+      });
+    }),
 
-    prepareEditorState: ({ editorsPath }) =>
-      Effect.tryPromise({
+    prepareEditorState: Effect.fn('EditorInstallIo.prepareEditorState')(function* ({
+      editorsPath,
+    }) {
+      return yield* Effect.tryPromise({
         try: async (): Promise<EditorSharedStatePaths> => {
           const providerRoot = join(editorsPath, 'code-server');
           const paths = {
@@ -243,7 +246,8 @@ function installIo(sessionSocketDirectory: string): EditorInstallIo['Service'] {
             output: null,
             cause,
           }),
-      }),
+      });
+    }),
   });
 }
 
@@ -287,8 +291,9 @@ export class EditorInstallIo extends Context.Service<
       readonly url: string;
       readonly destination: string;
     }) => Effect.Effect<{ readonly sha256: string }, EditorInstallIoError>;
-    /** `tar -xzf <archive> -C <into> --strip-components <n>`, the system-`tar`
-     *  precedent already set by `git/git.command.ts` and `pty-processes/adapters/tmux.ts`. */
+    /** `tar -xzf <archive> -C <into> --strip-components <n>`, run through the shared
+     *  `platform/process` `execCommand` adapter like `git` (`platform/git/command.ts`) and
+     *  `tmux` (`pty-processes/adapters/tmux.ts`). */
     readonly extractTarGz: (input: {
       readonly archive: string;
       readonly into: string;

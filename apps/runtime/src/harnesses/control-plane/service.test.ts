@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Deferred, Effect, Fiber, Layer, Ref } from 'effect';
+import { Deferred, Effect, Fiber, Layer, Ref, Tracer } from 'effect';
 
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
@@ -366,6 +366,33 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
   );
   assert.ok(result._tag === 'Failure' && result.failure instanceof ControlPlaneNotReady);
   assert.equal(committed, false);
+});
+
+test('the zero-argument members run under spans named for them', async () => {
+  // A defect such as an inventory that stays pending after a refresh is reported with the span frame that names the
+  // member; effect values (rather than functions) get one only by opening it themselves.
+  const spans: string[] = [];
+  const recordingTracer = Tracer.make({
+    span(options) {
+      spans.push(options.name);
+      return Tracer.nativeTracer.span(options);
+    },
+  });
+  await runControlPlane(policyState('invalid', disabledPolicy), { _tag: 'Pending' }, (service) =>
+    Effect.gen(function* () {
+      yield* service.start;
+      yield* service.snapshot;
+      yield* service.refreshInventory;
+    }).pipe(Effect.withTracer(recordingTracer)),
+  );
+  assert.deepEqual(
+    spans.filter((name) => name.startsWith('HarnessControlPlane.')),
+    [
+      'HarnessControlPlane.start',
+      'HarnessControlPlane.snapshot',
+      'HarnessControlPlane.refreshInventory',
+    ],
+  );
 });
 
 function runControlPlane<A>(

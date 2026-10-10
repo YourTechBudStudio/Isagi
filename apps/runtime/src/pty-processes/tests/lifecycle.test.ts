@@ -39,6 +39,7 @@ import { PtyService } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
 import {
   PtyServiceError,
+  PtyStartError,
   type PtyBackend as PtyBackendShape,
   type PtyOutputMessage,
   type PtyProcessEvent,
@@ -438,6 +439,121 @@ test('an attachment forwards backend output in order and stops when its scope cl
       }).pipe(Effect.provide(persistenceLayer(dataRoot))),
     ),
   ));
+
+// node-pty learns about an exit in its own callback: it stops reporting the process as live there and only enqueues
+// `Exited`, which the supervisor persists on a later scheduler turn. Requests that run in between see a `running` row
+// whose backend answers `missing` / "not live". None of them may record that as `runtime_ephemeral_lost`: terminal rows
+// are immutable, so the clean exit the supervisor is about to write would be lost for good.
+function inExitWindow(
+  observe: (input: {
+    readonly pty: PtyService['Service'];
+    readonly ptyProcessId: number;
+    readonly inspections: () => number;
+  }) => Effect.Effect<void, unknown, Scope.Scope>,
+) {
+  return withDataRoot('isagi-pty-exit-in-flight-', (dataRoot) =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<PtyProcessEvent, Cause.Done>();
+        // Flipped where the node-pty adapter's `onExit` drops its live entry, before `Exited` reaches the supervisor.
+        let exited = false;
+        let inspections = 0;
+        const backend = fakeNodePty({
+          launch: (input) =>
+            Effect.succeed({
+              ref: {
+                schemaVersion: 1,
+                backend: 'node_pty',
+                ptyProcessId: input.ptyProcessId,
+                pid: 4_242,
+              },
+              events: Stream.fromQueue(events),
+            }),
+          inspect: () =>
+            Effect.sync(() => {
+              inspections += 1;
+              return exited ? { status: 'missing' as const } : { status: 'alive' as const };
+            }),
+          attach: (input) =>
+            Effect.fail(
+              new PtyStartError({
+                ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
+                command: 'node_pty_attach',
+                cwd: '',
+                cause: new Error('node-pty process is not live.'),
+              }),
+            ),
+          kill: () => Effect.die('nothing is left to kill'),
+        });
+        const service = yield* buildInScope(ptyServiceLayer(fakeCatalog(backend)));
+        const pty = Context.get(service.context, PtyService);
+        const repository = yield* PtyRepository;
+        const { ptyProcessId } = yield* pty.launch({ command: 'zsh', args: [], cwd: '/repo' });
+        assert.equal((yield* repository.findProcess(ptyProcessId))?.status, 'running');
+
+        exited = true;
+        yield* observe({ pty, ptyProcessId, inspections: () => inspections });
+
+        const pending = yield* repository.findProcess(ptyProcessId);
+        assert.equal(pending?.status, 'running');
+        assert.equal(pending?.statusReason, null);
+
+        yield* Queue.offer(events, { _tag: 'Exited', exitCode: 0, signal: null });
+        yield* Queue.end(events);
+        yield* untilSettled(
+          repository.findProcess(ptyProcessId).pipe(Effect.map((row) => row?.status !== 'running')),
+        );
+        const row = yield* repository.findProcess(ptyProcessId);
+        assert.equal(row?.status, 'exited');
+        assert.equal(row?.statusReason, null);
+        assert.equal(row?.exitCode, 0);
+        yield* service.close;
+      }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+    ),
+  );
+}
+
+test('an attach failure inside the exit window leaves the exit to the supervisor', () =>
+  inExitWindow(({ pty, ptyProcessId }) =>
+    Effect.gen(function* () {
+      // The plan reads `running`; the backend says "not live".
+      const attach = yield* pty
+        .attach({ ptyProcessId, mode: 'interactive', send: () => {} })
+        .pipe(Effect.result);
+      assert.ok(Result.isFailure(attach));
+      assert.ok(attach.failure instanceof PtyServiceError);
+      assert.equal(attach.failure.code, 'backend_attach_failed');
+    }),
+  ));
+
+test('a cleanup audit inside the exit window finds nothing to kill and leaves the exit to the supervisor', () =>
+  inExitWindow(({ pty, ptyProcessId }) =>
+    Effect.gen(function* () {
+      assert.equal(
+        yield* pty.cleanupProcess({ ptyProcessId, reason: 'user_requested' }),
+        'already_terminal',
+      );
+    }),
+  ));
+
+test('a status poll inside the exit window leaves the exit to the supervisor', () =>
+  inExitWindow(({ inspections }) =>
+    Effect.gen(function* () {
+      const before = inspections();
+      yield* TestClock.adjust('10 seconds');
+      assert.ok(inspections() > before, 'the status poll inspected the row');
+    }),
+  ));
+
+/** Yields to other fibers until `done` holds, without needing a clock; fails the test if it never does. */
+const untilSettled = <E>(done: Effect.Effect<boolean, E>) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < 1_000; turn += 1) {
+      if (yield* done) return;
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(new Error('condition never held'));
+  });
 
 /** Waits, with real time, until `predicate` holds; fails the test after two seconds. */
 const eventually = (predicate: () => boolean) =>

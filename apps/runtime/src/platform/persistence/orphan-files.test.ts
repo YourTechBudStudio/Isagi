@@ -250,6 +250,59 @@ test('sweepOrphans turns a throw into a failed entry and still resolves', async 
   });
 });
 
+test('orphan collection warnings name filesystem conditions by their system error code', async () => {
+  // A busy or read-only volume, an I/O fault or a vanished parent must be distinguishable in the
+  // log; the raw message (which carries the path) still never is.
+  await withDataRootAsync(async (dataRoot) => {
+    const root = await guardedRoot(dataRoot, 'root');
+    writeFileSync(join(root.path, '1'), 'x');
+    utimesSync(join(root.path, '1'), oldDate, oldDate);
+
+    const logs = makeLogCapture();
+    await sweep(
+      {
+        label: 'test entry',
+        candidates: listed(await list(root, 'file')),
+        isLive: () => {
+          throw Object.assign(new Error(`EBUSY: resource busy or locked, ${root.path}`), {
+            code: 'EBUSY',
+          });
+        },
+        minAgeMs,
+        nowMs,
+      },
+      logs,
+    );
+    assert.deepEqual(logs.lines[0]?.annotations, {
+      collector: 'test entry',
+      name: '1',
+      cause: 'System error EBUSY',
+    });
+
+    // A real readdir failure: the listed parent was replaced by a file.
+    const parent = await guardedRoot(dataRoot, 'replaced');
+    rmSync(parent.path, { recursive: true, force: true });
+    writeFileSync(parent.path, 'not a directory');
+    const listingLogs = makeLogCapture();
+    const listing = await runScoped(
+      listOrphanCandidates(parent, 'file', isIdName, 'test').pipe(
+        Effect.provide(listingLogs.layer),
+      ),
+    );
+    assert.equal(listing.status, 'unreadable');
+    assert.deepEqual(
+      listingLogs.lines.map((line) => [line.level, line.message, line.annotations]),
+      [
+        [
+          'Warn',
+          'Could not list orphan collection entries',
+          { collector: 'test', path: parent.path, cause: 'System error ENOTDIR' },
+        ],
+      ],
+    );
+  });
+});
+
 test('sweepOrphans treats anything written after the sweep started as young', async () => {
   await withDataRootAsync(async (dataRoot) => {
     const root = await guardedRoot(dataRoot, 'root');

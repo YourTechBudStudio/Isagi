@@ -53,7 +53,6 @@ import {
   mergeEvents,
   runtimeConnectionPhaseAtom,
   workflowLive,
-  workflowResyncAtom,
   type RuntimeConnectionPhase,
 } from './live.js';
 import { workflowLogLines, type WorkflowLogLine } from './log.js';
@@ -117,13 +116,10 @@ export function useRuntimeConnectionPhase(): RuntimeConnectionPhase {
 
 /** One run's detail: its summary, inputs and execution tree. */
 export const workflowRunAtom = Atom.family((runId: number) =>
-  query(
-    (get) => {
-      get(workflowResyncAtom);
-      return getWorkflowRun(runId);
-    },
-    { keys: [keys.workflowRun(runId)], ...workflowReadPolicy },
-  ),
+  query(() => getWorkflowRun(runId), {
+    keys: [keys.workflowRun(runId), keys.workflowLive],
+    ...workflowReadPolicy,
+  }),
 );
 
 /**
@@ -135,9 +131,8 @@ export const workflowRunAtom = Atom.family((runId: number) =>
  */
 export const workflowEventsAtom = Atom.family((runId: number) =>
   query(
-    (get) => {
-      get(workflowResyncAtom);
-      return Effect.gen(function* () {
+    (get) =>
+      Effect.gen(function* () {
         const fetched: WorkflowEventDto[] = [];
         let cursor: number | null = null;
         for (;;) {
@@ -158,29 +153,24 @@ export const workflowEventsAtom = Atom.family((runId: number) =>
           (): readonly WorkflowEventDto[] => [],
         );
         return mergeEvents(mergeEvents(cached, fetched), live.takeHeld(runId));
-      });
-    },
-    { keys: [keys.workflowEvents(runId)], ...workflowReadPolicy },
+      }),
+    { keys: [keys.workflowEvents(runId), keys.workflowLive], ...workflowReadPolicy },
   ),
 );
 
 /** One execution in full, with its operations. */
 export const workflowExecutionAtom = Atom.family((executionId: number) =>
-  query(
-    (get) => {
-      get(workflowResyncAtom);
-      return Effect.map(getWorkflowExecution(executionId), (output) => output.execution);
-    },
-    { keys: [keys.workflowExecution(executionId)], ...workflowReadPolicy },
-  ),
+  query(() => Effect.map(getWorkflowExecution(executionId), (output) => output.execution), {
+    keys: [keys.workflowExecution(executionId), keys.workflowLive],
+    ...workflowReadPolicy,
+  }),
 );
 
 /** Every checkpoint a run saved, oldest first. Re-read when a `checkpoint_captured` event arrives. */
 export const workflowCheckpointListAtom = Atom.family((runId: number) =>
   query(
-    (get) => {
-      get(workflowResyncAtom);
-      return Effect.gen(function* () {
+    () =>
+      Effect.gen(function* () {
         const items: WorkflowCheckpointSummaryDto[] = [];
         let cursor: number | null = null;
         for (;;) {
@@ -193,9 +183,8 @@ export const workflowCheckpointListAtom = Atom.family((runId: number) =>
           cursor = page.nextCursor;
         }
         return items as readonly WorkflowCheckpointSummaryDto[];
-      });
-    },
-    { keys: [keys.workflowCheckpoints(runId)], ...workflowReadPolicy },
+      }),
+    { keys: [keys.workflowCheckpoints(runId), keys.workflowLive], ...workflowReadPolicy },
   ),
 );
 

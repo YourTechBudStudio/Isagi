@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, Stream } from 'effect';
+import { Cause, Effect, Option, Schema, Stream } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -60,12 +60,8 @@ const streamRuntimeEvents = Effect.fn('runtimeEvents.connection')(function* (
     Stream.runForEach((event) =>
       Schema.decodeUnknownEffect(runtimeEventSchema)(event).pipe(Effect.flatMap(ws.send)),
     ),
-    // An event the contract rejects ends the connection; the client reconnects and re-reads.
-    Effect.catch((error) =>
-      Effect.logError('Runtime event websocket encoding failed', error).pipe(
-        Effect.andThen(ws.close),
-      ),
-    ),
+    // An event the contract rejects, or a defect sending it, ends the connection; the client reconnects and re-reads.
+    closeOnFailure(ws, 'Runtime event websocket delivery failed'),
     Effect.forkScoped,
   );
 
@@ -84,12 +80,24 @@ function answerClientMessage(ws: WsConnection, raw: string) {
   }
   return handleClientMessage(message.value).pipe(
     Effect.flatMap(ws.send),
-    Effect.catch((error) =>
-      Effect.logError('Runtime event websocket client message failed', error).pipe(
-        Effect.andThen(ws.close),
-      ),
-    ),
+    closeOnFailure(ws, 'Runtime event websocket client message failed'),
   );
+}
+
+/**
+ * Ends the connection when one of its fibers fails or hits a defect: logs the cause and closes the socket, so the
+ * client sees the close, reconnects and re-reads instead of waiting on a socket that no longer answers. A forked fiber's
+ * failure is otherwise invisible. Interruption (the connection's scope closing) passes through untouched.
+ */
+function closeOnFailure(ws: WsConnection, message: string) {
+  return <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logError(message, cause).pipe(Effect.andThen(ws.close)),
+      ),
+    );
 }
 
 function decodeClientMessage(raw: string): Option.Option<RuntimeEventInputMessage> {

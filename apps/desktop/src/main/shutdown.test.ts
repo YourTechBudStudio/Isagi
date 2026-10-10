@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
+import { DesktopShutdownCoordinator, handleBeforeQuit, startDesktop } from './shutdown.js';
 
 // The order in which disposal stops the services is a property of the desktop layer: `desktop-layer.test.ts`.
 function shutdownHarness(options: { readonly installThrows?: boolean } = {}) {
@@ -92,4 +92,25 @@ test('before-quit lets the committed installer quit sequence terminate the app',
   // This is the quit `quitAndInstall()` starts: preventing it would strand the
   // process instead of installing and relaunching.
   assert.deepEqual(beforeQuit(subject.coordinator), { begun: false, prevented: false });
+});
+
+test('startup opens no window once a quit has disposed the runtime, including one that lands during the build', async () => {
+  const run = async (quitAt: 'never' | 'before' | 'during-build') => {
+    const steps: string[] = [];
+    let exitRequested = quitAt === 'before';
+    await startDesktop({
+      isExitRequested: () => exitRequested,
+      build: async () => {
+        steps.push('build');
+        if (quitAt === 'during-build') exitRequested = true;
+      },
+      openWindow: async () => {
+        steps.push('window');
+      },
+    });
+    return steps;
+  };
+  assert.deepEqual(await run('never'), ['build', 'window']);
+  assert.deepEqual(await run('before'), []);
+  assert.deepEqual(await run('during-build'), ['build']);
 });

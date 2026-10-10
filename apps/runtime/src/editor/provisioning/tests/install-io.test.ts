@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Tracer } from 'effect';
 
 import { runScoped } from '@isagi/testing';
 
@@ -67,4 +67,33 @@ test('extracting an archive tar cannot read fails with tar’s own bounded outpu
     assert.ok(failure.output !== null && failure.output.length > 0);
     assert.ok(Buffer.byteLength(failure.output) <= 2_048);
   });
+});
+
+test('every member runs under a span named for it', async () => {
+  // A failure or defect inside a member is reported with the span frame that names the operation, so each member must
+  // open one rather than only the ones written as generators.
+  const spans: string[] = [];
+  const recordingTracer = Tracer.make({
+    span(options) {
+      spans.push(options.name);
+      return Tracer.nativeTracer.span(options);
+    },
+  });
+  await withTemporaryDirectory(async (directory) => {
+    const executable = path.join(directory, 'code-server');
+    writeFileSync(executable, '#!/bin/sh\n');
+    chmodSync(executable, 0o755);
+    await runScoped(
+      EditorInstallIo.use((io) =>
+        Effect.gen(function* () {
+          yield* io.assertExecutable(executable);
+          yield* io.prepareEditorState({ editorsPath: path.join(directory, 'editors') });
+        }),
+      ).pipe(Effect.provide(EditorInstallIo.layer), Effect.withTracer(recordingTracer)),
+    );
+  });
+  assert.deepEqual(
+    spans.filter((name) => name.startsWith('EditorInstallIo.')),
+    ['EditorInstallIo.assertExecutable', 'EditorInstallIo.prepareEditorState'],
+  );
 });

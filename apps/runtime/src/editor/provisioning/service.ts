@@ -216,7 +216,9 @@ const make = Effect.gen(function* () {
       ),
       Effect.withSpan('EditorProvisioning.start'),
     ),
-    state: Effect.map(Ref.get(phase), (current) => projectPhase(current, version)),
+    state: Effect.map(Ref.get(phase), (current) => projectPhase(current, version)).pipe(
+      Effect.withSpan('EditorProvisioning.state'),
+    ),
     retry: Effect.andThen(
       // Marked before the attempt rather than after, so a boot `start` racing a
       // user retry cannot schedule a second attempt behind it.
@@ -242,7 +244,7 @@ const make = Effect.gen(function* () {
         reason: 'editor_unavailable',
         diagnostic: current.kind === 'failed' ? current.diagnostic : null,
       });
-    }),
+    }).pipe(Effect.withSpan('EditorProvisioning.requireReady')),
   });
 });
 

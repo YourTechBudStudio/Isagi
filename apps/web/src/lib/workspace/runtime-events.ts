@@ -204,11 +204,16 @@ export const connectRuntimeEvents = (open: OpenRuntimeEventsSocket) =>
       const url = yield* Effect.exit(resolveRuntimeEventsWebSocketUrl());
       if (Exit.isSuccess(url)) {
         yield* socketSignals(open, url.value).pipe(
-          Stream.runForEach((signal) => {
-            if (signal.type === 'message') return applyMessage(signal.data);
-            delay = INITIAL_RECONNECT_DELAY;
-            return onOpen(signal.socket);
-          }),
+          Stream.runForEach((signal) =>
+            superviseSignal(
+              signal.type === 'message'
+                ? applyMessage(signal.data)
+                : Effect.suspend(() => {
+                    delay = INITIAL_RECONNECT_DELAY;
+                    return onOpen(signal.socket);
+                  }),
+            ),
+          ),
           Effect.ensuring(receiveWorkflowSignal({ type: 'disconnected' })),
         );
       }
@@ -216,6 +221,19 @@ export const connectRuntimeEvents = (open: OpenRuntimeEventsSocket) =>
       delay = Duration.min(Duration.times(delay, 2), MAX_RECONNECT_DELAY);
     }
   });
+
+/**
+ * Each signal is a supervision point (effect-conventions §5.3): a defect while applying one (a
+ * throwing listener, store action or rebuilt read) loses that signal only, and is logged. Without
+ * this it would end the stream, close the socket and end the reconnect loop for the session.
+ * Interruption is not a defect, so unmounting still stops the loop.
+ */
+const superviseSignal = <R>(apply: Effect.Effect<void, never, R>) =>
+  apply.pipe(
+    Effect.catchDefect((defect) =>
+      Effect.logError('[workspace] runtime event handling failed', defect),
+    ),
+  );
 
 /**
  * On open, in this order: tell the terminal coordinator, ask for the attention snapshot, tell the

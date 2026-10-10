@@ -27,6 +27,7 @@ import {
   surfaceDetailAtom,
   worktreeCommandsAtom,
 } from '../queries.js';
+import { terminalFactsAtom } from '../terminal-presentation/facts.js';
 
 const useMockTime = (t: TestContext) => {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
@@ -215,6 +216,29 @@ test('surface detail is kept for the session and re-read only by its own key', a
   assert.equal(registry.get(surfaceDetailAtom(12))._tag, 'Success', 'still cached after 30 min');
   unmount();
   other();
+});
+
+test('a throwing terminal-facts listener does not fail a surface-detail read', async (t) => {
+  const logged = t.mock.method(console, 'error', () => {});
+  const registry = makeTestRegistry({
+    api: {
+      getSurfaceDetail: (surfaceId) =>
+        Effect.succeed({ id: surfaceId } as unknown as SurfaceDetail),
+    },
+  });
+  t.after(() => registry.dispose());
+  const seen: string[] = [];
+  registry.get(terminalFactsAtom).subscribe(() => {
+    throw new Error('coordinator bug');
+  });
+  registry.get(terminalFactsAtom).subscribe((fact) => seen.push(fact.type));
+
+  t.after(registry.mount(surfaceDetailAtom(12)));
+  await flush();
+
+  assert.equal(registry.get(surfaceDetailAtom(12))._tag, 'Success');
+  assert.deepEqual(seen, ['surface_detail_loaded'], 'the other listener still hears of it');
+  assert.equal(logged.mock.callCount(), 1);
 });
 
 test('the active-context atom is re-read by its own key, not the workspace key', async (t) => {

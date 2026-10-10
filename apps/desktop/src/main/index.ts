@@ -23,7 +23,7 @@ import {
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { RuntimeProcess } from './runtime-process/index.js';
 import { RuntimeProcessConfigElectron } from './runtime.js';
-import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
+import { DesktopShutdownCoordinator, handleBeforeQuit, startDesktop } from './shutdown.js';
 import {
   decodeDesktopUpdateIntent,
   DesktopUpdater,
@@ -62,6 +62,9 @@ const shutdown = new DesktopShutdownCoordinator({
     destroyRendererForExit(mainWindow);
   },
   exit: (code) => app.exit(code),
+  // The one desktop effect not run on `desktop`: the installer is invoked only after `dispose` has stopped the updater
+  // and the runtime process, so a rejection is known only once `desktop` is disposed (where every run dies with
+  // "ManagedRuntime disposed"). The record is requirement-free by design and gets the desktop logger here.
   diagnoseInstallRejection: () =>
     updaterInstaller &&
     Effect.runPromise(updaterInstaller.recordInstallRejection.pipe(Effect.provide(DesktopLogger))),
@@ -323,14 +326,18 @@ app
   .whenReady()
   .then(async () => {
     if (isDev && app.dock) app.dock.setIcon(DEVELOPMENT_ICON_PATH);
-    // A quit before the app was ready has already disposed the desktop runtime.
-    if (exitRequested) return;
-    // The first use builds the desktop runtime: the updater starts (its launch check
-    // included) and the renderer bridge subscribes, both before the window exists. A
-    // snapshot published before the renderer can listen is not lost: the renderer
-    // reconciles the current snapshot when it subscribes.
-    updaterInstaller = await runDesktop(DesktopUpdater.useSync((updater) => updater.installer));
-    return createWindow();
+    // A quit before the app was ready, or during the build, has already disposed the desktop runtime.
+    await startDesktop({
+      isExitRequested: () => exitRequested,
+      // The first use builds the desktop runtime: the updater starts (its launch check
+      // included) and the renderer bridge subscribes, both before the window exists. A
+      // snapshot published before the renderer can listen is not lost: the renderer
+      // reconciles the current snapshot when it subscribes.
+      build: async () => {
+        updaterInstaller = await runDesktop(DesktopUpdater.useSync((updater) => updater.installer));
+      },
+      openWindow: createWindow,
+    });
   })
   .catch((error: unknown) => {
     console.error(error);

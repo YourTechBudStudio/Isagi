@@ -13,7 +13,7 @@ import type { CommandPortPathConfig, WorktreeCommandPortConfig } from '../projec
 // nothing to remember for a port the user already fixed.
 //
 // Paths are stored exactly as declared. URLs are composed at read time
-// (`commands.summary.ts`), so the durable row never holds a derived value.
+// (`summary.ts`), so the durable row never holds a derived value.
 export interface ResolvedPortEntry {
   readonly envVar: string | null;
   readonly port: number;

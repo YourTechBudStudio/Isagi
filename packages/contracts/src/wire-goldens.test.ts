@@ -1,11 +1,15 @@
 /**
  * Contract wire goldens: every captured schema must keep the same wire behavior.
  *
- * `test/wire-goldens/wire-goldens.json` is produced by `scripts/capture-wire-goldens.ts` and frozen.
- * For each captured schema this test replays the stored wire samples and adversarial probes against
- * the current schema and asserts identical accept/reject decisions, identical re-encoded output, and
- * identical `.literals`. A divergence is a wire change: fix the schema, or, when the change is
- * deliberate and reviewed, recapture that schema only.
+ * `test/wire-goldens/wire-goldens.json` is a frozen oracle captured on effect@3.21.2 before the v4
+ * port; entries recaptured since then carry their own `capturedWith`. For each captured schema this test replays the stored wire samples and adversarial probes
+ * against the current schema and asserts identical accept/reject decisions, identical re-encoded
+ * output, and identical `.literals`. A divergence is a wire change: fix the schema, or, when the
+ * change is deliberate and reviewed, recapture only the changed schemas with
+ * `pnpm -C packages/contracts exec tsx scripts/capture-wire-goldens.ts --only <name>[,<name>...]`
+ * (it lists other names that capture the same schema object, and stamps each recaptured entry with
+ * its own `capturedWith`). Never recapture the whole file: v4's sampler differs from v3's, so that
+ * would replace the v3 oracle instead of recording one change.
  *
  * A captured name that no longer resolves must be listed in `test/wire-goldens/renames.json`
  * (`{ "oldName": "newName" }`) or `test/wire-goldens/removed.json` (`{ "name": "reason" }`).
@@ -23,6 +27,7 @@ type AnySchema = Schema.Codec<unknown>;
 
 interface Golden {
   readonly name: string;
+  readonly capturedWith?: string;
   readonly literals?: ReadonlyArray<unknown>;
   readonly samples: ReadonlyArray<{ readonly wire: unknown; readonly reencoded: unknown }>;
   readonly probes: ReadonlyArray<{
@@ -192,4 +197,25 @@ test('the golden harness reports a drifted schema', () => {
   );
   assert.ok(diffAgainstGolden('droppedLiteral', droppedLiteral, codeGolden).length > 0);
   assert.ok(diffAgainstGolden('loosenedError', loosenedError, errorGolden).length > 0);
+});
+
+test('the surfaces error golden pins the session_launch_rejected member', () => {
+  const golden = goldensByName.get('surfaceApiErrorSchema');
+  assert.ok(golden !== undefined);
+  // The union as it was before the launch gate's refusal became a surfaces failure.
+  const withoutLaunchRejection = Schema.Union([
+    contracts.surfaceRejectedErrorSchema,
+    contracts.runtimeDatabaseFailedErrorSchema,
+    contracts.runtimeDataDirectoryFailedErrorSchema,
+  ]);
+
+  assert.deepEqual(
+    diffAgainstGolden('surfaceApiErrorSchema', contracts.surfaceApiErrorSchema, golden),
+    [],
+  );
+  assert.ok(
+    diffAgainstGolden('withoutLaunchRejection', withoutLaunchRejection, golden).some((problem) =>
+      problem.includes('session_launch_rejected'),
+    ),
+  );
 });

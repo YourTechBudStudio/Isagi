@@ -262,7 +262,9 @@ export function CommandPalette() {
   // the palette owns keyboard focus before the browser handles another event. As passive effects
   // they ran a frame or two after the open request (an "opened" render, then a focus render), and
   // keys typed in that window landed behind the palette and were lost. Their relative order still
-  // matters: this close check must see `lastOpenRequest` before the reset below sets it.
+  // matters: this close check must see `lastOpenRequest` before the reset below sets it. The
+  // early-typing specs in `browser/specs/command-palette.spec.ts` pin the outcome: the input is
+  // focused before the browser handles the task after the Mod+K keydown.
   useLayoutEffect(() => {
     if (!open || machine.kind !== 'closed' || lastOpenRequest.current === null) {
       return;

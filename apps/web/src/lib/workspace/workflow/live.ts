@@ -3,9 +3,10 @@
  * session (per atom registry) rather than in module variables.
  *
  * `receiveWorkflowSignal` (`sync.ts`) applies each pushed fact to the workflow reads; this file
- * holds what that needs between facts: the connection phase the bar shows, the reconnect counter
- * every live read depends on, events held for reads still in flight, the 250 ms refetch windows,
- * and a feed of the facts for the one waiter that needs them (`awaitPreparation`).
+ * holds what that needs between facts: the connection phase the bar shows, events held for reads
+ * still in flight, the 250 ms refetch windows, and a feed of the facts for the one waiter that needs
+ * them (`awaitPreparation`). A (re)connect re-reads every live read through their shared
+ * `keys.workflowLive` invalidation key.
  */
 import { Duration, Effect, FiberMap, PubSub, type Scope } from 'effect';
 import { Atom, Reactivity } from 'effect/reactivity';
@@ -39,17 +40,6 @@ export type RuntimeConnectionPhase = 'connecting' | 'connected' | 'disconnected'
 export const runtimeConnectionPhaseAtom = Atom.make<RuntimeConnectionPhase>('connecting').pipe(
   Atom.keepAlive,
 );
-
-/**
- * Bumped by every (re)connect. Each live read (run, events, execution, checkpoint list) reads it,
- * so a reconnect re-reads the live reads someone is looking at and marks the others stale, while
- * structures and saved checkpoints, which are immutable, are left alone.
- *
- * A dependency rather than a shared `Reactivity` key: every live read registering one key would
- * make a single invalidation re-enter `Reactivity`'s handler loop (each rebuild re-registers its
- * handler on the set being iterated), which never terminates.
- */
-export const workflowResyncAtom = Atom.make(0).pipe(Atom.keepAlive);
 
 /**
  * How long a burst of events for one read is collected before that read is refetched once.

@@ -78,9 +78,9 @@ const make = Effect.gen(function* () {
   const refresh = Effect.flatMap(beginRefresh, Deferred.await);
 
   return HostInventory.of({
-    getCached: Ref.get(state),
-    startRefresh: Effect.asVoid(beginRefresh),
-    refresh,
+    getCached: Ref.get(state).pipe(Effect.withSpan('HostInventory.getCached')),
+    startRefresh: Effect.asVoid(beginRefresh).pipe(Effect.withSpan('HostInventory.startRefresh')),
+    refresh: refresh.pipe(Effect.withSpan('HostInventory.refresh')),
   });
 });
 

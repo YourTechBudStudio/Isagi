@@ -1,6 +1,6 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
-import { Context, Effect, FiberSet, Layer } from 'effect';
+import { Cause, Context, Effect, FiberSet, Layer } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { isAllowedRuntimeOrigin, sendApiError, type RouteRuntime } from '../platform/http/index.js';
@@ -39,7 +39,9 @@ export const HttpServerLayer = Layer.effect(
       Effect.sync(() => Fastify({ logger: false })),
       (server) =>
         tryPromise(() => server.close()).pipe(
-          Effect.catch((error) => Effect.logWarning('runtime.http_server_close_failed', error)),
+          Effect.catch((error) =>
+            Effect.logWarning('Runtime HTTP server did not close cleanly', Cause.fail(error)),
+          ),
         ),
     );
     // Acquired after Fastify, so released before it: every request and socket fiber is interrupted (and answered)

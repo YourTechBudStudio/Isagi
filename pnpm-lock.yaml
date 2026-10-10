@@ -225,9 +225,6 @@ importers:
         specifier: ^7.18.0
         version: 7.18.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
     devDependencies:
-      '@isagi/testing':
-        specifier: workspace:*
-        version: link:../../packages/testing
       '@playwright/test':
         specifier: ^1.55.0
         version: 1.62.0
@@ -268,9 +265,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.2
     devDependencies:
-      '@isagi/testing':
-        specifier: workspace:*
-        version: link:../testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4

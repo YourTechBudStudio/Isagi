@@ -193,6 +193,13 @@ const make = Effect.gen(function* () {
       return { child, exited, processError, readyUrl, release } satisfies AttachedChild;
     });
 
+  /**
+   * The configured health check, with anything it throws (a defect) reported as a failed check: whatever goes wrong
+   * there must settle `start`, never leave it waiting.
+   */
+  const checkHealth = (url: string) =>
+    config.checkHealth(url).pipe(Effect.catchDefect((defect) => Effect.fail(toError(defect))));
+
   /** `SIGTERM`, the grace period, `SIGKILL`, one more second, then stop watching. Never fails. */
   const terminate = (attached: AttachedChild) =>
     Effect.gen(function* () {
@@ -243,7 +250,7 @@ const make = Effect.gen(function* () {
             ),
         }),
       );
-      yield* config.checkHealth(url).pipe(
+      yield* checkHealth(url).pipe(
         Effect.mapError((error) => failure('health_check_failed', { message: error.message })),
         Effect.raceFirst(exitBeforeReady),
         Effect.raceFirst(errorBeforeReady),
@@ -271,6 +278,10 @@ const make = Effect.gen(function* () {
         ),
       );
     }).pipe(
+      // A defect anywhere above is still a terminal failure: it is published and settles every waiter.
+      Effect.catchDefect((defect) =>
+        Effect.fail(failure('process_error', { message: errorMessage(defect) })),
+      ),
       // Inside the scope, so the failure is published and every waiter settled before `terminate` runs. One
       // uninterruptible step: a concurrent stop cannot leave the failure stored but unpublished.
       Effect.catch((lifecycleFailure) =>
@@ -289,7 +300,7 @@ const make = Effect.gen(function* () {
     );
 
   const runExternal = (url: string) =>
-    config.checkHealth(url).pipe(
+    checkHealth(url).pipe(
       Effect.matchEffect({
         onSuccess: () => publish({ ownership: 'external', state: 'ready' }),
         onFailure: (error) =>
@@ -416,6 +427,10 @@ function validateManagedRuntimeUrl(value: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function errorMessageWithoutUrl(error: unknown) {

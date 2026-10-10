@@ -35,6 +35,23 @@ test('a channel delivers to the listeners present when a publish starts; unsubsc
   assert.deepEqual(seen, ['first:1', 'second:1']);
 });
 
+test('a throwing listener is logged; the other listeners still run and publish does not throw', (t) => {
+  const logged = t.mock.method(console, 'error', () => {});
+  const channel = makeChannel<number>();
+  const seen: string[] = [];
+  channel.subscribe((value) => seen.push(`first:${value}`));
+  channel.subscribe(() => {
+    throw new Error('subscriber bug');
+  });
+  channel.subscribe((value) => seen.push(`third:${value}`));
+
+  assert.doesNotThrow(() => channel.publish(1));
+  channel.publish(2);
+
+  assert.deepEqual(seen, ['first:1', 'third:1', 'first:2', 'third:2']);
+  assert.equal(logged.mock.callCount(), 2);
+});
+
 test('latest wins per key: only the newest claim for a key stays latest', () => {
   const writes = makeLatestWins<number>();
   const first = writes.claim(7);

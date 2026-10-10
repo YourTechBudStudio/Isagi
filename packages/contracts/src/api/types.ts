@@ -37,11 +37,20 @@ export interface ApiEndpoint<
   readonly errors: Errors;
 }
 
-/** A declared part's decoded type, or `undefined` when the endpoint does not declare that part. */
-type PartType<Endpoint, Part extends string> = Endpoint extends { readonly [K in Part]: infer S }
-  ? S extends WireSchema
-    ? S['Type']
-    : undefined
+/**
+ * A declared part's decoded type, or `undefined` when the endpoint does not declare that part.
+ *
+ * The part is read as an optional property so a descriptor annotated as `ApiEndpoint<…>` (whose
+ * `params`/`query`/`body` are optional) keeps its parts, the same as an `as const satisfies` one.
+ */
+type PartType<Endpoint, Part extends string> = Endpoint extends {
+  readonly [K in Part]?: infer S;
+}
+  ? [Exclude<S, undefined>] extends [never]
+    ? undefined
+    : [Exclude<S, undefined>] extends [WireSchema]
+      ? Exclude<S, undefined>['Type']
+      : undefined
   : undefined;
 
 export type ApiEndpointBody<Endpoint> = PartType<Endpoint, 'body'>;

@@ -7,6 +7,7 @@ import {
   coordinates,
   describeOperationalCause,
   describeSafely,
+  safeSystemErrorCode,
   type SafeDiagnostic,
 } from './operational-cause.js';
 
@@ -187,4 +188,37 @@ test('a system error code renders inside a recognized cause chain', () => {
     describeOperationalCause(new OperationFailed('kill', bindFailure, 'kill', 801)),
     'Operation kill failed (ptyProcess=801): System error EACCES',
   );
+});
+
+test('filesystem and spawn failures are named by their system error code', () => {
+  // The observed failures behind these entries: a missing executable or file, a full disk on a
+  // PTY log append, a busy, read-only or faulty volume under an orphan sweep, and the shape
+  // conditions the artifact and data-directory writers hit (ELOOP is an O_NOFOLLOW refusal).
+  for (const code of [
+    'ENOENT',
+    'ENOSPC',
+    'EROFS',
+    'EBUSY',
+    'EIO',
+    'ENOTEMPTY',
+    'ENAMETOOLONG',
+    'ENOTDIR',
+    'EISDIR',
+    'EEXIST',
+    'ELOOP',
+  ]) {
+    const failure = new Error(`${code}: operation failed, unlink '/Users/${SENTINEL}/x'`);
+    (failure as { code?: unknown }).code = code;
+    const rendered = describeOperationalCause(failure);
+    assert.equal(rendered, `System error ${code}`);
+    assert.ok(!rendered.includes(SENTINEL));
+  }
+});
+
+test('safeSystemErrorCode applies the same exact allowlist', () => {
+  assert.equal(safeSystemErrorCode('ENOENT'), 'ENOENT');
+  assert.equal(safeSystemErrorCode('EADDRINUSE'), 'EADDRINUSE');
+  assert.equal(safeSystemErrorCode(`E${SENTINEL}`), null);
+  assert.equal(safeSystemErrorCode(13), null);
+  assert.equal(safeSystemErrorCode(null), null);
 });

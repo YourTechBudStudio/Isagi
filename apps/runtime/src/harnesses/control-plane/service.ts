@@ -112,15 +112,15 @@ const make = Effect.gen(function* () {
     start: Effect.gen(function* () {
       yield* inventory.refresh;
       yield* Effect.forkIn(reconcileCurrent(true), scope);
-    }),
+    }).pipe(Effect.withSpan('HarnessControlPlane.start')),
     snapshot: Effect.gen(function* () {
       const current = yield* config.get;
       const cached = yield* inventory.getCached;
       const rec = yield* Ref.get(reconciliation);
       const editor = yield* editorProvisioning.state;
       return snapshotOf(current.harnesses, cached, rec, editor);
-    }),
-    refreshInventory: refresh,
+    }).pipe(Effect.withSpan('HarnessControlPlane.snapshot')),
+    refreshInventory: refresh.pipe(Effect.withSpan('HarnessControlPlane.refreshInventory')),
     acceptPolicy: Effect.fn('HarnessControlPlane.acceptPolicy')(function* (input) {
       // Prove reconciliation can run before committing: ensure inventory is
       // Ready, refreshing once if it is still pending. If it cannot become

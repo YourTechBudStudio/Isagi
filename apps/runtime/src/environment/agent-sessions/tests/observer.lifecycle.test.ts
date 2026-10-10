@@ -40,7 +40,7 @@ test('startup replay is non-publishing and cache reads return paired history', a
         const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
         const edges = yield* observer.getTurnEdges(10);
         const projectionBefore = yield* observer.getProjection(10);
-        yield* pollHarnessLedgerObserverForTest(observer);
+        yield* pollHarnessLedgerObserverForTest();
         const projectionAfter = yield* observer.getProjection(10);
         yield* subscription.unsubscribe;
         return { edges, sameProjection: projectionBefore === projectionAfter };
@@ -73,7 +73,7 @@ test('Claude background Stop stays active and empty Stop publishes the paired te
           path,
           `${ledgerRecord('claude', 'claude-session', 'UserPromptSubmit', 0, {})}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const started = yield* subscription.take;
         assert.equal((yield* observer.getTurnEdges(10)).at(-1)?.type, 'turn_started');
 
@@ -83,7 +83,7 @@ test('Claude background Stop stays active and empty Stop publishes the paired te
             background_tasks: [{ task_id: 'redacted' }],
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const backgroundAttention = yield* observer.getAttention(10);
 
         appendFileSync(
@@ -94,7 +94,7 @@ test('Claude background Stop stays active and empty Stop publishes the paired te
             background_tasks: [],
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const ended = yield* subscription.take;
         const attention = yield* observer.getAttention(10);
         const edges = yield* observer.getTurnEdges(10);
@@ -160,13 +160,13 @@ for (const withPromptIds of [true, false]) {
               tool_name: 'AskUserQuestion',
               tool_use_id: 'question-1',
             });
-            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* pollHarnessLedgerObserverForTest(10);
             yield* changes.take;
             assert.equal(yield* observer.getAttention(10), 'waiting');
 
             // Graph Workflows: another prompt arrives without a question completion.
             append('UserPromptSubmit', 2, { prompt_id: 'second', prompt: 'Do this instead' });
-            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* pollHarnessLedgerObserverForTest(10);
             yield* changes.take;
             assert.equal(yield* observer.getAttention(10), 'working');
 
@@ -180,7 +180,7 @@ for (const withPromptIds of [true, false]) {
             yield* changes.take;
             assert.equal(yield* observer.getAttention(10), 'error');
             append('UserPromptSubmit', 3, { prompt_id: 'resumed' }, 21);
-            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* pollHarnessLedgerObserverForTest(10);
             yield* changes.take;
             assert.equal(yield* observer.getAttention(10), 'working');
 
@@ -195,7 +195,7 @@ for (const withPromptIds of [true, false]) {
               },
               21,
             );
-            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* pollHarnessLedgerObserverForTest(10);
             yield* changes.take;
             assert.equal(yield* observer.getAttention(10), 'waiting');
             const edges = yield* observer.getTurnEdges(10);
@@ -244,7 +244,7 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
           path,
           `${ledgerRecord('claude', 'claude-session', 'UserPromptSubmit', 0, {})}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         yield* sessionChanges.take;
         const started = yield* turns.take;
 
@@ -258,7 +258,7 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
             tool_use_id: 'instant-question',
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const instantQuestionPublished = yield* Effect.race(
           sessionChanges.take.pipe(Effect.as(true)),
           Effect.sleep('30 millis').pipe(Effect.as(false)),
@@ -271,7 +271,7 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
             tool_use_id: 'question-1',
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         yield* sessionChanges.take;
         const waitingAttention = yield* observer.getAttention(10);
         const waitingEdges = yield* observer.getTurnEdges(10);
@@ -283,7 +283,7 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
             tool_use_id: 'question-1',
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         yield* sessionChanges.take;
         const resumedAttention = yield* observer.getAttention(10);
 
@@ -293,7 +293,7 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
             background_tasks: [],
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const ended = yield* turns.take;
         yield* sessionChanges.take;
         const endedAttention = yield* observer.getAttention(10);
@@ -342,7 +342,7 @@ test('replacement rebuilds a non-publishing baseline and seeds rebuilt edges', a
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n${ledgerRecord('pi', 'pi-session', 'agent_end', 1, { context: { hasPendingMessages: false } })}\n`,
           { mode: 0o600 },
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const published = yield* Effect.race(
           subscription.take.pipe(Effect.as(true)),
           Effect.sleep('30 millis').pipe(Effect.as(false)),
@@ -377,13 +377,13 @@ test('OpenCode root status owns lifecycle and session.error is non-terminal', as
           path,
           `${ledgerRecord('opencode', 'opencode-root', 'session.status', 0, openCodeStatus('busy', 0))}\n${ledgerRecord('opencode', 'opencode-root', 'session.error', 1, openCodeEvent('session.error', 1, { error: { name: 'recoverable' } }))}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         assert.equal((yield* observer.getTurnEdges(10)).at(-1)?.type, 'turn_started');
         appendFileSync(
           path,
           `${ledgerRecord('opencode', 'opencode-root', 'session.status', 2, openCodeStatus('idle', 2))}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getTurnEdges(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -411,13 +411,13 @@ test('OpenCode question events change attention without closing the active turn'
           path,
           `${ledgerRecord('opencode', 'opencode-root', 'session.status', 0, openCodeStatus('busy', 0))}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
 
         appendFileSync(
           path,
           `${ledgerRecord('opencode', 'opencode-root', 'question.asked', 1, openCodeEvent('question.asked', 1, { id: 'que-1', questions: [] }))}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const waitingAttention = yield* observer.getAttention(10);
         const waitingEdges = yield* observer.getTurnEdges(10);
 
@@ -425,14 +425,14 @@ test('OpenCode question events change attention without closing the active turn'
           path,
           `${ledgerRecord('opencode', 'opencode-root', 'question.rejected', 2, openCodeEvent('question.rejected', 2, { requestID: 'que-1' }))}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const resumedAttention = yield* observer.getAttention(10);
 
         appendFileSync(
           path,
           `${ledgerRecord('opencode', 'opencode-root', 'session.status', 3, openCodeStatus('idle', 3))}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const endedAttention = yield* observer.getAttention(10);
         const endedEdges = yield* observer.getTurnEdges(10);
         return {
@@ -482,13 +482,13 @@ test('Codex same-thread resume observes a newly announced transcript while the o
           ledger,
           `${ledgerRecord('codex', 'same-thread', 'SessionStart', 1, { transcript_path: currentPath })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         assert.equal(yield* observer.getAttention(10), 'working');
         appendFileSync(
           currentPath,
           `${codexEntry('event_msg', 3, { type: 'task_complete', turn_id: 'resumed-turn' })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         assert.deepEqual(
           (yield* observer.getTurnEdges(10)).map((edge) => edge.type),
           ['turn_started', 'turn_ended'],
@@ -521,7 +521,7 @@ test('Codex rollout bytes are authoritative while hook records only locate the n
           rollout,
           `${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-1' })}\n${codexEntry('event_msg', 2, { type: 'task_complete', turn_id: 'turn-1' })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getTurnEdges(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -567,7 +567,7 @@ test('a live Codex session switch publishes a fully completed first turn', async
           }),
         ]);
 
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const published = yield* Effect.all([subscription.take, subscription.take]);
         const edges = yield* observer.getTurnEdges(10);
         yield* subscription.unsubscribe;
@@ -626,7 +626,7 @@ test('a superseded Codex thread stops driving attention after a live thread swit
             transcript_path: newRollout,
           }),
         ]);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return {
           attention: yield* observer.getAttention(10),
           edges: yield* observer.getTurnEdges(10),
@@ -676,7 +676,7 @@ test('a superseded failed Codex thread does not pin the new thread to error', as
             transcript_path: newRollout,
           }),
         ]);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return {
           attention: yield* observer.getAttention(10),
           metadata: readHarnessMetadata(root),
@@ -721,7 +721,7 @@ test('an ephemeral Codex side session cannot replace the resumable thread or hid
             transcript_path: null,
           }),
         ]);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return {
           attention: yield* observer.getAttention(10),
           metadata: readHarnessMetadata(root),
@@ -750,7 +750,7 @@ test('Codex reports degraded attention when no active stream gains a native roll
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
         assert.equal(yield* observer.getAttention(10), 'idle');
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getAttention(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -784,13 +784,13 @@ test('Codex recovery publishes a completed turn even when a newer recovered turn
           ['turn_started', 'turn_ended'],
         );
         rmSync(rollout);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const missingEdges = yield* observer.getTurnEdges(10);
         writeFileSync(
           rollout,
           `${codexEntry('session_meta', 0, { id: 'codex-session-missing' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-2' })}\n${codexEntry('event_msg', 2, { type: 'task_complete', turn_id: 'turn-2' })}\n${codexEntry('event_msg', 3, { type: 'task_started', turn_id: 'turn-3' })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const recoveredEdges = yield* observer.getTurnEdges(10);
         const published = yield* Effect.all([
           subscription.take,
@@ -827,11 +827,11 @@ test('malformed and incomplete lines do not hide a later valid lifecycle record'
           path,
           `not json\n${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} }).slice(0, 40)}`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         assert.deepEqual(yield* observer.getTurnEdges(10), []);
         const complete = ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} });
         appendFileSync(path, `${complete.slice(40)}\n`);
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getTurnEdges(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -855,7 +855,7 @@ test('active PTY replacement fails the unresolved turn with its opening sequence
           path,
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         yield* database.use('replace_observer_test_pty', (db) => {
           const now = new Date().toISOString();
           db.insert(ptyProcesses)
@@ -897,7 +897,7 @@ test('active PTY replacement fails the unresolved turn with its opening sequence
             context: { hasPendingMessages: false },
           })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getTurnEdges(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -923,7 +923,7 @@ test('terminal PTY facts fail an unresolved turn even when no artifact bytes gro
           path,
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         const subscription = yield* tapInternalEvents(['turn_failed', 'agent_session_changed']);
         yield* bus.publish({
           type: 'pty_process_exited',
@@ -1041,7 +1041,7 @@ test('source rebase clears incarnation-bound sticky failures before sequences re
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} }, 10, 21)}\n${ledgerRecord('pi', 'pi-session', 'agent_end', 1, { context: { hasPendingMessages: false } }, 10, 21)}\n`,
           { mode: 0o600 },
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getTurnEdges(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -1077,7 +1077,7 @@ test('sticky failure remains adjacent to its start before a newer active turn', 
           path,
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 1, { context: {} }, 10, 21)}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        yield* pollHarnessLedgerObserverForTest(10);
         return yield* observer.getTurnEdges(10);
       }).pipe(Effect.provide(testLayer(root))),
     );
@@ -1112,7 +1112,7 @@ test(
             path,
             `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n`,
           );
-          yield* pollHarnessLedgerObserverForTest(observer, 10);
+          yield* pollHarnessLedgerObserverForTest(10);
           return yield* observer.getTurnEdges(10);
         }).pipe(Effect.provide(testLayer(root))),
       );
@@ -1181,7 +1181,7 @@ test(
           const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
           assert.deepEqual(yield* observer.getTurnEdges(10), []);
           chmodSync(path, 0o600);
-          yield* pollHarnessLedgerObserverForTest(observer, 10);
+          yield* pollHarnessLedgerObserverForTest(10);
           const edges = yield* observer.getTurnEdges(10);
           const published = yield* Effect.race(
             subscription.take.pipe(Effect.as(true)),
@@ -1275,7 +1275,6 @@ test('new live ledger discovery publishes once while concurrent polls serialize'
     rmSync(path);
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const observer = yield* HarnessLedgerObserver;
         const subscription = yield* tapInternalEvents(['turn_started']);
         writeFileSync(
           path,
@@ -1283,10 +1282,7 @@ test('new live ledger discovery publishes once while concurrent polls serialize'
           { mode: 0o600 },
         );
         yield* Effect.all(
-          [
-            pollHarnessLedgerObserverForTest(observer, 10),
-            pollHarnessLedgerObserverForTest(observer, 10),
-          ],
+          [pollHarnessLedgerObserverForTest(10), pollHarnessLedgerObserverForTest(10)],
           { concurrency: 'unbounded' },
         );
         const first = yield* subscription.take;
@@ -1333,7 +1329,7 @@ test('one global poll refreshes multiple live agents', async () => {
           secondPath,
           `${ledgerRecord('pi', 'pi-session-11', 'agent_start', 0, { context: {} }, 11, 21)}\n`,
         );
-        yield* pollHarnessLedgerObserverForTest(observer);
+        yield* pollHarnessLedgerObserverForTest();
         return {
           first: yield* observer.getTurnEdges(10),
           second: yield* observer.getTurnEdges(11),

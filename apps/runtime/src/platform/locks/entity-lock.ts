@@ -11,7 +11,10 @@ import { Context, Effect, Layer, Semaphore } from 'effect';
 export type EntityLockKey =
   | { readonly kind: 'agent_session'; readonly id: number }
   | { readonly kind: 'terminal_session'; readonly id: number }
-  | { readonly kind: 'editor_context'; readonly id: number };
+  | { readonly kind: 'editor_context'; readonly id: number }
+  // A project command has no row id of its own that outlives a run, so it is named by the worktree it belongs to and
+  // its configured name.
+  | { readonly kind: 'command'; readonly worktreeId: number; readonly commandName: string };
 
 /**
  * The brand that makes the witness unforgeable. It is declared, never defined,
@@ -42,6 +45,9 @@ export interface EntityLockHeld {
 }
 
 export function entityLockKeyId(key: EntityLockKey) {
+  // The worktree id is numeric, so the first `:` after it always ends it and a command name containing `:` cannot
+  // make two keys collide.
+  if (key.kind === 'command') return `${key.kind}:${key.worktreeId}:${key.commandName}`;
   return `${key.kind}:${key.id}`;
 }
 

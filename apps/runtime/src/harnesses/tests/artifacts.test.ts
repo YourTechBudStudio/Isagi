@@ -19,6 +19,9 @@ import test from 'node:test';
 
 import { Effect, Layer, Result } from 'effect';
 
+import { makeLogCapture } from '@isagi/testing';
+
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { AgentSessionArtifacts } from '../ledger.js';
@@ -166,6 +169,133 @@ test('agent session artifacts reject a symlinked Isagi harness directory', async
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
     rmSync(external, { recursive: true, force: true });
+  }
+});
+
+// Logs and diagnostics never carry an error's own text, so each failure names the policy that
+// refused the path (and the operation it refused) through its safe diagnostic label instead.
+test('a refused artifact root is named in the failure and in the construction warning', async () => {
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-refused-')));
+  const external = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-refused-external-'));
+  try {
+    mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
+    symlinkSync(external, join(dataRoot, 'sessions', 'agent-sessions'));
+    const logs = makeLogCapture();
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        return yield* Effect.flip(
+          artifacts.prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 }),
+        );
+      }).pipe(Effect.provide(testLayer(dataRoot)), Effect.provide(logs.layer)),
+    );
+
+    assert.equal(failure.code, 'jsonl_init_failed');
+    assert.equal(
+      describeOperationalCause(failure),
+      'Harness artifact operation failed (jsonl_init_failed): Harness artifact path rejected (not_real_directory)',
+    );
+    assert.deepEqual(
+      logs.lines.map((line) => [line.level, line.message, line.annotations.cause]),
+      [
+        [
+          'Warn',
+          'Harness artifact root could not be secured; observation will degrade.',
+          'Harness artifact path rejected (not_real_directory)',
+        ],
+      ],
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test('an unavailable artifact inventory logs why it is unavailable', async () => {
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-inventory-')));
+  try {
+    mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
+    writeFileSync(join(dataRoot, 'sessions', 'agent-sessions'), 'not a directory');
+    const logs = makeLogCapture();
+    const ids = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        return yield* artifacts.listAgentSessionIds;
+      }).pipe(Effect.provide(testLayer(dataRoot)), Effect.provide(logs.layer)),
+    );
+
+    assert.deepEqual(ids, []);
+    assert.deepEqual(
+      logs.lines.map((line) => [line.level, line.message, line.annotations.cause]),
+      [
+        [
+          'Warn',
+          'Harness artifact root could not be secured; observation will degrade.',
+          'System error EEXIST',
+        ],
+        [
+          'Warn',
+          'Harness artifact inventory is unavailable',
+          'Harness artifact path rejected (not_regular_directory)',
+        ],
+      ],
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('a refused metadata write names the operation and the refused path kind', async () => {
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-write-refused-')));
+  const external = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-write-refused-external-'));
+  try {
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        yield* artifacts.initializeMetadata(10);
+        const metadataPath = join(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json');
+        rmSync(metadataPath);
+        symlinkSync(join(external, 'harness.json'), metadataPath);
+        return yield* Effect.flip(
+          artifacts.writeHarnessSessionId({ agentSessionId: 10, harnessSessionId: 'pi-session-1' }),
+        );
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(failure.code, 'metadata_write_failed');
+    assert.equal(
+      describeOperationalCause(failure),
+      'Harness artifact operation failed (metadata_write_failed): Harness artifact path rejected (not_regular_file)',
+    );
+    assert.equal(existsSync(join(external, 'harness.json')), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test('a refused metadata read keeps its persisted status reason', async () => {
+  // The read's diagnostic is persisted as the session's status reason, so its wording is preserved.
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-read-refused-')));
+  try {
+    const read = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        yield* artifacts.initializeMetadata(10);
+        const metadataPath = join(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json');
+        rmSync(metadataPath);
+        mkdirSync(metadataPath);
+        return yield* artifacts.readMetadata(10);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(read, {
+      status: 'invalid',
+      metadataPath: join(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json'),
+      diagnostic: 'Invalid harness metadata: Harness artifact path is not a regular file.',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 

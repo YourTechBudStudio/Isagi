@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Fiber, Layer, ManagedRuntime } from 'effect';
+import { Effect, Fiber, Layer, ManagedRuntime, Tracer } from 'effect';
 
 import {
   UserShell,
@@ -132,6 +132,35 @@ test('managed runtime disposal interrupts an in-flight inventory refresh', async
   await probeStarted.promise;
   await runtime.dispose();
   assert.ok(interruptions > 0);
+});
+
+test('the zero-argument members run under spans named for them', async () => {
+  // A defect inside one of these members is reported with the span frame that names it; effect values (rather than
+  // functions) get one only by opening it themselves.
+  const spans: string[] = [];
+  const recordingTracer = Tracer.make({
+    span(options) {
+      spans.push(options.name);
+      return Tracer.nativeTracer.span(options);
+    },
+  });
+  const shell = fakeShell((input) => success(`${input.command} 1.2.3\n`));
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const inventory = yield* HostInventory;
+      yield* inventory.getCached;
+      yield* inventory.startRefresh;
+      yield* inventory.refresh;
+    }).pipe(
+      Effect.withTracer(recordingTracer),
+      Effect.provide(HostInventory.layer),
+      Effect.provide(Layer.succeed(UserShell, shell)),
+    ),
+  );
+  assert.deepEqual(
+    spans.filter((name) => name.startsWith('HostInventory.')),
+    ['HostInventory.getCached', 'HostInventory.startRefresh', 'HostInventory.refresh'],
+  );
 });
 
 function fakeShell(

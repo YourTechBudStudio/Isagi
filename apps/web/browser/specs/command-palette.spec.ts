@@ -308,6 +308,57 @@ test('four populated groups stay legible at the empty query', async ({ page }) =
 });
 
 // ---------------------------------------------------------------------------
+// Early typing — keys pressed straight after Mod+K, before anything has been
+// seen to render. The promise is that the palette owns keyboard focus before
+// the browser handles the next key (CommandPalette.tsx does it in layout
+// effects), so no early keystroke lands on the document body and is lost. No
+// visibility or focus wait between the shortcut and the keys, on purpose: that
+// wait is where lost keys hide. Deferring the input's focus by a single task
+// fails all three specs below.
+// ---------------------------------------------------------------------------
+
+test('keys typed straight after Mod+K reach the palette input', async ({ page }) => {
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.keyboard.type('migrate');
+
+  await expect(page.locator(`${PALETTE} input`)).toHaveValue('migrate');
+  await expect(row(page, 'migrate')).toBeVisible();
+});
+
+test('Escape pressed straight after Mod+K closes the palette', async ({ page }) => {
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.keyboard.press('Escape');
+
+  await expect(palette(page)).toHaveCount(0);
+});
+
+test('the palette input owns focus before the browser handles the next event', async ({ page }) => {
+  // The two specs above are the user's view at Playwright's pace: one browser
+  // round trip per key. This asks without that slack: once the Mod+K keydown and
+  // the microtasks it queued have run, and before any other task (the next key a
+  // fast typist sends), is the palette's input focused?
+  const focused = await page.evaluate(async (scrim) => {
+    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+    const isMac = /mac/i.test(nav.userAgentData?.platform ?? nav.platform ?? '');
+    (document.activeElement ?? document.body).dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'k',
+        metaKey: isMac,
+        ctrlKey: !isMac,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    // Microtasks only: React flushes the open's synchronous renders here.
+    for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+    const active = document.activeElement;
+    return { inPalette: Boolean(active?.closest(scrim)), tag: active?.tagName ?? null };
+  }, SCRIM);
+
+  expect(focused).toEqual({ inPalette: true, tag: 'INPUT' });
+});
+
+// ---------------------------------------------------------------------------
 // Integration — the seams that only exist with both surfaces mounted.
 // ---------------------------------------------------------------------------
 

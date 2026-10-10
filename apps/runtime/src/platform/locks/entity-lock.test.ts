@@ -13,6 +13,8 @@ import {
 const agentKey = { kind: 'agent_session', id: 10 } as const;
 const otherAgentKey = { kind: 'agent_session', id: 11 } as const;
 const editorKey = { kind: 'editor_context', id: 10 } as const;
+const commandKey = { kind: 'command', worktreeId: 10, commandName: 'dev' } as const;
+const otherCommandKey = { kind: 'command', worktreeId: 10, commandName: 'test' } as const;
 
 // Records start/end around a sleep, so an interleaving is visible in the
 // transcript rather than inferred from timing.
@@ -105,4 +107,35 @@ test('key ids distinguish kind and id', () => {
   assert.equal(entityLockKeyId(agentKey), 'agent_session:10');
   assert.equal(entityLockKeyId(editorKey), 'editor_context:10');
   assert.notEqual(entityLockKeyId(agentKey), entityLockKeyId(editorKey));
+});
+
+test('command keys are named by worktree and command name', () => {
+  assert.equal(entityLockKeyId(commandKey), 'command:10:dev');
+  assert.notEqual(entityLockKeyId(commandKey), entityLockKeyId(otherCommandKey));
+  assert.notEqual(
+    entityLockKeyId({ kind: 'command', worktreeId: 1, commandName: '0:dev' }),
+    entityLockKeyId({ kind: 'command', worktreeId: 10, commandName: 'dev' }),
+  );
+});
+
+test('work on the same command serializes while different commands of one worktree do not', async () => {
+  const events = await Effect.runPromise(
+    Effect.gen(function* () {
+      const lock = yield* EntityLock;
+      const transcript: string[] = [];
+      yield* Effect.all(
+        [
+          recorded(lock, commandKey, 'a', transcript),
+          recorded(lock, otherCommandKey, 'other', transcript),
+          recorded(lock, commandKey, 'b', transcript),
+        ],
+        { concurrency: 'unbounded' },
+      );
+      return transcript;
+    }).pipe(Effect.provide(EntityLock.layer)),
+  );
+
+  // Same command: b starts only after a ended. Other command: it started while a held its lock.
+  assert.ok(events.indexOf('b:start') > events.indexOf('a:end'), events.join(','));
+  assert.ok(events.indexOf('other:start') < events.indexOf('a:end'), events.join(','));
 });

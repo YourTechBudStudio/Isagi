@@ -54,9 +54,10 @@ export class HarnessObserverRefreshError extends Data.TaggedError('HarnessObserv
 const observerPollInterval = '500 millis';
 
 /**
- * Module-internal: the observer's own poll steps, published beside it by the same layer so fixture
- * tests can drive a poll pass instead of waiting for the background interval. Not exported from the
- * module's `index.ts`; only `testing.ts` reaches it.
+ * Module-internal: the observer's own poll steps, built beside it by `makeHarnessLedgerObserverContext`
+ * so fixture tests can drive a poll pass instead of waiting for the background interval. The
+ * production layers do not provide it; only the test layer in `testing.ts` does. Not exported from
+ * the module's `index.ts`.
  */
 export class HarnessLedgerObserverInternals extends Context.Service<
   HarnessLedgerObserverInternals,
@@ -72,7 +73,11 @@ type InventoryRow = HarnessObservationTarget;
 
 export type { ObservedHarnessTurnEdge } from './observer-state.js';
 
-const make = Effect.gen(function* () {
+/**
+ * Module-internal: builds the observer and its poll steps (`HarnessLedgerObserverInternals`) as one
+ * context. The production layers keep only the observer; `testing.ts` builds a layer that keeps both.
+ */
+export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
   const artifacts = yield* AgentSessionArtifacts;
   const targets = yield* HarnessObservationTargets;
   const eventBus = yield* InternalEvents;
@@ -827,8 +832,10 @@ export class HarnessLedgerObserver extends Context.Service<
     readonly getAttention: (agentSessionId: number) => Effect.Effect<AttentionState | undefined>;
   }
 >()('isagi/runtime/harnesses/HarnessLedgerObserver') {
-  /** Also provides `HarnessLedgerObserverInternals`, the poll seam fixture tests drive. */
-  static readonly layerNoDeps = Layer.effectContext(make);
+  static readonly layerNoDeps = Layer.effect(
+    HarnessLedgerObserver,
+    Effect.map(makeHarnessLedgerObserverContext, Context.get(HarnessLedgerObserver)),
+  );
   static readonly layer = HarnessLedgerObserver.layerNoDeps.pipe(
     Layer.provide([AgentSessionArtifacts.layer, InternalEvents.layer]),
   );

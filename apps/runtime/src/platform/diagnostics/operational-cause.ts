@@ -104,15 +104,42 @@ function recognize(value: unknown): SafeDescription | null {
 // the leak `knownForeignErrorNames` above exists to prevent. Grow this list only
 // when an observed failure justifies an entry.
 const knownSystemErrorCodes: ReadonlySet<string> = new Set([
+  // Permissions and limits: a refused bind or file, too many open descriptors.
   'EACCES',
-  'EADDRINUSE',
-  'EADDRNOTAVAIL',
-  'EINVAL',
+  'EPERM',
   'EMFILE',
   'ENFILE',
+  'EINVAL',
   'ENOTSUP',
-  'EPERM',
+  // Port allocation and loopback probes.
+  'EADDRINUSE',
+  'EADDRNOTAVAIL',
+  // A missing executable (`tmux`, `git`, `ps`, `tar` spawn failures) or file.
+  'ENOENT',
+  // Data-directory writes, artifact folders and orphan sweeps: a full disk, a
+  // read-only or busy volume, an I/O fault, and the shape conditions mkdir,
+  // rmdir and O_NOFOLLOW opens report (ELOOP is a symlink refused by O_NOFOLLOW).
+  'ENOSPC',
+  'EROFS',
+  'EBUSY',
+  'EIO',
+  'ENOTEMPTY',
+  'ENAMETOOLONG',
+  'ENOTDIR',
+  'EISDIR',
+  'EEXIST',
+  'ELOOP',
 ]);
+
+/**
+ * `code` when it is on the exact system-error allowlist above, otherwise `null`. For error classes
+ * that carry an operating-system code as an authored field (a spawn failure, say) and compose it
+ * into their own `SafeDiagnostic` label: the same allowlist decides, so an unlisted value never
+ * reaches a rendered label through a side door.
+ */
+export function safeSystemErrorCode(code: unknown): string | null {
+  return typeof code === 'string' && knownSystemErrorCodes.has(code) ? code : null;
+}
 
 function foreignErrorLabel(value: unknown) {
   if (!(value instanceof Error)) return 'UnknownError';
@@ -132,8 +159,7 @@ function foreignErrorLabel(value: unknown) {
 function recognizedSystemErrorCode(value: Error): string | null {
   const descriptor = Object.getOwnPropertyDescriptor(value, 'code');
   if (!descriptor || !('value' in descriptor)) return null;
-  const code: unknown = descriptor.value;
-  return typeof code === 'string' && knownSystemErrorCodes.has(code) ? code : null;
+  return safeSystemErrorCode(descriptor.value);
 }
 
 export function coordinates(values: Record<string, string | number | undefined>) {

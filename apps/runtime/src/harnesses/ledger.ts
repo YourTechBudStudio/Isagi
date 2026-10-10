@@ -16,7 +16,11 @@ import { Context, Data, Effect, Layer, Result, Schema, SchemaIssue } from 'effec
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import { describeOperationalCause } from '../platform/diagnostics/index.js';
+import {
+  describeOperationalCause,
+  describeSafely,
+  type SafeDiagnostic,
+} from '../platform/diagnostics/index.js';
 import {
   DataDirectory,
   emptyOrphanSweepStats,
@@ -68,16 +72,58 @@ export type AgentSessionHarnessMetadataRead =
       readonly diagnostic: string;
     };
 
-export class AgentSessionArtifactError extends Data.TaggedError('AgentSessionArtifactError')<{
-  readonly code:
-    | 'metadata_init_failed'
-    | 'metadata_write_failed'
-    | 'jsonl_init_failed'
-    | 'artifact_permissions_insecure';
-  readonly agentSessionId: number;
-  readonly path: string;
-  readonly cause: unknown;
-}> {}
+export class AgentSessionArtifactError
+  extends Data.TaggedError('AgentSessionArtifactError')<{
+    readonly code:
+      | 'metadata_init_failed'
+      | 'metadata_write_failed'
+      | 'jsonl_init_failed'
+      | 'artifact_permissions_insecure';
+    readonly agentSessionId: number;
+    readonly path: string;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  // The path is deliberately left out: it is user data, and callers log it as its own field.
+  [describeSafely]() {
+    return { label: `Harness artifact operation failed (${this.code})`, cause: this.cause };
+  }
+}
+
+/**
+ * Why the artifact policy refused a path it was about to read or write. Each reason keeps the
+ * message the policy used to throw, because a refused metadata read persists that message as the
+ * session's status reason (`diagnosticForInvalidMetadata`).
+ */
+const artifactPathRejections = {
+  not_real_directory: 'Harness artifact directory is not a real directory.',
+  directory_permissions_insecure: 'Harness artifact directory permissions are insecure.',
+  not_regular_directory: 'Harness artifact path is not a regular directory.',
+  not_regular_file: 'Harness artifact path is not a regular file.',
+  opened_not_regular_file: 'Harness artifact is not a regular file.',
+  file_permissions_insecure: 'Harness artifact permissions are insecure.',
+  nofollow_unavailable: 'Secure no-follow file writes are unavailable.',
+} as const;
+
+class HarnessArtifactPathRejected
+  extends Data.TaggedError('HarnessArtifactPathRejected')<{
+    readonly reason: keyof typeof artifactPathRejections;
+  }>
+  implements SafeDiagnostic
+{
+  override get message() {
+    return artifactPathRejections[this.reason];
+  }
+
+  [describeSafely]() {
+    return { label: `Harness artifact path rejected (${this.reason})`, cause: null };
+  }
+}
+
+function rejectArtifactPath(reason: keyof typeof artifactPathRejections): never {
+  throw new HarnessArtifactPathRejected({ reason });
+}
 
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
@@ -258,7 +304,7 @@ function ensureSecureArtifactDirectory(path: string) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error('Harness artifact directory is not a real directory.');
+    rejectArtifactPath('not_real_directory');
   }
   if (process.platform === 'win32') return;
   // `mkdir` leaves an existing directory's mode untouched, so every write path
@@ -266,14 +312,14 @@ function ensureSecureArtifactDirectory(path: string) {
   chmodSync(path, 0o700);
   const secured = lstatSync(path);
   if ((secured.mode & 0o777) !== 0o700) {
-    throw new Error('Harness artifact directory permissions are insecure.');
+    rejectArtifactPath('directory_permissions_insecure');
   }
 }
 
 function assertSecureArtifactPath(path: string, kind: 'directory' | 'file') {
   const stat = lstatSync(path);
   if (stat.isSymbolicLink() || (kind === 'directory' ? !stat.isDirectory() : !stat.isFile())) {
-    throw new Error(`Harness artifact path is not a regular ${kind}.`);
+    rejectArtifactPath(kind === 'directory' ? 'not_regular_directory' : 'not_regular_file');
   }
 }
 
@@ -285,7 +331,7 @@ function writeSecureArtifactFile(path: string, content: string) {
     if (!isMissingFileError(error)) throw error;
   }
   if (process.platform !== 'win32' && !constants.O_NOFOLLOW) {
-    throw new Error('Secure no-follow file writes are unavailable.');
+    rejectArtifactPath('nofollow_unavailable');
   }
   const fd = openSync(
     path,
@@ -296,12 +342,12 @@ function writeSecureArtifactFile(path: string, content: string) {
     0o600,
   );
   try {
-    if (!fstatSync(fd).isFile()) throw new Error('Harness artifact is not a regular file.');
+    if (!fstatSync(fd).isFile()) rejectArtifactPath('opened_not_regular_file');
     writeFileSync(fd, content, 'utf8');
     if (process.platform === 'win32') return;
     chmodSync(path, 0o600);
     if ((lstatSync(path).mode & 0o777) !== 0o600) {
-      throw new Error('Harness artifact permissions are insecure.');
+      rejectArtifactPath('file_permissions_insecure');
     }
   } finally {
     // `writeFileSync` does not own a caller-provided descriptor.

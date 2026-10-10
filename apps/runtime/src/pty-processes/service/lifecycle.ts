@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, FiberMap } from 'effect';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { InternalEvents } from '../../platform/events/index.js';
@@ -64,6 +64,22 @@ export interface PtyReservationAge {
 // a user happens to try to attach.
 export function isRowReserved(reservations: PtyReservations, ptyProcessId: number) {
   return reservations.terminations.has(ptyProcessId) || reservations.launches.has(ptyProcessId);
+}
+
+// One supervisor fiber per launched process, consuming its backend `events` (see `superviseProcess` in `launch.ts`).
+// A supervisor leaves this map only when its events stream ends, and a stream ends only after the supervisor has
+// handled `Exited` (or without one, when `kill`/`terminate` suppressed it and the killer owns the outcome).
+export type PtySupervisors = FiberMap.FiberMap<number, void, never>;
+
+// The exit-in-flight window. A backend learns about an exit in its own callback, stops reporting the process as live
+// there, and only enqueues `Exited`; the supervisor persists it on a later scheduler turn. In between the row still
+// reads `running` while `inspect` answers `missing` and `attach` answers "not live". So while a row's supervisor is
+// still present, a `missing` verdict is not evidence that the process vanished: the supervisor is about to record the
+// real exit (code, signal), and a generic `runtime_ephemeral_lost`/`backend_process_missing` written first would win
+// permanently under terminal immutability. Only that verdict defers: the poller still reconciles a supervised row
+// whose backend answers `alive`.
+export function isExitPending(supervisors: PtySupervisors, ptyProcessId: number) {
+  return FiberMap.hasUnsafe(supervisors, ptyProcessId);
 }
 
 // The poller's variant: same membership answer, plus the age report the fixed
@@ -335,7 +351,7 @@ function persistExitOnce(
 }
 
 function logPersistFailure(message: string, ptyProcessId: number, error: unknown) {
-  return Effect.logError(message).pipe(
+  return Effect.logWarning(message).pipe(
     Effect.annotateLogs({ ptyProcessId, cause: describeOperationalCause(error) }),
   );
 }

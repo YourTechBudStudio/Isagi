@@ -10,6 +10,7 @@ import { runScoped } from '@isagi/testing';
 
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { withApiServer } from '../../platform/http/testing.js';
+import { EntityLock } from '../../platform/locks/index.js';
 import { LoopbackPortProbe, LoopbackPortUnavailable } from '../../platform/net/index.js';
 import { DatabaseError, DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -265,6 +266,8 @@ export interface CommandRepositoryOptions {
   // that the launch performed no socket IO. A test that wants allocation builds
   // its own `commandPortProbe(...)` and keeps the `calls` recorder.
   readonly portProbe?: LoopbackPortProbe['Service'] | undefined;
+  // The lock the command service serializes per-command work on; a fresh `EntityLock.layer` when omitted.
+  readonly entityLock?: Layer.Layer<EntityLock> | undefined;
 }
 
 export async function runCommandService(rootPath: string, options: CommandRepositoryOptions = {}) {
@@ -286,6 +289,7 @@ export async function runCommandServiceEffect<A>(
     CommandService.pipe(
       Effect.flatMap(effect),
       Effect.provide(CommandService.layerNoDeps),
+      Effect.provide(options.entityLock ?? EntityLock.layer),
       Effect.provide(Layer.mock(ProjectRepository)(repository(rootPath))),
       Effect.provide(Layer.mock(CommandRepository)(commandRepository(options))),
       Effect.provide(

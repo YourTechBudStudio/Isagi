@@ -35,7 +35,7 @@ Every Isagi package that uses Effect (runtime, desktop, CLI, web, contracts, run
 - **Runtime process entry**: `apps/runtime/src/index.ts` runs `runMain(Layer.launch(MainLayer))`. `runMain` is built in `app/run-main.ts` on the stable core `Runtime.makeRunMain` (SIGINT/SIGTERM interrupt the main fiber; a requested shutdown exits 0, a startup failure prints the startup-failure line and exits 1). There is no production `ManagedRuntime` in the runtime.
 - **Runtime HTTP and WebSocket boundary**: Fastify lives in a scoped `HttpServerLayer` (`app/http-server.ts`); requests and sockets run as fibers in a server-scoped `FiberSet` through `RouteRuntime<R>`, so shutdown interrupts and answers in-flight requests, then closes Fastify, then releases services in reverse order. `platform/http/route-runtime.ts` is the one place a Fastify request becomes a fiber (the endpoint helpers call it); the PTY stream route and the runtime-events socket fork one connection fiber per socket on the same runtime.
 - **Workflow engine**: one bridge file, `workflows/engine/author-bridge.ts`, holds both Effect → Promise (author-facing contexts) and Promise → Effect (calling author code), using a runner captured from the engine scope. The engine (`workflows/engine/service.ts`) runs its run drivers and forked steps on an engine-scoped `FiberSet` runner, because they are started from synchronous code.
-- **Desktop**: one `ManagedRuntime` over the desktop layer (`src/main/desktop-layer.ts`: `RuntimeProcess`, `DesktopUpdater`, `UpdaterDiagnostics`), used only from Electron lifecycle hooks and IPC handlers in `src/main/index.ts`.
+- **Desktop**: one `ManagedRuntime` over the desktop layer (`src/main/desktop-layer.ts`: `RuntimeProcess`, `DesktopUpdater`, `UpdaterDiagnostics`), used only from Electron lifecycle hooks and IPC handlers in `src/main/index.ts`. The one exception, in the same file, is recording an update-install rejection: the installer runs only after that runtime is disposed, so its requirement-free diagnostic effect runs with `Effect.runPromise` and the desktop logger.
 - **CLI**: `apps/cli/src/main.ts` runs `Effect.runPromiseExit`; `bin.ts` calls it. The CLI does not use `runMain`, whose `process.exit` would truncate streamed stdout.
 - **Web**: `lib/state/runtime.ts` (`runApp`, `forkApp`) and `lib/state/registry.ts` (`AtomRegistry.make`). Non-Effect web subsystems receive Promise-returning functions built with `runApp`.
 - **Scripts** at their top-level entry, and **tests** through the shared test helpers.
@@ -83,7 +83,7 @@ Effect 4 is the current stable line. Moving every consumer at once avoids runnin
 - Wire behavior is unchanged except the free-text `data.reason` of `api_request_decoding_failed` and `api_response_encoding_failed`, which now carries v4 schema error text. Codes, statuses and envelope shapes are identical.
 - Runtime log lines become logfmt entries; consumers must not parse log text (the ready line is the protocol).
 - Unstable Effect modules can change in a minor release; the catalog pin keeps that a deliberate, gated upgrade.
-- Tests run through shared helpers (`@isagi/testing` for runtime, desktop and CLI; `lib/state/testing.ts` for web) with fresh layers or registries per test.
+- Tests run through shared helpers (`@isagi/testing` for runtime, desktop, CLI and runtime-client; `lib/state/testing.ts` for web) with fresh layers or registries per test. Partial fakes use `Layer.mock`, except the web's single `RuntimeApi` fake, which `makeFakeRuntimeApi` builds as a shape.
 
 ## Notes
 

@@ -3,7 +3,8 @@ import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import { AgentSessionArtifacts, HarnessLedgerObserver } from '../../../harnesses/index.js';
+import { AgentSessionArtifacts } from '../../../harnesses/index.js';
+import { HarnessLedgerObserverWithInternalsLayerNoDeps } from '../../../harnesses/testing.js';
 import { InternalEvents } from '../../../platform/events/index.js';
 import {
   DataDirectory,
@@ -244,7 +245,7 @@ export function testLayer(dataRoot: string) {
   const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directoryLayer));
   const internalBus = InternalEvents.layer;
   const foreground = PtyForegroundState.layer;
-  const observer = HarnessLedgerObserver.layerNoDeps.pipe(
+  const observer = HarnessLedgerObserverWithInternalsLayerNoDeps.pipe(
     Layer.provide(directoryLayer),
     Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
     Layer.provide(artifacts),

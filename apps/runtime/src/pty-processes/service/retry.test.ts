@@ -50,8 +50,8 @@ test('a failed attempt is logged and retried every delay until it succeeds', () 
       assert.deepEqual(
         logs.lines.map((line) => [line.level, line.message, line.annotations.label]),
         [
-          ['Error', 'PTY persistence retry failed', 'exit ptyProcessId=2'],
-          ['Error', 'PTY persistence retry failed', 'exit ptyProcessId=2'],
+          ['Warn', 'PTY persistence retry failed', 'exit ptyProcessId=2'],
+          ['Warn', 'PTY persistence retry failed', 'exit ptyProcessId=2'],
         ],
       );
     }).pipe(Effect.provide(logs.layer)),
@@ -96,8 +96,8 @@ test('pending launch retries are cancelled when the scope closes', () => {
       assert.deepEqual(
         logs.lines.map((line) => [line.level, line.message]),
         [
-          ['Error', 'PTY persistence retry failed'],
-          ['Error', 'PTY persistence retry failed'],
+          ['Warn', 'PTY persistence retry failed'],
+          ['Warn', 'PTY persistence retry failed'],
           ['Warn', 'Abandoning PTY persistence retry after shutdown'],
         ],
       );

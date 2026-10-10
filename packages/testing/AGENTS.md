@@ -2,7 +2,7 @@
 
 ## What this is
 
-`@isagi/testing` is the private, test-only package every Effect test in the runtime, desktop and CLI uses to run an Effect and to prove nothing leaked. It is a devDependency only and is never imported by production code. The web app uses its own `lib/state/testing.ts` instead, because reactivity timers run on real timers that TestClock cannot drive.
+`@isagi/testing` is the private, test-only package Effect tests use to run an Effect and to prove nothing leaked. Its consumers are the tests of `apps/runtime`, `apps/desktop`, `apps/cli` and `packages/runtime-client` (`requester.test.ts`, `test-support.ts`); each declares it as a devDependency, and production code never imports it. The web app does not use it: web tests use `apps/web/src/lib/state/testing.ts`, because reactivity timers run on real timers that TestClock cannot drive. `packages/contracts` does not use it either. A package that stops importing it removes the devDependency.
 
 ## What it exports
 

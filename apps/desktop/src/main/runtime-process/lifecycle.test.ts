@@ -428,6 +428,71 @@ test('external health failure loads through, retains provenance, and always retu
   );
 });
 
+test('a health check that dies settles start like a failed check', async () => {
+  const external = harness({
+    target: { ownership: 'external', url: 'localhost:4100' },
+    checkHealth: () => Effect.die(new TypeError('Invalid URL')),
+  });
+  await external.run((process) =>
+    Effect.gen(function* () {
+      const started = yield* Effect.forkChild(process.start);
+      yield* settle;
+      assert.ok(started.pollUnsafe(), 'start must settle');
+      yield* Fiber.join(started);
+      const snapshot = yield* snapshotOf(process);
+      assert.equal(snapshot.state, 'unreachable');
+      assert.equal(
+        snapshot.state === 'unreachable' ? snapshot.reason : undefined,
+        'external_health_check_failed',
+      );
+      assert.equal(yield* process.url, 'localhost:4100');
+      assert.deepEqual(external.logs, [
+        { stream: 'stderr', payload: '[external] health check failed: Invalid URL\n' },
+      ]);
+    }),
+  );
+
+  const managed = harness({ checkHealth: () => Effect.die(new Error('health crashed')) });
+  await managed.run((process) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.forkChild(Effect.result(process.start));
+      yield* settle;
+      ready(managed.child);
+      const unhealthy = yield* Fiber.join(result);
+      assert.equal(failureReason(unhealthy), 'health_check_failed');
+      assert.equal(
+        Result.isFailure(unhealthy) ? unhealthy.failure.diagnostic.message : undefined,
+        'health crashed',
+      );
+      assert.equal((yield* snapshotOf(process)).state, 'failed');
+      yield* settle;
+      assert.deepEqual(managed.signals, ['SIGTERM']);
+    }),
+  );
+});
+
+test('a defect in the supervising fiber is published as a terminal failure, never a hang', async () => {
+  const subject = harness();
+  subject.child.stdout.on = (() => {
+    throw new Error('listener rejected');
+  }) as typeof subject.child.stdout.on;
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const started = yield* Effect.forkChild(Effect.result(process.start));
+      yield* settle;
+      assert.ok(started.pollUnsafe(), 'start must settle');
+      const result = yield* Fiber.join(started);
+      assert.equal(failureReason(result), 'process_error');
+      assert.equal(
+        Result.isFailure(result) ? result.failure.diagnostic.message : undefined,
+        'listener rejected',
+      );
+      const snapshot = yield* snapshotOf(process);
+      assert.equal(snapshot.state === 'failed' ? snapshot.reason : undefined, 'process_error');
+    }),
+  );
+});
+
 test('a stop that outlives SIGKILL abandons observation and releases the child', async () => {
   const subject = harness({ exitOnTerm: false, exitOnKill: false });
   await subject.run((process) =>

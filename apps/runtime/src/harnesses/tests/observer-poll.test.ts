@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, Ref } from 'effect';
+import { Context, Effect, Layer, Option, Ref } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import { runWithTestClock } from '@isagi/testing';
+import { runScoped, runWithTestClock } from '@isagi/testing';
 
 import { InternalEvents } from '../../platform/events/index.js';
 import { AgentSessionArtifacts } from '../ledger.js';
 import { HarnessObservationTargets } from '../observation-targets.js';
 import { HarnessLedgerObserver } from '../observer.service.js';
+import {
+  HarnessLedgerObserverInternals,
+  HarnessLedgerObserverWithInternalsLayerNoDeps,
+} from '../testing.js';
 
 test('the harness observer polls live sessions once per interval and never after its scope closes', () =>
   runWithTestClock(
@@ -49,5 +53,33 @@ test('the harness observer polls live sessions once per interval and never after
 
       yield* TestClock.adjust('10 seconds');
       assert.equal(yield* Ref.get(livePolls), 3);
+    }),
+  ));
+
+test('the production observer layer keeps its poll seam out of the service graph', () =>
+  runScoped(
+    Effect.gen(function* () {
+      const dependencies = Layer.mergeAll(
+        Layer.mock(HarnessObservationTargets)({ list: () => Effect.succeed([]) }),
+        Layer.mock(AgentSessionArtifacts)({
+          paths: ({ agentSessionId }) => ({
+            directory: `/unused/${agentSessionId}`,
+            metadataPath: `/unused/${agentSessionId}/harness.json`,
+          }),
+          listAgentSessionIds: Effect.succeed([]),
+        }),
+        InternalEvents.layer,
+      );
+      const production = yield* Layer.build(
+        HarnessLedgerObserver.layerNoDeps.pipe(Layer.provide(dependencies)),
+      );
+      assert.ok(Option.isSome(Context.getOption(production, HarnessLedgerObserver)));
+      assert.ok(Option.isNone(Context.getOption(production, HarnessLedgerObserverInternals)));
+
+      const fixture = yield* Layer.build(
+        HarnessLedgerObserverWithInternalsLayerNoDeps.pipe(Layer.provide(dependencies)),
+      );
+      assert.ok(Option.isSome(Context.getOption(fixture, HarnessLedgerObserver)));
+      assert.ok(Option.isSome(Context.getOption(fixture, HarnessLedgerObserverInternals)));
     }),
   ));

@@ -275,6 +275,41 @@ test('a reconnect re-reads live run data but not immutable reads', async (t) => 
   assert.equal(structures.calls.length, 1);
 });
 
+test('a reconnect re-reads every held live read exactly once, on the shared live key', async (t) => {
+  const runs = scripted(ok(workflowRunDetailFixture()));
+  const events = scripted(ok(page(1)));
+  const executions = scripted(
+    ok({ execution: workflowExecutionDetailFixture({ executionId: 5 }) }),
+  );
+  const lists = scripted(ok({ items: [], nextCursor: null }));
+  const { send, hold } = session(t, {
+    getWorkflowRun: runs.endpoint,
+    listWorkflowEvents: events.endpoint,
+    getWorkflowExecution: executions.endpoint,
+    listWorkflowCheckpoints: lists.endpoint,
+  });
+  // Six observed reads registered on one key, two of them from the same family.
+  hold(workflowRunAtom(1));
+  hold(workflowRunAtom(2));
+  hold(workflowEventsAtom(1));
+  hold(workflowExecutionAtom(5));
+  hold(workflowCheckpointListAtom(1));
+  hold(workflowCheckpointListAtom(2));
+  await flush();
+  assert.deepEqual(
+    [runs.calls.length, events.calls.length, executions.calls.length, lists.calls.length],
+    [2, 1, 1, 2],
+  );
+
+  await send({ type: 'connected' });
+  await flush();
+
+  assert.deepEqual(
+    [runs.calls.length, events.calls.length, executions.calls.length, lists.calls.length],
+    [4, 2, 2, 4],
+  );
+});
+
 test('an event for a run nobody holds starts no read', async (t) => {
   const runs = scripted(ok(workflowRunDetailFixture()));
   const events = scripted(ok(page(1)));

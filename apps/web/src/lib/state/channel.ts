@@ -3,7 +3,13 @@
  */
 import { Atom, type AtomRegistry } from 'effect/reactivity';
 
-/** A synchronous publish/subscribe channel. Listeners added during a publish see the next one. */
+/**
+ * A synchronous publish/subscribe channel. Listeners added during a publish see the next one.
+ *
+ * Listeners are isolated: one that throws is logged and the others still run, and `publish` never
+ * throws. Publishers are reads and event handlers (the surface-detail query, workspace commits, the
+ * runtime-events connection) whose own outcome must not depend on a subscriber's bug.
+ */
 export interface Channel<A> {
   readonly publish: (value: A) => void;
   readonly subscribe: (listener: (value: A) => void) => () => void;
@@ -13,7 +19,13 @@ export const makeChannel = <A>(): Channel<A> => {
   const listeners = new Set<(value: A) => void>();
   return {
     publish: (value) => {
-      for (const listener of [...listeners]) listener(value);
+      for (const listener of [...listeners]) {
+        try {
+          listener(value);
+        } catch (error) {
+          console.error('[state] channel listener failed', error);
+        }
+      }
     },
     subscribe: (listener) => {
       listeners.add(listener);

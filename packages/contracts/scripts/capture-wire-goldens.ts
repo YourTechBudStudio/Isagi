@@ -1,137 +1,146 @@
 /**
- * Captures the contract wire goldens checked by `src/wire-goldens.test.ts`.
+ * Records a deliberate, reviewed wire change in the frozen contract wire goldens
+ * (`test/wire-goldens/wire-goldens.json`, checked by `src/wire-goldens.test.ts`).
  *
- * For every Schema exported by `@isagi/contracts` and every schema part of every endpoint in
- * `apiEndpoints`, it stores a few small JSON wire samples, their re-encoded output, the schema's
- * `.literals`, and the accept/reject decision (plus re-encoded output) for deterministic adversarial
- * probes. The output is seeded, so two captures of the same contracts are byte-identical.
+ * Usage (from the repo root):
  *
- * Usage: `pnpm -C packages/contracts exec tsx scripts/capture-wire-goldens.ts`
+ *   pnpm -C packages/contracts exec tsx scripts/capture-wire-goldens.ts --only <name>[,<name>...]
+ *     Recaptures only the named goldens (export names or `endpoint:<domain>.<key>.<part>`) and
+ *     merges them into the frozen file. Every other entry and the file's `capturedWith` stamp are
+ *     kept; a recaptured entry records its own `capturedWith`. Nothing is written when a name does
+ *     not resolve or a schema cannot be sampled.
  *
- * The goldens are a frozen oracle: only recapture when a wire change is deliberate and reviewed.
+ *   pnpm -C packages/contracts exec tsx scripts/capture-wire-goldens.ts [--out <file>]
+ *     Captures every schema. Without `--out` it only compares the result with the frozen file and
+ *     lists the entries that differ; it never overwrites the frozen file. With `--out` it writes the
+ *     full capture to that file (for inspection; not the frozen file).
+ *
+ * Most frozen entries were captured with effect@3.21.2, whose sample generator differs from v4's,
+ * so a full v4 recapture differs from almost every entry. That is why recapture is per schema.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
-import { Arbitrary, FastCheck, Schema } from 'effect';
+import {
+  captureAll,
+  captureGolden,
+  collectSchemas,
+  goldensFile,
+  installedEffect,
+  mergeGoldens,
+  serializeGoldens,
+  type WireGolden,
+  type WireGoldensFile,
+} from './wire-golden-capture.js';
 
-import * as contracts from '../src/index.js';
-import { applyMutation, mutationsOf, type Mutation } from '../src/testing/wire-golden-mutations.js';
-
-const SEED = 20261009;
-const SAMPLES = 3;
-const CANDIDATES = 40;
-const MAX_SAMPLE_BYTES = 2_000;
-const ENDPOINT_PARTS = [
-  'params',
-  'query',
-  'body',
-  'output',
-  'errors',
-  'clientMessages',
-  'serverMessages',
-] as const;
-
-const outDir = new URL('../test/wire-goldens/', import.meta.url);
-const outFile = new URL('wire-goldens.json', outDir);
-
-type AnySchema = Schema.Schema.AnyNoContext;
-type Probe = {
-  readonly sample: number;
-  readonly mutation: Mutation;
-  readonly ok: boolean;
-  readonly output?: unknown;
-};
-type Golden = {
-  readonly name: string;
-  readonly literals?: ReadonlyArray<unknown>;
-  readonly samples: ReadonlyArray<{ readonly wire: unknown; readonly reencoded: unknown }>;
-  readonly probes: ReadonlyArray<Probe>;
-  readonly skipped?: string;
+const fail = (message: string): never => {
+  console.error(message);
+  process.exit(1);
 };
 
-const json = (value: unknown): unknown => JSON.parse(JSON.stringify(value)) as unknown;
+const { values } = parseArgs({
+  options: { only: { type: 'string' }, out: { type: 'string' } },
+  strict: true,
+});
 
-/** Decode then re-encode; any throw in either direction counts as a reject. */
-const decode = (schema: AnySchema, input: unknown): { ok: boolean; output?: unknown } => {
+const frozenPath = fileURLToPath(goldensFile);
+const frozenText = readFileSync(frozenPath, 'utf8');
+const frozen = JSON.parse(frozenText) as WireGoldensFile;
+const frozenByName = new Map(frozen.goldens.map((golden) => [golden.name, golden]));
+const summary = (golden: WireGolden | undefined): string =>
+  golden === undefined
+    ? 'absent'
+    : `${golden.samples.length} samples, ${golden.probes.length} probes${golden.capturedWith ? `, ${golden.capturedWith}` : ''}`;
+
+if (values.only !== undefined) {
+  if (values.out !== undefined) fail('--only always writes the frozen file; drop --out');
+  const names = [
+    ...new Set(
+      values.only
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (names.length === 0) fail('--only needs at least one golden name');
+  const schemas = collectSchemas();
+  const unknown = names.filter((name) => !schemas.has(name));
+  if (unknown.length > 0) {
+    fail(
+      `not a captured schema: ${unknown.join(', ')}. A schema that no longer exists goes in test/wire-goldens/renames.json or removed.json.`,
+    );
+  }
+  // The same schema object is often captured under several names (an export and the endpoint
+  // parts that use it); recapturing only some of them leaves the others on the old samples.
+  const aliases = [...schemas]
+    .filter(
+      ([name, schema]) => !names.includes(name) && names.some((n) => schemas.get(n) === schema),
+    )
+    .map(([name]) => name);
+  if (aliases.length > 0) {
+    console.log(`note: the same schema is also captured as ${aliases.join(', ')}`);
+  }
+  const recaptured = names.map((name) => captureGolden(name, schemas.get(name)!));
+  let merged: WireGoldensFile;
   try {
-    const decoded: unknown = Schema.decodeUnknownSync(schema)(input);
-    return { ok: true, output: json(Schema.encodeSync(schema)(decoded)) };
-  } catch {
-    return { ok: false };
-  }
-};
-
-/** Names match the resolver in `src/wire-goldens.test.ts`: export name or `endpoint:<domain>.<key>.<part>`. */
-const collect = (): Map<string, AnySchema> => {
-  const found = new Map<string, AnySchema>();
-  for (const [name, value] of Object.entries(contracts)) {
-    if (Schema.isSchema(value)) found.set(name, value as AnySchema);
-  }
-  const endpoints = contracts.apiEndpoints as unknown as Record<string, Record<string, unknown>>;
-  for (const [domain, group] of Object.entries(endpoints)) {
-    const entries =
-      'method' in group || 'path' in group ? [[domain, group]] : Object.entries(group);
-    for (const [key, endpoint] of entries as Array<[string, Record<string, unknown>]>) {
-      for (const part of ENDPOINT_PARTS) {
-        const schema = endpoint[part];
-        if (Schema.isSchema(schema))
-          found.set(`endpoint:${domain}.${key}.${part}`, schema as AnySchema);
-      }
-    }
-  }
-  return found;
-};
-
-const capture = (name: string, schema: AnySchema): Golden => {
-  const literals = (schema as { readonly literals?: unknown }).literals;
-  // Draw many, keep the SAMPLES smallest JSON-representable ones: small fixtures, same shape coverage.
-  const candidates = FastCheck.sample(Arbitrary.make(schema), { seed: SEED, numRuns: CANDIDATES })
-    .map((value) => json(Schema.encodeSync(schema)(value)))
-    .map((wire) => ({ wire, size: JSON.stringify(wire).length }))
-    .filter((candidate) => candidate.size <= MAX_SAMPLE_BYTES)
-    .sort((a, b) => a.size - b.size);
-  const seen = new Set<string>();
-  const samples: Array<{ wire: unknown; reencoded: unknown }> = [];
-  const probes: Probe[] = [];
-  for (const { wire } of candidates) {
-    const key = JSON.stringify(wire);
-    if (seen.has(key) || samples.length >= SAMPLES) continue;
-    seen.add(key);
-    const roundTrip = decode(schema, wire);
-    if (!roundTrip.ok) continue; // Not representable as JSON (e.g. NaN, -0): not a wire value.
-    const index = samples.push({ wire, reencoded: roundTrip.output }) - 1;
-    for (const mutation of mutationsOf(wire)) {
-      probes.push({ sample: index, mutation, ...decode(schema, applyMutation(wire, mutation)) });
-    }
-  }
-  return { name, ...(Array.isArray(literals) ? { literals } : {}), samples, probes };
-};
-
-const goldens: Golden[] = [];
-for (const [name, schema] of [...collect()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-  try {
-    goldens.push(capture(name, schema));
+    merged = mergeGoldens(frozen, recaptured, installedEffect());
   } catch (error) {
-    const reason = String(error instanceof Error ? error.message : error).split('\n')[0] ?? '';
-    goldens.push({ name, samples: [], probes: [], skipped: reason });
+    merged = fail(`nothing written: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const mergedByName = new Map(merged.goldens.map((golden) => [golden.name, golden]));
+  for (const name of names) {
+    const before = frozenByName.get(name);
+    const after = mergedByName.get(name);
+    const unchanged = JSON.stringify(before) === JSON.stringify(after);
+    console.log(`${name}: ${unchanged ? 'unchanged' : `${summary(before)} -> ${summary(after)}`}`);
+  }
+  const text = serializeGoldens(merged);
+  if (text === frozenText) {
+    console.log('wire-goldens.json is unchanged');
+  } else {
+    writeFileSync(frozenPath, text);
+    console.log(`wrote ${frozenPath}`);
+  }
+} else {
+  const full = captureAll();
+  const skipped = full.goldens.filter((golden) => golden.skipped !== undefined);
+  const sampleCount = full.goldens.reduce((n, golden) => n + golden.samples.length, 0);
+  const probeCount = full.goldens.reduce((n, golden) => n + golden.probes.length, 0);
+  console.log(
+    `${full.capturedWith}: schemas=${full.goldens.length} samples=${sampleCount} probes=${probeCount} skipped=${skipped.length}`,
+  );
+  for (const golden of skipped) console.log(`  skipped ${golden.name}: ${golden.skipped}`);
+  if (values.out !== undefined) {
+    const outPath = resolve(process.cwd(), values.out);
+    if (outPath === frozenPath) fail('--out must not be the frozen file; use --only <name,...>');
+    writeFileSync(outPath, serializeGoldens(full));
+    console.log(`wrote ${outPath}`);
+  } else {
+    const capturedByName = new Map(full.goldens.map((golden) => [golden.name, golden]));
+    const names = [...new Set([...frozenByName.keys(), ...capturedByName.keys()])].sort();
+    const differing = names.filter((name) => {
+      const before = frozenByName.get(name);
+      const after = capturedByName.get(name);
+      if (before === undefined || after === undefined) return true;
+      const { capturedWith: _stamp, ...stored } = before;
+      return JSON.stringify(stored) !== JSON.stringify(after);
+    });
+    if (differing.length === 0) {
+      console.log('every frozen golden is reproduced byte-identically');
+    } else {
+      console.log(
+        `${differing.length} of ${names.length} goldens differ from a recapture (frozen file not written):`,
+      );
+      for (const name of differing) {
+        console.log(
+          `  ${name}: frozen ${summary(frozenByName.get(name))}; recapture ${summary(capturedByName.get(name))}`,
+        );
+      }
+      console.log(
+        'Recapture only deliberately changed schemas with --only <name,...> after the wire change is reviewed.',
+      );
+    }
   }
 }
-
-const effectVersion = (createRequire(import.meta.url)('effect/package.json') as { version: string })
-  .version;
-mkdirSync(outDir, { recursive: true });
-writeFileSync(
-  outFile,
-  `${JSON.stringify({ capturedWith: `effect@${effectVersion}`, seed: SEED, goldens })}\n`,
-);
-
-const skipped = goldens.filter((golden) => golden.skipped !== undefined);
-const sampleCount = goldens.reduce((n, golden) => n + golden.samples.length, 0);
-const probeCount = goldens.reduce((n, golden) => n + golden.probes.length, 0);
-console.log(
-  `schemas=${goldens.length} samples=${sampleCount} probes=${probeCount} skipped=${skipped.length}`,
-);
-for (const golden of skipped) console.log(`  skipped ${golden.name}: ${golden.skipped}`);
-console.log(`wrote ${fileURLToPath(outFile)}`);

@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, FiberSet, Layer, Result, Semaphore, Stream } from 'effect';
+import { Context, Duration, Effect, FiberSet, Layer, Result, Stream } from 'effect';
 
 import type {
   CommandActionOutput,
@@ -14,6 +14,7 @@ import {
   nextRuntimeEventEnvelope,
   RuntimeEvents,
 } from '../platform/events/index.js';
+import { EntityLock } from '../platform/locks/index.js';
 import { LoopbackPortProbe } from '../platform/net/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
 import { loadWorktreeCommandCatalog, ProjectRepository } from '../projects/index.js';
@@ -74,7 +75,19 @@ const make = Effect.gen(function* () {
   const publicEvents = yield* RuntimeEvents;
   const internalEvents = yield* InternalEvents;
   const settings = yield* CommandSettings;
-  const locks: CommandLocks = new Map();
+  const entityLock = yield* EntityLock;
+
+  // One mutex per (worktree, command) so concurrent run/stop/restart/lifecycle actions on the same command serialize,
+  // while different commands stay parallel. The shared `EntityLock` owns the semaphores (interruption-safe: an aborted
+  // request releases its permit on the way out); commands take no lock-held witness yet.
+  const withCommandLock = <A, E, R>(
+    input: { readonly worktreeId: number; readonly commandName: string },
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    entityLock.withLock(
+      { kind: 'command', worktreeId: input.worktreeId, commandName: input.commandName },
+      () => effect,
+    );
 
   const publishCommandChanged = (worktreeId: number, commandName: string, status: CommandStatus) =>
     publicEvents.publish({
@@ -150,7 +163,7 @@ const make = Effect.gen(function* () {
     return result;
   });
 
-  // The launch flow lives in `commands.launch.ts`; the layer keeps ownership of
+  // The launch flow lives in `launch.ts`; the layer keeps ownership of
   // the lock, the event bus, and every path that ends a live incarnation.
   const { runCommand } = makeCommandLauncher({
     projectRepository,
@@ -432,13 +445,13 @@ const make = Effect.gen(function* () {
     pty,
     publishCommandChanged,
     finalizeCommandRunByRun,
-    withLock: (target, effect) => withCommandLock(locks, target, effect),
+    withLock: withCommandLock,
   };
 
   // The worktree-level passes — postCreate, deactivation, activation,
-  // preDelete, and the teardown sweep — live in `commands.lifecycle.ts`. They
+  // preDelete, and the teardown sweep — live in `lifecycle.ts`. They
   // receive the capabilities they need rather than resolving anything of their
-  // own, so this layer stays the sole owner of the lock registry and the bus.
+  // own, so this layer stays the one place that names the command lock and owns the bus.
   const lifecycle = makeCommandLifecycle({
     projectRepository,
     commandRepository,
@@ -446,7 +459,7 @@ const make = Effect.gen(function* () {
     stopCommand,
     stopManagedCommand,
     cleanupIncarnations: (input) => cleanupCommandIncarnations(convergenceDependencies, input),
-    withLock: (target, effect) => withCommandLock(locks, target, effect),
+    withLock: withCommandLock,
   });
 
   const reconcilePtyProcessEvent = Effect.fnUntraced(function* (event: PtyCommandEvent) {
@@ -465,7 +478,6 @@ const make = Effect.gen(function* () {
     const run = yield* commandRepository.findRunByPtyProcess(event.ptyProcessId);
     if (!run) return;
     yield* withCommandLock(
-      locks,
       { worktreeId: run.worktreeId, commandName: run.commandName },
       finalizeCommandRunByPty({
         worktreeId: run.worktreeId,
@@ -591,14 +603,13 @@ const make = Effect.gen(function* () {
       } satisfies CommandLogMetadataOutput;
     }),
     run: Effect.fn('CommandService.run')(function* (input) {
-      return yield* withCommandLock(locks, input, runCommand(input));
+      return yield* withCommandLock(input, runCommand(input));
     }),
     stop: Effect.fn('CommandService.stop')(function* (input) {
-      return yield* withCommandLock(locks, input, stopCommand(input, { cause: 'user' }));
+      return yield* withCommandLock(input, stopCommand(input, { cause: 'user' }));
     }),
     restart: Effect.fn('CommandService.restart')(function* (input) {
       return yield* withCommandLock(
-        locks,
         input,
         stopCommand(input, { cause: 'user', suppressChangedEvent: true }).pipe(
           Effect.andThen(runCommand(input)),
@@ -664,6 +675,7 @@ export class CommandService extends Context.Service<
   static readonly layer = CommandService.layerNoDeps.pipe(
     Layer.provide([
       CommandRepository.layer,
+      EntityLock.layer,
       InternalEvents.layer,
       LoopbackPortProbe.layer,
       ProjectRepository.layer,
@@ -671,33 +683,6 @@ export class CommandService extends Context.Service<
       RuntimeEvents.layer,
     ]),
   );
-}
-
-// One mutex per (worktree, command) so concurrent run/stop/restart/lifecycle
-// actions on the same command serialize, while different commands stay parallel.
-// An Effect semaphore (rather than a hand-rolled promise chain) keeps the lock
-// interruption-safe: an aborted request releases its permit on the way out.
-// Entries are kept for the runtime's lifetime (one tiny semaphore per distinct
-// command key ever seen, including after its worktree is deleted) rather than
-// reference-counted away — a deliberate, negligible, desktop-scale tradeoff that
-// avoids racing entry teardown against an in-flight lock.
-type CommandLocks = Map<string, Semaphore.Semaphore>;
-
-function withCommandLock<A, E, R>(
-  locks: CommandLocks,
-  input: { readonly worktreeId: number; readonly commandName: string },
-  effect: Effect.Effect<A, E, R>,
-) {
-  const key = `${input.worktreeId}\0${input.commandName}`;
-  // The lookup-or-create is one synchronous step, so two fibers can never create two locks for one command.
-  return Effect.suspend(() => {
-    let semaphore = locks.get(key);
-    if (!semaphore) {
-      semaphore = Semaphore.makeUnsafe(1);
-      locks.set(key, semaphore);
-    }
-    return semaphore.withPermits(1)(effect);
-  });
 }
 
 // Which durable states keep a command visible in the removed/managed

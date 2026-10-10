@@ -17,7 +17,7 @@ import { PtyRepository } from '../repository.js';
 import { reconcilePersistedProcesses } from '../service.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from '../service/launch.js';
-import type { PtyReservations } from '../service/lifecycle.js';
+import type { PtyReservations, PtySupervisors } from '../service/lifecycle.js';
 import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
 import {
   PtyStartError,
@@ -68,6 +68,7 @@ interface Harness {
   readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly reservations: PtyReservations;
+  readonly supervisors: PtySupervisors;
   readonly sessionsPath: string;
   readonly dependencies: (
     backend: PtyBackendShape,
@@ -96,6 +97,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
           repository,
           bus,
           reservations,
+          supervisors,
           sessionsPath: paths.paths.sessionsPath,
           dependencies: (backend, override) => ({
             repository: override ?? repository,
@@ -213,6 +215,7 @@ test('a poller pass between allocate and start leaves the row starting', async (
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
+        harness.supervisors,
         { startup: false },
       );
 
@@ -351,6 +354,7 @@ test('cancelling mid-spawn never terminalizes off an absence observation', async
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
+        harness.supervisors,
         { startup: false },
       );
       const adopted = yield* harness.repository.findProcess(allocation.ptyProcessId);
@@ -381,6 +385,7 @@ test('a hung spawn keeps its reservation and stays out of the poller', async () 
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
+        harness.supervisors,
         { startup: false },
       );
 
@@ -506,6 +511,7 @@ test('a post-launch persistence failure returns metadata without killing', async
         catalogWith(backend),
         harness.bus.service,
         harness.reservations,
+        harness.supervisors,
         { startup: false },
       );
       const healed = yield* harness.repository.findProcess(allocation.ptyProcessId);

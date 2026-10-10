@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Fiber, Layer } from 'effect';
+import { Cause, Effect, Exit, Fiber, Layer, Option } from 'effect';
 import { FetchHttpClient, type HttpClient } from 'effect/http';
 import { TestClock } from 'effect/testing';
 
 import { runWithTestClock } from '@isagi/testing';
 
-import { ServerWaitFailed, waitForRuntimeHealth, waitForWebServer } from './boot.js';
+import {
+  InvalidRuntimeUrl,
+  ServerWaitFailed,
+  waitForRuntimeHealth,
+  waitForWebServer,
+} from './boot.js';
 
 const runtimeUrl = 'http://127.0.0.1:43129';
 const healthUrl = `${runtimeUrl}/api/v1/health`;
@@ -157,6 +162,17 @@ test('a hung runtime health attempt times out after one second', async () => {
     `Timed out waiting for ${healthUrl}: ${healthUrl} request timed out after 1000ms`,
   );
   assert.equal(server.seen.length, 40);
+});
+
+test('a runtime URL that is not a valid base fails at once, as a failure, without echoing it', async () => {
+  const server = fakeServer(() => json(healthy));
+  const exit = await server.run(Effect.exit(waitForRuntimeHealth('localhost:4100')));
+  assert.ok(Exit.isFailure(exit));
+  const failure = Cause.findErrorOption(exit.cause);
+  assert.ok(Option.isSome(failure), 'a typed failure, not a defect');
+  assert.ok(failure.value instanceof InvalidRuntimeUrl);
+  assert.equal(failure.value.message, 'Invalid URL');
+  assert.deepEqual(server.seen, []);
 });
 
 test('the web server wait retries non-2xx answers and sends a bare GET', async () => {

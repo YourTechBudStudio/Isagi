@@ -1,7 +1,7 @@
 /**
  * Deterministic adversarial inputs for the contract wire goldens.
  *
- * Shared by the capture script (`scripts/capture-wire-goldens.ts`) and the golden test
+ * Shared by the capture tool (`scripts/wire-golden-capture.ts`) and the golden test
  * (`src/wire-goldens.test.ts`). The capture stores each probe's accept/reject decision; the test
  * replays the same mutation against the current schema. Keep this file pure (no imports) and never
  * change an existing mutation: the stored goldens identify probes by these values.

@@ -36,10 +36,12 @@ import { recordForegroundCommandState, transitionProcessAndPublish } from './ser
 import { collectPtyGarbage } from './service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from './service/launch.js';
 import {
+  isExitPending,
   isRowReserved,
   skipReservedRow,
   type DurablePtyTerminationReason,
   type PtyReservations,
+  type PtySupervisors,
 } from './service/lifecycle.js';
 import {
   readPtyLogTail,
@@ -129,11 +131,11 @@ const make = Effect.gen(function* () {
   //   retry (drained last, while the repository is still open) -> supervisors -> shutdown sweep -> periodic loops
   //   (stopped first).
   const retry = yield* makePersistenceRetry;
-  const supervisors = yield* FiberMap.make<number, void, never>();
+  const supervisors: PtySupervisors = yield* FiberMap.make<number, void, never>();
 
   mkdirSync(directory.paths.sessionsPath, { recursive: true });
   yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-  yield* reconcilePersistedProcesses(repository, catalog, eventBus, reservations, {
+  yield* reconcilePersistedProcesses(repository, catalog, eventBus, reservations, supervisors, {
     startup: true,
   });
   const collectGarbage = collectPtyGarbage(
@@ -153,6 +155,7 @@ const make = Effect.gen(function* () {
     eventBus,
     activeAttachments,
     terminations: reservations.terminations,
+    supervisors,
     retry,
   };
 
@@ -218,7 +221,7 @@ const make = Effect.gen(function* () {
   yield* runPeriodically(
     'PTY status polling',
     settings.statusPollInterval,
-    reconcilePersistedProcesses(repository, catalog, eventBus, reservations, {
+    reconcilePersistedProcesses(repository, catalog, eventBus, reservations, supervisors, {
       startup: false,
     }),
   );
@@ -267,6 +270,7 @@ const make = Effect.gen(function* () {
         activeAttachments,
         pendingAttachments,
         reservations,
+        supervisors,
         input,
       );
     }),
@@ -317,15 +321,19 @@ const make = Effect.gen(function* () {
     cleanupProcess: Effect.fn('PtyService.cleanupProcess')(function* (input) {
       return yield* cleanupPtyProcess(cleanupDependencies, input);
     }),
-    pin: (input) =>
+    pin: Effect.fn('PtyService.pin')((input) =>
       Effect.sync(() => {
         pinnedPtyProcessIds.add(input.ptyProcessId);
       }),
-    unpin: (input) =>
+    ),
+    unpin: Effect.fn('PtyService.unpin')((input) =>
       Effect.sync(() => {
         pinnedPtyProcessIds.delete(input.ptyProcessId);
       }),
-    isPinned: (input) => Effect.sync(() => pinnedPtyProcessIds.has(input.ptyProcessId)),
+    ),
+    isPinned: Effect.fn('PtyService.isPinned')((input) =>
+      Effect.sync(() => pinnedPtyProcessIds.has(input.ptyProcessId)),
+    ),
     readLogTail: Effect.fn('PtyService.readLogTail')(function* (input) {
       // A caller-side bug, not an operational failure: the only caller
       // passes a fixed constant. Clamping would hide it, and a tagged
@@ -474,6 +482,7 @@ function attachToProcess(
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
   reservations: PtyReservations,
+  supervisors: PtySupervisors,
   input: {
     readonly ptyProcessId: number;
     readonly mode: PtyAttachmentMode;
@@ -531,7 +540,15 @@ function attachToProcess(
         .pipe(Scope.provide(attachScope), Effect.result);
       if (Result.isFailure(attachResult)) {
         yield* release;
-        yield* handleAttachFailure(repository, backend, eventBus, reservations, session, ref);
+        yield* handleAttachFailure(
+          repository,
+          backend,
+          eventBus,
+          reservations,
+          supervisors,
+          session,
+          ref,
+        );
         return yield* new PtyServiceError({
           code: 'backend_attach_failed',
           message: `Could not attach to PTY process ${session.id}.`,
@@ -687,6 +704,7 @@ export function reconcilePersistedProcesses(
   catalog: PtyBackendCatalog['Service'],
   eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
+  supervisors: PtySupervisors,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
@@ -738,6 +756,8 @@ export function reconcilePersistedProcesses(
           });
           break;
         case 'missing':
+          // An exit the backend reported but the supervisor has not persisted yet; its real code wins.
+          if (isExitPending(supervisors, session.id)) break;
           yield* transitionIfChanged(repository, eventBus, session, {
             status: 'failed',
             statusReason:
@@ -754,6 +774,7 @@ function handleAttachFailure(
   backend: PtyBackendShape,
   eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
+  supervisors: PtySupervisors,
   session: PtyProcessRecord,
   ref: BackendSessionRef,
 ) {
@@ -762,6 +783,9 @@ function handleAttachFailure(
     // has no fixed cadence to bound a warning against, so logging here would
     // make diagnostics depend on how often a user tries to attach.
     if (isRowReserved(reservations, session.id)) return;
+    // Equally defer to a supervisor that may hold an exit the backend reported but has not persisted yet: a node-pty
+    // attach fails with "not live" in exactly that window, and the supervisor is about to write the real exit code.
+    if (isExitPending(supervisors, session.id)) return;
     if (session.backend === 'node_pty') {
       yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',

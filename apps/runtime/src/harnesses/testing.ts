@@ -6,21 +6,32 @@ import {
   HarnessLaunchBlocked,
   type HarnessLaunchBlockReason,
 } from './control-plane/service.js';
-import { HarnessLedgerObserverInternals, type HarnessLedgerObserver } from './observer.service.js';
+import {
+  HarnessLedgerObserverInternals,
+  makeHarnessLedgerObserverContext,
+} from './observer.service.js';
 
 /**
- * The observer's poll steps, provided by `HarnessLedgerObserver.layer`/`layerNoDeps` beside the
- * observer itself. Fixture tests drive a poll pass through it instead of waiting for the observer's
- * own interval.
+ * The observer's poll steps. Fixture tests drive a poll pass through it instead of waiting for the
+ * observer's own interval; `HarnessLedgerObserverWithInternalsLayerNoDeps` provides it.
  */
 export { HarnessLedgerObserverInternals };
 
 /**
+ * `HarnessLedgerObserver.layerNoDeps` plus the observer's poll steps (`HarnessLedgerObserverInternals`),
+ * built from the same instance. Test-only: the production layers provide the observer alone, so the
+ * seam stays out of the runtime's service graph.
+ */
+export const HarnessLedgerObserverWithInternalsLayerNoDeps = Layer.effectContext(
+  makeHarnessLedgerObserverContext,
+);
+
+/**
  * Drives one observer poll pass (every live session) or, given an id, that one session's poll step.
- * `observer` names the observer under test; the steps come from the layer that built it.
+ * The steps come from the `HarnessLedgerObserverInternals` in context, which
+ * `HarnessLedgerObserverWithInternalsLayerNoDeps` provides beside the observer under test.
  */
 export function pollHarnessLedgerObserverForTest(
-  _observer: HarnessLedgerObserver['Service'],
   agentSessionId?: number,
 ): Effect.Effect<void, DatabaseError, HarnessLedgerObserverInternals> {
   return Effect.flatMap(HarnessLedgerObserverInternals, (internals) =>

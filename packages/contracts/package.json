@@ -18,7 +18,6 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@isagi/testing": "workspace:*",
     "@types/node": "^24.10.1",
     "@yourtechbudstudio/isagi-workflow-verifier": "workspace:0.1.1",
     "tsx": "^4.21.0",

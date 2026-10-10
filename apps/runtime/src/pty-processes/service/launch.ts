@@ -22,7 +22,13 @@ import {
 import type { ActiveAttachment } from './attachments.js';
 import { backendMetadataForLaunch } from './backend-ref.js';
 import { recordForegroundCommandState, transitionProcessByIdAndPublish } from './events.js';
-import { handleExit, releaseLaunch, reserveLaunch, type PtyReservations } from './lifecycle.js';
+import {
+  handleExit,
+  releaseLaunch,
+  reserveLaunch,
+  type PtyReservations,
+  type PtySupervisors,
+} from './lifecycle.js';
 import type { PtyPersistenceRetry } from './retry.js';
 import { spawnFailureMessage } from './runtime-namespace.js';
 import { prepareShellIntegration, refWithShellIntegrationToken } from './shell-integration.js';
@@ -40,9 +46,10 @@ export interface PtyLaunchDependencies {
   readonly retry: PtyPersistenceRetry;
   /**
    * One supervisor fiber per launched process, consuming its backend `events`. Owned by the PTY service scope, so a
-   * supervisor outlives the request that launched the process and is interrupted when the service shuts down.
+   * supervisor outlives the request that launched the process and is interrupted when the service shuts down. Its
+   * presence also tells observers that an exit may still be in flight (`isExitPending`).
    */
-  readonly supervisors: FiberMap.FiberMap<number, void, never>;
+  readonly supervisors: PtySupervisors;
   readonly reservations: PtyReservations;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
@@ -368,7 +375,7 @@ function superviseProcess(
           event.state,
         );
       case 'LogAppendFailed':
-        return yield* Effect.logError('Failed to append PTY output').pipe(
+        return yield* Effect.logWarning('Failed to append PTY output').pipe(
           Effect.annotateLogs({ cause: describeOperationalCause(event.cause) }),
         );
       case 'Exited':

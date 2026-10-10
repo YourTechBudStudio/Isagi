@@ -120,9 +120,10 @@ async function outcome(page: Page, id: string) {
 async function openPalette(page: Page) {
   await page.keyboard.press('Meta+k');
   await expect(palette(page)).toBeVisible();
-  // The palette focuses its input in a passive effect after the open render, and
-  // its keys (Escape included) are handled on the panel. A key pressed before that
-  // lands on the document body and is lost, leaving the palette open.
+  // The palette takes focus in the same commit as the open (layout effects; the
+  // early-typing specs in command-palette.spec.ts pin that keys pressed straight
+  // after Mod+K are not lost). This wait is a stability guard for the specs below,
+  // which assert where focus is, not a workaround for lost keys.
   await expect(palette(page).locator('input')).toBeFocused();
 }
 

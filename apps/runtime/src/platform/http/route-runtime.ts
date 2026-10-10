@@ -17,11 +17,12 @@ import type { ApiRouteContext } from './errors.js';
  */
 export interface RouteRuntime<R> {
   /**
-   * Runs `effect` on the server's runtime; aborting `signal` interrupts it. Rejects with the squashed failure, which
-   * for HTTP routes (whose pipeline never fails) can only mean interruption.
+   * Runs `effect` on the server's runtime; aborting `signal` interrupts it. The effect cannot fail: a route maps its
+   * failures to an answer first (`registerApiEndpoint`'s typed `HandlerError` mapping), so a rejection can only mean
+   * interruption (or a defect).
    */
-  readonly runPromise: <A, E = never>(
-    effect: Effect.Effect<A, E, R>,
+  readonly runPromise: <A>(
+    effect: Effect.Effect<A, never, R>,
     options?: { readonly signal?: AbortSignal | undefined },
   ) => Promise<A>;
   /** Forks `effect` on the server's runtime; shutdown interrupts it. */

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Fiber, Layer, Result } from 'effect';
+import { Effect, Fiber, FiberMap, Layer, Result } from 'effect';
 
 import {
   publishOnlyRecordingEventBus,
@@ -15,7 +15,7 @@ import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { PtyRepository } from '../repository.js';
 import { reconcilePersistedProcesses } from '../service.js';
 import type { ActiveAttachment } from '../service/attachments.js';
-import { handleExit, type PtyTerminations } from '../service/lifecycle.js';
+import { handleExit, type PtySupervisors, type PtyTerminations } from '../service/lifecycle.js';
 import { terminatePtyProcess } from '../service/termination.js';
 import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
 import {
@@ -58,6 +58,7 @@ interface Harness {
   readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly terminations: PtyTerminations;
+  readonly supervisors: PtySupervisors;
   readonly retry: ReturnType<typeof manualPtyPersistenceRetry>;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly ptyProcessId: number;
@@ -83,6 +84,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
           repository,
           bus: publishOnlyRecordingEventBus('termination tests do not subscribe'),
           terminations: new Map(),
+          supervisors: yield* FiberMap.make<number, void, never>(),
           retry: manualPtyPersistenceRetry(),
           activeAttachments: new Map(),
           ptyProcessId,
@@ -507,6 +509,7 @@ test('a poller pass leaves a reserved row alone instead of assigning it a compet
         catalog,
         harness.bus.service,
         { terminations: harness.terminations, launches: new Map() },
+        harness.supervisors,
         { startup: false },
       );
 
@@ -532,12 +535,47 @@ test('a poller pass still classifies rows no attempt has reserved', async () => 
         catalog,
         harness.bus.service,
         { terminations: harness.terminations, launches: new Map() },
+        harness.supervisors,
         { startup: false },
       );
 
       const row = yield* harness.repository.findProcess(harness.ptyProcessId);
       assert.equal(row?.status, 'failed');
       assert.equal(row?.statusReason, 'runtime_ephemeral_lost');
+    }),
+  );
+});
+
+test('a poller pass leaves a missing row alone while its supervisor may still hold the exit', async () => {
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      // The node-pty adapter has seen the exit (so `inspect` answers `missing`) and enqueued `Exited`, but the
+      // supervisor has not persisted it yet. Its exit code must not lose to a generic `runtime_ephemeral_lost`.
+      const catalog = catalogWith(
+        backendStub('node_pty', { inspect: () => Effect.succeed({ status: 'missing' as const }) }),
+      );
+      yield* FiberMap.run(harness.supervisors, harness.ptyProcessId, Effect.never);
+      const reconcile = reconcilePersistedProcesses(
+        harness.repository,
+        catalog,
+        harness.bus.service,
+        { terminations: harness.terminations, launches: new Map() },
+        harness.supervisors,
+        { startup: false },
+      );
+
+      yield* reconcile;
+      const pending = yield* harness.repository.findProcess(harness.ptyProcessId);
+      assert.equal(pending?.status, 'running');
+      assert.equal(pending?.statusReason, null);
+      assert.deepEqual(harness.bus.events, []);
+
+      // Once the supervisor is gone without having recorded an exit, `missing` is evidence again.
+      yield* FiberMap.remove(harness.supervisors, harness.ptyProcessId);
+      yield* reconcile;
+      const classified = yield* harness.repository.findProcess(harness.ptyProcessId);
+      assert.equal(classified?.status, 'failed');
+      assert.equal(classified?.statusReason, 'runtime_ephemeral_lost');
     }),
   );
 });

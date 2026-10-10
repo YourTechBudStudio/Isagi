@@ -80,6 +80,23 @@ export class DesktopShutdownCoordinator {
 }
 
 /**
+ * Main's `whenReady` sequence: build the desktop runtime, then open the first window, each only while no quit has been
+ * requested. A quit can land while the build is in flight: shutdown disposes the runtime under it (the build settles
+ * without a value), and opening the window then would run on the disposed runtime, fail with "ManagedRuntime
+ * disposed", and turn an ordinary quit into exit code 1 through the startup failure path.
+ */
+export async function startDesktop(steps: {
+  readonly isExitRequested: () => boolean;
+  readonly build: () => Promise<void>;
+  readonly openWindow: () => Promise<unknown>;
+}) {
+  if (steps.isExitRequested()) return;
+  await steps.build();
+  if (steps.isExitRequested()) return;
+  await steps.openWindow();
+}
+
+/**
  * The Electron `before-quit` policy, kept next to the coordinator that owns the
  * exit disposition so the decision is testable without the Electron app object.
  *

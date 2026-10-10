@@ -11,7 +11,7 @@
  * order. It never starts a read for a run nobody holds.
  */
 import { Effect, Option } from 'effect';
-import { AtomRegistry } from 'effect/reactivity';
+import { AtomRegistry, Reactivity } from 'effect/reactivity';
 
 import type { WorkflowEventDto, WorkflowRunSummary } from '@isagi/contracts';
 
@@ -22,7 +22,6 @@ import {
   mergeEvents,
   runtimeConnectionPhaseAtom,
   workflowLive,
-  workflowResyncAtom,
   type WorkflowLive,
   type WorkflowSignal,
 } from './live.js';
@@ -44,7 +43,7 @@ export const receiveWorkflowSignal = Effect.fn('receiveWorkflowSignal')(function
       // A reconnect cannot prove nothing was missed while the socket was down, so every live read
       // re-reads (the ones on screen now, the others when next shown). Structures and saved
       // checkpoints are immutable, and the connection's snapshot refreshes the attached runs.
-      registry.update(workflowResyncAtom, (count) => count + 1);
+      yield* Reactivity.invalidate([keys.workflowLive]);
       break;
     case 'snapshot':
       // The runtime's complete answer to "which runs occupy a surface right now".

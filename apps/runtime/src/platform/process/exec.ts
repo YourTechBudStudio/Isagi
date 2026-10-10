@@ -1,7 +1,11 @@
 import { execFile } from 'node:child_process';
+import { constants } from 'node:os';
+import { basename } from 'node:path';
 import { promisify } from 'node:util';
 
 import { Data, Duration, Effect } from 'effect';
+
+import { describeSafely, safeSystemErrorCode, type SafeDiagnostic } from '../diagnostics/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,18 +24,32 @@ export type ExecFailure =
  * A command that could not be started, exited non-zero, or was killed. `cause` is the raw `execFile` rejection and
  * `stdout`/`stderr` are whatever the child wrote before it ended; both may echo user data, so the message names only
  * the executable and the failure kind.
+ *
+ * Its safe diagnostic label is composed from the `failure` classification and the executable's base name only. It
+ * never reads `message`, `args`, `cwd` or the output, and it ends the cause walk, because the raw rejection's own
+ * message carries the full command line.
  */
-export class ExecFailed extends Data.TaggedError('ExecFailed')<{
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly cwd: string | undefined;
-  readonly failure: ExecFailure;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly cause: unknown;
-}> {
+export class ExecFailed
+  extends Data.TaggedError('ExecFailed')<{
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly cwd: string | undefined;
+    readonly failure: ExecFailure;
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
   override get message() {
     return `${this.command} ${describeExecFailure(this.failure)}`;
+  }
+
+  [describeSafely]() {
+    return {
+      label: `${basename(this.command)} ${describeExecFailureSafely(this.failure)}`,
+      cause: null,
+    };
   }
 }
 
@@ -59,7 +77,8 @@ export interface ExecResult {
 }
 
 /**
- * Runs a short-lived command (no shell) and collects its UTF-8 output. Interrupting the effect aborts the child (Node
+ * Runs a short-lived command (no shell) and collects its UTF-8 output. `command` must be a literal executable name
+ * authored at the call site (`git`, `tmux`, `ps`, `tar`): its base name is rendered into `ExecFailed`'s safe diagnostic. Interrupting the effect aborts the child (Node
  * sends `SIGTERM`), so a cancelled request never leaves the command running.
  *
  * Use `spawnProcessGroup` instead for commands that run a user-authored shell line or may start their own children.
@@ -132,6 +151,30 @@ function describeExecFailure(failure: ExecFailure) {
       return `exited with code ${failure.exitCode}`;
     case 'signalled':
       return `was killed by ${failure.signal}`;
+    case 'aborted':
+      return 'was aborted';
+  }
+}
+
+/**
+ * `describeExecFailure` under the safe-diagnostic rules: a spawn code appears only when it is on the system-error
+ * allowlist, and a signal only when it is one of this platform's signal names. Both come from Node today; the checks
+ * keep that an invariant of the label rather than an assumption about the cause.
+ */
+function describeExecFailureSafely(failure: ExecFailure) {
+  switch (failure.kind) {
+    case 'spawn_failed': {
+      const code = safeSystemErrorCode(failure.systemErrorCode);
+      return `could not be started${code ? ` (${code})` : ''}`;
+    }
+    case 'exited':
+      return Number.isSafeInteger(failure.exitCode)
+        ? `exited with code ${failure.exitCode}`
+        : 'exited with a non-zero code';
+    case 'signalled':
+      return Object.hasOwn(constants.signals, failure.signal)
+        ? `was killed by ${failure.signal}`
+        : 'was killed by a signal';
     case 'aborted':
       return 'was aborted';
   }

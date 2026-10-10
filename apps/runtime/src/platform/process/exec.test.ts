@@ -6,6 +6,12 @@ import { Effect, Fiber } from 'effect';
 
 import { expectNoProcessMatching, runScoped } from '@isagi/testing';
 
+import {
+  coordinates,
+  describeOperationalCause,
+  describeSafely,
+  type SafeDiagnostic,
+} from '../diagnostics/index.js';
 import { classifyExecFailure, ExecFailed, execCommand } from './exec.js';
 
 /**
@@ -157,5 +163,86 @@ describe('execCommand', () => {
         yield* expectNoProcessMatching(marker);
       }),
     );
+  });
+});
+
+/** A recognized wrapper, the way `PtyKillError` and friends carry an `ExecFailed` from tmux. */
+class KillFailed extends Error implements SafeDiagnostic {
+  constructor(
+    readonly ptyProcessId: number,
+    override readonly cause: unknown,
+  ) {
+    super('kill failed');
+  }
+
+  [describeSafely]() {
+    return {
+      label: `Kill failed${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
+
+describe('ExecFailed safe diagnostic', () => {
+  const SECRET = 'SUPERSECRETTOKEN12345';
+
+  const failed = (failure: ExecFailed['failure'], command = 'tmux') =>
+    new ExecFailed({
+      command,
+      args: ['send-keys', SECRET],
+      cwd: `/Users/${SECRET}`,
+      failure,
+      stdout: SECRET,
+      stderr: SECRET,
+      cause: Object.assign(new Error(`Command failed: ${command} send-keys ${SECRET}`), {
+        code: 'ENOENT',
+      }),
+    });
+
+  test('names the executable and the failure kind, and nothing it did not author', () => {
+    const cases: ReadonlyArray<readonly [ExecFailed['failure'], string]> = [
+      [{ kind: 'exited', exitCode: 1 }, 'tmux exited with code 1'],
+      [{ kind: 'signalled', signal: 'SIGTERM' }, 'tmux was killed by SIGTERM'],
+      [{ kind: 'aborted' }, 'tmux was aborted'],
+      [{ kind: 'spawn_failed', systemErrorCode: 'ENOENT' }, 'tmux could not be started (ENOENT)'],
+      [{ kind: 'spawn_failed', systemErrorCode: null }, 'tmux could not be started'],
+      // A code or signal outside the allowlists is dropped rather than echoed.
+      [{ kind: 'spawn_failed', systemErrorCode: `E${SECRET}` }, 'tmux could not be started'],
+      [{ kind: 'signalled', signal: SECRET }, 'tmux was killed by a signal'],
+    ];
+    for (const [failure, expected] of cases) {
+      const rendered = describeOperationalCause(failed(failure));
+      assert.equal(rendered, expected);
+      assert.ok(!rendered.includes(SECRET));
+    }
+  });
+
+  test('renders inside a recognized wrapper instead of collapsing to "Error"', () => {
+    assert.equal(
+      describeOperationalCause(new KillFailed(5, failed({ kind: 'exited', exitCode: 1 }))),
+      'Kill failed (ptyProcess=5): tmux exited with code 1',
+    );
+  });
+
+  test('renders only the base name of an executable path', () => {
+    assert.equal(
+      describeOperationalCause(failed({ kind: 'exited', exitCode: 2 }, `/Users/${SECRET}/bin/git`)),
+      'git exited with code 2',
+    );
+  });
+
+  test('describes real command failures', async () => {
+    const exited = await runScoped(Effect.flip(execCommand('sh', ['-c', 'exit 3'])));
+    assert.equal(describeOperationalCause(exited), 'sh exited with code 3');
+
+    const missing = await runScoped(Effect.flip(execCommand('/definitely/not/a/command', [])));
+    assert.equal(describeOperationalCause(missing), 'command could not be started (ENOENT)');
+
+    const marker = uniqueSleep();
+    const timedOut = await runScoped(
+      Effect.flip(execCommand('sleep', [marker], { timeout: '100 millis' })),
+    );
+    assert.equal(describeOperationalCause(timedOut), 'sleep was killed by SIGTERM');
+    await runScoped(expectNoProcessMatching(marker));
   });
 });

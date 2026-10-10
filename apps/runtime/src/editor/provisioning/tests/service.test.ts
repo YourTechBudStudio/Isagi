@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schedule } from 'effect';
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schedule, Tracer } from 'effect';
 import { TestClock } from 'effect/testing';
 
 import type { EditorProvisioningState } from '@isagi/contracts';
@@ -605,6 +605,42 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
     assert.ok(outcome.guard._tag === 'Failure');
     assert.equal(outcome.settled.status, 'ready');
     assert.ok(outcome.after._tag === 'Success');
+  } finally {
+    roots.cleanup();
+  }
+});
+
+test('every member of a declared runtime runs under a span named for it', async () => {
+  // `state` and `requireReady` are effect values rather than functions, so nothing names them unless they open their
+  // own span; an `editor_unavailable` from `requireReady` must still say which operation refused.
+  const roots = makeRoots();
+  const spans: string[] = [];
+  const recordingTracer = Tracer.make({
+    span(options) {
+      spans.push(options.name);
+      return Tracer.nativeTracer.span(options);
+    },
+  });
+  try {
+    const recorder = recordingInstallIo();
+    await Effect.runPromise(
+      withService(
+        { capability: 'code_server', directory: roots.directory, io: recorder.io },
+        (service) =>
+          Effect.gen(function* () {
+            yield* service.state;
+            yield* Effect.result(service.requireReady);
+            yield* service.retry;
+          }),
+      ).pipe(Effect.withTracer(recordingTracer)),
+    );
+    const members = new Set(
+      ['state', 'requireReady', 'retry'].map((m) => `EditorProvisioning.${m}`),
+    );
+    assert.deepEqual(
+      spans.filter((name) => members.has(name)),
+      ['EditorProvisioning.state', 'EditorProvisioning.requireReady', 'EditorProvisioning.retry'],
+    );
   } finally {
     roots.cleanup();
   }

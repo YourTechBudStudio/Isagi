@@ -1,6 +1,6 @@
 {
   "apps/cli/src/main.ts": "CLI process entry: runs the command program once with runPromiseExit and maps the exit to the process exit code.",
-  "apps/desktop/src/main/index.ts": "Electron main entry: app lifecycle events and IPC handlers are Promise callbacks that run desktop effects.",
+  "apps/desktop/src/main/index.ts": "Electron main entry: app lifecycle events and IPC handlers are Promise callbacks that run desktop effects on the desktop ManagedRuntime; the shutdown sequence also runs the updater's install-rejection record directly, because it runs after that runtime is disposed.",
   "apps/runtime/src/app/http-server.ts": "HTTP/WebSocket boundary: makes the server-scoped RouteRuntime (FiberSet.runtimePromise/runtime over the request FiberSet) that Fastify callbacks run through.",
   "apps/runtime/src/app/run-main.ts": "Runtime process entry primitive: builds runMain on the stable Runtime.makeRunMain (plan R1, critique C1).",
   "apps/runtime/src/index.ts": "Runtime process entry: runMain runs the main layer once and owns signals and the exit code (plan R1).",

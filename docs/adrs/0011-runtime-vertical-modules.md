@@ -49,7 +49,7 @@ projects · runtime-config · cli-access   (platform only)
 every module   ─→ platform/*;  platform areas never import modules;  only index.ts imports app/
 ```
 
-The manifest is `apps/runtime/module-boundaries.json`. Changing it changes the architecture: every edit needs a one-line reason in the change description.
+The manifest is `apps/runtime/module-boundaries.json` (`modules.<name>.dependsOn`); it is the only machine-checked copy of this graph and wins over this table and graph if they ever disagree. Changing it changes the architecture: every edit needs a one-line reason in the change description. Other docs name the modules but do not repeat the dependency lists (`apps/runtime/AGENTS.md` points here and to the manifest).
 
 ### Shared infrastructure (`platform/`)
 
@@ -163,7 +163,7 @@ Ports are limited to two because each one is an inversion that readers must chas
 ## Consequences
 
 - Common changes stay inside one module: add a harness (`harnesses/<name>/` + `harnesses/definitions.ts`), add a PTY backend (`pty-processes/adapters/`), change attention rules (`environment/agent-sessions/attention.ts`), add a command option (`commands/` + `projects/config/config-schema.ts`), add a workflow operation (`workflows/operations/`), add a data-directory file area (owning module + `platform/persistence` helper, ADR 0010).
-- Adding a module, a dependency edge or a table owner is an explicit edit to `module-boundaries.json`; adding a port is an amendment row in this ADR.
+- Adding a module, a dependency edge or a table owner is an explicit edit to `module-boundaries.json`. A new module or dependency edge also updates this ADR's module table and graph in the same change (a new module also gets an owns row in `apps/runtime/AGENTS.md`), just as adding a port is an amendment row in this ADR. No check compares the Markdown to the manifest, so reviewers check that the two agree.
 - `platform/` stays small; a helper with one consumer stays in that module.
 - Table write ownership (ADR 0008) is machine-checked by R7.
 - An owner of a PTY process must declare a foreign key to `pty_processes.id`, or the PTY GC will collect the process (ADR 0005).
