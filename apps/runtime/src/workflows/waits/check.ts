@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 
-import type { EngineRuntime } from '../engine/runtime.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { AgentTurnEdgesError, EngineRuntime } from '../engine/runtime.js';
 import { lastAssistantText } from '../operations/agents.js';
 import { settleExitedHeadless } from '../operations/headless.js';
 import { getOperation, listOperations } from '../store/operations.js';
@@ -43,11 +44,17 @@ export interface HeadlessOperationRecord {
   readonly interruption?: HeadlessOperationResult['interruption'];
 }
 
+/**
+ * What a check can fail with: the database, or the observer's turn edges. A refresh that fails is
+ * recovered here; an unrefreshed read cannot fail today, but the port does not promise that.
+ */
+export type WaitCheckError = DatabaseError | AgentTurnEdgesError;
+
 export function checkWait(
   rt: EngineRuntime,
   execution: ExecutionRow,
   wait: WaitDeclaration,
-): Effect.Effect<WaitCheck, unknown> {
+): Effect.Effect<WaitCheck, WaitCheckError> {
   switch (wait.kind) {
     case 'user_continue':
     case 'user_input': {
@@ -64,8 +71,8 @@ export function checkWait(
       ).pipe(
         // A write that fails again leaves the job owned for the next check; the wait keeps waiting.
         Effect.catch((cause) =>
-          Effect.sync(() =>
-            console.warn('[runtime] Settling an exited headless job failed', cause),
+          Effect.logWarning('Settling an exited headless job failed', cause).pipe(
+            Effect.annotateLogs({ runId: execution.runId }),
           ),
         ),
         Effect.andThen(
@@ -96,7 +103,7 @@ function checkAgentTurn(
   rt: EngineRuntime,
   execution: ExecutionRow,
   target: AgentTurnTarget,
-): Effect.Effect<WaitCheck, unknown> {
+): Effect.Effect<WaitCheck, WaitCheckError> {
   return Effect.gen(function* () {
     const agents = rt.deps.agents;
     // Resume and startup refresh first, because the observer may not have caught up with the

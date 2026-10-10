@@ -14,6 +14,7 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
+import { HarnessObserverRefreshError } from '../../harnesses/index.js';
 import { InternalEvents, type RuntimeEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import {
@@ -23,9 +24,11 @@ import {
   type RuntimeDatabase,
 } from '../../platform/persistence/index.js';
 import { makeRuntimeDatabase } from '../../platform/persistence/testing.js';
+import { PtyServiceError } from '../../pty-processes/index.js';
 import { DetachedWorktreeError, WorkspaceError } from '../../workspace/index.js';
 import { checkNewDirectory } from '../../workspace/testing.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
+import { WorkflowOperationFailed } from '../errors.js';
 import {
   makeWorkflowContentStore,
   type WorkflowContentStoreInstance,
@@ -95,6 +98,8 @@ export interface EngineHarness {
       readonly placement?: WorkflowPlacementRequestDto;
     },
   ) => Promise<number>;
+  /** Stops the engine, as app shutdown does, without starting a new one. */
+  readonly stop: () => Promise<void>;
   readonly restart: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -219,10 +224,13 @@ export async function makeEngineHarness(
       );
       return runId;
     },
-    restart: async () => {
-      // Deliberately no settle first: a restart can cut off a node function mid-run.
+    stop: async () => {
       await Effect.runPromise(Scope.close(scope, Exit.void));
       scope = Effect.runSync(Scope.make());
+    },
+    restart: async () => {
+      // Deliberately no settle first: a restart can cut off a node function mid-run.
+      await harness.stop();
       engine = await start();
       await harness.settle();
     },
@@ -661,7 +669,11 @@ export class FakeAgents {
       send: (input) =>
         Effect.suspend(() => {
           const session = this.sessions.get(input.agentSessionId);
-          if (!session) return Effect.fail(new Error(`No agent session ${input.agentSessionId}.`));
+          if (!session) {
+            return Effect.fail(
+              new WorkflowOperationFailed({ message: `No agent session ${input.agentSessionId}.` }),
+            );
+          }
           const sentAt = this.clock.now();
           this.prompts.push({
             kind: 'send',
@@ -684,7 +696,14 @@ export class FakeAgents {
         }),
       turnEdges: (agentSessionId, refresh) =>
         refresh && this.refreshFails
-          ? Effect.fail(new Error('The harness records could not be read.'))
+          ? Effect.fail(
+              new HarnessObserverRefreshError({
+                agentSessionId,
+                failedSources: [],
+                failedOperations: [],
+                message: 'The harness records could not be read.',
+              }),
+            )
           : Effect.succeed([...(this.sessions.get(agentSessionId)?.edges ?? [])]),
       isAlive: (agentSessionId) =>
         Effect.succeed(this.sessions.get(agentSessionId)?.alive ?? false),
@@ -806,7 +825,11 @@ export class FakeHeadless {
       exitOf: (ptyProcessId) => Effect.succeed(this.exits.get(ptyProcessId) ?? null),
       capture: (input) =>
         this.captureFails
-          ? Effect.fail(new Error(`The log of process ${input.ptyProcessId} is unreadable.`))
+          ? Effect.fail(
+              new WorkflowOperationFailed({
+                message: `The log of process ${input.ptyProcessId} is unreadable.`,
+              }),
+            )
           : Effect.succeed({
               output: this.outputs.get(input.ptyProcessId) ?? '',
               semanticError: null,
@@ -816,7 +839,13 @@ export class FakeHeadless {
       // A successful stop is a killed process, as the PTY service reports it.
       terminate: (ptyProcessId) =>
         this.terminateFails
-          ? Effect.fail(new Error(`Process ${ptyProcessId} would not stop.`))
+          ? Effect.fail(
+              new PtyServiceError({
+                code: 'backend_unavailable',
+                message: `Process ${ptyProcessId} would not stop.`,
+                ptyProcessId,
+              }),
+            )
           : Effect.sync(() => {
               this.terminated.push(ptyProcessId);
               this.exits.set(ptyProcessId, { status: 'killed', exitCode: null });

@@ -1,7 +1,8 @@
 import { Effect } from 'effect';
 
 import type { EngineRuntime } from '../engine/runtime.js';
-import { renderWorkflowPrompt, type WorkflowPromptOperation } from '../prompt-renderer.js';
+import { WorkflowOperationFailed } from '../errors.js';
+import { renderWorkflowPromptEffect, type WorkflowPromptOperation } from '../prompt-renderer.js';
 import { errorMessage } from '../state/pure.js';
 import { insertOperation, settleOperation, updateOperation } from '../store/operations.js';
 import { toJson, type ExecutionRow, type OperationRow, type RunRow } from '../store/rows.js';
@@ -23,30 +24,20 @@ import { startHeadless } from './headless.js';
  * recorded on the row and rethrown to the author.
  *
  * The context closes when the function returns, so a stray promise cannot act for an execution that
- * has already moved on.
+ * has already moved on. Every call runs through the engine's author bridge, so engine shutdown
+ * interrupts it and the author's promise rejects.
+ *
+ * `where` is the run's destination, which the driver has already checked exists.
  */
 export function makeOperationContext(
   rt: EngineRuntime,
   run: RunRow,
   execution: ExecutionRow,
+  where: { readonly worktreeId: number; readonly worktreePath: string; readonly surfaceId: number },
 ): { readonly context: OperationContext; readonly close: () => void } {
-  let closed = false;
-  const bridge = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
-    if (closed) {
-      return Promise.reject(
-        new Error('This operation context is closed: its node function has already returned.'),
-      );
-    }
-    return Effect.runPromise(effect);
-  };
-
-  const destination = () => {
-    if (run.worktreeId === null || run.worktreePath === null || run.surfaceId === null) {
-      throw new Error(`Workflow run ${run.id} has no worktree and surface to work in.`);
-    }
-    return { worktreeId: run.worktreeId, worktreePath: run.worktreePath, surfaceId: run.surfaceId };
-  };
-  const where = destination();
+  const bridge = rt.bridge.open(
+    'This operation context is closed: its node function has already returned.',
+  );
 
   const record = (
     fields: Pick<
@@ -71,14 +62,16 @@ export function makeOperationContext(
         Effect.flatMap((operation) =>
           operation
             ? Effect.succeed(operation)
-            : Effect.fail(new Error(`Workflow run ${run.id} was cancelled.`)),
+            : Effect.fail(
+                new WorkflowOperationFailed({ message: `Workflow run ${run.id} was cancelled.` }),
+              ),
         ),
       );
 
   /** Runs one effect under its operation row: completed with its result, or failed and rethrown. */
-  const logged = <A>(
+  const logged = <A, E>(
     operation: OperationRow,
-    effect: Effect.Effect<A, unknown>,
+    effect: Effect.Effect<A, E>,
     settle: (value: A) => Partial<Pick<OperationRow, 'resultJson' | 'harnessSessionId'>>,
   ) =>
     effect.pipe(
@@ -108,7 +101,7 @@ export function makeOperationContext(
     },
 
     spawnAgentSession: (input) =>
-      bridge(
+      bridge.run(
         Effect.gen(function* () {
           const prompt = yield* render(input.harness, input, 'spawn_agent_session');
           const operation = yield* record(
@@ -154,7 +147,7 @@ export function makeOperationContext(
       ),
 
     sendAgentPrompt: (input) =>
-      bridge(
+      bridge.run(
         Effect.gen(function* () {
           const harness = yield* rt.deps.agents.harnessOf(input.agentSessionId);
           const prompt = yield* render(harness, input, 'send_agent_prompt');
@@ -181,7 +174,7 @@ export function makeOperationContext(
       ),
 
     closePane: (paneId) =>
-      bridge(
+      bridge.run(
         Effect.gen(function* () {
           const operation = yield* record(
             {
@@ -202,10 +195,11 @@ export function makeOperationContext(
         }),
       ),
 
-    getConversationHistory: (agentSessionId) => bridge(rt.deps.agents.conversation(agentSessionId)),
+    getConversationHistory: (agentSessionId) =>
+      bridge.run(rt.deps.agents.conversation(agentSessionId)),
 
     runHeadlessAgent: (input) =>
-      bridge(
+      bridge.run(
         Effect.gen(function* () {
           const prompt = yield* render(input.harness, input, 'run_headless_agent');
           const operation = yield* record(
@@ -242,21 +236,23 @@ export function makeOperationContext(
       ),
 
     log: (level, message) =>
-      bridge(
-        rt.commit('workflow_log', (_db, emit) =>
-          emit({
-            runId: run.id,
-            executionId: execution.id,
-            category: 'log',
-            kind: 'log',
-            message,
-            data: { level, message },
-          }),
-        ),
-      ).then(() => undefined),
+      bridge
+        .run(
+          rt.commit('workflow_log', (_db, emit) =>
+            emit({
+              runId: run.id,
+              executionId: execution.id,
+              category: 'log',
+              kind: 'log',
+              message,
+              data: { level, message },
+            }),
+          ),
+        )
+        .then(() => undefined),
 
     setUiFeedback: (feedback: WorkflowUiFeedback) =>
-      bridge(
+      bridge.run(
         rt.commit('workflow_ui_feedback', (db, emit) =>
           emit({
             runId: run.id,
@@ -274,7 +270,7 @@ export function makeOperationContext(
       ),
   };
 
-  return { context, close: () => void (closed = true) };
+  return { context, close: bridge.close };
 }
 
 function render(
@@ -282,10 +278,7 @@ function render(
   input: WorkflowPromptInput,
   operation: WorkflowPromptOperation,
 ) {
-  return Effect.try({
-    try: () => renderWorkflowPrompt({ harness, promptInput: input, operation }),
-    catch: (cause) => cause,
-  });
+  return renderWorkflowPromptEffect({ harness, promptInput: input, operation });
 }
 
 /** What was asked for: the rendered prompt as sent, and the author's own input beside it. */

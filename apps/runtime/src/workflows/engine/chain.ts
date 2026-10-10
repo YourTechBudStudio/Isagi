@@ -469,6 +469,11 @@ function nodeLabel(node: AnyGraphNode, state: unknown): string | null {
   return captureLabel(node.label as ((argument: never) => unknown) | undefined, state);
 }
 
+/**
+ * A row the current step read moments ago in the same synchronous transaction. Missing is a broken
+ * invariant, not an expected failure: the throw rolls the transaction back, and the run's driver
+ * records it as a step failure.
+ */
 function requireRow<A>(row: A | null, what: string): A {
   if (row === null) throw new Error(`A workflow ${what} this step depends on is missing.`);
   return row;

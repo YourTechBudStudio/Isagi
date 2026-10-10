@@ -1,5 +1,7 @@
-import { Effect, Result } from 'effect';
+import { Data, Effect, Result } from 'effect';
 
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { WorkflowEngineError } from '../errors.js';
 import { errorMessage } from '../state/pure.js';
 import {
   fromJson,
@@ -11,6 +13,7 @@ import {
 } from '../store/rows.js';
 import { getRun, updateRun } from '../store/runs.js';
 import { findRootInvocation } from '../store/tree.js';
+import type { WorkflowLoadError } from '../structure/loader.js';
 import { applyEntry, applyFailure, computeEntry } from './chain.js';
 import { destinationOf } from './drive.js';
 import type { EngineRuntime } from './runtime.js';
@@ -29,45 +32,52 @@ import type { EngineRuntime } from './runtime.js';
  * saved ids skip the finished steps. Nothing created is ever deleted. A new worktree is created
  * from the commit its ref resolved to at launch, never from the ref again.
  */
-export function prepareAndStart(rt: EngineRuntime, runId: number): Effect.Effect<void, unknown> {
-  return Effect.gen(function* () {
-    const prepared = yield* prepare(rt, runId).pipe(Effect.result);
-    if (Result.isFailure(prepared)) {
-      yield* rt.commit('workflow_preparation_failed', (db, emit) => {
-        const run = getRun(db, runId);
-        if (!run || run.status !== 'preparing') return;
-        const message = errorMessage(prepared.failure);
-        updateRun(db, runId, {
-          status: 'failed',
-          errorJson: toJson({ stage: 'environment', message }),
-          endedAt: now(),
-        });
-        emit({
-          runId,
-          category: 'environment',
-          kind: 'preparation_failed',
-          message,
-          data: { message },
-        });
-        emit({
-          runId,
-          category: 'run',
-          kind: 'run_failed',
-          message,
-          data: { stage: 'environment' },
-        });
+export const prepareAndStart = Effect.fn('workflows.prepareAndStart')(function* (
+  rt: EngineRuntime,
+  runId: number,
+): Effect.fn.Return<void, WorkflowEngineError | DatabaseError | WorkflowLoadError> {
+  const prepared = yield* prepare(rt, runId).pipe(Effect.result);
+  if (Result.isFailure(prepared)) {
+    yield* rt.commit('workflow_preparation_failed', (db, emit) => {
+      const run = getRun(db, runId);
+      if (!run || run.status !== 'preparing') return;
+      const message = errorMessage(prepared.failure);
+      updateRun(db, runId, {
+        status: 'failed',
+        errorJson: toJson({ stage: 'environment', message }),
+        endedAt: now(),
       });
-      return;
-    }
-    if (prepared.success === 'stopped') return;
-    yield* enterRoot(rt, runId);
-  });
-}
+      emit({
+        runId,
+        category: 'environment',
+        kind: 'preparation_failed',
+        message,
+        data: { message },
+      });
+      emit({
+        runId,
+        category: 'run',
+        kind: 'run_failed',
+        message,
+        data: { stage: 'environment' },
+      });
+    });
+    return;
+  }
+  if (prepared.success === 'stopped') return;
+  yield* enterRoot(rt, runId);
+});
 
-class PreparationFailure extends Error {}
+/** A preparation step that cannot go on; its message becomes the run's error. */
+class PreparationFailure extends Data.TaggedError('PreparationFailure')<{
+  readonly message: string;
+}> {}
 
-/** Returns 'stopped' when the run stopped preparing meanwhile (Cancel). */
-function prepare(rt: EngineRuntime, runId: number): Effect.Effect<'ready' | 'stopped', unknown> {
+/**
+ * Returns 'stopped' when the run stopped preparing meanwhile (Cancel). Any failure — the
+ * workspace's, a surface's, the database's or its own — fails the run at stage `environment`.
+ */
+function prepare(rt: EngineRuntime, runId: number) {
   return Effect.gen(function* () {
     const places = rt.deps.places;
     const current = () => rt.read('workflow_read_run', (db) => getRun(db, runId));
@@ -117,7 +127,7 @@ function prepare(rt: EngineRuntime, runId: number): Effect.Effect<'ready' | 'sto
         });
         if (opened.status === 'created_setup_failed') {
           return yield* Effect.fail(
-            new PreparationFailure(`Worktree setup failed: ${opened.setup.message}`),
+            new PreparationFailure({ message: `Worktree setup failed: ${opened.setup.message}` }),
           );
         }
       } else if (!run.setupDone) {
@@ -138,15 +148,15 @@ function prepare(rt: EngineRuntime, runId: number): Effect.Effect<'ready' | 'sto
         });
         if (setup.status === 'failed') {
           return yield* Effect.fail(
-            new PreparationFailure(`Worktree setup failed: ${setup.message}`),
+            new PreparationFailure({ message: `Worktree setup failed: ${setup.message}` }),
           );
         }
       }
     } else if (run.worktreeId === null || !(yield* places.workspace.findWorktree(run.worktreeId))) {
       return yield* Effect.fail(
-        new PreparationFailure(
-          `Worktree ${run.worktreeId ?? '(none)'} no longer exists, so the run has nowhere to work.`,
-        ),
+        new PreparationFailure({
+          message: `Worktree ${run.worktreeId ?? '(none)'} no longer exists, so the run has nowhere to work.`,
+        }),
       );
     }
 
@@ -179,9 +189,9 @@ function prepare(rt: EngineRuntime, runId: number): Effect.Effect<'ready' | 'sto
           ? `Surface ${surfaceChoice.surfaceId}`
           : 'The launch surface';
       return yield* Effect.fail(
-        new PreparationFailure(
-          `${requested} no longer exists, and a run never replaces a surface it did not create.`,
-        ),
+        new PreparationFailure({
+          message: `${requested} no longer exists, and a run never replaces a surface it did not create.`,
+        }),
       );
     }
     return 'ready';
@@ -189,7 +199,10 @@ function prepare(rt: EngineRuntime, runId: number): Effect.Effect<'ready' | 'sto
 }
 
 /** Opens the root graph invocation (its `init`) and starts driving. Skipped if it already exists. */
-function enterRoot(rt: EngineRuntime, runId: number): Effect.Effect<void, unknown> {
+function enterRoot(
+  rt: EngineRuntime,
+  runId: number,
+): Effect.Effect<void, WorkflowEngineError | DatabaseError | WorkflowLoadError> {
   return Effect.gen(function* () {
     const run = yield* rt.read('workflow_read_run', (db) => getRun(db, runId));
     if (!run || run.status !== 'preparing') return;

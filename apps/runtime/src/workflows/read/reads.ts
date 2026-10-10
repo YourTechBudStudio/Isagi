@@ -43,6 +43,12 @@ import {
 
 const defaultLimit = 100;
 
+/**
+ * Refuses a read whose subject does not exist. The engine runs these reads in a transaction whose
+ * typed `abort` this is, so a refusal is a `WorkflowEngineError` rather than a database fault.
+ */
+type Reject = (error: WorkflowEngineError) => never;
+
 export function listRunSummaries(db: Db, query: ListWorkflowRunsQuery): ListWorkflowRunsOutput {
   const limit = query.limit ?? defaultLimit;
   return page(listRuns(db, { ...query, limit: limit + 1 }), limit, (row) => runSummary(db, row));
@@ -52,8 +58,8 @@ export function listAttachedSummaries(db: Db): readonly WorkflowRunSummary[] {
   return listAttachedRuns(db).map((row) => runSummary(db, row));
 }
 
-export function getRunDetail(db: Db, runId: number): GetWorkflowRunOutput {
-  const run = requireRun(db, runId);
+export function getRunDetail(db: Db, runId: number, reject: Reject): GetWorkflowRunOutput {
+  const run = requireRun(db, runId, reject);
   return {
     run: runSummary(db, run),
     inputs: fromJson<Record<string, unknown>>(run.inputsJson),
@@ -67,8 +73,9 @@ export function getRunStructure(
   db: Db,
   runId: number,
   artifactHash: string | undefined,
+  reject: Reject,
 ): GetWorkflowStructureOutput {
-  const run = requireRun(db, runId);
+  const run = requireRun(db, runId, reject);
   const artifact = getArtifact(db, artifactHash ?? run.artifactHash);
   // Any build the run has used can be named: its current one, or one an execution ran under.
   const used =
@@ -76,12 +83,14 @@ export function getRunStructure(
     (artifact.hash === run.artifactHash ||
       listExecutions(db, runId).some((execution) => execution.artifactHash === artifact.hash));
   if (!artifact || !used) {
-    throw new WorkflowEngineError({
-      code: 'workflow_load_failed',
-      message: `Run ${runId} has never used a build with hash ${artifactHash}.`,
-      workflowRunId: runId,
-      workflowKey: run.workflowKey,
-    });
+    return reject(
+      new WorkflowEngineError({
+        code: 'workflow_load_failed',
+        message: `Run ${runId} has never used a build with hash ${artifactHash}.`,
+        workflowRunId: runId,
+        workflowKey: run.workflowKey,
+      }),
+    );
   }
   return {
     artifactHash: artifact.hash,
@@ -100,8 +109,9 @@ export function listRunEvents(
   db: Db,
   runId: number,
   query: ListWorkflowEventsQuery,
+  reject: Reject,
 ): ListWorkflowEventsOutput {
-  requireRun(db, runId);
+  requireRun(db, runId, reject);
   const limit = query.limit ?? defaultLimit;
   return page(listEvents(db, { runId, cursor: query.cursor, limit: limit + 1 }), limit, eventDto);
 }
@@ -110,8 +120,9 @@ export function listRunOperations(
   db: Db,
   runId: number,
   query: ListWorkflowOperationsQuery,
+  reject: Reject,
 ): ListWorkflowOperationsOutput {
-  requireRun(db, runId);
+  requireRun(db, runId, reject);
   const limit = query.limit ?? defaultLimit;
   return page(
     listOperations(db, {
@@ -126,28 +137,40 @@ export function listRunOperations(
   );
 }
 
-export function getExecutionDetail(db: Db, executionId: number): GetWorkflowExecutionOutput {
+export function getExecutionDetail(
+  db: Db,
+  executionId: number,
+  reject: Reject,
+): GetWorkflowExecutionOutput {
   const execution = getExecution(db, executionId);
   if (!execution) {
-    throw new WorkflowEngineError({
-      code: 'workflow_execution_not_found',
-      message: `Execution ${executionId} was not found.`,
-      executionId,
-    });
+    return reject(
+      new WorkflowEngineError({
+        code: 'workflow_execution_not_found',
+        message: `Execution ${executionId} was not found.`,
+        executionId,
+      }),
+    );
   }
   return {
     execution: executionDetailDto(execution, listOperations(db, { executionId })),
   };
 }
 
-export function getOperationDetail(db: Db, operationId: number): GetWorkflowOperationOutput {
+export function getOperationDetail(
+  db: Db,
+  operationId: number,
+  reject: Reject,
+): GetWorkflowOperationOutput {
   const operation = getOperation(db, operationId);
   if (!operation) {
-    throw new WorkflowEngineError({
-      code: 'workflow_operation_not_found',
-      message: `Operation ${operationId} was not found.`,
-      operationId,
-    });
+    return reject(
+      new WorkflowEngineError({
+        code: 'workflow_operation_not_found',
+        message: `Operation ${operationId} was not found.`,
+        operationId,
+      }),
+    );
   }
   return { operation: operationDto(operation) };
 }
@@ -156,8 +179,9 @@ export function listRunCheckpoints(
   db: Db,
   runId: number,
   query: ListWorkflowCheckpointsQuery,
+  reject: Reject,
 ): ListWorkflowCheckpointsOutput {
-  requireRun(db, runId);
+  requireRun(db, runId, reject);
   const limit = query.limit ?? defaultLimit;
   return page(
     listCheckpoints(db, {
@@ -172,26 +196,34 @@ export function listRunCheckpoints(
   );
 }
 
-export function getCheckpointDetail(db: Db, checkpointId: number): GetWorkflowCheckpointOutput {
+export function getCheckpointDetail(
+  db: Db,
+  checkpointId: number,
+  reject: Reject,
+): GetWorkflowCheckpointOutput {
   const checkpoint = getCheckpoint(db, checkpointId);
   if (!checkpoint) {
-    throw new WorkflowEngineError({
-      code: 'workflow_checkpoint_not_found',
-      message: `Checkpoint ${checkpointId} was not found.`,
-      checkpointId,
-    });
+    return reject(
+      new WorkflowEngineError({
+        code: 'workflow_checkpoint_not_found',
+        message: `Checkpoint ${checkpointId} was not found.`,
+        checkpointId,
+      }),
+    );
   }
   return { checkpoint: checkpointDto(checkpoint) };
 }
 
-function requireRun(db: Db, runId: number) {
+function requireRun(db: Db, runId: number, reject: Reject) {
   const run = getRun(db, runId);
   if (!run) {
-    throw new WorkflowEngineError({
-      code: 'workflow_run_not_found',
-      message: `Workflow run ${runId} was not found.`,
-      workflowRunId: runId,
-    });
+    return reject(
+      new WorkflowEngineError({
+        code: 'workflow_run_not_found',
+        message: `Workflow run ${runId} was not found.`,
+        workflowRunId: runId,
+      }),
+    );
   }
   return run;
 }

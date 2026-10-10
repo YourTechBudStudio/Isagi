@@ -5,9 +5,10 @@ import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-import { Cause, Context, Data, Effect, Layer, Scope } from 'effect';
+import { Clock, Context, Data, Duration, Effect, Layer, Scope } from 'effect';
 
 import { diagnosticPhase } from '../../platform/diagnostics/index.js';
+import { runPeriodically } from '../../platform/fibers/index.js';
 import {
   DataDirectory,
   RuntimeDatabase,
@@ -39,20 +40,30 @@ import { listReferencedContentHashes } from './checkpoints.js';
  *   capture publishes or reuses, and every temp it is writing, is held in memory until its scope
  *   closes, and checkpoint capture keeps that scope open until its row has committed.
  * - **Release tracking.** A sweep reads its mark at one moment; a checkpoint may commit and release
- *   its lease after that. From just before the mark is read until the sweep ends, every released
- *   hash is remembered and kept, so the stale mark never decides alone.
+ *   its lease after that. From before the mark read begins until the sweep ends, every released
+ *   hash is remembered and kept, so the stale mark never decides alone. Only the order matters, not
+ *   adjacency: a capture whose row commits after the read released after tracking started.
  * - **Reuse refresh.** Reusing an existing blob refreshes its mtime (`reuseExisting`).
  *
- * There is no lock. Hold, release, temp registration, "start tracking then read the mark", and the
- * collector's per-candidate decide-and-remove step (`sweepOrphans`) are each synchronous JavaScript
- * on the runtime's single thread, so none can interleave with another. Keep them free of `await`
- * and `yield*`.
+ * There is no lock. Hold, release, temp registration, "start tracking", and the collector's
+ * per-candidate decide-and-remove step (`sweepOrphans`) are each one synchronous block on the
+ * runtime's single thread (plain code between two `yield*`s, or one `Effect.sync`), so none can
+ * interleave with another. Keep them free of `await` and `yield*`.
  */
 const refPattern = /^sha256:[a-f0-9]{64}$/;
 
-/** Tunable. Unreferenced content is reclaimed within about grace plus interval. */
-const contentGcGraceMs = 60 * 60_000;
-const contentGcIntervalMs = 60 * 60_000;
+/**
+ * The collector's tunables. Unreferenced content is reclaimed within about grace plus interval. Tests
+ * provide `Layer.succeed(WorkflowContentGcSettings, {...})`.
+ */
+export const WorkflowContentGcSettings = Context.Reference<{
+  /** How often the collector runs. The first run is one interval after the store starts. */
+  readonly interval: Duration.Duration;
+  /** How old an unreferenced, unheld blob or temp must be before it is deleted. */
+  readonly grace: Duration.Duration;
+}>('isagi/runtime/workflows/WorkflowContentGcSettings', {
+  defaultValue: () => ({ interval: Duration.hours(1), grace: Duration.hours(1) }),
+});
 
 const shardPattern = /^[0-9a-f]{2}$/;
 const temporaryPattern = /^[0-9a-f-]{36}\.tmp$/;
@@ -79,7 +90,8 @@ export interface ContentCapture {
    * verifies is reused instead of replaced.
    *
    * Fails with `ContentPublishError` when the capture's scope closed before this put could take its
-   * hold; such a put leaves no hold and no temp behind.
+   * hold; such a put leaves no hold and no temp behind. Interrupting a put tears its stream down and
+   * removes its temp.
    */
   readonly put: (input: {
     readonly source: Readable;
@@ -92,18 +104,18 @@ export interface ContentCapture {
 /** The store plus its collector. The collector is deliberately not on the service tag. */
 export interface WorkflowContentStoreInstance {
   readonly service: WorkflowContentStore['Service'];
-  readonly collectGarbage: (input: ContentGcInput) => Effect.Effect<ContentGcResult>;
+  readonly collectGarbage: <E>(input: ContentGcInput<E>) => Effect.Effect<ContentGcResult, E>;
 }
 
-export interface ContentGcInput {
+export interface ContentGcInput<E> {
   readonly nowMs: number;
   readonly minAgeMs: number;
   /**
-   * Synchronous mark read: every hash a checkpoint references. Called inside the sweep right after
-   * release tracking starts. A throw aborts the sweep before anything is removed; the sweep then
-   * dies with that throw as its defect.
+   * The mark: every hash a checkpoint references. Run inside the sweep after release tracking has
+   * started, and only when something is old enough to collect. A failure aborts the sweep before
+   * anything is removed, and the sweep fails with it.
    */
-  readonly referencedHashes: () => ReadonlySet<string>;
+  readonly referencedHashes: Effect.Effect<ReadonlySet<string>, E>;
 }
 
 export type ContentGcResult =
@@ -116,42 +128,38 @@ export type ContentGcResult =
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
   const database = yield* RuntimeDatabase;
-  const instance = makeWorkflowContentStore(directory.paths.root);
+  const settings = yield* WorkflowContentGcSettings;
+  const store = makeWorkflowContentStore(directory.paths.root);
+  const referencedHashes = database.use(
+    'list_referenced_content_hashes',
+    listReferencedContentHashes,
+  );
 
-  const tick = diagnosticPhase(
-    'workflow.content_gc',
-    {},
-    // Suspended so every tick reads its own clock.
-    Effect.suspend(() =>
-      instance.collectGarbage({
-        nowMs: Date.now(),
-        minAgeMs: contentGcGraceMs,
-        referencedHashes: () =>
-          Effect.runSync(
-            database.use('list_referenced_content_hashes', listReferencedContentHashes),
-          ),
-      }),
-    ),
-  ).pipe(
-    // catchCause, not catch: a failed mark read is a defect here, and it must be logged and
-    // leave the next tick running.
-    Effect.catchCause((cause) =>
-      Effect.sync(() => console.warn('[runtime] Workflow content GC failed', Cause.pretty(cause))),
+  // A failed tick (a failed mark read, or a defect) is logged by the loop, and the next tick runs.
+  yield* runPeriodically(
+    'Workflow content GC',
+    settings.interval,
+    diagnosticPhase(
+      'workflow.content_gc',
+      {},
+      Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
+        store.collectGarbage({
+          nowMs,
+          minAgeMs: Duration.toMillis(settings.grace),
+          referencedHashes,
+        }),
+      ),
     ),
   );
-  const timer = setInterval(() => {
-    void Effect.runPromise(tick);
-  }, contentGcIntervalMs);
-  timer.unref();
-  yield* Effect.addFinalizer(() => Effect.sync(() => clearInterval(timer)));
 
-  return instance.service;
+  return store.service;
 });
 
 /**
  * The store and its hourly collector. Reference `WorkflowContentStore.layer` (never a second layer
  * value) so the build memoizes it and exactly one collector runs over the root. There is no
- * startup pass: the first tick is one interval in.
+ * startup pass: the first tick is one interval in, and closing the layer's scope stops the
+ * collector, mid-sweep included.
  */
 export class WorkflowContentStore extends Context.Service<
   WorkflowContentStore,
@@ -248,51 +256,8 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
   };
 
   /**
-   * The only reuse primitive. Reuse refreshes the blob's mtime first, so content a capture keeps
-   * using never ages out. A blob the collector already removed fails `utimes` with ENOENT and is
-   * not reusable, so a fresh copy is published; a corrupt blob is touched, fails verification, and
-   * is replaced by the rename.
-   */
-  const reuseExisting = async (path: string, ref: string) => {
-    try {
-      const now = new Date();
-      await utimes(path, now, now);
-    } catch {
-      return false;
-    }
-    return verifies(path, ref);
-  };
-
-  /**
-   * A fully written temp file becomes the blob, or it does not exist at all.
-   *
-   * The temp is fsynced, renamed, and then the *directory* is fsynced too — without that last step
-   * the rename itself can be lost by a crash, leaving a reference pointing at nothing. An existing
-   * correct file is reused, so republishing identical bytes costs one hash rather than one file.
-   */
-  const commitTemporary = async (temporary: string, ref: string) => {
-    const path = pathFor(ref);
-    const folder = dirname(path);
-    try {
-      if (await reuseExisting(path, ref)) {
-        await rm(temporary, { force: true }).catch(() => undefined);
-        return;
-      }
-      await mkdir(folder, { recursive: true });
-      await syncPath(temporary);
-      await rename(temporary, path);
-      await syncDirectory(folder);
-    } catch (cause) {
-      await rm(temporary, { force: true }).catch(() => undefined);
-      // A concurrent publisher of identical content is a success, not a conflict.
-      if (await reuseExisting(path, ref)) return;
-      throw cause;
-    }
-  };
-
-  /**
    * Claims a temp name under `<root>/incoming/` and registers it as live, synchronously, before the
-   * file exists. The caller unregisters it once the temp has been renamed into place or removed, so
+   * file exists. The put unregisters it once the temp has been renamed into place or removed, so
    * the collector never takes a temp that a put still owns.
    *
    * Temps are staged here rather than beside the final blob so shard folders never hold
@@ -300,111 +265,95 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
    * and the collector deletes it once it is older than the grace period; that is the only cleanup
    * crash residue needs, so no other sweep belongs here.
    */
-  const stage = () => {
+  const stage = (): StagedTemporary => {
     const name = `${randomUUID()}.tmp`;
     liveTemps.add(name);
     return { name, path: join(incoming, name) };
   };
 
-  const putStream = async (lease: CaptureLease, source: Readable) => {
-    if (lease.closed) {
-      source.destroy();
-      throw closedCapture();
+  const publishStaged = Effect.fnUntraced(function* (
+    lease: CaptureLease,
+    source: Readable,
+    temporary: StagedTemporary,
+  ) {
+    const hash = createHash('sha256');
+    let byteSize = 0;
+    const measure = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        hash.update(chunk);
+        byteSize += chunk.byteLength;
+        callback(null, chunk);
+      },
+    });
+    // The signal tears the pipeline down when the put is interrupted.
+    yield* publishing(async (signal) => {
+      await mkdir(incoming, { recursive: true });
+      await pipeline(source, measure, createWriteStream(temporary.path, { flags: 'wx' }), {
+        signal,
+      });
+    }).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => source.destroy()).pipe(Effect.andThen(removeQuietly(temporary.path))),
+      ),
+    );
+    const digest = hash.digest('hex');
+    // The hold is taken here, in the same synchronous step as the end of the stream, so the reuse
+    // check that follows sees either a blob the collector can no longer remove or no blob at all.
+    if (!hold(lease, digest)) {
+      yield* removeQuietly(temporary.path);
+      return yield* closedCapture();
     }
-    const temporary = stage();
-    try {
-      const hash = createHash('sha256');
-      let byteSize = 0;
-      try {
-        await mkdir(incoming, { recursive: true });
-        const measure = new Transform({
-          transform(chunk: Buffer, _encoding, callback) {
-            hash.update(chunk);
-            byteSize += chunk.byteLength;
-            callback(null, chunk);
-          },
-        });
-        await pipeline(source, measure, createWriteStream(temporary.path, { flags: 'wx' }));
-      } catch (cause) {
-        source.destroy();
-        await rm(temporary.path, { force: true }).catch(() => undefined);
-        throw cause;
+    const contentRef = `sha256:${digest}`;
+    yield* publishing(() => commitTemporary(pathFor(contentRef), temporary.path, contentRef));
+    return { contentRef, byteSize };
+  });
+
+  const put = (lease: CaptureLease) =>
+    Effect.fnUntraced(function* (input: { readonly source: Readable }) {
+      if (lease.closed) {
+        input.source.destroy();
+        return yield* closedCapture();
       }
-      const digest = hash.digest('hex');
-      // The hold is taken here, before the next await, so the reuse check that follows sees either
-      // a blob the collector can no longer remove or no blob at all.
-      if (!hold(lease, digest)) {
-        await rm(temporary.path, { force: true }).catch(() => undefined);
-        throw closedCapture();
-      }
-      const ref = `sha256:${digest}`;
-      await commitTemporary(temporary.path, ref);
-      return { contentRef: ref, byteSize };
-    } finally {
-      liveTemps.delete(temporary.name);
-    }
-  };
+      return yield* Effect.acquireUseRelease(
+        Effect.sync(stage),
+        (temporary) => publishStaged(lease, input.source, temporary),
+        (temporary) => Effect.sync(() => liveTemps.delete(temporary.name)),
+      );
+    });
 
   /**
    * Everything a read does that is *not* its read strategy.
    *
    * The syntax guard and the failure mapping are the same whichever way the bytes are fetched, and
    * they would otherwise have to be kept in step across two paths — including if a third `cause` is
-   * ever added. Anything the strategy throws that is not already a `ContentUnavailable` is reported
-   * as `missing`, so a permissions error or a vanished file is an honest answer rather than a
-   * defect escaping the store. Only the strategy differs between `open` and `readAll`; keep it that
-   * way.
+   * ever added. Anything the strategy throws is reported as `missing`, so a permissions error or a
+   * vanished file is an honest answer rather than a defect escaping the store. A strategy that read
+   * bytes which do not match the reference answers `corrupt`. Only the strategy differs between
+   * `open` and `readAll`; keep it that way.
    */
-  const reading = <A>(ref: string, strategy: (path: string) => Promise<A>) =>
-    Effect.tryPromise({
-      try: async () => {
-        if (!refPattern.test(ref)) throw new ContentUnavailable({ ref, cause: 'missing' });
-        return await strategy(pathFor(ref));
-      },
-      catch: (cause) =>
-        cause instanceof ContentUnavailable
-          ? cause
-          : new ContentUnavailable({ ref, cause: 'missing' }),
-    });
-
-  /**
-   * The verifying pre-pass `open` needs, and only `open`.
-   *
-   * A streaming response cannot verify as it serves — the hash is only known at the last byte, long
-   * after the status line has gone out — so the file is hashed first and streamed second. A reader
-   * that materialises the whole value has no such constraint and must not pay this cost; see
-   * `readAll`.
-   */
-  const verifiedPathFor = (ref: string) =>
-    reading(ref, async (path) => {
-      // Verified on every read. A reference is a claim about bytes, and an unverified read would
-      // let a truncated or edited file be presented as recorded history.
-      if (`sha256:${await hashFile(path)}` !== ref) {
-        throw new ContentUnavailable({ ref, cause: 'corrupt' });
-      }
-      return path;
-    });
+  const reading = <A>(
+    ref: string,
+    strategy: (path: string, signal: AbortSignal) => Promise<Verified<A>>,
+  ): Effect.Effect<A, ContentUnavailable> =>
+    Effect.suspend(() =>
+      refPattern.test(ref)
+        ? Effect.tryPromise({
+            try: (signal) => strategy(pathFor(ref), signal),
+            catch: () => new ContentUnavailable({ ref, cause: 'missing' }),
+          })
+        : Effect.fail(new ContentUnavailable({ ref, cause: 'missing' })),
+    ).pipe(
+      Effect.flatMap((result) =>
+        result.verified
+          ? Effect.succeed(result.value)
+          : Effect.fail(new ContentUnavailable({ ref, cause: 'corrupt' })),
+      ),
+    );
 
   const openCapture: Effect.Effect<ContentCapture, never, Scope.Scope> = Effect.acquireRelease(
     Effect.sync((): CaptureLease => ({ holds: new Set(), closed: false })),
     (lease) => Effect.sync(() => release(lease)),
-  ).pipe(
-    Effect.map(
-      (lease): ContentCapture => ({
-        put: ({ source }) =>
-          Effect.tryPromise({
-            try: () => putStream(lease, source),
-            catch: (cause) =>
-              cause instanceof ContentPublishError
-                ? cause
-                : new ContentPublishError({
-                    message: 'Could not publish workflow content.',
-                    cause,
-                  }),
-          }),
-      }),
-    ),
-  );
+  ).pipe(Effect.map((lease): ContentCapture => ({ put: put(lease) })));
 
   /**
    * Blobs (`<hh>/<hash>.json`) and temps (`incoming/<uuid>.tmp`), reached only through real
@@ -458,7 +407,7 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
     return held.has(hash) || (releasedDuringSweep?.has(hash) ?? false) || mark.has(hash);
   };
 
-  const sweepOnce = Effect.fnUntraced(function* (input: ContentGcInput) {
+  const sweepOnce = Effect.fnUntraced(function* <E>(input: ContentGcInput<E>) {
     const listed = yield* listCandidates();
     if (listed === 'absent') return nothingOld;
     if (listed === 'root_unusable') return rootUnusable;
@@ -477,12 +426,12 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
     }
     if (old.length === 0) return nothingOld;
 
-    // Adjacent and synchronous: tracking starts before the mark is read, so a capture that
-    // commits and releases after the read is still kept by this sweep.
-    const mark = yield* Effect.sync(() => {
+    // Tracking starts before the mark read begins, so a capture that releases at any point after
+    // this (during the read included) is kept by this sweep even though the mark predates its row.
+    yield* Effect.sync(() => {
       releasedDuringSweep = new Set();
-      return input.referencedHashes();
     });
+    const mark = yield* input.referencedHashes;
 
     const stats = yield* sweepOrphans({
       label: 'workflow content file',
@@ -496,7 +445,7 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
   });
 
   // The check and the claim are one synchronous step, so overlapping sweeps are refused.
-  const collectGarbage = (input: ContentGcInput): Effect.Effect<ContentGcResult> =>
+  const collectGarbage = <E>(input: ContentGcInput<E>): Effect.Effect<ContentGcResult, E> =>
     Effect.suspend(() => {
       if (sweeping) return Effect.succeed(alreadyRunning);
       sweeping = true;
@@ -511,31 +460,46 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
     });
 
   return {
-    service: {
+    service: WorkflowContentStore.of({
       openCapture,
 
-      open: (ref) => verifiedPathFor(ref).pipe(Effect.map((path) => createReadStream(path))),
+      open: Effect.fn('WorkflowContentStore.open')(function* (ref: string) {
+        // Verified on every read. A reference is a claim about bytes, and an unverified read would
+        // let a truncated or edited file be presented as recorded history.
+        const verifiedPath = yield* reading(ref, async (path, signal) =>
+          `sha256:${await hashFile(path, signal)}` === ref
+            ? { verified: true, value: path }
+            : notVerified,
+        );
+        return createReadStream(verifiedPath);
+      }),
 
       /**
        * One read, then verify the buffer that read produced.
        *
-       * Deliberately not `verifiedPathFor` plus a second read. `open` pre-verifies because it cannot
-       * verify while streaming; a whole-value read is already holding the bytes it needs to hash, so
-       * pre-verifying would double the IO to buy nothing. The "verified on every read" invariant is
-       * identical either way.
+       * Deliberately not a verifying pre-pass plus a second read. `open` pre-verifies because it
+       * cannot verify while streaming; a whole-value read is already holding the bytes it needs to
+       * hash, so pre-verifying would double the IO to buy nothing. The "verified on every read"
+       * invariant is identical either way.
        */
-      readAll: (ref) =>
-        reading(ref, async (path) => {
-          const bytes = await readFile(path);
-          if (`sha256:${sha256(bytes)}` !== ref) {
-            throw new ContentUnavailable({ ref, cause: 'corrupt' });
-          }
-          return bytes;
-        }),
-    },
+      readAll: Effect.fn('WorkflowContentStore.readAll')(function* (ref: string) {
+        return yield* reading(ref, async (path, signal) => {
+          const bytes = await readFile(path, { signal });
+          return `sha256:${sha256(bytes)}` === ref ? { verified: true, value: bytes } : notVerified;
+        });
+      }),
+    }),
     collectGarbage,
   };
 }
+
+interface StagedTemporary {
+  readonly name: string;
+  readonly path: string;
+}
+
+type Verified<A> = { readonly verified: true; readonly value: A } | { readonly verified: false };
+const notVerified = { verified: false } as const;
 
 const alreadyRunning: ContentGcResult = { status: 'skipped', reason: 'already_running' };
 const nothingOld: ContentGcResult = { status: 'skipped', reason: 'nothing_old' };
@@ -547,6 +511,64 @@ function closedCapture() {
   });
 }
 
+/** One filesystem step of a put. Any failure is the put's generic publish failure. */
+function publishing<A>(
+  operation: (signal: AbortSignal) => Promise<A>,
+): Effect.Effect<A, ContentPublishError> {
+  return Effect.tryPromise({
+    try: operation,
+    catch: (cause) =>
+      new ContentPublishError({ message: 'Could not publish workflow content.', cause }),
+  });
+}
+
+/** Best-effort removal of a temp the put owns; a failure leaves it for the collector. */
+function removeQuietly(path: string): Effect.Effect<void> {
+  return Effect.promise(() => rm(path, { force: true }).catch(() => undefined));
+}
+
+/**
+ * A fully written temp file becomes the blob, or it does not exist at all.
+ *
+ * The temp is fsynced, renamed, and then the *directory* is fsynced too — without that last step
+ * the rename itself can be lost by a crash, leaving a reference pointing at nothing. An existing
+ * correct file is reused, so republishing identical bytes costs one hash rather than one file.
+ */
+async function commitTemporary(path: string, temporary: string, ref: string): Promise<void> {
+  const folder = dirname(path);
+  try {
+    if (await reuseExisting(path, ref)) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      return;
+    }
+    await mkdir(folder, { recursive: true });
+    await syncPath(temporary);
+    await rename(temporary, path);
+    await syncDirectory(folder);
+  } catch (cause) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    // A concurrent publisher of identical content is a success, not a conflict.
+    if (await reuseExisting(path, ref)) return;
+    throw cause;
+  }
+}
+
+/**
+ * The only reuse primitive. Reuse refreshes the blob's mtime first, so content a capture keeps
+ * using never ages out. A blob the collector already removed fails `utimes` with ENOENT and is not
+ * reusable, so a fresh copy is published; a corrupt blob is touched, fails verification, and is
+ * replaced by the rename.
+ */
+async function reuseExisting(path: string, ref: string): Promise<boolean> {
+  try {
+    const now = new Date();
+    await utimes(path, now, now);
+  } catch {
+    return false;
+  }
+  return verifies(path, ref);
+}
+
 async function verifies(path: string, ref: string): Promise<boolean> {
   try {
     return `sha256:${await hashFile(path)}` === ref;
@@ -556,9 +578,9 @@ async function verifies(path: string, ref: string): Promise<boolean> {
 }
 
 /** Hashes a file without holding it in memory, so verification costs a read and not a copy. */
-async function hashFile(path: string): Promise<string> {
+async function hashFile(path: string, signal?: AbortSignal): Promise<string> {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) {
+  for await (const chunk of createReadStream(path, signal ? { signal } : {})) {
     hash.update(chunk as Buffer);
   }
   return hash.digest('hex');
