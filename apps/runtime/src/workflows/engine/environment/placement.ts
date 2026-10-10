@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 
 import { SurfaceError, validateSurfaceTitle } from '../../../environment/index.js';
 import type { DatabaseError } from '../../../platform/persistence/index.js';
-import { WorkspaceError, type WorkspaceServiceError } from '../../../workspace/index.js';
+import type { WorkspaceError, WorkspaceServiceError } from '../../../workspace/index.js';
 import { WorkflowEngineError } from '../../errors.js';
 import type { WorkflowOrigin } from '../../types.js';
 import type { LaunchProject, PlacementSelection, ResolvedPlacement } from './types.js';
@@ -148,9 +148,8 @@ function resolveWorktree(
             fromRef: choice.fromRef,
           })
           .pipe(
-            Effect.catchIf(
-              (error): error is WorkspaceError => error instanceof WorkspaceError,
-              (error) => Effect.fail(creationRejection(error, input, branch, choice.fromRef)),
+            Effect.catchTag('WorkspaceError', (error) =>
+              Effect.fail(creationRejection(error, input, branch, choice.fromRef)),
             ),
           );
         return {

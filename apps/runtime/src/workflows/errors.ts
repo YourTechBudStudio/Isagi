@@ -55,3 +55,16 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   /** Which registrations no longer fit, for the structure and code-incompatible reasons. */
   readonly diagnostics?: readonly StructureDiagnostic[] | undefined;
 }> {}
+
+/**
+ * A workflow operation — an author's `ctx` call, or the engine's own step on its behalf — that
+ * could not be carried out, for a reason the owning services do not name themselves: a spawned
+ * session that never accepted its prompt, a turn already in flight, a headless log that is gone.
+ *
+ * The `message` is runtime-authored and reaches the author verbatim as the rejected promise's
+ * message, and the operation row's recorded error.
+ */
+export class WorkflowOperationFailed extends Data.TaggedError('WorkflowOperationFailed')<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}

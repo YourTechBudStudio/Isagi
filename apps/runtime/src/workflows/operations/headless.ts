@@ -1,14 +1,21 @@
 import { readFileSync } from 'node:fs';
 
-import { Effect } from 'effect';
+import { Duration, Effect, FiberMap } from 'effect';
 
 import {
   harnessDefinition,
   type HarnessControlPlane,
   type HarnessAdapterRegistry,
 } from '../../harnesses/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { PtyService } from '../../pty-processes/index.js';
-import type { EngineRuntime, HeadlessExit, HeadlessPort } from '../engine/runtime.js';
+import type {
+  EngineRuntime,
+  HeadlessExit,
+  HeadlessPort,
+  HeadlessStartError,
+} from '../engine/runtime.js';
+import { WorkflowOperationFailed, type WorkflowEngineError } from '../errors.js';
 import { errorMessage } from '../state/pure.js';
 import { getOperation, settleOperation } from '../store/operations.js';
 import { toJson, toNullableJson } from '../store/rows.js';
@@ -22,7 +29,15 @@ import type { HeadlessOperationRecord } from '../waits/check.js';
  * output as the operation's `response_text` and wakes the run, whose headless wait then sees every
  * listed operation settled. A restart loses the tracking; startup marks those operations
  * `interrupted` instead.
+ *
+ * Each job's timeout is a fiber in the engine's `headlessTimers`, keyed by PTY process id. Settling
+ * or stopping the job removes it, which interrupts a timer still pending; when it fires it only hands
+ * the timeout to the engine's work, so the handling is awaited like any other step and a settlement
+ * it reaches never interrupts itself.
  */
+
+/** Everything a headless step writes can fail with: the database, or an engine refusal. */
+type HeadlessWriteError = DatabaseError | WorkflowEngineError;
 
 export const defaultHeadlessTimeoutMs = 10 * 60_000;
 const terminationGraceMs = 1_000;
@@ -39,7 +54,7 @@ export function startHeadless(
     readonly effort?: string | undefined;
     readonly timeoutMs?: number | undefined;
   },
-) {
+): Effect.Effect<void, HeadlessStartError | HeadlessWriteError> {
   return Effect.gen(function* () {
     const { ptyProcessId } = yield* rt.deps.headless.start({
       harness: input.harness,
@@ -48,15 +63,21 @@ export function startHeadless(
       model: input.model,
       effort: input.effort,
     });
-    const timer = setTimeout(() => {
-      rt.fork(timeOutHeadless(rt, ptyProcessId), 'workflow headless timeout');
-    }, input.timeoutMs ?? defaultHeadlessTimeoutMs);
-    timer.unref();
+    yield* FiberMap.run(
+      rt.headlessTimers,
+      ptyProcessId,
+      Effect.sleep(Duration.millis(input.timeoutMs ?? defaultHeadlessTimeoutMs)).pipe(
+        Effect.andThen(
+          Effect.sync(() =>
+            rt.fork(timeOutHeadless(rt, ptyProcessId), 'Workflow headless timeout failed'),
+          ),
+        ),
+      ),
+    );
     rt.headlessProcesses.set(ptyProcessId, {
       runId: input.runId,
       operationId: input.operationId,
       harness: input.harness,
-      timer,
       timedOut: false,
       settling: false,
     });
@@ -83,7 +104,10 @@ export function startHeadless(
  * exit then settles the operation as a timeout. A stop that fails is recorded as `stop_failed` and
  * the job stays owned, so its eventual exit, or a Cancel, still cleans it up.
  */
-function timeOutHeadless(rt: EngineRuntime, ptyProcessId: number): Effect.Effect<void, unknown> {
+function timeOutHeadless(
+  rt: EngineRuntime,
+  ptyProcessId: number,
+): Effect.Effect<void, HeadlessWriteError> {
   return Effect.gen(function* () {
     const tracked = rt.headlessProcesses.get(ptyProcessId);
     if (!tracked) return;
@@ -121,7 +145,7 @@ export function settleHeadless(
   rt: EngineRuntime,
   ptyProcessId: number,
   exit: HeadlessExit,
-): Effect.Effect<void, unknown> {
+): Effect.Effect<void, HeadlessWriteError> {
   return Effect.gen(function* () {
     const tracked = rt.headlessProcesses.get(ptyProcessId);
     if (!tracked || tracked.settling) return;
@@ -165,7 +189,7 @@ export function settleHeadless(
     }
     // Ownership ends only once the operation's end is committed.
     rt.headlessProcesses.delete(ptyProcessId);
-    if (tracked.timer) clearTimeout(tracked.timer);
+    yield* FiberMap.remove(rt.headlessTimers, ptyProcessId);
     yield* rt.deps.headless.release(ptyProcessId);
     rt.kick(tracked.runId);
   });
@@ -178,7 +202,7 @@ export function settleHeadless(
 export function settleExitedHeadless(
   rt: EngineRuntime,
   operationIds: readonly number[],
-): Effect.Effect<void, unknown> {
+): Effect.Effect<void, HeadlessWriteError> {
   return Effect.gen(function* () {
     for (const [ptyProcessId, tracked] of rt.headlessProcesses) {
       if (!operationIds.includes(tracked.operationId) || tracked.settling) continue;
@@ -195,7 +219,10 @@ export function settleExitedHeadless(
  * own transaction: stop their processes, best effort. A process that will not stop is reported as a
  * `stop_failed` event and stays tracked, so its eventual exit still releases it.
  */
-export function stopRunHeadless(rt: EngineRuntime, runId: number): Effect.Effect<void, unknown> {
+export function stopRunHeadless(
+  rt: EngineRuntime,
+  runId: number,
+): Effect.Effect<void, HeadlessWriteError> {
   return Effect.gen(function* () {
     const tracked = [...rt.headlessProcesses.entries()].filter(
       ([, entry]) => entry.runId === runId,
@@ -208,11 +235,14 @@ export function stopRunHeadless(rt: EngineRuntime, runId: number): Effect.Effect
  * Stops one tracked process whose operation has already ended. A stopped process is released; one
  * that will not stop is reported as `stop_failed` and stays tracked, so its exit still releases it.
  */
-function stopTracked(rt: EngineRuntime, ptyProcessId: number): Effect.Effect<void, unknown> {
+function stopTracked(
+  rt: EngineRuntime,
+  ptyProcessId: number,
+): Effect.Effect<void, HeadlessWriteError> {
   return Effect.gen(function* () {
     const entry = rt.headlessProcesses.get(ptyProcessId);
     if (!entry) return;
-    if (entry.timer) clearTimeout(entry.timer);
+    yield* FiberMap.remove(rt.headlessTimers, ptyProcessId);
     const stopped = yield* rt.deps.headless.terminate(ptyProcessId).pipe(Effect.result);
     if (stopped._tag === 'Success') {
       rt.headlessProcesses.delete(ptyProcessId);
@@ -257,13 +287,13 @@ export function makeHeadlessPort(deps: {
         const plan = yield* deps.pty.getAttachmentPlan({ ptyProcessId: input.ptyProcessId });
         const logPath = plan.session.logPath;
         if (!logPath) {
-          return yield* Effect.fail(
-            new Error(`Headless process ${input.ptyProcessId} kept no output log.`),
-          );
+          return yield* new WorkflowOperationFailed({
+            message: `Headless process ${input.ptyProcessId} kept no output log.`,
+          });
         }
         const raw = yield* Effect.try({
           try: () => readFileSync(logPath, 'utf8'),
-          catch: (cause) => cause,
+          catch: (cause) => new WorkflowOperationFailed({ message: errorMessage(cause), cause }),
         });
         const launch = harnessDefinition(input.harness).launch;
         const provenance = launch.extractHeadlessProvenance?.(raw);

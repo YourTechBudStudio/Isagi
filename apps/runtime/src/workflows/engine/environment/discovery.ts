@@ -2,17 +2,20 @@ import { Effect } from 'effect';
 
 import type { SurfaceService } from '../../../environment/index.js';
 import type { ProjectRepository } from '../../../projects/index.js';
+import { WorkflowOperationFailed } from '../../errors.js';
 import type {
   WorkflowOrigin,
   WorkflowPlacementContext,
   WorkflowSurfaceSummary,
   WorkflowWorktreeSummary,
 } from '../../types.js';
+import type { AuthorBridge } from '../author-bridge.js';
 import type { LaunchProject } from './types.js';
 
 export interface DiscoveryDeps {
   readonly workspace: Pick<ProjectRepository['Service'], 'listWorktrees' | 'findWorktree'>;
   readonly surfaceReads: Pick<SurfaceService['Service'], 'listWorkspaceSurfaceMetadata'>;
+  readonly bridge: AuthorBridge;
 }
 
 /**
@@ -43,28 +46,19 @@ export function makePlacementContext(
   deps: DiscoveryDeps,
   input: { readonly origin: WorkflowOrigin; readonly project: LaunchProject },
 ): { readonly context: WorkflowPlacementContext; readonly close: () => void } {
-  let closed = false;
-
   /**
    * The bridge author code sees.
    *
    * Promise-shaped for the same reason `command` and `parse` are: the SDK surface is Tier 0
    * plain TypeScript and no Effect concept crosses it.
    */
-  const bridge = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
-    if (closed) {
-      return Promise.reject(
-        new Error('The placement context is closed once placement() has returned.'),
-      );
-    }
-    return Effect.runPromise(effect as Effect.Effect<A, unknown, never>);
-  };
+  const bridge = deps.bridge.open('The placement context is closed once placement() has returned.');
 
   const context: WorkflowPlacementContext = {
     origin: input.origin,
     project: { id: input.project.id, name: input.project.name, kind: input.project.kind },
     listWorktrees: () =>
-      bridge(
+      bridge.run(
         deps.workspace.listWorktrees.pipe(
           Effect.map((rows) =>
             rows
@@ -84,11 +78,13 @@ export function makePlacementContext(
         ),
       ),
     listSurfaces: ({ worktreeId }) =>
-      bridge(
+      bridge.run(
         Effect.gen(function* () {
           const worktree = yield* deps.workspace.findWorktree(worktreeId);
           if (!worktree || worktree.projectId !== input.project.id) {
-            return yield* Effect.fail(new Error(`Worktree ${worktreeId} is not in this project.`));
+            return yield* new WorkflowOperationFailed({
+              message: `Worktree ${worktreeId} is not in this project.`,
+            });
           }
           const surfaces = yield* deps.surfaceReads.listWorkspaceSurfaceMetadata;
           return surfaces
@@ -104,5 +100,5 @@ export function makePlacementContext(
       ),
   };
 
-  return { context, close: () => void (closed = true) };
+  return { context, close: bridge.close };
 }

@@ -20,13 +20,17 @@ import process from 'node:process';
 import { PassThrough, Readable } from 'node:stream';
 import test from 'node:test';
 
-import { Cause, Effect, Exit, Scope } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Queue, Scope } from 'effect';
+import { TestClock } from 'effect/testing';
 
-import { runScoped } from '@isagi/testing';
+import { runScoped, runWithTestClock } from '@isagi/testing';
 
+import { DataDirectory, DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import {
   contentPathFor,
   makeWorkflowContentStore,
+  WorkflowContentStore,
   type ContentCapture,
   type ContentGcResult,
   type WorkflowContentStoreInstance,
@@ -116,7 +120,7 @@ function sweep(
     store.collectGarbage({
       nowMs: options.nowMs ?? Date.now(),
       minAgeMs: graceMs,
-      referencedHashes: () => options.mark ?? new Set(),
+      referencedHashes: Effect.sync(() => options.mark ?? new Set<string>()),
     }),
   );
 }
@@ -251,12 +255,12 @@ test(
       store.collectGarbage({
         nowMs: later(),
         minAgeMs: graceMs,
-        referencedHashes: () => {
+        referencedHashes: Effect.sync(() => {
           const staleMark = new Set(references);
           references.add(hash); // the checkpoint row commits
           close(); // and the capture's scope closes, releasing its hold
           return staleMark;
-        },
+        }),
       }),
     );
     assert.equal(stats(first).kept, 1);
@@ -268,6 +272,89 @@ test(
     references.delete(hash);
     stats(await sweep(store, { nowMs: later(), mark: references }));
     assert.equal(existsSync(blobPath), false, 'unreferenced, it is collected');
+  }),
+);
+
+test(
+  'capture released between tracking start and mark read keeps its blob',
+  withStore(async ({ contentRoot, store }) => {
+    const { capture, close } = openCapture(store);
+    const { contentRef } = await put(capture, Buffer.from('released while the mark is read'));
+    const blobPath = contentPathFor(contentRoot, contentRef);
+
+    const result = await runScoped(
+      Effect.gen(function* () {
+        const markStarted = yield* Deferred.make<void>();
+        const markGate = yield* Deferred.make<void>();
+        const sweeping = yield* Effect.forkChild(
+          store.collectGarbage({
+            nowMs: later(),
+            minAgeMs: graceMs,
+            // A mark read that takes a while, and whose result predates the checkpoint row.
+            referencedHashes: Deferred.succeed(markStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(markGate)),
+              Effect.as(new Set<string>()),
+            ),
+          }),
+        );
+        yield* Deferred.await(markStarted);
+        // Tracking has started and the read has not returned: the capture commits and releases now.
+        close();
+        yield* Deferred.succeed(markGate, undefined);
+        return yield* Fiber.join(sweeping);
+      }),
+    );
+
+    assert.equal(stats(result).kept, 1);
+    assert.equal(existsSync(blobPath), true, 'release tracking kept it despite the stale mark');
+    stats(await sweep(store, { nowMs: later() }));
+    assert.equal(existsSync(blobPath), false, 'unreferenced and released, the next sweep takes it');
+  }),
+);
+
+test(
+  'content GC runs on schedule and never after disposal',
+  withStore(async ({ dataRoot, contentRoot }) => {
+    // Old, but referenced by every mark, so each tick reads the mark exactly once and keeps it.
+    const blob = plantBlob(contentRoot, Buffer.from('referenced forever'), 2 * graceMs);
+
+    await runWithTestClock(
+      Effect.gen(function* () {
+        // File ages are compared with the Effect clock: start it at the wall clock.
+        yield* TestClock.setTime(Date.now());
+        const markReads = yield* Queue.unbounded<string>();
+        const database = Layer.mock(RuntimeDatabase)({
+          use: <A>(operation: string) =>
+            Effect.sync(() => {
+              Queue.offerUnsafe(markReads, operation);
+              return new Set([blob.hash]) as A;
+            }),
+        });
+        const layer = WorkflowContentStore.layer.pipe(
+          Layer.provide([Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot)), database]),
+        );
+        const storeScope = yield* Scope.make();
+        yield* Layer.buildWithScope(layer, storeScope);
+
+        yield* TestClock.adjust('59 minutes');
+        assert.equal(yield* Queue.size(markReads), 0, 'no startup pass and no early tick');
+
+        yield* TestClock.adjust('1 minute');
+        // The tick reads real file ages first, so wait for its mark read rather than assume it.
+        assert.equal(yield* Queue.take(markReads), 'list_referenced_content_hashes');
+
+        yield* TestClock.adjust('1 hour');
+        assert.equal(yield* Queue.take(markReads), 'list_referenced_content_hashes');
+        assert.equal(yield* Queue.size(markReads), 0);
+
+        yield* Scope.close(storeScope, Exit.void);
+        yield* TestClock.adjust('10 hours');
+        // Long enough for a tick's file-age reads to reach the mark, had a tick started.
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 50)));
+        assert.equal(yield* Queue.size(markReads), 0, 'nothing ticks after the layer is released');
+      }),
+    );
+    assert.equal(existsSync(blob.path), true);
   }),
 );
 
@@ -285,12 +372,15 @@ test(
         store.collectGarbage({
           nowMs: Date.now(),
           minAgeMs: graceMs,
-          referencedHashes: () => {
-            throw new Error('database unavailable');
-          },
+          referencedHashes: Effect.fail(
+            new DatabaseError({
+              operation: 'list_referenced_content_hashes',
+              cause: new Error('database unavailable'),
+            }),
+          ),
         }),
       ),
-      /database unavailable/,
+      DatabaseError,
     );
     assert.equal(existsSync(blob.path), true, 'an aborted sweep removes nothing');
 
@@ -303,10 +393,10 @@ test(
       store.collectGarbage({
         nowMs: Date.now(),
         minAgeMs: graceMs,
-        referencedHashes: () => {
+        referencedHashes: Effect.sync(() => {
           markReads += 1;
-          return new Set();
-        },
+          return new Set<string>();
+        }),
       }),
     );
     assert.deepEqual(quiet, { status: 'skipped', reason: 'nothing_old' });
@@ -464,11 +554,11 @@ test(
         store.collectGarbage({
           nowMs: Date.now(),
           minAgeMs: graceMs,
-          referencedHashes: () => {
+          referencedHashes: Effect.sync(() => {
             renameSync(shard, join(outside, 'real-shard'));
             symlinkSync(decoyShard, shard);
-            return new Set();
-          },
+            return new Set<string>();
+          }),
         }),
       ),
     );

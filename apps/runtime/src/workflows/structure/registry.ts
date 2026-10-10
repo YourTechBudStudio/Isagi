@@ -11,6 +11,7 @@ import {
   type DiscoveredFilesystemWorkflow,
   type ScanWorkflowSource,
   type WorkflowDiscoverySource,
+  type WorkflowFilesystemCandidate,
 } from './discovery.js';
 import {
   loadPinnedWorkflowArtifact,
@@ -95,61 +96,73 @@ export function createFilesystemWorkflowRegistry(
   const scanSource = options.scanSource ?? scanWorkflowSource;
   const additionalDirectories = [...(options.additionalDirectories ?? [])];
 
-  return {
-    discover: (context) =>
-      Effect.try({
-        try: () => {
-          const discovered = discoverOrderedWorkflowSources(
-            workflowDiscoverySources(workflowsPath, additionalDirectories, context),
-            (source) => scanSourceWithPolicy(source, scanSource, missingWarningPaths),
-          );
-          for (const workflow of discovered) logWorkflowShadows(workflow, shadowLogKeys);
-          return createDiscoverySnapshot(
-            discovered.map((workflow) =>
-              filesystemDiscoveryEntry(workflow, cacheRoot, definitionCache),
-            ),
-          );
-        },
-        catch: (cause) =>
-          cause instanceof WorkflowRegistryError
-            ? cause
-            : new WorkflowRegistryError({
-                code: 'scan_failed',
-                message: 'Could not scan workflow sources.',
-                cause,
-              }),
-      }),
-    loadPinned: (artifactHash, workflowKey) =>
-      loadPinnedWorkflowArtifact({ artifactHash, cacheRoot, workflowKey, definitionCache }),
-  };
+  return WorkflowRegistry.of({
+    discover: Effect.fn('WorkflowRegistry.discover')(function* (context) {
+      const sources = workflowDiscoverySources(workflowsPath, additionalDirectories, context);
+      const scanned = new Map<WorkflowDiscoverySource, readonly WorkflowFilesystemCandidate[]>();
+      for (const source of sources) {
+        scanned.set(source, yield* scanSourceWithPolicy(source, scanSource, missingWarningPaths));
+      }
+      const discovered = discoverOrderedWorkflowSources(
+        sources,
+        (source) => scanned.get(source) ?? [],
+      );
+      for (const workflow of discovered) yield* logWorkflowShadows(workflow, shadowLogKeys);
+      return createDiscoverySnapshot(
+        discovered.map((workflow) =>
+          filesystemDiscoveryEntry(workflow, cacheRoot, definitionCache),
+        ),
+      );
+    }),
+    loadPinned: Effect.fn('WorkflowRegistry.loadPinned')(function* (artifactHash, workflowKey) {
+      return yield* loadPinnedWorkflowArtifact({
+        artifactHash,
+        cacheRoot,
+        workflowKey,
+        definitionCache,
+      });
+    }),
+  });
 }
 
+/**
+ * Scans one source. A missing source is empty; an explicitly configured one is also warned about,
+ * once per path for this registry. Any other filesystem failure fails discovery with the source as
+ * context.
+ */
 function scanSourceWithPolicy(
   source: WorkflowDiscoverySource,
   scanSource: ScanWorkflowSource,
   missingWarningPaths: Set<string>,
-) {
-  try {
-    return scanSource(source);
-  } catch (cause) {
-    if (isErrno(cause, 'ENOENT')) {
-      if (source.explicitlyConfigured && !missingWarningPaths.has(source.rootPath)) {
-        missingWarningPaths.add(source.rootPath);
-        console.warn('[runtime] Configured workflow directory is missing', {
+): Effect.Effect<readonly WorkflowFilesystemCandidate[], WorkflowRegistryError> {
+  return Effect.suspend(() => {
+    try {
+      return Effect.succeed(scanSource(source));
+    } catch (cause) {
+      if (!isErrno(cause, 'ENOENT')) {
+        return Effect.fail(
+          new WorkflowRegistryError({
+            code: 'scan_failed',
+            message: `Could not scan workflow directory: ${source.rootPath}.`,
+            workflowSourceDirectory: source.rootPath,
+            sourceKind: source.kind,
+            cause,
+          }),
+        );
+      }
+      if (!source.explicitlyConfigured || missingWarningPaths.has(source.rootPath)) {
+        return Effect.succeed([]);
+      }
+      missingWarningPaths.add(source.rootPath);
+      return Effect.logWarning('Configured workflow directory is missing').pipe(
+        Effect.annotateLogs({
           operation: 'workflow.discover.scan_source',
           workflowSourceDirectory: source.rootPath,
-        });
-      }
-      return [];
+        }),
+        Effect.as([]),
+      );
     }
-    throw new WorkflowRegistryError({
-      code: 'scan_failed',
-      message: `Could not scan workflow directory: ${source.rootPath}.`,
-      workflowSourceDirectory: source.rootPath,
-      sourceKind: source.kind,
-      cause,
-    });
-  }
+  });
 }
 
 function isErrno(cause: unknown, code: string) {
@@ -229,18 +242,26 @@ function createDiscoverySnapshot(
   return { entries, find: (workflowKey) => byKey.get(workflowKey) };
 }
 
-function logWorkflowShadows(workflow: DiscoveredFilesystemWorkflow, shadowLogKeys: Set<string>) {
-  if (workflow.shadowed.length === 0) return;
-  const key = `${workflow.workflowKey}:${workflow.winner.packageRoot}:${workflow.shadowed
-    .map((candidate) => candidate.packageRoot)
-    .join(':')}`;
-  if (shadowLogKeys.has(key)) return;
-  shadowLogKeys.add(key);
-  console.info('[runtime] Workflow source collision resolved by precedence', {
-    workflowKey: workflow.workflowKey,
-    winningSourceKind: workflow.winner.source.kind,
-    workflowPackageDirectory: workflow.winner.packageRoot,
-    shadowedWorkflowPackageDirectories: workflow.shadowed.map((candidate) => candidate.packageRoot),
+function logWorkflowShadows(
+  workflow: DiscoveredFilesystemWorkflow,
+  shadowLogKeys: Set<string>,
+): Effect.Effect<void> {
+  return Effect.suspend(() => {
+    if (workflow.shadowed.length === 0) return Effect.void;
+    const shadowedWorkflowPackageDirectories = workflow.shadowed.map(
+      (candidate) => candidate.packageRoot,
+    );
+    const key = `${workflow.workflowKey}:${workflow.winner.packageRoot}:${shadowedWorkflowPackageDirectories.join(':')}`;
+    if (shadowLogKeys.has(key)) return Effect.void;
+    shadowLogKeys.add(key);
+    return Effect.logInfo('Workflow source collision resolved by precedence').pipe(
+      Effect.annotateLogs({
+        workflowKey: workflow.workflowKey,
+        winningSourceKind: workflow.winner.source.kind,
+        workflowPackageDirectory: workflow.winner.packageRoot,
+        shadowedWorkflowPackageDirectories,
+      }),
+    );
   });
 }
 

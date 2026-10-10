@@ -2,7 +2,7 @@ import { createReadStream, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { Effect, Result } from 'effect';
+import { Data, Effect } from 'effect';
 
 import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
 
@@ -22,112 +22,136 @@ import { pathContains, type NormalizedScope } from './plan.js';
  * recorded as missing. Nothing here writes to the checkout.
  */
 
-/** A capture failure the execution reports with stage `checkpoint_capture`. */
-export class CaptureFailed extends Error {}
+/**
+ * A capture failure the execution reports with stage `checkpoint_capture`. `message` is what the
+ * run's error shows; `cause` is the filesystem or content-store failure behind it, when there is one.
+ */
+export class CheckpointCaptureFailed extends Data.TaggedError('CheckpointCaptureFailed')<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
-export function captureScopes(
+export const captureScopes = Effect.fn('workflows.captureScopes')(function* (
   root: string,
   scopes: readonly NormalizedScope[],
   capture: ContentCapture,
-): Effect.Effect<CheckpointScope[], CaptureFailed> {
-  return Effect.tryPromise({
-    try: async () => {
-      const captured: CheckpointScope[] = [];
-      for (const scope of scopes) captured.push(await captureScope(root, scope, capture));
-      return captured;
-    },
-    catch: (cause) =>
-      cause instanceof CaptureFailed ? cause : new CaptureFailed(errorMessage(cause)),
-  });
-}
+) {
+  const captured: CheckpointScope[] = [];
+  for (const scope of scopes) captured.push(yield* captureScope(root, scope, capture));
+  return captured;
+});
 
-async function captureScope(
+const captureScope = Effect.fnUntraced(function* (
   root: string,
   scope: NormalizedScope,
   capture: ContentCapture,
-): Promise<CheckpointScope> {
+) {
   const base = { scope: scope.scope, kind: scope.kind, path: scope.path, exclude: scope.exclude };
-  const found = await locate(root, scope);
-  if (found === 'missing') return { ...base, missing: true, files: [] };
+  const found = yield* locate(root, scope);
+  if (found === 'missing') {
+    const missing: CheckpointScope = { ...base, missing: true, files: [] };
+    return missing;
+  }
 
   const files: WorkflowCheckpointFileDto[] = [];
   if (scope.kind === 'file') {
-    files.push(await copyFile(root, scope.path, capture));
+    files.push(yield* copyFile(root, scope.path, capture));
   } else {
-    await walk(root, scope, scope.path, files, capture);
+    yield* walk(root, scope, scope.path, files, capture);
     files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
-  return { ...base, missing: false, files };
-}
+  const present: CheckpointScope = { ...base, missing: false, files };
+  return present;
+});
 
 /**
  * Whether the scope's path exists, checked one component at a time without following links. A
  * parent that is not a directory means the path cannot exist, so it is missing.
  */
-async function locate(root: string, scope: NormalizedScope): Promise<'present' | 'missing'> {
+const locate = Effect.fnUntraced(function* (root: string, scope: NormalizedScope) {
   const parts = scope.path.split('/');
   for (const index of parts.keys()) {
     const relative = parts.slice(0, index + 1).join('/');
-    const stats = await lstatOrNull(join(root, relative));
-    if (stats === null) return 'missing';
+    const stats = yield* filesystem(() => lstatOrNull(join(root, relative)));
+    if (stats === null) return 'missing' as const;
     if (stats.isSymbolicLink()) {
-      throw new CaptureFailed(
-        `Scope '${scope.scope}': '${relative}' is a symbolic link, which checkpoints never follow.`,
-      );
+      return yield* new CheckpointCaptureFailed({
+        message: `Scope '${scope.scope}': '${relative}' is a symbolic link, which checkpoints never follow.`,
+      });
     }
     const last = index === parts.length - 1;
-    if (!last && !stats.isDirectory()) return 'missing';
+    if (!last && !stats.isDirectory()) return 'missing' as const;
     if (last && scope.kind === 'directory' && !stats.isDirectory()) {
-      throw new CaptureFailed(`Scope '${scope.scope}': '${scope.path}' is not a directory.`);
+      return yield* new CheckpointCaptureFailed({
+        message: `Scope '${scope.scope}': '${scope.path}' is not a directory.`,
+      });
     }
     if (last && scope.kind === 'file' && !stats.isFile()) {
-      throw new CaptureFailed(`Scope '${scope.scope}': '${scope.path}' is not a regular file.`);
+      return yield* new CheckpointCaptureFailed({
+        message: `Scope '${scope.scope}': '${scope.path}' is not a regular file.`,
+      });
     }
   }
-  return 'present';
-}
+  return 'present' as const;
+});
 
-async function walk(
+const walk: (
   root: string,
   scope: NormalizedScope,
   directory: string,
   files: WorkflowCheckpointFileDto[],
   capture: ContentCapture,
-): Promise<void> {
-  const entries: Dirent[] = await readdir(join(root, directory), { withFileTypes: true });
-  for (const entry of entries) {
-    const path = `${directory}/${entry.name}`;
-    if (entry.name === '.git' || isExcluded(scope, path)) continue;
-    if (entry.isDirectory()) await walk(root, scope, path, files, capture);
-    else if (entry.isFile()) files.push(await copyFile(root, path, capture));
-    // Symlinks and special files are skipped.
-  }
-}
+) => Effect.Effect<void, CheckpointCaptureFailed> = Effect.fnUntraced(
+  function* (root, scope, directory, files, capture) {
+    const entries: Dirent[] = yield* filesystem(() =>
+      readdir(join(root, directory), { withFileTypes: true }),
+    );
+    for (const entry of entries) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.name === '.git' || isExcluded(scope, path)) continue;
+      if (entry.isDirectory()) yield* walk(root, scope, path, files, capture);
+      else if (entry.isFile()) files.push(yield* copyFile(root, path, capture));
+      // Symlinks and special files are skipped.
+    }
+  },
+);
 
 /** Whether a root-relative path is an exclusion of this scope, or lies beneath one. */
 export function isExcluded(scope: Pick<NormalizedScope, 'path' | 'exclude'>, path: string) {
   return scope.exclude.some((exclusion) => pathContains(`${scope.path}/${exclusion}`, path));
 }
 
-async function copyFile(
-  root: string,
-  path: string,
-  capture: ContentCapture,
-): Promise<WorkflowCheckpointFileDto> {
+const copyFile = Effect.fnUntraced(function* (root: string, path: string, capture: ContentCapture) {
   const absolute = join(root, path);
-  const stats = await lstat(absolute);
-  const put = await Effect.runPromise(
-    Effect.result(capture.put({ source: createReadStream(absolute) })),
+  const stats = yield* filesystem(() => lstat(absolute));
+  const stored = yield* capture.put({ source: createReadStream(absolute) }).pipe(
+    Effect.catchTag('ContentPublishError', (error) =>
+      Effect.fail(
+        new CheckpointCaptureFailed({
+          message: `Could not save '${path}': ${error.message}`,
+          cause: error,
+        }),
+      ),
+    ),
   );
-  if (Result.isFailure(put))
-    throw new CaptureFailed(`Could not save '${path}': ${put.failure.message}`);
-  const stored = put.success;
-  return {
+  const file: WorkflowCheckpointFileDto = {
     path,
     sha256: stored.contentRef.slice('sha256:'.length),
     sizeBytes: stored.byteSize,
     executable: (stats.mode & 0o100) !== 0,
   };
+  return file;
+});
+
+/**
+ * One filesystem read of the checkout. A failure fails the capture with the filesystem's own
+ * description, as the run's error has always shown it.
+ */
+function filesystem<A>(read: () => Promise<A>): Effect.Effect<A, CheckpointCaptureFailed> {
+  return Effect.tryPromise({
+    try: read,
+    catch: (cause) => new CheckpointCaptureFailed({ message: errorMessage(cause), cause }),
+  });
 }
 
 async function lstatOrNull(path: string) {

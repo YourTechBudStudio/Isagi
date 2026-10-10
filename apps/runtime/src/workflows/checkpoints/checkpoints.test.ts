@@ -606,7 +606,7 @@ function sweepContent(harness: EngineHarness, mark: () => ReadonlySet<string> = 
     harness.contentStore.collectGarbage({
       nowMs: Date.now() + 2 * graceMs,
       minAgeMs: graceMs,
-      referencedHashes: mark,
+      referencedHashes: Effect.sync(mark),
     }),
   );
 }
