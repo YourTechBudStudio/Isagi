@@ -76,11 +76,17 @@ export function makeRuntimeDatabase(database: RuntimeDrizzleDatabase): RuntimeDa
 }
 
 /**
- * The runtime's SQLite database.
+ * The runtime's SQLite database (Drizzle over better-sqlite3).
  *
  * The driver is synchronous and single-connection: `use` and `transaction` callbacks run synchronously, so never
  * `yield*` or `await` inside them and never run an Effect inside a transaction. Transactions are therefore serialised,
- * and interruption cannot land mid-transaction.
+ * and interruption cannot land mid-transaction. Expected failures inside a transaction use the typed `abort(error)`
+ * instead of throwing a tagged error and checking `instanceof` on the `DatabaseError` cause.
+ *
+ * A platform layer service: the layer opens the database file under `DataDirectory`, applies the pragmas and runs the
+ * Drizzle migrations when it is built (a failure there is a startup failure), and closes the connection when its
+ * scope closes. Repositories are module services over this one. Not `effect/sql`: it is `@stability unstable` and
+ * would replace Drizzle's typed query builder for nothing the synchronous driver needs.
  */
 export class RuntimeDatabase extends Context.Service<
   RuntimeDatabase,

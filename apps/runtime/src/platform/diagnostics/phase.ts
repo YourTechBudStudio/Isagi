@@ -28,41 +28,35 @@ let currentDiagnosticMarker:
  * phase's start, completion and failure at `Debug` (shown when `ISAGI_RUNTIME_DEBUG` is on), annotated with `phase`,
  * the context and `elapsedMs`.
  */
-export function diagnosticPhase<A, E, R>(
+export const diagnosticPhase = Effect.fnUntraced(function* <A, E, R>(
   phase: string,
   context: DiagnosticContext,
   effect: Effect.Effect<A, E, R>,
 ) {
-  return Effect.gen(function* () {
-    const cleaned = cleanContext(context);
-    const startedAt = Date.now();
-    const log = (
-      message: string,
-      annotations: DiagnosticContext,
-      ...rest: ReadonlyArray<unknown>
-    ) =>
-      Effect.logDebug(message, ...rest).pipe(
-        Effect.annotateLogs({ phase, ...cleaned, ...cleanContext(annotations) }),
-      );
-    // Publish the marker unconditionally: the watchdog ships in every build,
-    // independent of ISAGI_RUNTIME_DEBUG, and relies on it for lag attribution. Only
-    // the verbose trace below is `Debug`.
-    setMarker(phase, cleaned, startedAt);
-    yield* log('Diagnostic phase started', {});
+  const cleaned = cleanContext(context);
+  const startedAt = Date.now();
+  const log = (message: string, annotations: DiagnosticContext, ...rest: ReadonlyArray<unknown>) =>
+    Effect.logDebug(message, ...rest).pipe(
+      Effect.annotateLogs({ phase, ...cleaned, ...cleanContext(annotations) }),
+    );
+  // Publish the marker unconditionally: the watchdog ships in every build,
+  // independent of ISAGI_RUNTIME_DEBUG, and relies on it for lag attribution. Only
+  // the verbose trace below is `Debug`.
+  setMarker(phase, cleaned, startedAt);
+  yield* log('Diagnostic phase started', {});
 
-    const exit = yield* Effect.exit(effect);
-    const elapsedMs = Date.now() - startedAt;
-    clearMarker(phase);
+  const exit = yield* Effect.exit(effect);
+  const elapsedMs = Date.now() - startedAt;
+  clearMarker(phase);
 
-    if (Exit.isSuccess(exit)) {
-      yield* log('Diagnostic phase completed', { elapsedMs });
-      return exit.value;
-    }
+  if (Exit.isSuccess(exit)) {
+    yield* log('Diagnostic phase completed', { elapsedMs });
+    return exit.value;
+  }
 
-    yield* log('Diagnostic phase failed', { elapsedMs }, exit.cause);
-    return yield* Effect.failCause(exit.cause);
-  });
-}
+  yield* log('Diagnostic phase failed', { elapsedMs }, exit.cause);
+  return yield* Effect.failCause(exit.cause);
+});
 
 function setMarker(phase: string, context: DiagnosticContext, startedAt: number) {
   currentDiagnosticMarker = { phase, context, startedAt };

@@ -48,21 +48,31 @@ export function entityLockKeyId(key: EntityLockKey) {
 const make = Effect.gen(function* () {
   const semaphores = new Map<string, Semaphore.Semaphore>();
 
+  // Lookup and insertion happen in one synchronous step, so two fibers asking for a new key's lock at the same time
+  // always share one semaphore.
+  const semaphoreFor = (key: EntityLockKey) =>
+    Effect.sync(() => {
+      const keyId = entityLockKeyId(key);
+      let semaphore = semaphores.get(keyId);
+      if (!semaphore) {
+        semaphore = Semaphore.makeUnsafe(1);
+        semaphores.set(keyId, semaphore);
+      }
+      return semaphore;
+    });
+
   const service = EntityLock.of({
-    withLock: (key, run) =>
-      Effect.gen(function* () {
-        const keyId = entityLockKeyId(key);
-        let semaphore = semaphores.get(keyId);
-        if (!semaphore) {
-          semaphore = yield* Semaphore.make(1);
-          semaphores.set(keyId, semaphore);
-        }
-        // The one place a witness is created, and the only reason this file
-        // asserts anything: the brand has no runtime representation, so the
-        // value carries exactly the key and the cast is the proof.
-        const held = { key } as EntityLockHeld;
-        return yield* semaphore.withPermits(1)(run(held));
-      }),
+    withLock: Effect.fn('EntityLock.withLock')(function* <A, E, R>(
+      key: EntityLockKey,
+      run: (held: EntityLockHeld) => Effect.Effect<A, E, R>,
+    ) {
+      const semaphore = yield* semaphoreFor(key);
+      // The one place a witness is created, and the only reason this file
+      // asserts anything: the brand has no runtime representation, so the
+      // value carries exactly the key and the cast is the proof.
+      const held = { key } as EntityLockHeld;
+      return yield* semaphore.withPermits(1)(run(held));
+    }),
   });
 
   return yield* Effect.acquireRelease(Effect.succeed(service), () =>

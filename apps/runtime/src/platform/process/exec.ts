@@ -100,7 +100,7 @@ export const execCommand = Effect.fn('process.execCommand')(function* (
  * `spawn_failed` with a null code — the conservative bucket, because it is the one classification never treated as
  * evidence of anything.
  *
- * Same precedence as Git's `deriveGitCommandFailure`, which moves onto this function (plan R22).
+ * Git's `GitCommandError.failure` is this classification, so it decides project-root classification too.
  */
 export function classifyExecFailure(cause: unknown): ExecFailure {
   if (!cause || typeof cause !== 'object') {

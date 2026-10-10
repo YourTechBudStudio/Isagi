@@ -102,8 +102,8 @@ export interface LoopbackPortProbeHooks {
 export function makeLoopbackPortProbe(
   hooks: LoopbackPortProbeHooks = {},
 ): LoopbackPortProbe['Service'] {
-  const probeInactive = (port: number) =>
-    withLoopbackPort(port, hooks).pipe(
+  const probeInactive = Effect.fn('LoopbackPortProbe.probeInactive')(function* (port: number) {
+    return yield* withLoopbackPort(port, hooks).pipe(
       Effect.as(true),
       // Both stages fold to `false`, but only for their own reasons: a bind
       // failure means the port is in use, and a close failure means this file
@@ -111,8 +111,11 @@ export function makeLoopbackPortProbe(
       // assignment can still serve the endpoint.
       Effect.catch(() => Effect.succeed(false)),
     );
+  });
 
-  const obtainEphemeralPort = withLoopbackPort(0, hooks);
+  const obtainEphemeralPort = withLoopbackPort(0, hooks).pipe(
+    Effect.withSpan('LoopbackPortProbe.obtainEphemeralPort'),
+  );
 
   return { probeInactive, obtainEphemeralPort };
 }
@@ -177,23 +180,21 @@ function withLoopbackPort(
         if (hooks.afterListening) yield* hooks.afterListening(bound);
         const close = closeListener(listener);
         yield* (hooks.closeListener ? hooks.closeListener({ close }) : close).pipe(
+          // Out-of-model: the OS refused to release a listener this process
+          // owns. The port is not offered, so this can cost a launch a
+          // diagnostic but never a wrong allocation — and the only evidence it
+          // happened is this line.
+          //
+          // The cause is deliberately absent. The logger renders whatever it is
+          // given, so passing it — as a message part or as a `Cause` — would
+          // publish foreign text into logs that end up in bug reports, and this
+          // module holds no classifier that could redact it. The label and the
+          // port are both runtime-authored, and they are enough to see the
+          // degradation: the caller simply asks for a fresh port.
           Effect.tapError(() =>
-            Effect.sync(() => {
-              // Out-of-model: the OS refused to release a listener this process
-              // owns. The port is not offered, so this can cost a launch a
-              // diagnostic but never a wrong allocation — and the only evidence
-              // it happened is this line.
-              //
-              // The cause is deliberately absent. `console` stringifies its
-              // arguments, so passing it — even as a second argument — would
-              // publish foreign text into logs that end up in bug reports, and
-              // this module holds no classifier that could redact it. The label
-              // and the port are both runtime-authored, and they are enough to
-              // see the degradation: the caller simply asks for a fresh port.
-              console.warn(
-                `[runtime] Loopback port probe could not close its listener port=${bound}`,
-              );
-            }),
+            Effect.logWarning('Loopback port probe could not close its listener').pipe(
+              Effect.annotateLogs({ port: bound }),
+            ),
           ),
         );
         return bound;

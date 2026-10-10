@@ -6,9 +6,11 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { Cause, Effect, Exit, Option } from 'effect';
+import { Cause, Effect, Exit, Fiber, Option } from 'effect';
 
-import { deriveGitCommandFailure, Git, GitCommandError } from './command.js';
+import { expectNoProcessMatching, runScoped } from '@isagi/testing';
+
+import { Git, GitCommandError } from './command.js';
 import { removeTree, requireGit } from './testing.js';
 
 /**
@@ -16,6 +18,10 @@ import { removeTree, requireGit } from './testing.js';
  * rejections. Everything above this layer branches on `failure` rather than on
  * stderr text, so getting the derivation wrong would make an unlaunchable `git`
  * indistinguishable from a repository that simply does not exist.
+ *
+ * The derivation itself is `classifyExecFailure` in `platform/process`, whose
+ * precedence is pinned by `platform/process/exec.test.ts`; the cases here prove
+ * Git reports what that classifier derives from real git runs.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +47,36 @@ function run(args: readonly string[], options?: { readonly env?: Record<string, 
   );
 }
 
+/**
+ * A git invocation that blocks until killed: `hash-object --stdin` waits for an
+ * end of input that never comes, because the adapter leaves the child's stdin
+ * open. The `-c` value is a marker nothing else on the machine carries, so
+ * `pgrep -f` finds only this test's git.
+ */
+function blockingGit() {
+  const marker = `isagi-git-test-${process.pid}-${Math.floor(Math.random() * 1_000_000)}`;
+  return { marker, args: ['-c', `isagi.testmarker=${marker}`, 'hash-object', '--stdin'] };
+}
+
+function processRunning(marker: string) {
+  try {
+    execFileSync('pgrep', ['-f', marker]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function waitForProcess(marker: string) {
+  return Effect.promise(async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (processRunning(marker)) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`no process matching ${marker} started`);
+  });
+}
+
 function commandFailure(exit: Exit.Exit<unknown, GitCommandError>) {
   assert.ok(Exit.isFailure(exit), 'expected the git call to fail');
   const failure = Option.getOrNull(Cause.findErrorOption(exit.cause));
@@ -62,53 +98,6 @@ function inAmbientEnvironment(ambient: Record<string, string>, request: unknown)
   );
   return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as Record<string, unknown>;
 }
-
-describe('deriveGitCommandFailure precedence', () => {
-  test('an abort is recognized by name, ahead of every other field', () => {
-    assert.deepEqual(
-      deriveGitCommandFailure({ name: 'AbortError', signal: 'SIGTERM', code: 128 }),
-      { kind: 'aborted' },
-    );
-  });
-
-  test('a signal outranks a code', () => {
-    assert.deepEqual(deriveGitCommandFailure({ signal: 'SIGKILL', code: 128 }), {
-      kind: 'signalled',
-      signal: 'SIGKILL',
-    });
-  });
-
-  test('a numeric code is an ordinary exit', () => {
-    assert.deepEqual(deriveGitCommandFailure({ code: 128 }), { kind: 'exited', exitCode: 128 });
-  });
-
-  test('a string code is a launch failure and carries the system code', () => {
-    assert.deepEqual(deriveGitCommandFailure({ code: 'ENOENT' }), {
-      kind: 'spawn_failed',
-      systemErrorCode: 'ENOENT',
-    });
-  });
-
-  test('unrecognized causes land in the conservative bucket', () => {
-    // Conservative because `spawn_failed` is the one shape classification never
-    // reads as evidence of anything; it can only produce a refusal.
-    for (const cause of [
-      null,
-      undefined,
-      'a string',
-      42,
-      new Error('no fields'),
-      {},
-      { code: '' },
-    ]) {
-      assert.deepEqual(
-        deriveGitCommandFailure(cause),
-        { kind: 'spawn_failed', systemErrorCode: null },
-        `unexpected derivation for ${String(cause)}`,
-      );
-    }
-  });
-});
 
 describe('the live adapter', () => {
   test('a successful command returns its output', async () => {
@@ -154,6 +143,50 @@ describe('the live adapter', () => {
     );
   });
 });
+
+describe(
+  'git child lifecycle',
+  { skip: process.platform === 'win32' ? 'uses pgrep' : false },
+  () => {
+    test('interrupting git kills its child process', async () => {
+      const { marker, args } = blockingGit();
+      await runScoped(
+        Effect.gen(function* () {
+          const git = yield* Git;
+          const fiber = yield* Effect.forkChild(git.run(args));
+          yield* waitForProcess(marker);
+          yield* Fiber.interrupt(fiber);
+          const exit = yield* Fiber.await(fiber);
+          // Interruption is not a failure: no `aborted` GitCommandError reaches the caller.
+          assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+          yield* expectNoProcessMatching(marker);
+        }).pipe(Effect.provide(Git.layer)),
+      );
+    });
+
+    test('git timeout fails with the typed timeout error and kills the child', async () => {
+      const { marker, args } = blockingGit();
+      await runScoped(
+        Effect.gen(function* () {
+          const git = yield* Git;
+          const timed = yield* Effect.forkChild(
+            Effect.flip(
+              git.run(args).pipe(
+                Effect.tap(() => Effect.die('git should not finish')),
+                Effect.timeout('1 second'),
+              ),
+            ),
+          );
+          // Proves the deadline lands on a live git rather than on one that never started.
+          yield* waitForProcess(marker);
+          const error = yield* Fiber.join(timed);
+          assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+          yield* expectNoProcessMatching(marker);
+        }).pipe(Effect.provide(Git.layer)),
+      );
+    });
+  },
+);
 
 describe('overrides beat the inherited environment', () => {
   test('a per-call value wins over an ambient one', () => {
