@@ -7,7 +7,7 @@ import {
   isNull,
   type InferSelectModel,
 } from 'drizzle-orm';
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
@@ -92,19 +92,51 @@ const make = Effect.gen(function* () {
     ptyProcessId: worktreeCommandRuns.ptyProcessId,
   };
 
+  // Maps a stored state row. The resolved-port snapshot is decoded here, outside the
+  // database callback, so an undecodable snapshot can be logged as an Effect.
+  const toStateRow = Effect.fnUntraced(function* (record: CommandStateRecord) {
+    if (record.resolvedPortsJson === null) return commandStateRow(record, null);
+    const resolvedPorts = decodeResolvedPorts(record.resolvedPortsJson);
+    if (resolvedPorts === null) {
+      // Out-of-model stored data degrades to the modeled unknown value instead
+      // of failing the read: `null` is exactly what the contract already means
+      // by "unknown for this incarnation". The warning carries identity only —
+      // the payload is command-derived and adds nothing a support reader needs.
+      yield* Effect.logWarning('Command resolved-port snapshot could not be decoded').pipe(
+        Effect.annotateLogs({ worktreeId: record.worktreeId, commandName: record.commandName }),
+      );
+    }
+    return commandStateRow(record, resolvedPorts);
+  });
+  const toStateRows = (records: readonly CommandStateRecord[]) =>
+    Effect.forEach(records, toStateRow);
+  const toOptionalStateRow = (record: CommandStateRecord | undefined) =>
+    record ? toStateRow(record) : Effect.succeed(null);
+  const toFinalizeResult = Effect.fnUntraced(function* (result: StoredFinalizeResult) {
+    return {
+      run: result.run,
+      runCompleted: result.runCompleted,
+      stateTransitioned: result.stateTransitioned,
+      state: result.state ? yield* toStateRow(result.state) : null,
+    } satisfies CommandFinalizeResult;
+  });
+
   return CommandRepository.of({
-    listStatesForWorktree: (worktreeId) =>
-      database.use('list_worktree_command_states', (db) =>
+    listStatesForWorktree: Effect.fn('CommandRepository.listStatesForWorktree')(
+      function* (worktreeId) {
+        const records = yield* database.use('list_worktree_command_states', (db) =>
+          db
+            .select(stateColumns)
+            .from(worktreeCommandStates)
+            .where(eq(worktreeCommandStates.worktreeId, worktreeId))
+            .all(),
+        );
+        return yield* toStateRows(records);
+      },
+    ),
+    findState: Effect.fn('CommandRepository.findState')(function* (input) {
+      const record = yield* database.use('find_worktree_command_state', (db) =>
         db
-          .select(stateColumns)
-          .from(worktreeCommandStates)
-          .where(eq(worktreeCommandStates.worktreeId, worktreeId))
-          .all()
-          .map(commandStateRow),
-      ),
-    findState: (input) =>
-      database.use('find_worktree_command_state', (db) => {
-        const row = db
           .select(stateColumns)
           .from(worktreeCommandStates)
           .where(
@@ -113,33 +145,40 @@ const make = Effect.gen(function* () {
               eq(worktreeCommandStates.commandName, input.commandName),
             ),
           )
-          .get();
-        return row ? commandStateRow(row) : null;
-      }),
-    listRunningStates: database.use('list_running_worktree_command_states', (db) =>
-      db
-        .select(stateColumns)
-        .from(worktreeCommandStates)
-        .where(eq(worktreeCommandStates.status, 'running'))
-        .all()
-        .map(commandStateRow),
-    ),
-    listRunningStatesForWorktree: (worktreeId) =>
-      database.use('list_running_worktree_command_states_for_worktree', (db) =>
+          .get(),
+      );
+      return yield* toOptionalStateRow(record);
+    }),
+    listRunningStates: database
+      .use('list_running_worktree_command_states', (db) =>
         db
           .select(stateColumns)
           .from(worktreeCommandStates)
-          .where(
-            and(
-              eq(worktreeCommandStates.worktreeId, worktreeId),
-              eq(worktreeCommandStates.status, 'running'),
-            ),
-          )
-          .all()
-          .map(commandStateRow),
-      ),
-    ensureState: (input) =>
-      database.transaction('ensure_worktree_command_state', (db) => {
+          .where(eq(worktreeCommandStates.status, 'running'))
+          .all(),
+      )
+      .pipe(Effect.flatMap(toStateRows)),
+    listRunningStatesForWorktree: Effect.fn('CommandRepository.listRunningStatesForWorktree')(
+      function* (worktreeId) {
+        const records = yield* database.use(
+          'list_running_worktree_command_states_for_worktree',
+          (db) =>
+            db
+              .select(stateColumns)
+              .from(worktreeCommandStates)
+              .where(
+                and(
+                  eq(worktreeCommandStates.worktreeId, worktreeId),
+                  eq(worktreeCommandStates.status, 'running'),
+                ),
+              )
+              .all(),
+        );
+        return yield* toStateRows(records);
+      },
+    ),
+    ensureState: Effect.fn('CommandRepository.ensureState')(function* (input) {
+      const record = yield* database.transaction('ensure_worktree_command_state', (db) => {
         const existing = db
           .select(stateColumns)
           .from(worktreeCommandStates)
@@ -150,9 +189,9 @@ const make = Effect.gen(function* () {
             ),
           )
           .get();
-        if (existing) return commandStateRow(existing);
+        if (existing) return existing;
         const now = timestamp();
-        const inserted = db
+        return db
           .insert(worktreeCommandStates)
           .values({
             worktreeId: input.worktreeId,
@@ -164,14 +203,17 @@ const make = Effect.gen(function* () {
           })
           .returning(stateColumns)
           .get();
-        return commandStateRow(inserted);
-      }),
-    transitionState: (input) =>
-      database.transaction('transition_worktree_command_state', (db) =>
+      });
+      return yield* toStateRow(record);
+    }),
+    transitionState: Effect.fn('CommandRepository.transitionState')(function* (input) {
+      const record = yield* database.transaction('transition_worktree_command_state', (db) =>
         writeCommandState(db, { ...input, resolvedPorts: undefined }),
-      ),
-    markLaunchInProgress: (input) =>
-      database.transaction('mark_worktree_command_launch_in_progress', (db) =>
+      );
+      return yield* toStateRow(record);
+    }),
+    markLaunchInProgress: Effect.fn('CommandRepository.markLaunchInProgress')(function* (input) {
+      const record = yield* database.transaction('mark_worktree_command_launch_in_progress', (db) =>
         writeCommandState(db, {
           worktreeId: input.worktreeId,
           commandName: input.commandName,
@@ -179,9 +221,11 @@ const make = Effect.gen(function* () {
           activePtyProcessId: null,
           resolvedPorts: input.resolvedPorts,
         }),
-      ),
-    createRun: (input) =>
-      database.use('create_worktree_command_run', (db) => {
+      );
+      return yield* toStateRow(record);
+    }),
+    createRun: Effect.fn('CommandRepository.createRun')(function* (input) {
+      return yield* database.use('create_worktree_command_run', (db) => {
         const now = timestamp();
         const completedAt = input.completedAt === undefined ? null : input.completedAt;
         const inserted = db
@@ -201,9 +245,10 @@ const make = Effect.gen(function* () {
           .returning(runColumns)
           .get();
         return commandRunRow(inserted);
-      }),
-    updateRunPty: (input) =>
-      database.use('update_worktree_command_run_pty', (db) => {
+      });
+    }),
+    updateRunPty: Effect.fn('CommandRepository.updateRunPty')(function* (input) {
+      return yield* database.use('update_worktree_command_run_pty', (db) => {
         const row = db
           .update(worktreeCommandRuns)
           .set({
@@ -214,9 +259,10 @@ const make = Effect.gen(function* () {
           .returning(runColumns)
           .get();
         return row ? commandRunRow(row) : null;
-      }),
-    completeRun: (input) =>
-      database.use('complete_worktree_command_run', (db) => {
+      });
+    }),
+    completeRun: Effect.fn('CommandRepository.completeRun')(function* (input) {
+      return yield* database.use('complete_worktree_command_run', (db) => {
         const now = timestamp();
         const row = db
           .update(worktreeCommandRuns)
@@ -231,157 +277,177 @@ const make = Effect.gen(function* () {
           .returning(runColumns)
           .get();
         return row ? commandRunRow(row) : null;
-      }),
-    finalizeRunAndStateByPty: (input) =>
-      database.transaction('finalize_worktree_command_run_and_state_by_pty', (db) =>
-        finalizeRunAndState(db, stateColumns, runColumns, input, {
-          selectRun: () =>
-            db
-              .select(runColumns)
-              .from(worktreeCommandRuns)
-              .where(
-                and(
-                  eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                  eq(worktreeCommandRuns.commandName, input.commandName),
-                  eq(worktreeCommandRuns.ptyProcessId, input.ptyProcessId),
-                ),
-              )
-              .orderBy(desc(worktreeCommandRuns.id))
-              .get(),
-          stateMatches: (state) => state.activePtyProcessId === input.ptyProcessId,
-        }),
-      ),
-    finalizeRunAndStateByRun: (input) =>
-      database.transaction('finalize_worktree_command_run_and_state_by_run', (db) =>
-        finalizeRunAndState(db, stateColumns, runColumns, input, {
-          // Scoped by identity as well as id: a caller that mixes up its
-          // inputs must complete nothing rather than complete one command's
-          // run while transitioning another command's state.
-          selectRun: () =>
-            db
-              .select(runColumns)
-              .from(worktreeCommandRuns)
-              .where(
-                and(
-                  eq(worktreeCommandRuns.id, input.runId),
-                  eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                  eq(worktreeCommandRuns.commandName, input.commandName),
-                ),
-              )
-              .get(),
-          stateMatches: (state) => state.status === 'running',
-        }),
-      ),
-    readoptCommandIncarnation: (input) =>
-      database.transaction('readopt_worktree_command_incarnation', (db) => {
-        const now = timestamp();
-        const existingState = db
-          .select(stateColumns)
-          .from(worktreeCommandStates)
-          .where(
-            and(
-              eq(worktreeCommandStates.worktreeId, input.worktreeId),
-              eq(worktreeCommandStates.commandName, input.commandName),
-            ),
-          )
-          .get();
-        const state = existingState
-          ? db
-              .update(worktreeCommandStates)
-              .set({
-                status: 'running',
-                activePtyProcessId: input.ptyProcessId,
-                updatedAt: now,
-              })
-              .where(eq(worktreeCommandStates.id, existingState.id))
-              .returning(stateColumns)
-              .get()
-          : db
-              .insert(worktreeCommandStates)
-              .values({
-                worktreeId: input.worktreeId,
-                commandName: input.commandName,
-                status: 'running',
-                activePtyProcessId: input.ptyProcessId,
-                createdAt: now,
-                updatedAt: now,
-              })
-              .returning(stateColumns)
-              .get();
+      });
+    }),
+    finalizeRunAndStateByPty: Effect.fn('CommandRepository.finalizeRunAndStateByPty')(
+      function* (input) {
+        const result = yield* database.transaction(
+          'finalize_worktree_command_run_and_state_by_pty',
+          (db) =>
+            finalizeRunAndState(db, stateColumns, runColumns, input, {
+              selectRun: () =>
+                db
+                  .select(runColumns)
+                  .from(worktreeCommandRuns)
+                  .where(
+                    and(
+                      eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                      eq(worktreeCommandRuns.commandName, input.commandName),
+                      eq(worktreeCommandRuns.ptyProcessId, input.ptyProcessId),
+                    ),
+                  )
+                  .orderBy(desc(worktreeCommandRuns.id))
+                  .get(),
+              stateMatches: (state) => state.activePtyProcessId === input.ptyProcessId,
+            }),
+        );
+        return yield* toFinalizeResult(result);
+      },
+    ),
+    finalizeRunAndStateByRun: Effect.fn('CommandRepository.finalizeRunAndStateByRun')(
+      function* (input) {
+        const result = yield* database.transaction(
+          'finalize_worktree_command_run_and_state_by_run',
+          (db) =>
+            finalizeRunAndState(db, stateColumns, runColumns, input, {
+              // Scoped by identity as well as id: a caller that mixes up its
+              // inputs must complete nothing rather than complete one command's
+              // run while transitioning another command's state.
+              selectRun: () =>
+                db
+                  .select(runColumns)
+                  .from(worktreeCommandRuns)
+                  .where(
+                    and(
+                      eq(worktreeCommandRuns.id, input.runId),
+                      eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                      eq(worktreeCommandRuns.commandName, input.commandName),
+                    ),
+                  )
+                  .get(),
+              stateMatches: (state) => state.status === 'running',
+            }),
+        );
+        return yield* toFinalizeResult(result);
+      },
+    ),
+    readoptCommandIncarnation: Effect.fn('CommandRepository.readoptCommandIncarnation')(
+      function* (input) {
+        const stored = yield* database.transaction('readopt_worktree_command_incarnation', (db) => {
+          const now = timestamp();
+          const existingState = db
+            .select(stateColumns)
+            .from(worktreeCommandStates)
+            .where(
+              and(
+                eq(worktreeCommandStates.worktreeId, input.worktreeId),
+                eq(worktreeCommandStates.commandName, input.commandName),
+              ),
+            )
+            .get();
+          const state = existingState
+            ? db
+                .update(worktreeCommandStates)
+                .set({
+                  status: 'running',
+                  activePtyProcessId: input.ptyProcessId,
+                  updatedAt: now,
+                })
+                .where(eq(worktreeCommandStates.id, existingState.id))
+                .returning(stateColumns)
+                .get()
+            : db
+                .insert(worktreeCommandStates)
+                .values({
+                  worktreeId: input.worktreeId,
+                  commandName: input.commandName,
+                  status: 'running',
+                  activePtyProcessId: input.ptyProcessId,
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .returning(stateColumns)
+                .get();
 
-        const existingRun = db
-          .select(runColumns)
-          .from(worktreeCommandRuns)
-          .where(
-            and(
-              eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-              eq(worktreeCommandRuns.commandName, input.commandName),
-            ),
-          )
-          .orderBy(desc(worktreeCommandRuns.id))
-          .get();
-        // The diagnostic columns are only named in the update when the caller
-        // supplied them, so an omitted diagnostic leaves the persisted values
-        // untouched rather than overwriting them with nulls.
-        const runDiagnosticColumns = input.diagnostic
-          ? {
-              diagnosticReason: input.diagnostic.reason,
-              diagnosticDetail: input.diagnostic.detail,
-            }
-          : {};
-        const run = existingRun
-          ? db
-              .update(worktreeCommandRuns)
-              .set({
-                status: 'running',
-                ptyProcessId: input.ptyProcessId,
-                ...runDiagnosticColumns,
-                completedAt: null,
-                updatedAt: now,
-              })
-              .where(eq(worktreeCommandRuns.id, existingRun.id))
-              .returning(runColumns)
-              .get()
-          : db
-              .insert(worktreeCommandRuns)
-              .values({
-                worktreeId: input.worktreeId,
-                commandName: input.commandName,
-                ptyProcessId: input.ptyProcessId,
-                status: 'running',
-                diagnosticReason: input.diagnostic?.reason ?? null,
-                diagnosticDetail: input.diagnostic?.detail ?? null,
-                startedAt: now,
-                completedAt: null,
-                createdAt: now,
-                updatedAt: now,
-              })
-              .returning(runColumns)
-              .get();
+          const existingRun = db
+            .select(runColumns)
+            .from(worktreeCommandRuns)
+            .where(
+              and(
+                eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                eq(worktreeCommandRuns.commandName, input.commandName),
+              ),
+            )
+            .orderBy(desc(worktreeCommandRuns.id))
+            .get();
+          // The diagnostic columns are only named in the update when the caller
+          // supplied them, so an omitted diagnostic leaves the persisted values
+          // untouched rather than overwriting them with nulls.
+          const runDiagnosticColumns = input.diagnostic
+            ? {
+                diagnosticReason: input.diagnostic.reason,
+                diagnosticDetail: input.diagnostic.detail,
+              }
+            : {};
+          const run = existingRun
+            ? db
+                .update(worktreeCommandRuns)
+                .set({
+                  status: 'running',
+                  ptyProcessId: input.ptyProcessId,
+                  ...runDiagnosticColumns,
+                  completedAt: null,
+                  updatedAt: now,
+                })
+                .where(eq(worktreeCommandRuns.id, existingRun.id))
+                .returning(runColumns)
+                .get()
+            : db
+                .insert(worktreeCommandRuns)
+                .values({
+                  worktreeId: input.worktreeId,
+                  commandName: input.commandName,
+                  ptyProcessId: input.ptyProcessId,
+                  status: 'running',
+                  diagnosticReason: input.diagnostic?.reason ?? null,
+                  diagnosticDetail: input.diagnostic?.detail ?? null,
+                  startedAt: now,
+                  completedAt: null,
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .returning(runColumns)
+                .get();
 
-        return { state: commandStateRow(state), run: commandRunRow(run) };
-      }),
+          return { state, run: commandRunRow(run) };
+        });
+        return { state: yield* toStateRow(stored.state), run: stored.run };
+      },
+    ),
     listCommandPtyLinks: database.use('list_worktree_command_pty_links', (db) =>
       distinctCommandPtyLinks(
         db.select(stateLinkColumns).from(worktreeCommandStates).all(),
         db.select(runLinkColumns).from(worktreeCommandRuns).all(),
       ),
     ),
-    listCommandPtyLinksForWorktree: (worktreeId) =>
-      database.use('list_worktree_command_pty_links_for_worktree', (db) =>
-        distinctCommandPtyLinks(
-          db
-            .select(stateLinkColumns)
-            .from(worktreeCommandStates)
-            .where(eq(worktreeCommandStates.worktreeId, worktreeId))
-            .all(),
-          db
-            .select(runLinkColumns)
-            .from(worktreeCommandRuns)
-            .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
-            .all(),
-        ),
-      ),
+    listCommandPtyLinksForWorktree: Effect.fn('CommandRepository.listCommandPtyLinksForWorktree')(
+      function* (worktreeId) {
+        return yield* database.use('list_worktree_command_pty_links_for_worktree', (db) =>
+          distinctCommandPtyLinks(
+            db
+              .select(stateLinkColumns)
+              .from(worktreeCommandStates)
+              .where(eq(worktreeCommandStates.worktreeId, worktreeId))
+              .all(),
+            db
+              .select(runLinkColumns)
+              .from(worktreeCommandRuns)
+              .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
+              .all(),
+          ),
+        );
+      },
+    ),
     listLinklessRunningRuns: database.use('list_linkless_running_worktree_command_runs', (db) =>
       db
         .select(runColumns)
@@ -392,8 +458,8 @@ const make = Effect.gen(function* () {
         .all()
         .map(commandRunRow),
     ),
-    findLatestRun: (input) =>
-      database.use('find_latest_worktree_command_run', (db) => {
+    findLatestRun: Effect.fn('CommandRepository.findLatestRun')(function* (input) {
+      return yield* database.use('find_latest_worktree_command_run', (db) => {
         const row = db
           .select(runColumns)
           .from(worktreeCommandRuns)
@@ -406,24 +472,28 @@ const make = Effect.gen(function* () {
           .orderBy(desc(worktreeCommandRuns.id))
           .get();
         return row ? commandRunRow(row) : null;
-      }),
-    findRunByPtyProcess: (ptyProcessId) =>
-      database.use('find_worktree_command_run_by_pty', (db) => {
-        const row = db
-          .select(runColumns)
-          .from(worktreeCommandRuns)
-          .where(eq(worktreeCommandRuns.ptyProcessId, ptyProcessId))
-          .orderBy(desc(worktreeCommandRuns.id))
-          .get();
-        return row ? commandRunRow(row) : null;
-      }),
+      });
+    }),
+    findRunByPtyProcess: Effect.fn('CommandRepository.findRunByPtyProcess')(
+      function* (ptyProcessId) {
+        return yield* database.use('find_worktree_command_run_by_pty', (db) => {
+          const row = db
+            .select(runColumns)
+            .from(worktreeCommandRuns)
+            .where(eq(worktreeCommandRuns.ptyProcessId, ptyProcessId))
+            .orderBy(desc(worktreeCommandRuns.id))
+            .get();
+          return row ? commandRunRow(row) : null;
+        });
+      },
+    ),
     // Keep only the newest `keep` runs for a command and delete the rest,
     // returning the deleted rows so the caller can reclaim their command-log
     // files. This is what stops historical runs from pinning PTY rows/logs
     // forever (each retained run is a GC reference); pruned runs let the PTY
     // GC reclaim their now-unreferenced process rows and session logs.
-    pruneRunHistory: (input) =>
-      database.transaction('prune_worktree_command_runs', (db) => {
+    pruneRunHistory: Effect.fn('CommandRepository.pruneRunHistory')(function* (input) {
+      return yield* database.transaction('prune_worktree_command_runs', (db) => {
         const rows = db
           .select(runColumns)
           .from(worktreeCommandRuns)
@@ -446,7 +516,8 @@ const make = Effect.gen(function* () {
           )
           .run();
         return stale.map(commandRunRow);
-      }),
+      });
+    }),
   });
 });
 
@@ -617,6 +688,13 @@ export class CommandRepository extends Context.Service<CommandRepository, Comman
   static readonly layer = Layer.effect(CommandRepository, make);
 }
 
+// What a finalizer's transaction returns: the result with the state row still in
+// its stored form, so the snapshot is decoded (and a decode failure logged) after
+// the transaction.
+interface StoredFinalizeResult extends Omit<CommandFinalizeResult, 'state'> {
+  readonly state: CommandStateRecord | null;
+}
+
 // The shared body of both finalizers, run directly on the caller's transaction
 // handle so run completion and state transition commit or roll back together.
 // Two guards, both deliberate:
@@ -643,7 +721,7 @@ function finalizeRunAndState(
     readonly selectRun: () => CommandRunRecord | undefined;
     readonly stateMatches: (state: CommandStateRecord) => boolean;
   },
-): CommandFinalizeResult {
+): StoredFinalizeResult {
   const now = timestamp();
   const existingRun = keying.selectRun();
   let run = existingRun ? commandRunRow(existingRun) : null;
@@ -677,7 +755,7 @@ function finalizeRunAndState(
       ),
     )
     .get();
-  let state = existingState ? commandStateRow(existingState) : null;
+  let state = existingState ?? null;
   let stateTransitioned = false;
   if (existingState && keying.stateMatches(existingState)) {
     const updated = db
@@ -687,7 +765,7 @@ function finalizeRunAndState(
       .returning(stateColumns)
       .get();
     if (updated) {
-      state = commandStateRow(updated);
+      state = updated;
       stateTransitioned = true;
     }
   }
@@ -695,35 +773,32 @@ function finalizeRunAndState(
   return { run, runCompleted, stateTransitioned, state };
 }
 
-function commandStateRow(row: CommandStateRecord): CommandStateRow {
+function commandStateRow(
+  row: CommandStateRecord,
+  resolvedPorts: readonly ResolvedPortEntry[] | null,
+): CommandStateRow {
   return {
     id: row.id,
     worktreeId: row.worktreeId,
     commandName: row.commandName,
     status: row.status,
     activePtyProcessId: row.activePtyProcessId,
-    resolvedPorts: decodeResolvedPorts(row),
+    resolvedPorts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
-// Out-of-model stored data degrades to the modeled unknown value instead of
-// failing the read: `null` is exactly what the contract already means by
-// "unknown for this incarnation". The warning carries identity only — the
-// payload is command-derived and adds nothing a support reader needs.
-function decodeResolvedPorts(row: CommandStateRecord): readonly ResolvedPortEntry[] | null {
-  if (row.resolvedPortsJson === null) {
-    return null;
-  }
+// A stored snapshot, or null when it is not JSON or does not match the snapshot schema.
+function decodeResolvedPorts(json: string): readonly ResolvedPortEntry[] | null {
+  let parsed: unknown;
   try {
-    return Schema.decodeUnknownSync(resolvedPortsSnapshotSchema)(JSON.parse(row.resolvedPortsJson));
+    parsed = JSON.parse(json);
   } catch {
-    console.warn(
-      `[runtime] Command resolved-port snapshot could not be decoded worktree=${row.worktreeId} command=${row.commandName}`,
-    );
     return null;
   }
+  const decoded = Schema.decodeUnknownResult(resolvedPortsSnapshotSchema)(parsed);
+  return Result.isSuccess(decoded) ? decoded.success : null;
 }
 
 function commandRunRow(row: CommandRunRecord): CommandRunRow {
@@ -786,7 +861,7 @@ function writeCommandState(
     readonly activePtyProcessId?: number | null | undefined;
     readonly resolvedPorts: readonly ResolvedPortEntry[] | undefined;
   },
-) {
+): CommandStateRecord {
   const now = timestamp();
   const existing = db
     .select(commandStateColumns)
@@ -799,7 +874,7 @@ function writeCommandState(
     )
     .get();
   if (!existing) {
-    const inserted = db
+    return db
       .insert(worktreeCommandStates)
       .values({
         worktreeId: input.worktreeId,
@@ -813,9 +888,8 @@ function writeCommandState(
       })
       .returning(commandStateColumns)
       .get();
-    return commandStateRow(inserted);
   }
-  const updated = db
+  return db
     .update(worktreeCommandStates)
     .set({
       status: input.status,
@@ -834,5 +908,4 @@ function writeCommandState(
     .where(eq(worktreeCommandStates.id, existing.id))
     .returning(commandStateColumns)
     .get();
-  return commandStateRow(updated);
 }

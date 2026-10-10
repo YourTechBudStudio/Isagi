@@ -7,6 +7,8 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
+import { makeLogCapture } from '@isagi/testing';
+
 import {
   DatabaseError,
   DataDirectory,
@@ -737,6 +739,41 @@ test('a malformed stored snapshot decodes to null rather than failing the read',
 
   assert.equal(result?.status, 'running');
   assert.equal(result?.resolvedPorts, null);
+});
+
+test('an undecodable stored snapshot is logged by command identity only', async () => {
+  // The warning is the only trace of the degraded read. It names which command
+  // carries the bad row and never echoes the stored payload, which is
+  // command-derived.
+  const capture = makeLogCapture();
+  const payload = '{"secret":"PAYLOAD-SENTINEL"}';
+  const seeded = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const database = yield* RuntimeDatabase;
+      const row = yield* seed({ stateStatus: 'running' });
+      yield* database.use('test_corrupt', (db) =>
+        db
+          .update(worktreeCommandStates)
+          .set({ resolvedPortsJson: payload })
+          .where(eq(worktreeCommandStates.id, row.stateId))
+          .run(),
+      );
+      yield* repository.findState({ worktreeId: row.worktreeId, commandName: row.commandName });
+      return row;
+    }).pipe(Effect.provide(capture.layer)),
+  );
+
+  const warnings = capture.lines.filter(
+    (line) => line.message === 'Command resolved-port snapshot could not be decoded',
+  );
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0]?.level, 'Warn');
+  assert.deepEqual(warnings[0]?.annotations, {
+    worktreeId: seeded.worktreeId,
+    commandName: seeded.commandName,
+  });
+  assert.ok(!JSON.stringify(capture.lines).includes('PAYLOAD-SENTINEL'));
 });
 
 test('a resolved snapshot survives closing and reopening the database', async () => {
