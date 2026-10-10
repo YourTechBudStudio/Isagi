@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { Effect, Result } from 'effect';
 
 import type { CliAccess } from '../../cli-access/index.js';
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { shellLaunchCommand } from '../../platform/process/index.js';
 import type { PtyBackendCatalog } from '../backend.js';
@@ -33,7 +33,7 @@ const defaultRows = 30;
 export interface PtyLaunchDependencies {
   readonly repository: PtyRepository['Service'];
   readonly catalog: PtyBackendCatalog['Service'];
-  readonly eventBus: InternalRuntimeEventBus['Service'];
+  readonly eventBus: InternalEvents['Service'];
   readonly foreground: PtyForegroundState['Service'];
   readonly retry: PtyRetryScheduler;
   readonly reservations: PtyReservations;

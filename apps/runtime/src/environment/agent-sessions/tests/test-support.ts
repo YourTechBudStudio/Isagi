@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Effect, Layer } from 'effect';
 
 import { AgentSessionArtifacts, HarnessLedgerObserver } from '../../../harnesses/index.js';
-import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { InternalEvents } from '../../../platform/events/index.js';
 import {
   DataDirectory,
   RuntimeDatabase,
@@ -242,15 +242,15 @@ export function testLayer(dataRoot: string) {
   const directoryLayer = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directoryLayer));
   const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directoryLayer));
-  const internalBus = InternalRuntimeEventBus.layer;
+  const internalBus = InternalEvents.layer;
   const foreground = PtyForegroundState.layer;
-  const observer = HarnessLedgerObserver.layer.pipe(
+  const observer = HarnessLedgerObserver.layerNoDeps.pipe(
     Layer.provide(directoryLayer),
     Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
     Layer.provide(artifacts),
     Layer.provide(internalBus),
   );
-  const attention = AgentSessionAttentionProjection.layer.pipe(
+  const attention = AgentSessionAttentionProjection.layerNoDeps.pipe(
     Layer.provide(database),
     Layer.provide(artifacts),
     Layer.provide(foreground),

@@ -4,7 +4,7 @@ import { Effect, Layer } from 'effect';
 import { EditorContextService } from '../../editor/index.js';
 import { AgentSessionArtifacts, HarnessAdapterRegistry } from '../../harnesses/index.js';
 import { AllowAllHarnessControlPlaneLayer } from '../../harnesses/testing.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -14,9 +14,10 @@ import { ptyProcesses } from '../../pty-processes/tables.js';
 import { fakeTerminateMany } from '../../pty-processes/testing.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { AgentSessionService } from '../agent-sessions/service.js';
-import { SurfaceRepository, SurfaceService } from '../index.js';
+import { SurfaceService } from '../index.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
-import { StartupSessionRestoreLayer } from '../sessions/restore.js';
+import { restorePaneBoundSessions } from '../sessions/restore.js';
+import { SurfaceRepository } from '../surfaces/repository.js';
 import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 import { TerminalSessionService } from '../terminal-sessions/service.js';
 
@@ -29,8 +30,21 @@ import { TerminalSessionService } from '../terminal-sessions/service.js';
  * *the* composition rather than each maintaining its own copy. A second graph
  * would let the thing under test drift from the thing that ships. Doubles that
  * belong to a single suite (binding fakes, dying service stubs used to isolate
- * `StartupSessionRestoreLayer` itself) deliberately stay local to that suite.
+ * `paneBoundRestoreLayer` itself) deliberately stay local to that suite.
  */
+
+/**
+ * The startup restore `SurfaceService.restorePaneBoundSessions` runs, over the session services in
+ * context, so a suite can drive it without building the surface service around it.
+ */
+export const paneBoundRestoreLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const repository = yield* SurfaceRepository;
+    const agentSessions = yield* AgentSessionService;
+    const terminalSessions = yield* TerminalSessionService;
+    yield* restorePaneBoundSessions({ repository, agentSessions, terminalSessions });
+  }),
+);
 
 /** What the fake harness adapter observed when a launch envelope was built. */
 export interface HarnessLaunchRecord {
@@ -70,15 +84,15 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directory));
-  const events = InternalRuntimeEventBus.layer;
+  const events = InternalEvents.layer;
   const entityLock = EntityLock.layer;
-  const sessionLifecycle = SessionLifecycle.layer.pipe(Layer.provide(entityLock));
+  const sessionLifecycle = SessionLifecycle.layerNoDeps.pipe(Layer.provide(entityLock));
 
-  const surfaceRepository = SurfaceRepository.layer.pipe(
+  const surfaceRepository = SurfaceRepository.layerNoDeps.pipe(
     Layer.provide(database),
     Layer.provide(artifacts),
   );
-  const agentRepository = AgentSessionRepository.layer.pipe(
+  const agentRepository = AgentSessionRepository.layerNoDeps.pipe(
     Layer.provide(database),
     Layer.provide(artifacts),
   );
@@ -94,7 +108,7 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
     recordingHarnessRegistry(options.harnessLaunches),
   );
 
-  const agentService = AgentSessionService.layer.pipe(
+  const agentService = AgentSessionService.layerNoDeps.pipe(
     Layer.provide(AllowAllHarnessControlPlaneLayer),
     Layer.provide(agentRepository),
     Layer.provide(pty),
@@ -103,7 +117,7 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
     Layer.provide(events),
   );
 
-  const terminalService = TerminalSessionService.layer.pipe(
+  const terminalService = TerminalSessionService.layerNoDeps.pipe(
     Layer.provide(terminalRepository),
     Layer.provide(pty),
     Layer.provide(sessionLifecycle),
@@ -135,7 +149,7 @@ export function sessionDataLayer(dataRoot: string) {
 /** Startup restore over the real session world. */
 export function realRestoreLayer(dataRoot: string, options: SessionWorldOptions) {
   const world = sessionWorldLayers(dataRoot, options);
-  return StartupSessionRestoreLayer.pipe(
+  return paneBoundRestoreLayer.pipe(
     Layer.provide(world.surfaceRepository),
     Layer.provide(world.agentService),
     Layer.provide(world.terminalService),
@@ -152,14 +166,14 @@ export function realRestoreLayer(dataRoot: string, options: SessionWorldOptions)
  * those rows by hand would write the path the test already believed and prove
  * nothing about propagation.
  *
- * The editor service dies rather than being wired: `SurfaceService.layer` requires
+ * The editor service dies rather than being wired: `SurfaceService.layerNoDeps` requires
  * it for `openEditor`, which no caller of this layer uses, and a real editor
  * would drag provisioning, port probing, and a socket directory into a session
  * test. A death names the mistake if that assumption ever stops holding.
  */
 export function realSessionCreationLayer(dataRoot: string, options: SessionWorldOptions) {
   const world = sessionWorldLayers(dataRoot, options);
-  const surfaceService = SurfaceService.layer.pipe(
+  const surfaceService = SurfaceService.layerNoDeps.pipe(
     Layer.provide(world.surfaceRepository),
     Layer.provide(world.agentService),
     Layer.provide(world.terminalService),

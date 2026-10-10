@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 
 import { CommandError, CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
@@ -144,11 +144,11 @@ function provide<A, E>(
   },
 ) {
   return effect.pipe(
-    Effect.provide(WorkspaceService.layer),
+    Effect.provide(WorkspaceService.layerNoDeps),
     Effect.provide(NoProjectDeletionParticipant),
     Effect.provideService(CommandService, input.commands),
     Effect.provideService(PtyService, testPtyService),
-    Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+    Effect.provideService(InternalEvents, testInternalEvents),
     Effect.provideService(ProjectRepository, input.repository),
     Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
     Effect.provideService(SurfaceService, testSurfaceService),

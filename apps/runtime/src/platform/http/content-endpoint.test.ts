@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Layer, ManagedRuntime, References } from 'effect';
 import Fastify from 'fastify';
 
 import {
@@ -11,12 +11,14 @@ import {
   type ApiContentEndpoint,
   type WireSchema,
 } from '@isagi/contracts';
+import { makeLogCapture } from '@isagi/testing';
 
 import {
   contentDisposition,
   registerContentEndpoint,
   type ContentResponse,
 } from './content-endpoint.js';
+import { routeRuntimeOf, serviceFreeRouteRuntime } from './testing.js';
 
 /**
  * The branch no other test can reach: a stream that fails *after* a 200 is committed.
@@ -42,32 +44,22 @@ const endpoint = {
   errors: apiInfrastructureErrorSchema,
 } as const satisfies ApiContentEndpoint<WireSchema>;
 
-function routeServing(handle: () => Effect.Effect<ContentResponse, unknown>) {
+function routeServing(
+  handle: () => Effect.Effect<ContentResponse, never>,
+  runtime = serviceFreeRouteRuntime,
+) {
   const fastify = Fastify({ logger: false });
-  registerContentEndpoint(fastify, endpoint, {
-    handle,
-    run: (effect) => Effect.runPromise(effect as Effect.Effect<never, never, never>),
-  });
+  registerContentEndpoint(fastify, runtime, endpoint, handle);
   return fastify;
 }
 
-/** Captures the diagnostic channel, which only writes when runtime diagnostics are on. */
+/** Captures the diagnostic channel: runtime diagnostics are `Debug` log entries. */
 function captureDiagnostics() {
-  const previous = process.env.ISAGI_RUNTIME_DEBUG;
-  const originalWarn = console.warn;
-  const lines: string[] = [];
-  process.env.ISAGI_RUNTIME_DEBUG = '1';
-  console.warn = (...args: readonly unknown[]) => {
-    lines.push(args.map((part) => JSON.stringify(part) ?? String(part)).join(' '));
-  };
-  return {
-    lines,
-    restore: () => {
-      console.warn = originalWarn;
-      if (previous === undefined) delete process.env.ISAGI_RUNTIME_DEBUG;
-      else process.env.ISAGI_RUNTIME_DEBUG = previous;
-    },
-  };
+  const capture = makeLogCapture();
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(capture.layer, Layer.succeed(References.MinimumLogLevel, 'Debug')),
+  );
+  return { lines: capture.lines, runtime, restore: () => runtime.dispose() };
 }
 
 test('a stream that fails after the headers severs the response and says so in the log', async () => {
@@ -76,13 +68,15 @@ test('a stream that fails after the headers severs the response and says so in t
   // A timer would only assume that, and losing the race would take the other branch and fail the
   // one test whose job is to prove the two branches are distinct.
   let serving: Readable | undefined;
-  const fastify = routeServing(() =>
-    Effect.sync(() => {
-      const stream = new Readable({ read() {} });
-      stream.push(Buffer.from('the first part arrived'));
-      serving = stream;
-      return { stream, mediaType: 'text/plain', byteSize: 512, filename: null };
-    }),
+  const fastify = routeServing(
+    () =>
+      Effect.sync(() => {
+        const stream = new Readable({ read() {} });
+        stream.push(Buffer.from('the first part arrived'));
+        serving = stream;
+        return { stream, mediaType: 'text/plain', byteSize: 512, filename: null };
+      }),
+    routeRuntimeOf(diagnostics.runtime),
   );
 
   try {
@@ -108,12 +102,15 @@ test('a stream that fails after the headers severs the response and says so in t
       'reading the promised 512 bytes fails, because the connection was severed',
     );
 
-    const logged = diagnostics.lines.find((line) => line.includes('api.content_stream_failed'));
+    const logged = await waitFor(() =>
+      diagnostics.lines.find((line) => line.message === 'api.content_stream_failed'),
+    );
     assert.ok(logged, 'the severed connection is recorded, since nothing else can report it');
-    assert.ok(logged.includes('blob truncated mid-read'), 'with the cause');
-    assert.ok(logged.includes('test.content'), 'and the endpoint it happened on');
+    assert.equal(logged.level, 'Debug');
+    assert.equal(logged.annotations.error, 'blob truncated mid-read', 'with the cause');
+    assert.equal(logged.annotations.endpointId, 'test.content', 'and the endpoint it happened on');
   } finally {
-    diagnostics.restore();
+    await diagnostics.restore();
     await fastify.close();
   }
 });
@@ -122,7 +119,7 @@ test('a handler that fails before the first byte still gets the JSON envelope', 
   // The companion case, asserted beside it so the two branches are visible together: the distinction
   // is the whole contract of a content route, and a refactor that collapsed them would still pass a
   // test of either one alone.
-  const fastify = routeServing(() => Effect.fail(new Error('nothing to serve')));
+  const fastify = routeServing(() => Effect.die(new Error('nothing to serve')));
 
   const response = await fastify.inject({ method: 'GET', url: '/api/v1/test/content' });
 
@@ -175,17 +172,19 @@ test('neither form of the name can break out of its header line or quoted string
 
 test('a Unicode filename reaches the client as a valid attachment header', async () => {
   const fastify = Fastify({ logger: false });
-  registerContentEndpoint(fastify, endpoint, {
-    handle: () =>
+  registerContentEndpoint(
+    fastify,
+    serviceFreeRouteRuntime,
+    endpoint,
+    () =>
       Effect.succeed({
         stream: Readable.from([Buffer.from('ok')]),
         mediaType: 'application/octet-stream',
         byteSize: 2,
         filename: 'résumé.md',
       }),
-    attachment: () => true,
-    run: (effect) => Effect.runPromise(effect as Effect.Effect<never, never, never>),
-  });
+    { attachment: () => true },
+  );
   try {
     const response = await fastify.inject({ method: 'GET', url: '/api/v1/test/content' });
     assert.equal(response.statusCode, 200);
@@ -198,3 +197,13 @@ test('a Unicode filename reaches the client as a valid attachment header', async
     await fastify.close();
   }
 });
+
+/** The stream's `error` listener logs on a forked fiber, so the entry lands a moment after the client sees the cut. */
+async function waitFor<A>(read: () => A | undefined): Promise<A | undefined> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const value = read();
+    if (value !== undefined) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return read();
+}

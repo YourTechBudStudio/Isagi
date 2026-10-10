@@ -40,23 +40,48 @@ const make = Effect.gen(function* () {
     ({ client }) => Effect.sync(() => client.close()),
   );
 
+  return makeRuntimeDatabase(resource.database);
+});
+
+/** Thrown by a transaction's `abort` so the rollback carries the caller's typed error out of better-sqlite3. */
+class TransactionAbort {
+  constructor(readonly error: unknown) {}
+}
+
+/** The service over an open Drizzle database. Exported for test doubles through `testing.ts`. */
+export function makeRuntimeDatabase(database: RuntimeDrizzleDatabase): RuntimeDatabase['Service'] {
   return RuntimeDatabase.of({
     use: (operation, run) =>
       Effect.try({
-        try: () => run(resource.database),
+        try: () => run(database),
         catch: (cause) => new DatabaseError({ operation, cause }),
       }),
-    transaction: (operation, run) =>
+    transaction: <A, E = never>(
+      operation: string,
+      run: (database: RuntimeDrizzleDatabase, abort: (error: E) => never) => A,
+    ) =>
       Effect.try({
         try: () =>
-          resource.database.transaction((transaction) =>
-            run(transaction as unknown as RuntimeDrizzleDatabase),
+          database.transaction((transaction) =>
+            run(transaction as unknown as RuntimeDrizzleDatabase, (error) => {
+              throw new TransactionAbort(error);
+            }),
           ),
-        catch: (cause) => new DatabaseError({ operation, cause }),
+        catch: (cause): DatabaseError | E =>
+          cause instanceof TransactionAbort
+            ? (cause.error as E)
+            : new DatabaseError({ operation, cause }),
       }),
   });
-});
+}
 
+/**
+ * The runtime's SQLite database.
+ *
+ * The driver is synchronous and single-connection: `use` and `transaction` callbacks run synchronously, so never
+ * `yield*` or `await` inside them and never run an Effect inside a transaction. Transactions are therefore serialised,
+ * and interruption cannot land mid-transaction.
+ */
 export class RuntimeDatabase extends Context.Service<
   RuntimeDatabase,
   {
@@ -64,10 +89,14 @@ export class RuntimeDatabase extends Context.Service<
       operation: string,
       run: (database: RuntimeDrizzleDatabase) => A,
     ) => Effect.Effect<A, DatabaseError>;
-    readonly transaction: <A>(
+    /**
+     * Runs `run` inside one SQLite transaction. `abort(error)` rolls back and fails with `error`; any other throw rolls
+     * back and fails with `DatabaseError`.
+     */
+    readonly transaction: <A, E = never>(
       operation: string,
-      run: (database: RuntimeDrizzleDatabase) => A,
-    ) => Effect.Effect<A, DatabaseError>;
+      run: (database: RuntimeDrizzleDatabase, abort: (error: E) => never) => A,
+    ) => Effect.Effect<A, DatabaseError | E>;
   }
 >()('isagi/runtime/platform/persistence/RuntimeDatabase') {
   static readonly layer = Layer.effect(RuntimeDatabase, make);

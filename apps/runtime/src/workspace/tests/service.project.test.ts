@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
@@ -56,11 +56,11 @@ test('project deletion does not touch frontend-owned active context persistence'
       const workspace = yield* WorkspaceService;
       return yield* workspace.deleteProject(project.id);
     }).pipe(
-      Effect.provide(WorkspaceService.layer),
+      Effect.provide(WorkspaceService.layerNoDeps),
       Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
-      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+      Effect.provideService(InternalEvents, testInternalEvents),
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -95,11 +95,11 @@ test('project relocation rejects projects that are not missing before touching g
         const workspace = yield* WorkspaceService;
         return yield* workspace.relocateProject({ projectId: project.id, path: '/repo/elsewhere' });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -169,11 +169,11 @@ test('project relocation restores the same project id and reconciles discovered 
         const workspace = yield* WorkspaceService;
         return yield* workspace.relocateProject({ projectId: project.id, path: projectRoot });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -258,11 +258,11 @@ test('registering a new project reconciles the created row without a follow-up l
         const workspace = yield* WorkspaceService;
         return yield* workspace.registerProject({ path: projectRoot });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),

@@ -1,45 +1,34 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../../app/layer.js';
 import { editorApiError } from '../../editor/index.js';
 import { HarnessLaunchBlocked } from '../../harnesses/index.js';
 import {
-  registerApiEndpoint,
+  registerLegacyApiEndpoint,
   type ApiRouteContext,
   errorMessage,
+  type RouteRuntime,
 } from '../../platform/http/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { SurfaceError, SurfaceOrderError } from './errors.js';
 import { SurfaceService } from './service.js';
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
-
 export function registerSurfacesApi(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<SurfaceService>,
 ) {
-  const run = runWithRuntime(runtime);
-
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.get, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.get, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.getSurfaceDetail(params.surfaceId);
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.rename, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.rename, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
@@ -49,20 +38,18 @@ export function registerSurfacesApi(
         });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.delete, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.delete, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.deleteSurface(params.surfaceId);
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.deletePane, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.deletePane, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
@@ -72,10 +59,9 @@ export function registerSurfacesApi(
         });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.setWorktreeEnvironmentFocus, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.setWorktreeEnvironmentFocus, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
@@ -85,10 +71,9 @@ export function registerSurfacesApi(
         });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.createSurface, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.createSurface, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
@@ -98,60 +83,54 @@ export function registerSurfacesApi(
         });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.splitPane, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.splitPane, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.splitPane({ worktreeId: params.worktreeId, split: input });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.startPane, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.startPane, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.startPane({ surfaceId: params.surfaceId, start: input });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.setSplitWeights, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.setSplitWeights, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.setSplitWeights({ surfaceId: params.surfaceId, weights: input });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.createPaneSession, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.createPaneSession, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.createPaneSession({ worktreeId: params.worktreeId, create: input });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.claimPaneSession, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.claimPaneSession, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
         return yield* surfaces.claimPaneSession({ worktreeId: params.worktreeId, claim: input });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.moveOrder, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.surfaces.moveOrder, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
@@ -162,12 +141,11 @@ export function registerSurfacesApi(
         });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
   });
 
   // Opening an editor is a placement: the surfaces service resolves (or creates) the pane and
   // asks the editor domain for the context it binds there.
-  registerApiEndpoint(fastify, apiEndpoints.editor.open, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.editor.open, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
@@ -177,7 +155,6 @@ export function registerSurfacesApi(
         });
       }),
     mapError: toEditorOpenApiError,
-    run,
   });
 }
 

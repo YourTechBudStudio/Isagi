@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEvent } from '../../../platform/events/index.js';
+import type { InternalEvent } from '../../../platform/events/index.js';
 import {
   editorContextChangedIds,
   editorServiceLayer,
@@ -18,7 +18,7 @@ import { EditorContextService } from '../service.js';
 
 test('layer construction converges interrupted attempts and publishes one event each', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-boot-'));
-  const events: InternalRuntimeEvent[] = [];
+  const events: InternalEvent[] = [];
   try {
     // Two runtimes over one database. The first leaves attempts in flight the way
     // a crash mid-launch would; the second is the one whose *construction* has to
@@ -40,7 +40,7 @@ test('layer construction converges interrupted attempts and publishes one event 
       ),
     );
 
-    const booted: InternalRuntimeEvent[] = [];
+    const booted: InternalEvent[] = [];
     const rows = await Effect.runPromise(
       Effect.gen(function* () {
         // Resolving the service is what forces layer construction, so everything

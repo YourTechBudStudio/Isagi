@@ -9,7 +9,7 @@ Persistence support for runtime-owned project, worktree, and worktree-environmen
 - Runtime owns persistence and Git/worktree reconciliation.
 - Use Drizzle ORM with SQLite through `better-sqlite3`; prefer Drizzle-supported drivers over hand-written SQL driver adapters.
 - Use Drizzle Kit-generated migrations from the start.
-- Do not edit generated migration artifacts by hand; change the Drizzle schema and regenerate migrations instead.
+- Do not edit generated migration artifacts by hand; change the Drizzle schema and regenerate migrations instead with `pnpm -C apps/runtime db:generate`.
 - Tables live in the owning module's `tables.ts`; only that module writes them; `drizzle.config.ts` globs `src/*/tables.ts`; `RuntimeDatabase` has no schema object.
 - Prefer incremental integer primary keys.
 - Do not use composite primary keys. Use unique indexes for natural uniqueness such as project/worktree path constraints.

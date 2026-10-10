@@ -55,8 +55,11 @@ function faultingDatabase(
       const inner = yield* RuntimeDatabase;
       return {
         use: inner.use,
-        transaction: (operation, run) =>
-          inner.transaction(operation, (db) =>
+        transaction: <A, E = never>(
+          operation: string,
+          run: (db: RuntimeDrizzleDatabase, abort: (error: E) => never) => A,
+        ) =>
+          inner.transaction<A, E>(operation, (db, abort) =>
             run(
               new Proxy(db, {
                 get(target, property, receiver) {
@@ -72,6 +75,7 @@ function faultingDatabase(
                   return typeof value === 'function' ? value.bind(target) : value;
                 },
               }) as RuntimeDrizzleDatabase,
+              abort,
             ),
           ),
       } satisfies RuntimeDatabase['Service'];

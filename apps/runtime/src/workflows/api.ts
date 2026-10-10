@@ -1,4 +1,4 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -8,17 +8,18 @@ import {
   type WorkflowRejectionData,
 } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
 import {
   errorMessage,
   infrastructureApiError,
-  registerApiEndpoint,
-  registerContentEndpoint,
+  registerLegacyApiEndpoint,
+  registerLegacyContentEndpoint,
   type ApiRouteContext,
+  type RouteRuntime,
 } from '../platform/http/index.js';
 import { workspaceApiError } from '../workspace/index.js';
 import { WorkflowEngine } from './engine/service.js';
 import { WorkflowEngineError } from './errors.js';
+import type { WorkflowsLayer } from './layer.js';
 
 /**
  * The workflow HTTP surface: launch, the controls, and plain reads.
@@ -28,28 +29,18 @@ import { WorkflowEngineError } from './errors.js';
  * what a client refetches from.
  */
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
-
-export function registerWorkflowApi(
+export function registerWorkflowsRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof WorkflowsLayer>>,
 ) {
-  const run = runWithRuntime(runtime);
   const endpoints = apiEndpoints.workflows;
-  const register = <Endpoint extends Parameters<typeof registerApiEndpoint>[1]>(
+  const register = <Endpoint extends Parameters<typeof registerLegacyApiEndpoint>[2]>(
     endpoint: Endpoint,
-    handle: Parameters<typeof registerApiEndpoint<Endpoint, RuntimeServices>>[2]['handle'],
+    handle: Parameters<typeof registerLegacyApiEndpoint<Endpoint, WorkflowEngine>>[3]['handle'],
   ) =>
-    registerApiEndpoint<Endpoint, RuntimeServices>(fastify, endpoint, {
+    registerLegacyApiEndpoint<Endpoint, WorkflowEngine>(fastify, runtime, endpoint, {
       handle,
       mapError: toWorkflowApiError,
-      run,
     });
 
   register(endpoints.descriptors, (input) =>
@@ -121,8 +112,9 @@ export function registerWorkflowApi(
       engine.exportCheckpoint(params.checkpointId, input.destinationPath),
     ),
   );
-  registerContentEndpoint<typeof workflowContentEndpoints.getCheckpointFile, RuntimeServices>(
+  registerLegacyContentEndpoint<typeof workflowContentEndpoints.getCheckpointFile, WorkflowEngine>(
     fastify,
+    runtime,
     workflowContentEndpoints.getCheckpointFile,
     {
       handle: (_context, params, query) =>
@@ -130,7 +122,6 @@ export function registerWorkflowApi(
           engine.openCheckpointFile(params.checkpointId, query.path),
         ),
       mapError: toWorkflowApiError,
-      run,
     },
   );
 

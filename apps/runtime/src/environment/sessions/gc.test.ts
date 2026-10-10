@@ -17,7 +17,7 @@ import test from 'node:test';
 import { Effect, Layer } from 'effect';
 
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -156,10 +156,10 @@ function runWithSessionGc<E>(
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directory));
   const layer = Layer.mergeAll(
-    AgentSessionRepository.layer,
+    AgentSessionRepository.layerNoDeps,
     TerminalSessionRepository.layer,
-    SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer)),
-    InternalRuntimeEventBus.layer,
+    SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer)),
+    InternalEvents.layer,
     artifacts,
     database,
   ).pipe(Layer.provide(artifacts), Layer.provide(database));
@@ -173,7 +173,7 @@ function runWithSessionGc<E>(
           agents,
           terminals: yield* TerminalSessionRepository,
           lifecycle: yield* SessionLifecycle,
-          events: yield* InternalRuntimeEventBus,
+          events: yield* InternalEvents,
           artifacts: sessionArtifacts,
         });
         yield* body({ tick, agents, artifacts: sessionArtifacts });

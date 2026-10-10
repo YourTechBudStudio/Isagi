@@ -146,8 +146,9 @@ const make = Effect.gen(function* () {
 });
 
 /**
- * The store and its hourly collector. Bind this layer once (`runtime.layer.ts`) so exactly one
- * collector runs over the root. There is no startup pass: the first tick is one interval in.
+ * The store and its hourly collector. Reference `WorkflowContentStore.layer` (never a second layer
+ * value) so the build memoizes it and exactly one collector runs over the root. There is no
+ * startup pass: the first tick is one interval in.
  */
 export class WorkflowContentStore extends Context.Service<
   WorkflowContentStore,

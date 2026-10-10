@@ -260,7 +260,7 @@ const make = Effect.suspend(() =>
 export class EditorProvisioning extends Context.Service<
   EditorProvisioning,
   {
-    /** Forked from `startRuntimeServer`, the way `HarnessControlPlane.start`
+    /** Forked from the runtime's `startup`, the way `HarnessControlPlane.start`
      *  forks docs reconciliation. Idempotent, and never fails. */
     readonly start: Effect.Effect<void>;
     readonly state: Effect.Effect<EditorProvisioningState>;
@@ -279,5 +279,6 @@ export class EditorProvisioning extends Context.Service<
     readonly requireReady: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
   }
 >()('isagi/runtime/editor/EditorProvisioning') {
-  static readonly layer = Layer.effect(EditorProvisioning, make);
+  static readonly layerNoDeps = Layer.effect(EditorProvisioning, make);
+  static readonly layer = EditorProvisioning.layerNoDeps.pipe(Layer.provide(EditorInstallIo.layer));
 }

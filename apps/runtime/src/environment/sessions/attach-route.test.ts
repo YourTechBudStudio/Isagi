@@ -21,7 +21,7 @@ import { TerminalSessionService } from '../terminal-sessions/service.js';
 import { registerPtyApi } from './attach-route.js';
 import { SessionLifecycle, type AttachTokenRecord } from './lifecycle.js';
 
-const sessionLifecycleLayer = SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer));
+const sessionLifecycleLayer = SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer));
 
 type OutputSender = (message: PtyStreamOutputMessageSet) => void;
 

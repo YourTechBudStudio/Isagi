@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 
 import { Cause, Effect, Result } from 'effect';
 
-import { diagnosticPhase, logDiagnosticEvent } from '../../platform/diagnostics/index.js';
+import { diagnosticPhase } from '../../platform/diagnostics/index.js';
 import {
   isIdName,
   listOrphanCandidates,
@@ -206,22 +206,26 @@ function cleanupOrphanPtyProcesses(
 ) {
   return Effect.gen(function* () {
     const processes = yield* repository.listOrphanProcesses;
-    logDiagnosticEvent('pty.gc.orphan_processes_discovered', {
-      orphanCount: processes.length,
-      pinnedCount: options.pinnedPtyProcessIds.size,
-      pendingLaunchCount: options.pendingLaunches.size,
-    });
+    yield* Effect.logDebug('pty.gc.orphan_processes_discovered').pipe(
+      Effect.annotateLogs({
+        orphanCount: processes.length,
+        pinnedCount: options.pinnedPtyProcessIds.size,
+        pendingLaunchCount: options.pendingLaunches.size,
+      }),
+    );
     for (const process of processes) {
-      logDiagnosticEvent('pty.gc.orphan_process_considered', {
-        ptyProcessId: process.id,
-        backend: process.backend,
-        status: process.status,
-        statusReason: process.statusReason,
-        cwd: process.cwd,
-        pinned: options.pinnedPtyProcessIds.has(process.id),
-        pendingLaunch: options.pendingLaunches.has(process.id),
-        retentionElapsed: isRetentionElapsed(process.updatedAt, options.nowMs),
-      });
+      yield* Effect.logDebug('pty.gc.orphan_process_considered').pipe(
+        Effect.annotateLogs({
+          ptyProcessId: process.id,
+          backend: process.backend,
+          status: process.status,
+          statusReason: process.statusReason,
+          cwd: process.cwd,
+          pinned: options.pinnedPtyProcessIds.has(process.id),
+          pendingLaunch: options.pendingLaunches.has(process.id),
+          retentionElapsed: isRetentionElapsed(process.updatedAt, options.nowMs),
+        }),
+      );
       if (options.pinnedPtyProcessIds.has(process.id)) {
         console.info(
           `[runtime] Keeping orphan PTY process because it is pinned ptyProcessId=${process.id}`,

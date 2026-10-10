@@ -619,7 +619,10 @@ interface SurfaceRepositoryShape {
 export class SurfaceRepository extends Context.Service<SurfaceRepository, SurfaceRepositoryShape>()(
   'isagi/runtime/environment/SurfaceRepository',
 ) {
-  static readonly layer = Layer.effect(SurfaceRepository, make);
+  static readonly layerNoDeps = Layer.effect(SurfaceRepository, make);
+  static readonly layer = SurfaceRepository.layerNoDeps.pipe(
+    Layer.provide(AgentSessionArtifacts.layer),
+  );
 }
 
 /**

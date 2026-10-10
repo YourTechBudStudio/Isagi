@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import websocket from '@fastify/websocket';
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import Fastify from 'fastify';
+import { Effect, Layer } from 'effect';
+import type { FastifyInstance } from 'fastify';
 
-import { InternalRuntimeEventBus, RuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
+import { withApiServer } from '../../platform/http/testing.js';
 import { LoopbackPortProbe, LoopbackPortUnavailable } from '../../platform/net/index.js';
 import { DatabaseError, DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -15,7 +16,7 @@ import { PtyService, type PtyProcessAllocation } from '../../pty-processes/index
 import type { PtyProcessRow } from '../../pty-processes/index.js';
 import type { PtyAttachment, PtyProcessLaunchMetadata } from '../../pty-processes/testing.js';
 import { fakePtyAllocation, fakeTerminateMany } from '../../pty-processes/testing.js';
-import { registerCommandsApi } from '../api.js';
+import { registerCommandsRoutes } from '../api.js';
 import type { ResolvedPortEntry } from '../ports.js';
 import {
   CommandRepository,
@@ -43,27 +44,22 @@ export const idleLogMetadata = {
   latestRun: null,
 };
 
-export async function withCommandsApi<A>(
+export function withCommandsApi<A>(
   service: CommandService['Service'],
-  run: (fastify: Fastify.FastifyInstance) => Promise<A>,
+  run: (fastify: FastifyInstance) => Promise<A>,
   options: { readonly pty?: PtyService['Service'] | undefined } = {},
 ) {
-  const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(
+  return withApiServer(
     Layer.mergeAll(
       Layer.succeed(CommandService, service),
       Layer.succeed(PtyService, options.pty ?? fakeCommandLogPtyService()),
     ),
+    async (fastify, runtime) => {
+      await fastify.register(websocket);
+      registerCommandsRoutes(fastify, runtime);
+    },
+    run,
   );
-  try {
-    await fastify.register(websocket);
-    registerCommandsApi(fastify, runtime as never);
-    await fastify.ready();
-    return await run(fastify);
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
 }
 
 export function commandService(
@@ -236,7 +232,7 @@ export interface CommandRepositoryOptions {
   // Replaces the public event bus. Scenario harnesses pass a synchronous
   // recording bus so a published event is observable the instant the service
   // publishes it, with no drain fiber and no settle window.
-  readonly eventBus?: Layer.Layer<RuntimeEventBus> | undefined;
+  readonly eventBus?: Layer.Layer<RuntimeEvents> | undefined;
   // Fires with the repository's own mutable state rows immediately after a
   // worktree listing, which is the snapshot point every lifecycle pass plans
   // from. Splicing that array — or rewriting the config file — from here is how
@@ -286,14 +282,14 @@ export async function runCommandServiceEffect<A>(
   ) => Effect.Effect<
     A,
     unknown,
-    import('../service.js').CommandService | InternalRuntimeEventBus | RuntimeEventBus
+    import('../service.js').CommandService | InternalEvents | RuntimeEvents
   >,
   options: CommandRepositoryOptions = {},
 ) {
   return Effect.runPromise(
     CommandService.pipe(
       Effect.flatMap(effect),
-      Effect.provide(CommandService.layer),
+      Effect.provide(CommandService.layerNoDeps),
       Effect.provide(Layer.succeed(ProjectRepository, repository(rootPath))),
       Effect.provide(Layer.succeed(CommandRepository, commandRepository(options))),
       Effect.provide(
@@ -310,8 +306,8 @@ export async function runCommandServiceEffect<A>(
         Layer.succeed(LoopbackPortProbe, options.portProbe ?? untouchableCommandPortProbe()),
       ),
       Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
-      Effect.provide(options.eventBus ?? RuntimeEventBus.layer),
-      Effect.provide(InternalRuntimeEventBus.layer),
+      Effect.provide(options.eventBus ?? RuntimeEvents.layer),
+      Effect.provide(InternalEvents.layer),
     ),
   );
 }
@@ -906,7 +902,7 @@ export interface CommandScenarioRecorder {
 }
 
 /**
- * Drives the real `CommandService.layer` with everything a lifecycle scenario
+ * Drives the real `CommandService.layerNoDeps` with everything a lifecycle scenario
  * needs to observe: durable state transitions, published `command_changed`
  * events, the runtime's own log lines (which are also how a pass signals it
  * finished), terminate calls, and re-adoptions.
@@ -918,9 +914,9 @@ export async function runCommandScenario<A>(
   rootPath: string,
   body: (input: {
     readonly service: CommandService['Service'];
-    readonly internalEvents: InternalRuntimeEventBus['Service'];
+    readonly internalEvents: InternalEvents['Service'];
     readonly recorder: CommandScenarioRecorder;
-  }) => Effect.Effect<A, unknown, CommandService | InternalRuntimeEventBus | RuntimeEventBus>,
+  }) => Effect.Effect<A, unknown, CommandService | InternalEvents | RuntimeEvents>,
   options: CommandRepositoryOptions = {},
 ) {
   const recorder: CommandScenarioRecorder = {
@@ -948,7 +944,7 @@ export async function runCommandScenario<A>(
       rootPath,
       (service) =>
         Effect.gen(function* () {
-          const internalEvents = yield* InternalRuntimeEventBus;
+          const internalEvents = yield* InternalEvents;
           return yield* body({ service, internalEvents, recorder });
         }),
       {
@@ -1032,7 +1028,7 @@ const scenarioPollLimit = 1_000;
 export function recordingEventBus(
   published: Array<{ readonly commandName: string; readonly status: string }>,
 ) {
-  return Layer.succeed(RuntimeEventBus, {
+  return Layer.succeed(RuntimeEvents, {
     publish: (event) =>
       Effect.sync(() => {
         if (event.type === 'command_changed') {
@@ -1043,7 +1039,7 @@ export function recordingEventBus(
         }
       }),
     subscribe: Effect.die('the recording event bus has no subscribers'),
-  } satisfies RuntimeEventBus['Service']);
+  } satisfies RuntimeEvents['Service']);
 }
 
 function scenarioTick() {

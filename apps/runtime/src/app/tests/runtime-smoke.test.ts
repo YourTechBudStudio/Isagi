@@ -3,8 +3,9 @@
 // decoded with the contract schemas, so this pins wire behavior (status, code, envelope shape)
 // across the Effect v4 port and the runtime module refactor. Pinned values were observed on v3.
 //
-// The helpers below are deliberately inline: `@isagi/testing` (handle diff, process probe, log
-// capture, fiber probe) does not exist yet, and the final enforcement stage switches this file to it.
+// The runtime boots through `bootRuntime` (the same `MainLayer` the process entry launches) with a
+// fiber probe around it. The other probes below (handle diff, process probe, console capture) are
+// still inline; the final enforcement stage switches them to `@isagi/testing`.
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
-import { Effect, Result, Schema } from 'effect';
+import { Layer, Result, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -33,8 +34,10 @@ import {
   type RuntimeEvent,
   type WireSchema,
 } from '@isagi/contracts';
+import { makeFiberProbe } from '@isagi/testing';
 
-import { startRuntimeServer } from '../http-server.js';
+import { RuntimeLogger } from '../logger.js';
+import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 
 describe('runtime smoke', () => {
   const marker = `isagi-smoke-${randomUUID()}`;
@@ -227,70 +230,67 @@ describe('runtime smoke', () => {
     const shutdownLogs = await captureLogs(() => runtime.shutdown());
     await expectNoNewHandles(runtime.handleBaseline);
     assert.deepEqual(failureLines(shutdownLogs), []);
-    // The "no fibers left running" assertion needs a fiber probe layer at boot, which the v3
-    // entry point cannot take; it is added with `@isagi/testing` and the new composition root.
+    assert.equal(runtime.fibers.active, 0, 'no fiber outlives the runtime');
   });
 });
 
 describe('runtime smoke: shutdown with open sockets', () => {
-  test(
-    'flow 13: closing the runtime with an events socket and a PTY attach open',
-    { todo: 'phase 3: shutdown ordering' },
-    async () => {
-      const marker = `isagi-smoke-${randomUUID()}`;
-      const runtime = await bootSmokeRuntime();
-      let events: RecordingSocket<RuntimeEvent> | undefined;
-      let terminal: TerminalAttach | undefined;
-      try {
-        events = await openSocket(runtime, runtimeEventsWebSocketEndpoint.path, runtimeEventSchema);
-        const { projectId } = await callOk(runtime.server, apiEndpoints.projects.add, {
-          body: { path: runtime.repoDir },
-        });
-        const workspace = await callOk(runtime.server, apiEndpoints.workspace.get);
-        const worktree = workspace.projects
-          .find((project) => project.id === projectId)
-          ?.worktrees.find((candidate) => candidate.isRoot);
-        assert.ok(worktree);
-        const created = await callOk(runtime.server, apiEndpoints.surfaces.createSurface, {
-          params: { worktreeId: worktree.id },
-          body: { initialPane: { kind: 'terminal_session' } },
-        });
-        const detail = await callOk(runtime.server, apiEndpoints.surfaces.get, {
-          params: { surfaceId: created.surfaceId },
-        });
-        const session = detail.panes[0]?.session;
-        assert.ok(session?.kind === 'terminal_session');
-        const attached = await claimAndAttachTerminal(runtime, {
-          worktreeId: worktree.id,
-          paneId: created.paneId,
-          terminalSessionId: session.terminalSession.id,
-        });
-        terminal = attached;
-        await waitFor(() => attached.output().includes('$'), 'the shell prompt');
-        attached.socket.send({ type: 'input', data: `sh -c 'sleep 300; true' ${marker}\n` });
-        await waitFor(
-          async () => (await processesMatching(marker)).length > 0,
-          'the marker process to start',
-        );
+  // Shutdown interrupts every request and socket fiber before Fastify closes, so both sockets close and
+  // nothing lingers.
+  test('flow 13: closing the runtime with an events socket and a PTY attach open', async () => {
+    const marker = `isagi-smoke-${randomUUID()}`;
+    const runtime = await bootSmokeRuntime();
+    let events: RecordingSocket<RuntimeEvent> | undefined;
+    let terminal: TerminalAttach | undefined;
+    try {
+      events = await openSocket(runtime, runtimeEventsWebSocketEndpoint.path, runtimeEventSchema);
+      const { projectId } = await callOk(runtime.server, apiEndpoints.projects.add, {
+        body: { path: runtime.repoDir },
+      });
+      const workspace = await callOk(runtime.server, apiEndpoints.workspace.get);
+      const worktree = workspace.projects
+        .find((project) => project.id === projectId)
+        ?.worktrees.find((candidate) => candidate.isRoot);
+      assert.ok(worktree);
+      const created = await callOk(runtime.server, apiEndpoints.surfaces.createSurface, {
+        params: { worktreeId: worktree.id },
+        body: { initialPane: { kind: 'terminal_session' } },
+      });
+      const detail = await callOk(runtime.server, apiEndpoints.surfaces.get, {
+        params: { surfaceId: created.surfaceId },
+      });
+      const session = detail.panes[0]?.session;
+      assert.ok(session?.kind === 'terminal_session');
+      const attached = await claimAndAttachTerminal(runtime, {
+        worktreeId: worktree.id,
+        paneId: created.paneId,
+        terminalSessionId: session.terminalSession.id,
+      });
+      terminal = attached;
+      await waitFor(() => attached.output().includes('$'), 'the shell prompt');
+      attached.socket.send({ type: 'input', data: `sh -c 'sleep 300; true' ${marker}\n` });
+      await waitFor(
+        async () => (await processesMatching(marker)).length > 0,
+        'the marker process to start',
+      );
 
-        const openEvents = events;
-        const shutdownLogs = await captureLogs(() => runtime.shutdown());
-        await waitFor(
-          () => openEvents.closed && attached.socket.closed,
-          'the runtime to close both sockets',
-          2_000,
-        );
-        await expectNoProcessMatching(marker, 2_000);
-        await expectNoNewHandles(runtime.handleBaseline);
-        assert.deepEqual(failureLines(shutdownLogs), []);
-      } finally {
-        events?.socket.close();
-        terminal?.socket.socket.close();
-        await runtime.shutdown();
-        await killProcessesMatching(marker);
-      }
-    },
-  );
+      const openEvents = events;
+      const shutdownLogs = await captureLogs(() => runtime.shutdown());
+      await waitFor(
+        () => openEvents.closed && attached.socket.closed,
+        'the runtime to close both sockets',
+        2_000,
+      );
+      await expectNoProcessMatching(marker, 2_000);
+      await expectNoNewHandles(runtime.handleBaseline);
+      assert.deepEqual(failureLines(shutdownLogs), []);
+    } finally {
+      events?.socket.close();
+      terminal?.socket.socket.close();
+      await runtime.shutdown();
+      await killProcessesMatching(marker);
+    }
+  });
 });
 
 // --- Booting -------------------------------------------------------------------------------------
@@ -300,7 +300,9 @@ interface SmokeRuntime {
   readonly url: string;
   readonly repoDir: string;
   readonly handleBaseline: ReadonlyMap<string, number>;
-  /** Closes the server once, then restores the environment and removes the temp dirs. */
+  /** Fibers started under the runtime that have not ended yet. */
+  readonly fibers: { readonly active: number };
+  /** Shuts the runtime down once, then restores the environment and removes the temp dirs. */
   readonly shutdown: () => Promise<void>;
 }
 
@@ -354,9 +356,12 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
   }
 
   const handleBaseline = activeResourceCounts();
-  let started: { readonly server: FastifyInstance; readonly url: string };
+  const fiberProbe = makeFiberProbe();
+  let started: BootedRuntime;
   try {
-    started = await Effect.runPromise(startRuntimeServer());
+    started = await bootRuntime({
+      extraLayer: Layer.mergeAll(RuntimeLogger.layer, fiberProbe.layer),
+    });
   } catch (error) {
     restoreEnvironment();
     removeTempDirs();
@@ -369,8 +374,9 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
     url: started.url,
     repoDir,
     handleBaseline,
+    fibers: fiberProbe.counts,
     shutdown: () => {
-      shutdown ??= started.server.close().finally(() => {
+      shutdown ??= started.close().finally(() => {
         restoreEnvironment();
         removeTempDirs();
       });

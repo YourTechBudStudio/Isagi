@@ -37,5 +37,8 @@ export class HarnessAdapterRegistry extends Context.Service<
     ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
   }
 >()('isagi/runtime/harnesses/HarnessAdapterRegistry') {
-  static readonly layer = Layer.effect(HarnessAdapterRegistry, make);
+  static readonly layerNoDeps = Layer.effect(HarnessAdapterRegistry, make);
+  static readonly layer = HarnessAdapterRegistry.layerNoDeps.pipe(
+    Layer.provide(AgentSessionArtifacts.layer),
+  );
 }

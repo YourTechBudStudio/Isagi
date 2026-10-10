@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { terminalShellCommand } from '../../platform/process/index.js';
 import { PtyService, type PtyLaunchError } from '../../pty-processes/index.js';
@@ -25,7 +25,7 @@ export class TerminalSessionError extends Error {
 const make = Effect.gen(function* () {
   const repository = yield* TerminalSessionRepository;
   const pty = yield* PtyService;
-  const eventBus = yield* InternalRuntimeEventBus;
+  const eventBus = yield* InternalEvents;
   const lifecycle = yield* SessionLifecycle;
 
   const publishChanged = (terminalSessionId: number) =>
@@ -125,7 +125,15 @@ export class TerminalSessionService extends Context.Service<
     ) => Effect.Effect<number, DatabaseError | TerminalSessionError>;
   }
 >()('isagi/runtime/environment/TerminalSessionService') {
-  static readonly layer = Layer.effect(TerminalSessionService, make);
+  static readonly layerNoDeps = Layer.effect(TerminalSessionService, make);
+  static readonly layer = TerminalSessionService.layerNoDeps.pipe(
+    Layer.provide([
+      InternalEvents.layer,
+      PtyService.layer,
+      SessionLifecycle.layer,
+      TerminalSessionRepository.layer,
+    ]),
+  );
 }
 
 function findTerminalSessionOrFail(

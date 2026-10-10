@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "extends": ["../../.oxlintrc.json"],
+  "plugins": ["eslint", "typescript", "oxc", "import"],
+  "overrides": [
+    {
+      "files": ["src/**"],
+      "rules": {
+        "import/no-cycle": "error"
+      }
+    }
+  ]
+}

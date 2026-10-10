@@ -9,7 +9,7 @@ import { SessionLifecycle } from './lifecycle.js';
 // Restore exclusion is delegated to the shared per-entity lock, so the layer
 // under test needs one. Every test builds its own; nothing here depends on the
 // instance being shared with another domain.
-const lifecycleLayer = SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer));
+const lifecycleLayer = SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer));
 
 const agentKey = { kind: 'agent_session' as const, sessionId: 10 };
 const otherAgentKey = { kind: 'agent_session' as const, sessionId: 11 };

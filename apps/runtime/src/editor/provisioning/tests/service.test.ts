@@ -432,7 +432,7 @@ test('a state Ref is not shared between two constructions of the service', async
       Layer.provide(Layer.succeed(DataDirectory, roots.directory)),
       Layer.provide(Layer.succeed(EditorInstallIo, recorder.io)),
     );
-    // Provided by reference in `runtime.layer.ts` precisely so the control plane
+    // Wired by reference (`EditorProvisioning.layer`) precisely so the control plane
     // and the API observe one attempt; this asserts the state really is
     // per-construction, which is what makes that sharing necessary.
     const [first, second] = await Effect.runPromise(

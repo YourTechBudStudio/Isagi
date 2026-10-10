@@ -9,9 +9,9 @@ import { Cause, Effect, Exit, Layer, Option, Result } from 'effect';
 
 import { EditorContextRepository } from '../../../editor/testing.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
-import { SurfaceRepository, SurfaceRepositoryInitialSessionRejected } from '../../index.js';
 import { surfacePanes, worktreeEnvironmentStates, worktreeSurfaces } from '../../tables.js';
 import { insertWorktree, testLayer } from '../../testing.js';
+import { SurfaceRepository, SurfaceRepositoryInitialSessionRejected } from '../repository.js';
 
 type TestServices = Layer.Success<ReturnType<typeof testLayer>>;
 

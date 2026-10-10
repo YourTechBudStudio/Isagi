@@ -1,32 +1,23 @@
 import type { Readable } from 'node:stream';
 
-import { Effect, Result } from 'effect';
-import type { FastifyInstance } from 'fastify';
+import { Effect } from 'effect';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import {
   apiBasePath,
   type AnyApiContentEndpoint,
-  type ApiContentEndpointParams,
   type ApiContentEndpointQuery,
-  type ApiError,
 } from '@isagi/contracts';
 
-import { logDiagnosticEvent } from '../diagnostics/index.js';
+import { runRoute, type ApiHandler } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';
-import {
-  decodeParams,
-  decodeQuery,
-  logSlowApiRequest,
-  requestInterruptSignal,
-  sendRouteApiError,
-  slowApiRequestThresholdMs,
-} from './route-runtime.js';
+import { runRouteRequest, watchContentStream, type RouteRuntime } from './route-runtime.js';
 
 /**
  * Routes whose success body is bytes.
  *
  * Everything before the first byte is the ordinary route lifecycle, shared with
- * `registerApiEndpoint` through `route-runtime.ts`: params and query are decoded against the
+ * `registerApiEndpoint` through `runRoute`: params and query are decoded against the
  * endpoint's own schemas, the handler runs under the request's interrupt signal, and a failure is
  * the same JSON error envelope every other route sends. A client can therefore rely on the envelope
  * for any non-200 status, which is the whole reason this is a declared endpoint kind rather than a
@@ -50,12 +41,7 @@ export interface ContentResponse {
   readonly filename: string | null;
 }
 
-export interface RegisterContentEndpointOptions<Endpoint extends AnyApiContentEndpoint, R> {
-  readonly handle: (
-    context: ApiRouteContext,
-    params: ApiContentEndpointParams<Endpoint>,
-    query: ApiContentEndpointQuery<Endpoint>,
-  ) => Effect.Effect<ContentResponse, unknown, R>;
+export interface RegisterContentEndpointOptions<Endpoint extends AnyApiContentEndpoint> {
   /**
    * Whether this request asked for a download rather than an inline view.
    *
@@ -63,161 +49,85 @@ export interface RegisterContentEndpointOptions<Endpoint extends AnyApiContentEn
    * route's own contract and this registrar stays generic over any content route.
    */
   readonly attachment?: (query: ApiContentEndpointQuery<Endpoint>) => boolean;
-  readonly mapError?: (error: unknown, context: ApiRouteContext) => ApiError;
-  readonly run: <A>(
-    effect: Effect.Effect<A, unknown, R>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) => Promise<A>;
 }
 
-export function registerContentEndpoint<Endpoint extends AnyApiContentEndpoint, R = never>(
+export function registerContentEndpoint<Endpoint extends AnyApiContentEndpoint, R>(
   fastify: FastifyInstance,
+  runtime: RouteRuntime<R>,
   endpoint: Endpoint,
-  options: RegisterContentEndpointOptions<Endpoint, R>,
+  handle: ApiHandler<Endpoint, ContentResponse, NoInfer<R>>,
+  options: RegisterContentEndpointOptions<Endpoint> = {},
 ) {
   fastify.route({
     method: endpoint.method,
     url: `${apiBasePath}${endpoint.path}`,
     handler: async (request, reply) => {
-      const context = {
-        endpointId: endpoint.id,
-        requestId: String(request.id),
-      } satisfies ApiRouteContext;
-
-      const params = decodeParams<ApiContentEndpointParams<Endpoint>>(
-        endpoint,
-        request.params,
+      const context: ApiRouteContext = { endpointId: endpoint.id, requestId: String(request.id) };
+      const result = await runRouteRequest(
+        runtime,
+        request,
+        reply,
         context,
-      );
-      if (params.status === 'failed') {
-        return sendApiError(reply, params.error);
-      }
-      const query = decodeQuery<ApiContentEndpointQuery<Endpoint>>(
-        endpoint,
-        request.query,
-        context,
-      );
-      if (query.status === 'failed') {
-        return sendApiError(reply, query.error);
-      }
-
-      const interrupt = requestInterruptSignal(request, reply);
-      const handlerStartedAt = Date.now();
-      let slowRequestLogged = false;
-      const slowRequestTimer = setTimeout(() => {
-        slowRequestLogged = true;
-        logDiagnosticEvent(
-          'api.request_still_running',
-          {
-            endpointId: endpoint.id,
-            requestId: context.requestId,
-            method: request.method,
-            url: request.url,
-            elapsedMs: Date.now() - handlerStartedAt,
-          },
-          'warn',
-        );
-      }, slowApiRequestThresholdMs);
-      slowRequestTimer.unref();
-
-      let content: ContentResponse;
-      try {
-        const result = await options.run(
-          Effect.result(options.handle(context, params.value, query.value)),
-          { signal: interrupt.signal },
-        );
-        if (Result.isFailure(result)) {
-          logSlowApiRequest({
-            context,
-            elapsedMs: Date.now() - handlerStartedAt,
-            endpointId: endpoint.id,
-            method: request.method,
-            outcome: 'failed',
-            slowRequestLogged,
-            url: request.url,
-          });
-          const apiError =
-            options.mapError?.(result.failure, context) ??
-            unhandledApiError(context, result.failure);
-          return sendRouteApiError(request, reply, endpoint, context, apiError);
-        }
-        content = result.success;
-      } catch (error: unknown) {
-        if (interrupt.signal.aborted || reply.raw.destroyed) {
-          logSlowApiRequest({
-            context,
-            elapsedMs: Date.now() - handlerStartedAt,
-            endpointId: endpoint.id,
-            method: request.method,
-            outcome: 'aborted',
-            slowRequestLogged,
-            url: request.url,
-          });
-          return;
-        }
-        logSlowApiRequest({
-          context,
-          elapsedMs: Date.now() - handlerStartedAt,
-          endpointId: endpoint.id,
-          method: request.method,
-          outcome: 'threw',
-          slowRequestLogged,
-          url: request.url,
-        });
-        return sendRouteApiError(
-          request,
-          reply,
+        runRoute(
           endpoint,
-          context,
-          unhandledApiError(context, error),
-        );
-      } finally {
-        clearTimeout(slowRequestTimer);
-        interrupt.cleanup();
-      }
-      logSlowApiRequest({
-        context,
-        elapsedMs: Date.now() - handlerStartedAt,
-        endpointId: endpoint.id,
-        method: request.method,
-        outcome: 'succeeded',
-        slowRequestLogged,
-        url: request.url,
-      });
-
-      if (interrupt.signal.aborted || reply.raw.destroyed) {
-        content.stream.destroy();
-        return;
-      }
-
-      // Past this point a 200 is committed. A stream failure can no longer be reported as an error,
-      // so the connection is severed and the diagnostic goes to the log with the request id.
-      content.stream.once('error', (error: unknown) => {
-        logDiagnosticEvent(
-          'api.content_stream_failed',
           {
-            endpointId: endpoint.id,
             requestId: context.requestId,
-            method: request.method,
-            url: request.url,
-            error: error instanceof Error ? error.message : String(error),
+            body: undefined,
+            params: request.params,
+            query: request.query,
           },
-          'warn',
-        );
-        reply.raw.destroy();
-      });
-
-      reply.header('Content-Type', content.mediaType);
-      reply.header('Content-Length', String(content.byteSize));
-      // The bytes behind a reference are immutable by construction — the reference is their hash —
-      // but they are one run's recorded content, so a shared cache must never hold them.
-      reply.header('Cache-Control', 'private, immutable');
-      if (options.attachment?.(query.value) === true && content.filename !== null) {
-        reply.header('Content-Disposition', contentDisposition(content.filename));
+          (decoded) =>
+            Effect.map(handle(decoded), (content) => ({
+              content,
+              attachment: options.attachment?.(decoded.query) === true,
+            })),
+        ),
+        (outcome) => (outcome._tag === 'Succeeded' ? 'succeeded' : outcome.outcome),
+      );
+      if (result._tag === 'Rejected') {
+        if (result.clientGone) return;
+        return sendApiError(reply, unhandledApiError(context, result.cause));
       }
-      return reply.status(200).send(content.stream);
+      const outcome = result.value;
+      if (outcome._tag === 'Failed') {
+        if (result.clientGone) return;
+        return sendApiError(reply, outcome.error);
+      }
+      const { content, attachment } = outcome.value;
+      return sendContent(runtime, request, reply, context, content, attachment, result.clientGone);
     },
   });
+}
+
+/**
+ * Sends a content route's bytes, or releases the stream when the client already left. Past this point a 200 is
+ * committed: a stream failure severs the connection and is logged with the request id.
+ */
+export function sendContent<R>(
+  runtime: RouteRuntime<R>,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  context: ApiRouteContext,
+  content: ContentResponse,
+  attachment: boolean,
+  clientGone: boolean,
+) {
+  if (clientGone) {
+    content.stream.destroy();
+    return;
+  }
+
+  watchContentStream(runtime, request, reply, context, content.stream);
+
+  reply.header('Content-Type', content.mediaType);
+  reply.header('Content-Length', String(content.byteSize));
+  // The bytes behind a reference are immutable by construction — the reference is their hash —
+  // but they are one run's recorded content, so a shared cache must never hold them.
+  reply.header('Cache-Control', 'private, immutable');
+  if (attachment && content.filename !== null) {
+    reply.header('Content-Disposition', contentDisposition(content.filename));
+  }
+  return reply.status(200).send(content.stream);
 }
 
 /**

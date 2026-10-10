@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { InternalEvents } from '../../../platform/events/index.js';
 import { PtyKillError } from '../../../pty-processes/index.js';
 import {
   awaitProbeSettled,
@@ -78,7 +78,7 @@ test('a terminal event for an owned incarnation ends its probe and publishes', a
     Effect.gen(function* () {
       const service = yield* EditorContextService;
       const repository = yield* EditorContextRepository;
-      const bus = yield* InternalRuntimeEventBus;
+      const bus = yield* InternalEvents;
       const worktreeId = yield* insertWorktree('/repo/isagi');
       const created = yield* repository.create({ worktreeId });
 
@@ -121,7 +121,7 @@ test('a terminal event for another domain’s process is ignored entirely', asyn
     Effect.gen(function* () {
       const service = yield* EditorContextService;
       const repository = yield* EditorContextRepository;
-      const bus = yield* InternalRuntimeEventBus;
+      const bus = yield* InternalEvents;
       const worktreeId = yield* insertWorktree('/repo/isagi');
       const created = yield* repository.create({ worktreeId });
 
@@ -166,7 +166,7 @@ test('an incarnation whose termination was refused still publishes its terminal 
       Effect.gen(function* () {
         const service = yield* EditorContextService;
         const repository = yield* EditorContextRepository;
-        const bus = yield* InternalRuntimeEventBus;
+        const bus = yield* InternalEvents;
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const created = yield* repository.create({ worktreeId });
 

@@ -9,7 +9,7 @@ import {
   HarnessAdapterError,
   type HarnessLaunchOptions,
 } from '../../harnesses/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyService, type PtyLaunchError } from '../../pty-processes/index.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
@@ -46,7 +46,7 @@ const make = Effect.gen(function* () {
   const repository = yield* AgentSessionRepository;
   const pty = yield* PtyService;
   const harnesses = yield* HarnessAdapterRegistry;
-  const eventBus = yield* InternalRuntimeEventBus;
+  const eventBus = yield* InternalEvents;
   const lifecycle = yield* SessionLifecycle;
   const controlPlane = yield* HarnessControlPlane;
 
@@ -180,7 +180,17 @@ export class AgentSessionService extends Context.Service<
     }) => Effect.Effect<StopUnlessPlacedOutcome, DatabaseError>;
   }
 >()('isagi/runtime/environment/AgentSessionService') {
-  static readonly layer = Layer.effect(AgentSessionService, make);
+  static readonly layerNoDeps = Layer.effect(AgentSessionService, make);
+  static readonly layer = AgentSessionService.layerNoDeps.pipe(
+    Layer.provide([
+      AgentSessionRepository.layer,
+      HarnessAdapterRegistry.layer,
+      HarnessControlPlane.layer,
+      InternalEvents.layer,
+      PtyService.layer,
+      SessionLifecycle.layer,
+    ]),
+  );
 }
 
 function findAgentSessionOrFail(

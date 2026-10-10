@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Result, Semaphore } from 'effect';
+import { Context, Effect, Layer, Result, Semaphore, Stream } from 'effect';
 
 import type {
   CommandActionOutput,
@@ -10,9 +10,9 @@ import type {
 
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import {
-  InternalRuntimeEventBus,
+  InternalEvents,
   nextRuntimeEventEnvelope,
-  RuntimeEventBus,
+  RuntimeEvents,
 } from '../platform/events/index.js';
 import { LoopbackPortProbe } from '../platform/net/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
@@ -72,8 +72,8 @@ const make = Effect.gen(function* () {
   const commandRepository = yield* CommandRepository;
   const pty = yield* PtyService;
   const portProbe = yield* LoopbackPortProbe;
-  const publicEvents = yield* RuntimeEventBus;
-  const internalEvents = yield* InternalRuntimeEventBus;
+  const publicEvents = yield* RuntimeEvents;
+  const internalEvents = yield* InternalEvents;
   const locks: CommandLocks = new Map();
 
   const publishCommandChanged = (worktreeId: number, commandName: string, status: CommandStatus) =>
@@ -499,52 +499,38 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const subscription = yield* internalEvents.subscribe({
-    types: [
-      'pty_process_exited',
-      'pty_process_failed',
-      'pty_process_killed',
-      'worktree_activation_change',
-    ],
-  });
-  yield* Effect.addFinalizer(() => subscription.unsubscribe);
+  const processEvents = yield* internalEvents.subscribe([
+    'pty_process_exited',
+    'pty_process_failed',
+    'pty_process_killed',
+    'worktree_activation_change',
+  ]);
   const logEventError = (error: unknown) =>
     Effect.sync(() => {
       console.warn(
         `[runtime] Command process event reconciliation failed cause=${describeOperationalCause(error)}`,
       );
     });
-  yield* Effect.forkScoped(
-    Effect.forever(
-      Effect.gen(function* () {
-        const event = yield* subscription.take;
-        if (
-          event.type === 'pty_process_exited' ||
-          event.type === 'pty_process_failed' ||
-          event.type === 'pty_process_killed'
-        ) {
-          // Fork so a PTY-exit event for a command whose lock is currently
-          // held (e.g. by an in-flight restart's graceful terminate) cannot
-          // stall reconciliation of other commands' events behind it in the
-          // queue. The per-command lock still serializes same-command work.
-          yield* Effect.forkScoped(
-            reconcilePtyProcessEvent(event).pipe(Effect.catch(logEventError)),
-          );
-          return;
-        }
-        // Activation changes stay inline so consecutive worktree switches keep
-        // their deactivate-then-activate ordering.
-        if (event.type === 'worktree_activation_change') {
-          yield* lifecycle
-            .applyActivationLifecycle({
-              previousWorktreeId: event.previousWorktreeId,
-              nextWorktreeId: event.nextWorktreeId,
-              cause: event.cause,
-            })
-            .pipe(Effect.catch(logEventError));
-        }
-      }).pipe(Effect.catch(logEventError)),
-    ),
+  yield* processEvents.pipe(
+    Stream.runForEach((event) => {
+      // Activation changes stay inline so consecutive worktree switches keep
+      // their deactivate-then-activate ordering.
+      if (event.type === 'worktree_activation_change') {
+        return lifecycle
+          .applyActivationLifecycle({
+            previousWorktreeId: event.previousWorktreeId,
+            nextWorktreeId: event.nextWorktreeId,
+            cause: event.cause,
+          })
+          .pipe(Effect.catch(logEventError));
+      }
+      // Fork so a PTY-exit event for a command whose lock is currently
+      // held (e.g. by an in-flight restart's graceful terminate) cannot
+      // stall reconciliation of other commands' events behind it in the
+      // queue. The per-command lock still serializes same-command work.
+      return Effect.forkScoped(reconcilePtyProcessEvent(event).pipe(Effect.catch(logEventError)));
+    }),
+    Effect.forkScoped,
   );
 
   const service = CommandService.of({
@@ -674,7 +660,17 @@ export class CommandService extends Context.Service<
     }) => Effect.Effect<void, CommandServiceError>;
   }
 >()('isagi/runtime/commands/CommandService') {
-  static readonly layer = Layer.effect(CommandService, make);
+  static readonly layerNoDeps = Layer.effect(CommandService, make);
+  static readonly layer = CommandService.layerNoDeps.pipe(
+    Layer.provide([
+      CommandRepository.layer,
+      InternalEvents.layer,
+      LoopbackPortProbe.layer,
+      ProjectRepository.layer,
+      PtyService.layer,
+      RuntimeEvents.layer,
+    ]),
+  );
 }
 
 // One mutex per (worktree, command) so concurrent run/stop/restart/lifecycle

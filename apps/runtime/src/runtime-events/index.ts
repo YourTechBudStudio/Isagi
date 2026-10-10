@@ -1,1 +1,1 @@
-export { registerRuntimeEventsApi } from './api.js';
+export { registerRuntimeEventsRoutes } from './api.js';

@@ -1,35 +1,35 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
-import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../platform/http/index.js';
+import {
+  registerLegacyApiEndpoint,
+  type ApiRouteContext,
+  errorMessage,
+  type RouteRuntime,
+} from '../platform/http/index.js';
 import { RuntimeConfigConflict, RuntimeHarnessConfigInvalid } from '../runtime-config/index.js';
 import { ControlPlaneNotReady, HarnessControlPlane } from './control-plane/service.js';
-export function registerControlPlaneApi(
+import type { HarnessesLayer } from './layer.js';
+
+/** The harnesses module's routes: the harness control plane. */
+export function registerHarnessesRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof HarnessesLayer>>,
 ) {
-  const run = <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) => runtime.runPromise(effect, options);
-  registerApiEndpoint(fastify, apiEndpoints.controlPlane.get, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.controlPlane.get, {
     handle: () => Effect.flatMap(HarnessControlPlane, (service) => service.snapshot),
-    run,
   });
-  registerApiEndpoint(fastify, apiEndpoints.controlPlane.refreshInventory, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.controlPlane.refreshInventory, {
     // Refresh is an explicit operational lifecycle: a changed trusted Docs target projection also
     // reconciles global isagi-docs integrations before this mutation completes.
     handle: () => Effect.flatMap(HarnessControlPlane, (service) => service.refreshInventory),
-    run,
   });
-  registerApiEndpoint(fastify, apiEndpoints.controlPlane.acceptPolicy, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.controlPlane.acceptPolicy, {
     handle: (input) =>
       Effect.flatMap(HarnessControlPlane, (service) => service.acceptPolicy(input)),
     mapError: toError,
-    run,
   });
 }
 function toError(error: unknown, context: ApiRouteContext): ApiError {

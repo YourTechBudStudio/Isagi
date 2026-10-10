@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect, Layer, Result } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { UserShell } from '../../platform/process/index.js';
@@ -68,13 +68,13 @@ function serviceLayer(dataRoot: string, catalog: ReturnType<typeof fakeBackendCa
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const repository = PtyRepository.layer.pipe(Layer.provide(database));
-  const service = PtyService.layer.pipe(
+  const service = PtyService.layerNoDeps.pipe(
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(Layer.succeed(PtyBackendCatalog, catalog)),
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
-    Layer.provide(InternalRuntimeEventBus.layer),
+    Layer.provide(InternalEvents.layer),
     Layer.provide(Layer.succeed(UserShell, testUserShell())),
   );
   return Layer.mergeAll(database, repository, service);

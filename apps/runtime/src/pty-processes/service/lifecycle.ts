@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { PtyRepository } from '../repository.js';
 import type { PtyProcessStatusReason } from '../types.js';
 import type { PtyExit } from '../types.js';
@@ -178,7 +178,7 @@ function clearTerminationReservation(
 
 export function handleExit(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   retry: PtyRetryScheduler,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
@@ -205,7 +205,7 @@ export function handleExit(
 // Persist an exit that no termination attempt is reserving.
 function persistExit(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   retry: PtyRetryScheduler,
   activeAttachments: Map<number, ActiveAttachment>,
   ptyProcessId: number,
@@ -229,7 +229,7 @@ function persistExit(
 // be permanent.
 export function persistCapturedExitAndRelease(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   retry: PtyRetryScheduler,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
@@ -263,7 +263,7 @@ export function persistCapturedExitAndRelease(
 // stays reserved until this retry lands or an already-terminal fact rejects it.
 export function retryPersistKilledUntilSuccess(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   retry: PtyRetryScheduler,
   terminations: PtyTerminations,
   ptyProcessId: number,
@@ -301,7 +301,7 @@ export function retryPersistKilledUntilSuccess(
 
 function persistExitOnce(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   activeAttachments: Map<number, ActiveAttachment>,
   ptyProcessId: number,
   exit: PtyExit,
@@ -330,7 +330,7 @@ function persistExitOnce(
 
 function scheduleExitRetry(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   retry: PtyRetryScheduler,
   activeAttachments: Map<number, ActiveAttachment>,
   ptyProcessId: number,

@@ -11,7 +11,7 @@ import { apiEndpoints } from '@isagi/contracts';
 
 import { CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
@@ -133,14 +133,14 @@ const forbiddenDurableSessions = {
 } satisfies SurfaceService['Service'];
 
 function workspaceLayerWith(repository: ProjectRepository['Service']) {
-  return WorkspaceService.layer.pipe(
+  return WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
         NoProjectDeletionParticipant,
         Layer.succeed(ProjectRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
-        Layer.succeed(InternalRuntimeEventBus, testInternalEvents),
+        Layer.succeed(InternalEvents, testInternalEvents),
         Layer.succeed(WorktreeDeleteDiagnosticsReader, forbiddenDeleteDiagnostics),
         Layer.succeed(SurfaceService, forbiddenDurableSessions),
         Layer.succeed(
@@ -382,14 +382,14 @@ test('a Git project still reaches the work the guard refuses for folders', async
     ...forbiddenRepositoryFor(gitProject),
     listWorktrees: Effect.succeed([{ ...worktree, path: projectRoot }]),
   };
-  const layer = WorkspaceService.layer.pipe(
+  const layer = WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
         NoProjectDeletionParticipant,
         Layer.succeed(ProjectRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
-        Layer.succeed(InternalRuntimeEventBus, testInternalEvents),
+        Layer.succeed(InternalEvents, testInternalEvents),
         Layer.succeed(WorktreeDeleteDiagnosticsReader, forbiddenDeleteDiagnostics),
         Layer.succeed(SurfaceService, forbiddenDurableSessions),
         Layer.succeed(

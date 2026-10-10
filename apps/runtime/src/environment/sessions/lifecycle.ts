@@ -167,7 +167,8 @@ export class SessionLifecycle extends Context.Service<
     readonly supersedeAttachment: (key: SessionLifecycleKey) => Effect.Effect<void>;
   }
 >()('isagi/runtime/environment/SessionLifecycle') {
-  static readonly layer = Layer.effect(SessionLifecycle, make);
+  static readonly layerNoDeps = Layer.effect(SessionLifecycle, make);
+  static readonly layer = SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer));
 }
 
 function revokeTokensForKey(

@@ -132,12 +132,12 @@ test('malformed reportRules are a configuration error', () => {
   }
 });
 
-test('the registry reports module-boundaries with R9 report-only (plan R27)', () => {
+test('the registry enforces module-boundaries with R9 report-only (plan R27)', () => {
   assert.deepEqual(
     CHECKS.filter(({ check }) => check === 'module-boundaries').map(
       ({ check, mode, reportRules }) => ({ check, mode, reportRules }),
     ),
-    [{ check: 'module-boundaries', mode: 'report', reportRules: ['R9'] }],
+    [{ check: 'module-boundaries', mode: 'enforce', reportRules: ['R9'] }],
   );
 });
 
@@ -195,7 +195,7 @@ test('the CLI runs the registry against the given repo root and sets the exit co
     assert.match(clean.stdout, /effect-run-sites \[enforce\]: 0 violation\(s\)/);
     assert.match(
       clean.stdout,
-      /module-boundaries \[report\]: 0 violation\(s\), 0 report-only \(R9\)/,
+      /module-boundaries \[enforce\]: 0 violation\(s\), 0 report-only \(R9\)/,
     );
     assert.match(
       clean.stdout,

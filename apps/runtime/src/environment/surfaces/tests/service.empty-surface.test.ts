@@ -9,9 +9,10 @@ import { Deferred, Effect, Fiber, Result } from 'effect';
 
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { ptyProcesses } from '../../../pty-processes/tables.js';
-import { SurfaceError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { SurfaceError, SurfaceService } from '../../index.js';
 import { surfacePanes, terminalSessions } from '../../tables.js';
 import { insertPtyProcess, insertWorktree, testLayer } from '../../testing.js';
+import { SurfaceRepository } from '../repository.js';
 
 function withTerminals(dataRoot: string) {
   let nextTerminalSessionId = 300;

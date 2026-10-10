@@ -34,7 +34,7 @@ import {
 } from '../../editor/index.js';
 import type { HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { displayNameForHarness, HarnessAdapterError } from '../../harnesses/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock, type EntityLockHeld } from '../../platform/locks/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
@@ -82,7 +82,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalSessionService;
   const pty = yield* PtyService;
   const lifecycle = yield* SessionLifecycle;
-  const eventBus = yield* InternalRuntimeEventBus;
+  const eventBus = yield* InternalEvents;
   const editors = yield* EditorContextService;
   // The same module-scoped lock value `SessionLifecycle` and
   // `EditorContextService` are built on, so placement and the editor's own
@@ -564,7 +564,19 @@ interface SurfaceServiceShape {
 export class SurfaceService extends Context.Service<SurfaceService, SurfaceServiceShape>()(
   'isagi/runtime/environment/SurfaceService',
 ) {
-  static readonly layer = Layer.effect(SurfaceService, make);
+  static readonly layerNoDeps = Layer.effect(SurfaceService, make);
+  static readonly layer = SurfaceService.layerNoDeps.pipe(
+    Layer.provide([
+      AgentSessionService.layer,
+      EditorContextService.layer,
+      EntityLock.layer,
+      InternalEvents.layer,
+      PtyService.layer,
+      SessionLifecycle.layer,
+      SurfaceRepository.layer,
+      TerminalSessionService.layer,
+    ]),
+  );
 }
 
 /**
@@ -624,7 +636,7 @@ function createPaneSession(
   agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
   terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
   lifecycle: import('../sessions/lifecycle.js').SessionLifecycle['Service'],
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   worktreeId: number,
   create: PaneSessionCreateInput,
 ): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
@@ -649,7 +661,7 @@ function claimPaneSession(
   agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
   terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
   lifecycle: import('../sessions/lifecycle.js').SessionLifecycle['Service'],
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   worktreeId: number,
   claim: PaneSessionClaimInput,
 ): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
@@ -710,7 +722,7 @@ function loadPaneSessionTarget(
 function assignPaneSession(
   repository: SurfaceRepository['Service'],
   lifecycle: import('../sessions/lifecycle.js').SessionLifecycle['Service'],
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   input: {
     readonly worktreeId: number;
     readonly surfaceId: number;
@@ -934,7 +946,7 @@ const emptyPaneDeleteOutput = { deletedPaneIds: [] } satisfies DeletePaneOutput;
 interface SurfaceDeleteDependencies {
   readonly repository: SurfaceRepository['Service'];
   readonly pty: PtyService['Service'];
-  readonly eventBus: InternalRuntimeEventBus['Service'];
+  readonly eventBus: InternalEvents['Service'];
   readonly editors: EditorContextService['Service'];
   readonly entityLock: EntityLock['Service'];
 }
@@ -1117,14 +1129,14 @@ function terminateDeletedPanePtys(
 }
 
 function publishSurfaceChanged(
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   payload: import('@isagi/contracts').SurfaceChangedEvent['payload'],
 ) {
   return eventBus.publish({ type: 'surface_changed', payload });
 }
 
 function publishDeletedPaneSessionChanges(
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   panes: readonly SurfacePaneRow[],
 ) {
   return Effect.all(
@@ -1138,7 +1150,7 @@ function publishDeletedPaneSessionChanges(
 }
 
 function publishReplacedPaneSessionChange(
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   pane: SurfacePaneRow,
   next: { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
 ) {
@@ -1159,7 +1171,7 @@ function publishReplacedPaneSessionChange(
  * only; the projection layer adds placement.
  */
 function publishSessionChanged(
-  eventBus: import('../../platform/events/index.js').InternalRuntimeEventBus['Service'],
+  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
   sessionKind: NonNullable<SurfacePaneRow['sessionKind']>,
   sessionId: number,
 ) {

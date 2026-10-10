@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Deferred, Effect, Fiber } from 'effect';
 
-import type { InternalRuntimeEvent } from '../../../platform/events/index.js';
+import type { InternalEvent } from '../../../platform/events/index.js';
 import { editorServiceLayer, insertWorktree, withEditorService } from '../../testing.js';
 import { EditorContextRepository } from '../repository.js';
 import { EditorContextService } from '../service.js';
@@ -19,7 +19,7 @@ import { EditorContextService } from '../service.js';
  */
 test('layer shutdown interrupts a probe that would otherwise never settle', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-shutdown-'));
-  const events: InternalRuntimeEvent[] = [];
+  const events: InternalEvent[] = [];
   const probeStarted = Deferred.makeUnsafe<void>();
   let probeInterrupted = false;
   try {

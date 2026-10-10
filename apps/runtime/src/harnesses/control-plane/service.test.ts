@@ -130,7 +130,7 @@ test('start does not complete until initial host inventory is ready', async () =
         } satisfies HostInventory['Service'];
       }),
     );
-    const layer = HarnessControlPlane.layer.pipe(
+    const layer = HarnessControlPlane.layerNoDeps.pipe(
       Layer.provide(inventoryLayer),
       Layer.provide(
         Layer.succeed(RuntimeConfig, {
@@ -341,7 +341,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
     startRefresh: Effect.void,
     refresh: Effect.succeed(ready(available).inventory),
   } satisfies HostInventory['Service']);
-  const layer = HarnessControlPlane.layer.pipe(
+  const layer = HarnessControlPlane.layerNoDeps.pipe(
     Layer.provide(stuckInventory),
     Layer.provide(Layer.succeed(RuntimeConfig, config)),
     Layer.provide(
@@ -423,7 +423,7 @@ function controlPlaneLayer(
       } satisfies HostInventory['Service'];
     }),
   );
-  return HarnessControlPlane.layer.pipe(
+  return HarnessControlPlane.layerNoDeps.pipe(
     Layer.provide(inventory),
     Layer.provide(Layer.succeed(RuntimeConfig, config)),
     Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),

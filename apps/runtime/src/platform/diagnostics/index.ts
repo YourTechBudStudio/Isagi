@@ -7,4 +7,4 @@ export {
 } from './operational-cause.js';
 export { boundedDiagnostic } from './bounded.js';
 export { EventLoopWatchdog } from './event-loop-watchdog.js';
-export { diagnosticPhase, logDiagnosticEvent } from './phase.js';
+export { diagnosticPhase } from './phase.js';

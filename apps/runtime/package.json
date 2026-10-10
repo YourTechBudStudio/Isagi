@@ -9,6 +9,7 @@
   "scripts": {
     "build": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && vite build && node scripts/sync-runtime-assets.mjs --dist",
     "check": "pnpm typecheck && pnpm test && pnpm build",
+    "db:generate": "cross-env NODE_OPTIONS=--conditions=import drizzle-kit generate",
     "dev": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 tsx src/index.ts",
     "lint:modules": "node ../../scripts/architecture/module-boundaries.mjs ../..",
     "start": "node dist/index.js",

@@ -4,7 +4,6 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { Effect } from 'effect';
 
-import { logDiagnosticEvent } from '../platform/diagnostics/index.js';
 import { normalizeHomePath } from '../platform/fs/index.js';
 
 export interface PathSuggestInput {
@@ -148,7 +147,7 @@ export function suggestPathsAtHome(input: PathSuggestInput, home: string) {
 
 // `Effect.suspend` so the runtime home is read when the effect executes, not when it
 // is constructed. Composing rather than running keeps the request interrupt signal
-// that `registerApiEndpoint` threads into `Effect.runPromise` effective.
+// that the route runtime threads into the request fiber effective.
 export function suggestPaths(input: PathSuggestInput) {
   return Effect.suspend(() => suggestPathsAtHome(input, homedir()));
 }
@@ -181,14 +180,10 @@ function listDirectoryEntries(basePath: string) {
     catch: (error) => error,
   }).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        logDiagnosticEvent(
-          'paths.listing_failed',
-          { basePath, reason: listingFailureReason(error) },
-          'warn',
-        );
-        return [] as readonly ScanDirent[];
-      }),
+      Effect.logDebug('paths.listing_failed').pipe(
+        Effect.annotateLogs({ basePath, reason: listingFailureReason(error) }),
+        Effect.as([] as readonly ScanDirent[]),
+      ),
     ),
   );
 }

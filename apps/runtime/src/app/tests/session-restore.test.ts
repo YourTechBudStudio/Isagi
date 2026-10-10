@@ -7,12 +7,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
-import {
-  AgentSessionService,
-  SurfaceService,
-  SurfaceRepository,
-  TerminalSessionService,
-} from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import type { PaneSessionBinding } from '../../environment/index.js';
 import {
   agentSessions,
@@ -22,7 +17,7 @@ import {
 } from '../../environment/tables.js';
 import {
   AgentSessionError,
-  StartupSessionRestoreLayer,
+  paneBoundRestoreLayer,
   TerminalSessionError,
   captureStartupLogs,
   type HarnessLaunchRecord,
@@ -30,6 +25,7 @@ import {
   realSessionCreationLayer,
   sessionDataLayer,
 } from '../../environment/testing.js';
+import { SurfaceRepository, TerminalSessionService } from '../../environment/testing.js';
 import { AgentSessionArtifacts, HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
@@ -197,7 +193,7 @@ function restoreLayer(input: {
   readonly agentService?: Partial<AgentSessionService['Service']> | undefined;
   readonly terminalService?: Partial<TerminalSessionService['Service']> | undefined;
 }) {
-  return StartupSessionRestoreLayer.pipe(
+  return paneBoundRestoreLayer.pipe(
     Layer.provide(Layer.succeed(SurfaceRepository, fakeSurfaceRepository(input.bindings))),
     Layer.provide(Layer.succeed(AgentSessionService, fakeAgentService(input.agentService))),
     Layer.provide(

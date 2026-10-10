@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { PtyForegroundState } from '../foreground-state.js';
 import type { PtyProcessTransitionResult, PtyRepository } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
@@ -25,7 +25,7 @@ export interface PtyProcessTransitionInput {
 // observably a no-op rather than an announcement of a status that never landed.
 export function transitionProcessAndPublish(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   previous: PtyProcessRecord,
   input: PtyProcessTransitionInput,
 ) {
@@ -38,7 +38,7 @@ export function transitionProcessAndPublish(
 
 export function transitionProcessByIdAndPublish(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   input: PtyProcessTransitionInput,
 ) {
   return Effect.gen(function* () {
@@ -52,7 +52,7 @@ export function transitionProcessByIdAndPublish(
 }
 
 function publishAppliedTransition(
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   previous: PtyProcessRecord,
   input: PtyProcessTransitionInput,
   result: PtyProcessTransitionResult,
@@ -67,7 +67,7 @@ function publishAppliedTransition(
 }
 
 function publishPtyProcessChangedIfNeeded(
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   previous: PtyProcessRecord,
   next: {
     readonly status: PtyProcessStatus;
@@ -116,7 +116,7 @@ function publishPtyProcessChangedIfNeeded(
 // notifications from a backend and must announce only real changes.
 export function recordForegroundCommandState(
   foreground: PtyForegroundState['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   ptyProcessId: number,
   state: PtyForegroundCommandState,
 ) {

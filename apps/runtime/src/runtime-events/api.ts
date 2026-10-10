@@ -1,4 +1,4 @@
-import { Effect, Result, Schema, type ManagedRuntime } from 'effect';
+import { Effect, Option, Schema, Stream } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -10,23 +10,25 @@ import {
   type RuntimeEventInputMessage,
 } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
 import { AgentSessionAttentionProjection } from '../environment/index.js';
-import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../platform/events/index.js';
-import { enforceRuntimeWebSocketOrigin } from '../platform/http/index.js';
+import { nextRuntimeEventEnvelope, RuntimeEvents } from '../platform/events/index.js';
+import {
+  acquireWsConnection,
+  enforceRuntimeWebSocketOrigin,
+  type RouteRuntime,
+  type WebSocketLike,
+  type WsConnection,
+} from '../platform/http/index.js';
 import { WorkflowEngine } from '../workflows/index.js';
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(effect: Effect.Effect<A, unknown, RuntimeServices>) =>
-    runtime.runPromise(effect);
+/** The services the runtime events socket uses. */
+type RuntimeEventsRouteServices = RuntimeEvents | AgentSessionAttentionProjection | WorkflowEngine;
 
-export function registerRuntimeEventsApi(
+/** The runtime-events module's route: the public runtime event socket. It has no module layer of its own. */
+export function registerRuntimeEventsRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<RuntimeEventsRouteServices>,
 ) {
-  const run = runWithRuntime(runtime);
-
   fastify.get(
     `${apiBasePath}${runtimeEventsWebSocketEndpoint.path}`,
     {
@@ -34,127 +36,72 @@ export function registerRuntimeEventsApi(
       preValidation: enforceRuntimeWebSocketOrigin,
     },
     (socket) => {
-      let closed = false;
-      let unsubscribe = () => {};
-
-      const send = (event: RuntimeEvent) => {
-        if (socket.readyState !== 1) {
-          return false;
-        }
-
-        try {
-          const encoded = Schema.decodeUnknownSync(runtimeEventSchema)(event);
-          socket.send(JSON.stringify(encoded));
-          return true;
-        } catch (error: unknown) {
-          console.error('[runtime] Runtime event websocket encoding failed', error);
-          socket.close();
-          return false;
-        }
-      };
-
-      socket.once('close', () => {
-        closed = true;
-        unsubscribe();
-      });
-
-      void run(
-        Effect.gen(function* () {
-          const eventBus = yield* RuntimeEventBus;
-          return yield* eventBus.subscribe;
-        }).pipe(Effect.result),
-      )
-        .then((subscriptionResult) => {
-          if (Result.isFailure(subscriptionResult)) {
-            console.error(
-              '[runtime] Runtime event websocket subscribe failed',
-              subscriptionResult.failure,
-            );
-            socket.close();
-            return;
-          }
-
-          const subscription = subscriptionResult.success;
-          unsubscribe = () => {
-            void run(subscription.unsubscribe).catch((error: unknown) => {
-              console.warn('[runtime] Runtime event websocket unsubscribe failed', error);
-            });
-          };
-          if (closed) {
-            unsubscribe();
-            return;
-          }
-
-          const pump = (): void => {
-            if (closed) {
-              return;
-            }
-
-            void run(subscription.take.pipe(Effect.result)).then(
-              (eventResult) => {
-                if (closed) {
-                  return;
-                }
-                if (Result.isFailure(eventResult)) {
-                  console.error(
-                    '[runtime] Runtime event websocket receive failed',
-                    eventResult.failure,
-                  );
-                  socket.close();
-                  return;
-                }
-                if (send(eventResult.success)) {
-                  pump();
-                }
-              },
-              (error: unknown) => {
-                if (closed) {
-                  return;
-                }
-                console.error('[runtime] Runtime event websocket failed', error);
-                socket.close();
-              },
-            );
-          };
-
-          pump();
-        })
-        .catch((error: unknown) => {
-          console.error('[runtime] Runtime event websocket failed', error);
-          socket.close();
-        });
-
-      socket.on('message', (raw: Buffer) => {
-        const message = decodeClientMessage(raw);
-        if (!message) {
-          console.warn('[runtime] Runtime event websocket received invalid client message');
-          return;
-        }
-        void run(handleClientMessage(message)).then(
-          (event) => {
-            if (!closed) send(event);
-          },
-          (error: unknown) => {
-            console.error('[runtime] Runtime event websocket client message failed', error);
-            socket.close();
-          },
-        );
-      });
+      runtime.runFork(Effect.scoped(streamRuntimeEvents(socket)));
     },
   );
 }
 
-function decodeClientMessage(raw: Buffer): RuntimeEventInputMessage | null {
+/**
+ * One events connection, for as long as its socket is open.
+ *
+ * The bus subscription is taken before anything else can happen, and lives in the connection's scope: when the client
+ * closes the socket (or the connection fiber is interrupted) the scope closes, which removes the subscriber and closes
+ * the socket if it is still open. Events are sent in publish order; client messages are answered in arrival order.
+ */
+const streamRuntimeEvents = Effect.fn('runtimeEvents.connection')(function* (
+  socket: WebSocketLike,
+) {
+  const ws = yield* acquireWsConnection(socket);
+  const bus = yield* RuntimeEvents;
+  const events = yield* bus.subscribe;
+
+  yield* events.pipe(
+    Stream.runForEach((event) =>
+      Schema.decodeUnknownEffect(runtimeEventSchema)(event).pipe(Effect.flatMap(ws.send)),
+    ),
+    // An event the contract rejects ends the connection; the client reconnects and re-reads.
+    Effect.catch((error) =>
+      Effect.logError('[runtime] Runtime event websocket encoding failed', error).pipe(
+        Effect.andThen(ws.close),
+      ),
+    ),
+    Effect.forkScoped,
+  );
+
+  yield* ws.incoming.pipe(
+    Stream.runForEach((raw) => answerClientMessage(ws, raw)),
+    Effect.forkScoped,
+  );
+
+  yield* ws.closed;
+});
+
+function answerClientMessage(ws: WsConnection, raw: string) {
+  const message = decodeClientMessage(raw);
+  if (Option.isNone(message)) {
+    return Effect.logWarning('[runtime] Runtime event websocket received invalid client message');
+  }
+  return handleClientMessage(message.value).pipe(
+    Effect.flatMap(ws.send),
+    Effect.catch((error) =>
+      Effect.logError('[runtime] Runtime event websocket client message failed', error).pipe(
+        Effect.andThen(ws.close),
+      ),
+    ),
+  );
+}
+
+function decodeClientMessage(raw: string): Option.Option<RuntimeEventInputMessage> {
   try {
-    return Schema.decodeUnknownSync(runtimeEventInputMessageSchema)(JSON.parse(raw.toString()));
+    return Schema.decodeUnknownOption(runtimeEventInputMessageSchema)(JSON.parse(raw));
   } catch {
-    return null;
+    return Option.none();
   }
 }
 
 function handleClientMessage(
   message: RuntimeEventInputMessage,
-): Effect.Effect<RuntimeEvent, unknown, RuntimeServices> {
+): Effect.Effect<RuntimeEvent, unknown, RuntimeEventsRouteServices> {
   switch (message.type) {
     case 'attention_snapshot_requested':
       return Effect.gen(function* () {

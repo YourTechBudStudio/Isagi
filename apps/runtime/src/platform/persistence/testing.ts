@@ -21,3 +21,5 @@ export function makeTestDataDirectory(
 ): DataDirectory['Service'] {
   return { paths: { ...isagiDataDirectoryPaths(root), ...overrides } };
 }
+
+export { makeRuntimeDatabase } from './database.js';

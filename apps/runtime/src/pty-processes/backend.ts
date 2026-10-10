@@ -68,5 +68,8 @@ export class PtyBackendCatalog extends Context.Service<
     readonly all: readonly PtyBackendShape[];
   }
 >()('isagi/runtime/pty-processes/PtyBackendCatalog') {
-  static readonly layer = Layer.effect(PtyBackendCatalog, make);
+  static readonly layerNoDeps = Layer.effect(PtyBackendCatalog, make);
+  static readonly layer = PtyBackendCatalog.layerNoDeps.pipe(
+    Layer.provide([NodePtyBackend.layer, TmuxBackend.layer]),
+  );
 }

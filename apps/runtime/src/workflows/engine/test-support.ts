@@ -14,7 +14,7 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
-import { InternalRuntimeEventBus, type RuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents, type RuntimeEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import {
   DatabaseError,
@@ -22,6 +22,7 @@ import {
   migrationsDirectory,
   type RuntimeDatabase,
 } from '../../platform/persistence/index.js';
+import { makeRuntimeDatabase } from '../../platform/persistence/testing.js';
 import { DetachedWorktreeError, WorkspaceError } from '../../workspace/index.js';
 import { checkNewDirectory } from '../../workspace/testing.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
@@ -71,7 +72,7 @@ export interface EngineHarness {
   readonly headless: FakeHeadless;
   /** The seeded worktree's checkout, where operation and checkpoint nodes work. */
   readonly worktreePath: string;
-  readonly internalEvents: InternalRuntimeEventBus['Service'];
+  readonly internalEvents: InternalEvents['Service'];
   /** Makes the next write with this operation name fail and roll back, as a full disk would. */
   readonly failNextWrite: (operation: string) => void;
   /**
@@ -113,22 +114,20 @@ export async function makeEngineHarness(
   migrate(drizzled, { migrationsFolder: migrationsDirectory() });
   const failingWrites = new Set<string>();
   const beforeWrites = new Map<string, () => Promise<void>>();
+  const real = makeRuntimeDatabase(drizzled);
   const database: RuntimeDatabase['Service'] = {
-    use: (operation, run) =>
-      Effect.try({
-        try: () => run(drizzled),
-        catch: (cause) => new DatabaseError({ operation, cause }),
-      }),
+    use: real.use,
     transaction: (operation, run) => {
-      const write = Effect.try({
-        try: () => {
-          if (failingWrites.delete(operation)) throw new Error(`Injected failure of ${operation}.`);
-          return drizzled.transaction((transaction) =>
-            run(transaction as unknown as RuntimeDrizzleDatabase),
-          );
-        },
-        catch: (cause) => new DatabaseError({ operation, cause }),
-      });
+      const write = Effect.suspend(() =>
+        failingWrites.delete(operation)
+          ? Effect.fail(
+              new DatabaseError({
+                operation,
+                cause: new Error(`Injected failure of ${operation}.`),
+              }),
+            )
+          : real.transaction(operation, run),
+      );
       return Effect.suspend(() => {
         const before = beforeWrites.get(operation);
         if (!before) return write;
@@ -141,16 +140,11 @@ export async function makeEngineHarness(
   const worktreePath = join(root, 'worktree');
   mkdirSync(worktreePath, { recursive: true });
   const busScope = Effect.runSync(Scope.make());
-  const busContext = await Effect.runPromise(
-    Layer.buildWithScope(InternalRuntimeEventBus.layer, busScope),
-  );
-  const internalEvents: InternalRuntimeEventBus['Service'] = Context.get(
-    busContext,
-    InternalRuntimeEventBus,
-  );
+  const busContext = await Effect.runPromise(Layer.buildWithScope(InternalEvents.layer, busScope));
+  const internalEvents: InternalEvents['Service'] = Context.get(busContext, InternalEvents);
 
   const events: RuntimeEvent[] = [];
-  const publicEvents: RuntimeEventBus['Service'] = {
+  const publicEvents: RuntimeEvents['Service'] = {
     publish: (event) => Effect.sync(() => void events.push(event)),
     subscribe: Effect.die('Tests read published events from the array.'),
   };
@@ -629,7 +623,7 @@ export class FakeAgents {
 
   constructor(
     private readonly clock: FakeClock,
-    private readonly bus: InternalRuntimeEventBus['Service'],
+    private readonly bus: InternalEvents['Service'],
   ) {}
 
   /** An agent session that already exists, such as the one a workflow is launched from. */
@@ -798,7 +792,7 @@ export class FakeHeadless {
   private readonly outputs = new Map<number, string>();
   private nextProcess = 1;
 
-  constructor(private readonly bus: InternalRuntimeEventBus['Service']) {}
+  constructor(private readonly bus: InternalEvents['Service']) {}
 
   port(): HeadlessPort {
     return {

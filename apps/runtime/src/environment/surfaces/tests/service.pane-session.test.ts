@@ -9,7 +9,7 @@ import { Effect, Result } from 'effect';
 
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import type { AgentSessionService } from '../../agent-sessions/service.js';
-import { SurfaceError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { SurfaceError, SurfaceService } from '../../index.js';
 import { surfacePanes, terminalSessions } from '../../tables.js';
 import {
   addPaneToSurface,
@@ -19,6 +19,7 @@ import {
   insertWorktree,
   testLayer,
 } from '../../testing.js';
+import { SurfaceRepository } from '../repository.js';
 
 test('create pane session assigns a new agent session to the pane', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-claim-start-fresh-'));

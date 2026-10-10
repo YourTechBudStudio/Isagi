@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
 import { CliAccessNone } from '../cli-access/index.js';
-import type { InternalRuntimeEvent, InternalRuntimeEventBus } from '../platform/events/index.js';
+import type { InternalEvent, InternalEvents } from '../platform/events/index.js';
 import { recordingInternalEventBusLayer } from '../platform/events/testing.js';
 import { EntityLock } from '../platform/locks/index.js';
 import { LoopbackPortProbe } from '../platform/net/index.js';
@@ -16,15 +16,10 @@ import { UserShell } from '../platform/process/index.js';
 import { ProjectRepository } from '../projects/index.js';
 import type { WorktreeRow } from '../projects/index.js';
 import { worktrees } from '../projects/tables.js';
-import {
-  PtyBackendCatalog,
-  PtyForegroundState,
-  PtyRepository,
-  PtyService,
-} from '../pty-processes/index.js';
+import { PtyForegroundState, PtyService } from '../pty-processes/index.js';
 import type { PtyBackendShape as PtyBackend } from '../pty-processes/index.js';
 import { ptyProcesses } from '../pty-processes/tables.js';
-import { fakeBackendCatalog } from '../pty-processes/testing.js';
+import { fakeBackendCatalog, PtyBackendCatalog, PtyRepository } from '../pty-processes/testing.js';
 import type { PtyBackendName } from '../pty-processes/testing.js';
 import { EditorContextRepository } from './contexts/repository.js';
 import {
@@ -231,7 +226,7 @@ export interface EditorServiceHarnessInput {
   readonly configured?: PtyBackendName | undefined;
   readonly nodePty?: PtyBackend | undefined;
   readonly tmux?: PtyBackend | undefined;
-  readonly events: InternalRuntimeEvent[];
+  readonly events: InternalEvent[];
   readonly options?: EditorContextServiceOptions | undefined;
   readonly portProbe?: LoopbackPortProbe['Service'] | undefined;
 }
@@ -252,7 +247,7 @@ export function editorContextServiceLayer<E>(input: {
   readonly provisioning: Layer.Layer<EditorProvisioning, E>;
   readonly portProbe: Layer.Layer<LoopbackPortProbe, E>;
   readonly entityLock: Layer.Layer<EntityLock, E>;
-  readonly bus: Layer.Layer<InternalRuntimeEventBus, E>;
+  readonly bus: Layer.Layer<InternalEvents, E>;
   readonly options?: EditorContextServiceOptions | undefined;
 }) {
   return Layer.effect(EditorContextService, makeEditorContextService(input.options ?? {})).pipe(
@@ -293,7 +288,7 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
       tmux: input.tmux ?? editorBackendStub('tmux'),
     }),
   );
-  const pty = PtyService.layer.pipe(
+  const pty = PtyService.layerNoDeps.pipe(
     Layer.provide(CliAccessNone),
     Layer.provide(ptyRepository),
     Layer.provide(catalog),
@@ -342,7 +337,7 @@ export function immediateProbe(state: 'ready' | 'unreachable', detail: string | 
   return runner;
 }
 
-export function editorContextChangedIds(events: readonly InternalRuntimeEvent[]) {
+export function editorContextChangedIds(events: readonly InternalEvent[]) {
   return events.flatMap((event) =>
     event.type === 'editor_context_changed' ? [event.editorContextId] : [],
   );
@@ -376,7 +371,7 @@ export type EditorHarnessContext =
   | PtyRepository
   | PtyService
   | EntityLock
-  | InternalRuntimeEventBus;
+  | InternalEvents;
 
 /**
  * One editor stack over one throwaway data directory, torn down afterwards.
@@ -389,10 +384,10 @@ export function withEditorService<A, E>(
   input: Omit<EditorServiceHarnessInput, 'dataRoot' | 'events'> & {
     readonly prefix?: string | undefined;
   },
-  body: (events: InternalRuntimeEvent[]) => Effect.Effect<A, E, EditorHarnessContext>,
+  body: (events: InternalEvent[]) => Effect.Effect<A, E, EditorHarnessContext>,
 ): Promise<A> {
   const dataRoot = mkdtempSync(join(tmpdir(), input.prefix ?? 'isagi-editor-'));
-  const events: InternalRuntimeEvent[] = [];
+  const events: InternalEvent[] = [];
   return Effect.runPromise(
     body(events).pipe(
       Effect.provide(editorServiceLayer({ ...input, dataRoot, events })),
@@ -415,7 +410,7 @@ function failingDatabaseLayer(operation: string) {
     RuntimeDatabase,
     Effect.gen(function* () {
       const database = yield* RuntimeDatabase;
-      const refuse = <A>(name: string, run: () => Effect.Effect<A, DatabaseError>) =>
+      const refuse = <A, E>(name: string, run: () => Effect.Effect<A, DatabaseError | E>) =>
         name === operation
           ? Effect.fail(new DatabaseError({ operation: name, cause: new Error('forced failure') }))
           : run();

@@ -1,9 +1,6 @@
-export { PtyBackendCatalog } from './backend.js';
 export { PtyForegroundState } from './foreground-state.js';
-export { NodePtyBackend } from './adapters/node-pty.js';
-export { PtyRepository } from './repository.js';
 export { PtyService } from './service.js';
-export { TmuxBackend } from './adapters/tmux.js';
+export { PtyProcessesLayer } from './layer.js';
 export type { PtyAttachmentPlan, PtyLaunchError } from './service.js';
 // The command domain names a durable termination reason when it asks for
 // generic cleanup; it stays PTY-layer vocabulary, exported rather than

@@ -37,6 +37,17 @@ export function unhandledApiError(context: ApiRouteContext, cause: unknown): Api
   };
 }
 
+/**
+ * Adds the request id to a rejection, keeping the envelope's field order (`code`, `status`, `message`, `requestId`,
+ * `data`) whatever order the rejection was written in.
+ */
+export function withRequestId(rejection: Omit<ApiError, 'requestId'>, requestId: string): ApiError {
+  const { code, status, message } = rejection;
+  return 'data' in rejection
+    ? { code, status, message, requestId, data: rejection.data }
+    : { code, status, message, requestId };
+}
+
 export function sendApiError(reply: FastifyReply, error: ApiError) {
   return reply.status(error.status).send({ error });
 }

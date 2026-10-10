@@ -1,4 +1,4 @@
-import { Data, Effect, type ManagedRuntime, Schema } from 'effect';
+import { Data, Effect, type Layer, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -10,48 +10,47 @@ import {
   type CommandLogStreamOutputMessage,
 } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
-import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../platform/http/index.js';
+import {
+  registerLegacyApiEndpoint,
+  type ApiRouteContext,
+  errorMessage,
+  type RouteRuntime,
+} from '../platform/http/index.js';
 import { DatabaseError } from '../platform/persistence/index.js';
 import {
+  type PtyService,
   PtyServiceError,
   registerPtyStreamRoute,
   type PtyStreamStrategy,
 } from '../pty-processes/index.js';
 import { CommandError } from './errors.js';
+import type { CommandsLayer } from './layer.js';
 import { CommandService } from './service.js';
-
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
 
 class CommandLogStreamProtocolError extends Data.TaggedError('CommandLogStreamProtocolError')<{
   readonly code: 'command_not_found' | 'read_only_stream';
   readonly message: string;
 }> {}
 
-export function registerCommandsApi(
+/**
+ * The commands module's routes. Typed by the module's own layer plus `PtyService`, which the command log stream
+ * reads, so the module never imports the composition root.
+ */
+export function registerCommandsRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof CommandsLayer> | PtyService>,
 ) {
-  const run = runWithRuntime(runtime);
-
-  registerApiEndpoint(fastify, apiEndpoints.commands.listForWorktree, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.commands.listForWorktree, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const commands = yield* CommandService;
         return yield* commands.listForWorktree(params.worktreeId);
       }),
     mapError: (error, context) => toCommandApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.commands.logMetadata, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.commands.logMetadata, {
     handle: (_input, _context, params, query) =>
       Effect.gen(function* () {
         const commands = yield* CommandService;
@@ -61,10 +60,9 @@ export function registerCommandsApi(
         });
       }),
     mapError: (error, context) => toCommandApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.commands.run, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.commands.run, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const commands = yield* CommandService;
@@ -74,10 +72,9 @@ export function registerCommandsApi(
         });
       }),
     mapError: (error, context) => toCommandApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.commands.stop, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.commands.stop, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const commands = yield* CommandService;
@@ -87,10 +84,9 @@ export function registerCommandsApi(
         });
       }),
     mapError: (error, context) => toCommandApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.commands.restart, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.commands.restart, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const commands = yield* CommandService;
@@ -100,15 +96,14 @@ export function registerCommandsApi(
         });
       }),
     mapError: (error, context) => toCommandApiError(error, context),
-    run,
   });
 
-  registerCommandLogStreamRoute(fastify, run);
+  registerCommandLogStreamRoute(fastify, runtime);
 }
 
 function registerCommandLogStreamRoute(
   fastify: FastifyInstance,
-  run: ReturnType<typeof runWithRuntime>,
+  runtime: RouteRuntime<CommandService | PtyService>,
 ) {
   const strategy: PtyStreamStrategy<
     {
@@ -117,7 +112,8 @@ function registerCommandLogStreamRoute(
         { readonly type: 'command_log_state' }
       >;
     },
-    Extract<CommandLogStreamOutputMessage, { readonly type: 'command_log_state' }>
+    Extract<CommandLogStreamOutputMessage, { readonly type: 'command_log_state' }>,
+    CommandService | PtyService
   > = {
     path: commandLogStreamWebSocketEndpoint.path,
     logLabel: 'Command log stream',
@@ -198,7 +194,7 @@ function registerCommandLogStreamRoute(
     mapError: commandLogStreamError,
   };
 
-  registerPtyStreamRoute(fastify, run, strategy);
+  registerPtyStreamRoute(fastify, runtime, strategy);
 }
 
 function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {

@@ -7,7 +7,7 @@ import {
   type EditorUnavailable,
   type EditorContextService,
 } from '../../editor/index.js';
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { EntityLock } from '../../platform/locks/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { SurfaceError } from './errors.js';
@@ -34,7 +34,7 @@ export interface OpenEditorDependencies {
   readonly repository: SurfaceRepository['Service'];
   readonly editors: EditorContextService['Service'];
   readonly entityLock: EntityLock['Service'];
-  readonly eventBus: InternalRuntimeEventBus['Service'];
+  readonly eventBus: InternalEvents['Service'];
 }
 
 export function openEditor(

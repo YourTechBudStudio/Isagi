@@ -123,6 +123,7 @@ export function fakePtyAllocation(input: {
  * The repository, its owner discovery and the GC pass, for the cross-module ownership test in
  * `app/tests/pty-gc-ownership.test.ts`: only there can owner rows from other modules be seeded.
  */
+export { PtyBackendCatalog } from './backend.js';
 export { PtyRepository, ptyProcessOwnerColumns } from './repository.js';
 export { collectPtyGarbage } from './service/gc.js';
 

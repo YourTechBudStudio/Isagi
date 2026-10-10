@@ -4,23 +4,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
-import type { FastifyInstance } from 'fastify';
+import { Cause, ConfigProvider, Effect, Exit, Layer } from 'effect';
 
 import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
+import { expectNoNewHandles, makeLogCapture } from '@isagi/testing';
 
-import { startRuntimeServer } from '../http-server.js';
+import { CliAccess, noCliAccess } from '../../cli-access/index.js';
+import { HttpServerLayer } from '../http-server.js';
+import { AppLayer } from '../layer.js';
+import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 
 test('runtime server registers PTY routes after the websocket plugin is ready', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ws-'));
   const previousDataDirectory = process.env.ISAGI_DATA_DIR;
   process.env.ISAGI_DATA_DIR = dataRoot;
-  let server: FastifyInstance | undefined;
+  let runtime: BootedRuntime | undefined;
 
   try {
-    const started = await Effect.runPromise(startRuntimeServer());
-    server = started.server;
-    const socket = new WebSocket(agentSessionPtyWebSocketUrl(started.url, 1));
+    runtime = await bootRuntime();
+    const socket = new WebSocket(agentSessionPtyWebSocketUrl(runtime.url, 1));
     try {
       await waitForSocketOpen(socket);
       const message = await waitForSocketMessage(socket);
@@ -33,7 +35,7 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
     }
   } finally {
     restoreDataDirectory(previousDataDirectory);
-    await server?.close();
+    await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
@@ -44,11 +46,11 @@ test('runtime HTTP CORS emits an allow origin only for the exact configured orig
   const previousAllowedOrigins = process.env.ISAGI_ALLOWED_ORIGINS;
   process.env.ISAGI_DATA_DIR = dataRoot;
   process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
-  let server: FastifyInstance | undefined;
+  let runtime: BootedRuntime | undefined;
 
   try {
-    const started = await Effect.runPromise(startRuntimeServer());
-    server = started.server;
+    runtime = await bootRuntime();
+    const server = runtime.server;
     const allowed = await server.inject({
       method: 'GET',
       url: '/api/v1/health',
@@ -64,7 +66,92 @@ test('runtime HTTP CORS emits an allow origin only for the exact configured orig
   } finally {
     restoreEnvironment('ISAGI_ALLOWED_ORIGINS', previousAllowedOrigins);
     restoreDataDirectory(previousDataDirectory);
-    await server?.close();
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('a route handler log reaches the runtime logger with the request annotations', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-logger-'));
+  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
+  const previousDebug = process.env.ISAGI_RUNTIME_DEBUG;
+  process.env.ISAGI_DATA_DIR = dataRoot;
+  process.env.ISAGI_RUNTIME_DEBUG = '1';
+  // `RuntimeLogger` writes `Debug` entries through `console.debug`; record them instead of printing.
+  const originalDebug = console.debug;
+  const lines: string[] = [];
+  console.debug = (...args: ReadonlyArray<unknown>) => {
+    lines.push(args.map(String).join(' '));
+  };
+  let runtime: BootedRuntime | undefined;
+
+  try {
+    runtime = await bootRuntime();
+    const server = runtime.server;
+    // A base directory that does not exist: the handler logs why the listing is empty and still answers.
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/v1/paths/suggestions',
+      payload: { input: `${join(dataRoot, 'no-such-directory')}/` },
+    });
+    const payload = response.json() as { meta?: { requestId?: string } };
+    assert.equal(response.statusCode, 200);
+
+    const line = lines.find((entry) => entry.includes('message=paths.listing_failed'));
+    assert.ok(line, 'the handler log reached the runtime logger');
+    assert.match(line, /^timestamp=\S+ level=DEBUG /, 'as one logfmt line at Debug');
+    assert.match(line, /endpointId=paths\.suggestions/);
+    assert.ok(line.includes(`requestId=${payload.meta?.requestId}`), line);
+  } finally {
+    console.debug = originalDebug;
+    restoreEnvironment('ISAGI_RUNTIME_DEBUG', previousDebug);
+    restoreDataDirectory(previousDataDirectory);
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startup failure after listen closes Fastify and disposes the runtime', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-startup-failure-'));
+  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
+  process.env.ISAGI_DATA_DIR = dataRoot;
+  const released: string[] = [];
+  let listeningUrl: string | undefined;
+  // The first startup step after `listen` fails. Its service is provided around the server, beside the app layer, so
+  // its release shows the runtime's services were released too.
+  const failingStartupStep = Layer.effect(
+    CliAccess,
+    Effect.acquireRelease(
+      Effect.succeed(
+        CliAccess.of({
+          ...noCliAccess,
+          publishRuntimeUrl: (url) =>
+            Effect.sync(() => {
+              listeningUrl = url;
+            }).pipe(Effect.andThen(Effect.die(new Error('startup step failed')))),
+        }),
+      ),
+      () => Effect.sync(() => released.push('runtime services')),
+    ),
+  );
+  const server = HttpServerLayer.pipe(Layer.provide(failingStartupStep), Layer.provide(AppLayer));
+  const logs = makeLogCapture();
+
+  try {
+    const exit = await Effect.runPromise(
+      expectNoNewHandles(Effect.exit(Effect.scoped(Layer.build(server)))).pipe(
+        Effect.provide(logs.layer),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+      ),
+    );
+
+    assert.ok(Exit.isFailure(exit), 'startup fails');
+    assert.match(Cause.pretty(exit.cause), /startup step failed/);
+    assert.ok(listeningUrl, 'the server was listening when startup failed');
+    await assert.rejects(fetch(`${listeningUrl}/api/v1/health`), 'Fastify no longer listens');
+    assert.deepEqual(released, ['runtime services']);
+  } finally {
+    restoreDataDirectory(previousDataDirectory);
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });

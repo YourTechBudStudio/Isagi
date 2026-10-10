@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { type CommandRunRow } from '../repository.js';
 import { CommandService } from '../service.js';
@@ -145,7 +145,7 @@ commands:
       () =>
         Effect.gen(function* () {
           yield* CommandService;
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_exited',
             ptyProcessId: 123,
@@ -191,7 +191,7 @@ commands:
       () =>
         Effect.gen(function* () {
           yield* CommandService;
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_killed',
             ptyProcessId: 123,
@@ -247,7 +247,7 @@ commands:
       () =>
         Effect.gen(function* () {
           yield* CommandService;
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_exited',
             ptyProcessId: 123,
@@ -305,7 +305,7 @@ commands:
       (service) =>
         Effect.gen(function* () {
           const action = yield* service.run({ worktreeId: 10, commandName: 'dev' });
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_exited',
             ptyProcessId: 901,

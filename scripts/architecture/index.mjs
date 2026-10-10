@@ -24,9 +24,10 @@ import { isMainModule } from './source-files.mjs';
 /** @type {RegisteredCheck[]} */
 export const CHECKS = [
   { check: 'effect-run-sites', mode: 'enforce', run: (repoRoot) => checkEffectRunSites(repoRoot) },
+  // Enforced since S3.7 (every rule at 0); R9 stays report-only until its last five files move (plan R27, S4.Z).
   {
     check: 'module-boundaries',
-    mode: 'report',
+    mode: 'enforce',
     reportRules: ['R9'],
     run: (repoRoot) => checkModuleBoundaries(repoRoot),
   },

@@ -5,16 +5,12 @@ import { join } from 'node:path';
 import test, { after as afterAll, describe } from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect } from 'effect';
+import { Effect, Stream } from 'effect';
 
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
 import { CommandError, type CommandService } from '../../commands/index.js';
-import {
-  AgentSessionService,
-  SurfaceService,
-  TerminalSessionService,
-} from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import {
   agentSessions,
   surfacePanes,
@@ -22,7 +18,8 @@ import {
   worktreeSurfaces,
 } from '../../environment/tables.js';
 import { realSessionCreationLayer } from '../../environment/testing.js';
-import type { InternalRuntimeEvent, InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { TerminalSessionService } from '../../environment/testing.js';
+import type { InternalEvent, InternalEvents } from '../../platform/events/index.js';
 import type { Git } from '../../platform/git/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { RuntimeDatabase } from '../../platform/persistence/index.js';
@@ -72,7 +69,7 @@ const dyingGit: Git['Service'] = {
  */
 function inspectingEventBus() {
   const observations: Array<{
-    readonly event: InternalRuntimeEvent;
+    readonly event: InternalEvent;
     readonly projectRowStillPresent: boolean | null;
   }> = [];
   const probe = { projectRowStillPresent: null as Effect.Effect<boolean> | null };
@@ -80,15 +77,15 @@ function inspectingEventBus() {
     observations,
     probe,
     service: {
-      publish: (event: InternalRuntimeEvent) =>
+      publish: (event: InternalEvent) =>
         Effect.gen(function* () {
           const projectRowStillPresent = probe.projectRowStillPresent
             ? yield* probe.projectRowStillPresent
             : null;
           observations.push({ event, projectRowStillPresent });
         }),
-      subscribe: () => Effect.succeed({ take: Effect.never, unsubscribe: Effect.void }),
-    } satisfies InternalRuntimeEventBus['Service'],
+      subscribe: () => Effect.succeed(Stream.never),
+    } satisfies InternalEvents['Service'],
   };
 }
 

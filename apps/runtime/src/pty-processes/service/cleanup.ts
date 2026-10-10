@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyRepository } from '../repository.js';
@@ -38,7 +38,7 @@ export type PtyProcessCleanupError =
 export interface PtyCleanupDependencies {
   readonly repository: PtyRepository['Service'];
   readonly catalog: PtyBackendCatalog['Service'];
-  readonly eventBus: InternalRuntimeEventBus['Service'];
+  readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
   readonly retry: PtyRetryScheduler;

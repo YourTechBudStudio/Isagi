@@ -5,13 +5,13 @@ import { Effect, Layer, Logger } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import { InternalRuntimeEventBus, RuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from '../agent-sessions/attention.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
-import { SurfaceRepository } from '../index.js';
 import { RuntimeEventProjection } from '../runtime-event-projection.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
+import { SurfaceRepository } from '../surfaces/repository.js';
 import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 
 /**
@@ -52,12 +52,12 @@ function harness(input: {
     find: input.rows,
     findByActivePtyProcessId: input.rows,
   };
-  const publicBus = Layer.succeed(RuntimeEventBus, {
+  const publicBus = Layer.succeed(RuntimeEvents, {
     publish: (event: RuntimeEvent) => Effect.sync(() => void input.published.push(event)),
     subscribe: Effect.die('this test never subscribes publicly'),
-  } as unknown as RuntimeEventBus['Service']);
-  return RuntimeEventProjection.layer.pipe(
-    Layer.provideMerge(InternalRuntimeEventBus.layer),
+  } as unknown as RuntimeEvents['Service']);
+  return RuntimeEventProjection.layerNoDeps.pipe(
+    Layer.provideMerge(InternalEvents.layer),
     Layer.provide(
       Layer.succeed(SurfaceRepository, {
         findPaneForSession: input.placements,
@@ -92,7 +92,7 @@ async function runProjection(input: {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const internal = yield* InternalRuntimeEventBus;
+        const internal = yield* InternalEvents;
         for (let index = 0; index < input.events; index += 1) {
           yield* internal.publish(
             input.kind === 'agent_session'

@@ -11,13 +11,14 @@ import {
   EditorContextRepository,
   insertPtyProcess as insertEditorPtyProcess,
 } from '../../../editor/testing.js';
-import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { tapInternalEvents } from '../../../platform/events/testing.js';
 import { DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
-import { SurfaceError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { SurfaceError, SurfaceService } from '../../index.js';
 import { SessionLifecycle } from '../../sessions/lifecycle.js';
 import { surfacePanes, terminalSessions } from '../../tables.js';
 import type { TerminalSessionService } from '../../terminal-sessions/service.js';
 import { insertWorktree, testLayer } from '../../testing.js';
+import { SurfaceRepository } from '../repository.js';
 
 /**
  * Closing a surface racing the work that fills it. Each test forces one
@@ -176,13 +177,13 @@ test('a committed delete is published even when its cleanup lookup fails', async
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
         const empty = yield* surfaces.createEmptySurface({ worktreeId, titleBase: 'Scratch' });
-        const eventBus = yield* InternalRuntimeEventBus;
-        const subscription = yield* eventBus.subscribe({ types: ['surface_changed'] });
+        const subscription = yield* tapInternalEvents(['surface_changed']);
         const deleted = yield* Effect.result(surfaces.deleteSurface(empty.surfaceId));
         const event = yield* subscription.take;
         yield* subscription.unsubscribe;
         return { deleted, event, surfaceId: empty.surfaceId };
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           testLayer(dataRoot, {
             decorateSurfaceRepository: (inner) => ({

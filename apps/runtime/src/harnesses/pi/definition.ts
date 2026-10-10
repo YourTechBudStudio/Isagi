@@ -3,10 +3,10 @@ import { resolve } from 'node:path';
 import type { HarnessDefinition } from '../definition-types.js';
 import { resolveDocsTarget } from '../docs-targets.js';
 import { extractPiHeadlessOutput, piHeadlessSemanticError } from '../headless-output.js';
-import { reducePiLifecycle } from '../lifecycle.js';
 import { buildPiHeadlessLaunch, buildPiLaunch } from './adapter.js';
 import { piExtensionSource } from './artifacts.js';
 import { readPiConversation } from './conversation.js';
+import { reducePiLifecycle } from './lifecycle.js';
 
 export const piHarnessDefinition = {
   id: 'pi',

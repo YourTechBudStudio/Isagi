@@ -4,14 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
-import type { FastifyInstance } from 'fastify';
-
 import type { ClientSettingsOutput } from '@isagi/contracts';
 
-import { startRuntimeServer } from '../http-server.js';
+import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 
-// This exercises the production runtime composition: the endpoint is only usable if the managed
+// This exercises the production runtime composition: the endpoint is only usable if the server's
 // runtime actually carries RuntimeConfig, which a hand-built single-service runtime cannot prove.
 test('client settings endpoint projects normalized runtime settings at the versioned route', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-client-settings-'));
@@ -30,12 +27,11 @@ test('client settings endpoint projects normalized runtime settings at the versi
     ].join('\n'),
     'utf8',
   );
-  let server: FastifyInstance | undefined;
+  let runtime: BootedRuntime | undefined;
 
   try {
-    const started = await Effect.runPromise(startRuntimeServer());
-    server = started.server;
-    const response = await server.inject({ method: 'GET', url: '/api/v1/client-settings' });
+    runtime = await bootRuntime();
+    const response = await runtime.server.inject({ method: 'GET', url: '/api/v1/client-settings' });
     const payload = response.json() as {
       readonly data?: ClientSettingsOutput & { readonly harnesses?: unknown };
       readonly meta?: { readonly requestId?: string };
@@ -53,7 +49,7 @@ test('client settings endpoint projects normalized runtime settings at the versi
   } finally {
     if (previousDataDirectory === undefined) delete process.env.ISAGI_DATA_DIR;
     else process.env.ISAGI_DATA_DIR = previousDataDirectory;
-    await server?.close();
+    await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });

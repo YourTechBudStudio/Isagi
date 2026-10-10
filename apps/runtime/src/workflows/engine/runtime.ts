@@ -2,7 +2,7 @@ import type { Effect } from 'effect';
 
 import type { SurfaceService } from '../../environment/index.js';
 import type { HarnessConversationTurn } from '../../harnesses/index.js';
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { ProjectRepository } from '../../projects/index.js';
 import type { WorkspaceService } from '../../workspace/index.js';
@@ -76,7 +76,7 @@ export interface EngineDeps {
   readonly agents: AgentPort;
   readonly headless: HeadlessPort;
   readonly checkpoints: CheckpointsPort;
-  readonly internalEvents: InternalRuntimeEventBus['Service'];
+  readonly internalEvents: InternalEvents['Service'];
 }
 
 /** Worktrees and surfaces: read for launch validation, created by preparation. */

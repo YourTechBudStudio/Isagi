@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import Fastify, { type FastifyInstance } from 'fastify';
+import { Effect, Layer } from 'effect';
+import type { FastifyInstance } from 'fastify';
 
 import type {
   EditorContextFacts,
@@ -10,7 +10,8 @@ import type {
   RetryEditorProvisioningOutput,
 } from '@isagi/contracts';
 
-import { registerEditorApi } from './api.js';
+import { withApiServer } from '../platform/http/testing.js';
+import { registerEditorRoutes } from './api.js';
 import {
   EditorDiagnosticsUnavailable,
   EditorError,
@@ -52,30 +53,23 @@ function fakeEditors(
   };
 }
 
-async function withEditorApi(
+function withEditorApi(
   service: EditorProvisioning['Service'],
   use: (fastify: FastifyInstance) => Promise<void>,
   services: {
     readonly editors?: Partial<EditorContextService['Service']> | undefined;
   } = {},
 ) {
-  const runtime = ManagedRuntime.make(
+  // Registered exactly the way the runtime registers it, so this proves the
+  // route really is reachable rather than that a handler function exists.
+  return withApiServer(
     Layer.mergeAll(
       Layer.succeed(EditorProvisioning, service),
       Layer.succeed(EditorContextService, fakeEditors(services.editors ?? {})),
     ),
+    registerEditorRoutes,
+    use,
   );
-  const fastify = Fastify({ logger: false });
-  // Registered exactly the way `server.ts` registers it, so this proves the
-  // route really is reachable rather than that a handler function exists.
-  registerEditorApi(fastify, runtime as never);
-  try {
-    await fastify.ready();
-    await use(fastify);
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
 }
 
 /**

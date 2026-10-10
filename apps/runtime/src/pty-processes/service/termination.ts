@@ -1,6 +1,6 @@
 import { Effect, Result } from 'effect';
 
-import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
 import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyRepository } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
@@ -82,7 +82,7 @@ export function terminatePtyProcesses(
 export function terminatePtyProcess(input: {
   readonly repository: PtyRepository['Service'];
   readonly catalog: PtyBackendCatalog['Service'];
-  readonly eventBus: InternalRuntimeEventBus['Service'];
+  readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
   readonly retry: PtyRetryScheduler;
@@ -119,7 +119,7 @@ function runReservedTermination(
   input: {
     readonly repository: PtyRepository['Service'];
     readonly catalog: PtyBackendCatalog['Service'];
-    readonly eventBus: InternalRuntimeEventBus['Service'];
+    readonly eventBus: InternalEvents['Service'];
     readonly activeAttachments: Map<number, ActiveAttachment>;
     readonly terminations: PtyTerminations;
     readonly retry: PtyRetryScheduler;
@@ -221,7 +221,7 @@ function runReservedTermination(
 function concludeReservation(
   input: {
     readonly repository: PtyRepository['Service'];
-    readonly eventBus: InternalRuntimeEventBus['Service'];
+    readonly eventBus: InternalEvents['Service'];
     readonly activeAttachments: Map<number, ActiveAttachment>;
     readonly terminations: PtyTerminations;
     readonly retry: PtyRetryScheduler;
@@ -268,7 +268,7 @@ function findPtyProcessOrFail(repository: PtyRepository['Service'], ptyProcessId
 function persistKilledTransition(
   input: {
     readonly repository: PtyRepository['Service'];
-    readonly eventBus: InternalRuntimeEventBus['Service'];
+    readonly eventBus: InternalEvents['Service'];
     readonly reason: DurablePtyTerminationReason;
   },
   session: PtyProcessRecord,

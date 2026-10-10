@@ -1,17 +1,16 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../../app/layer.js';
-import { registerApiEndpoint } from '../../platform/http/index.js';
+import { registerLegacyApiEndpoint, type RouteRuntime } from '../../platform/http/index.js';
 import { AgentSessionAttentionProjection } from './attention.js';
 
 export function registerAgentSessionsApi(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<AgentSessionAttentionProjection>,
 ) {
-  registerApiEndpoint(fastify, apiEndpoints.agentSessions.activity, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.agentSessions.activity, {
     handle: () =>
       Effect.gen(function* () {
         const projection = yield* AgentSessionAttentionProjection;
@@ -30,6 +29,5 @@ export function registerAgentSessionsApi(
         requestId: context.requestId,
       };
     },
-    run: (effect, options) => runtime.runPromise(effect, options),
   });
 }

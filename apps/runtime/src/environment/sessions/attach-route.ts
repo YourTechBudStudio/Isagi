@@ -1,4 +1,4 @@
-import { Data, Effect, Schema, type ManagedRuntime } from 'effect';
+import { Data, Effect, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -10,9 +10,8 @@ import {
   type PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../../app/layer.js';
 import { HarnessLaunchBlocked, HarnessAdapterError } from '../../harnesses/index.js';
-import { errorMessage } from '../../platform/http/index.js';
+import { errorMessage, type RouteRuntime } from '../../platform/http/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import {
   PtyService,
@@ -27,21 +26,18 @@ import { AgentSessionError, AgentSessionService } from '../agent-sessions/servic
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/service.js';
 import { SessionLifecycle, SessionLifecycleError, type SessionLifecycleKey } from './lifecycle.js';
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
+/** The services the session attach routes use. */
+type AttachRouteServices =
+  | AgentSessionService
+  | TerminalSessionService
+  | SessionLifecycle
+  | PtyService;
 
 export function registerPtyApi(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<AttachRouteServices>,
 ) {
-  const run = runWithRuntime(runtime);
-
-  registerSessionAttachRoute(fastify, run, {
+  registerSessionAttachRoute(fastify, runtime, {
     path: agentSessionPtyWebSocketEndpoint.path,
     paramName: 'agentSessionId',
     sessionKind: 'agent_session',
@@ -51,7 +47,7 @@ export function registerPtyApi(
         return yield* service.ensureActivePtyProcess(sessionId);
       }),
   });
-  registerSessionAttachRoute(fastify, run, {
+  registerSessionAttachRoute(fastify, runtime, {
     path: terminalSessionPtyWebSocketEndpoint.path,
     paramName: 'terminalSessionId',
     sessionKind: 'terminal_session',
@@ -77,17 +73,17 @@ class SessionAttachProtocolError extends Data.TaggedError('SessionAttachProtocol
 
 function registerSessionAttachRoute(
   fastify: FastifyInstance,
-  run: ReturnType<typeof runWithRuntime>,
+  runtime: RouteRuntime<AttachRouteServices>,
   input: {
     readonly path: string;
     readonly paramName: 'agentSessionId' | 'terminalSessionId';
     readonly sessionKind: 'agent_session' | 'terminal_session';
     readonly resolveProcessId: (
       sessionId: number,
-    ) => Effect.Effect<number, unknown, RuntimeServices>;
+    ) => Effect.Effect<number, unknown, AttachRouteServices>;
   },
 ) {
-  const strategy: PtyStreamStrategy<SessionAttachTarget, SessionPreamble> = {
+  const strategy: PtyStreamStrategy<SessionAttachTarget, SessionPreamble, AttachRouteServices> = {
     path: input.path,
     logLabel: `PTY websocket ${input.sessionKind} attach`,
     mode: 'interactive',
@@ -161,7 +157,7 @@ function registerSessionAttachRoute(
     mapError: websocketError,
   };
 
-  registerPtyStreamRoute(fastify, run, strategy);
+  registerPtyStreamRoute(fastify, runtime, strategy);
 }
 
 function sessionPreamble(plan: PtyAttachmentPlan | null): SessionPreamble {

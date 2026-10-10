@@ -111,7 +111,7 @@ function builtCatalog(
   return Effect.gen(function* () {
     return yield* PtyBackendCatalog;
   }).pipe(
-    Effect.provide(PtyBackendCatalog.layer),
+    Effect.provide(PtyBackendCatalog.layerNoDeps),
     Effect.provideService(RuntimeConfig, service),
     Effect.provide(Layer.succeed(NodePtyBackend, fakeBackend('node_pty', true))),
     Effect.provide(Layer.succeed(TmuxBackend, fakeBackend('tmux', options.tmuxAvailable))),

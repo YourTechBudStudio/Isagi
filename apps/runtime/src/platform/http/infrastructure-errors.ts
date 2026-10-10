@@ -2,7 +2,7 @@ import type { ApiError } from '@isagi/contracts';
 
 import { GitCommandError, ProjectPathValidationError } from '../git/index.js';
 import { DataDirectoryError, DatabaseError } from '../persistence/index.js';
-import type { ApiRouteContext } from './errors.js';
+import { withRequestId, type ApiRouteContext } from './errors.js';
 
 /**
  * How a platform failure that is not any one domain's rejection reaches a client.
@@ -12,53 +12,89 @@ import type { ApiRouteContext } from './errors.js';
  * saw a database failure reported as two different codes, would be responding to which handler ran
  * rather than to what went wrong.
  *
- * Returning `null` rather than a fallback is deliberate: it says "not mine", and leaves each
- * boundary to decide what an unrecognised error means there. Every caller already ends in its own
- * logged `api_unhandled_error`, which stays the single place an unknown failure is reported.
- *
  * **What does not belong here** is any module's error. The platform knows only platform failures;
  * the workspace's project-configuration, worktree-setup and state-file failures are mapped by
  * `workspaceRejections` (`workspace/api-errors.ts`) at the workspace and workflow boundaries.
+ *
+ * Adding an infrastructure error is one row in each of `infrastructureCodes`, `InfrastructureErrorsByTag` and the
+ * switch in `infrastructureRejection`; the compiler enforces the rest.
+ */
+const infrastructureCodes = {
+  ProjectPathValidationError: 'project_path_rejected',
+  GitCommandError: 'git_command_failed',
+  DatabaseError: 'runtime_database_failed',
+  DataDirectoryError: 'runtime_data_directory_failed',
+} as const;
+
+interface InfrastructureErrorsByTag {
+  readonly ProjectPathValidationError: ProjectPathValidationError;
+  readonly GitCommandError: GitCommandError;
+  readonly DatabaseError: DatabaseError;
+  readonly DataDirectoryError: DataDirectoryError;
+}
+
+type InfrastructureCodes = typeof infrastructureCodes;
+
+export type InfrastructureError = InfrastructureErrorsByTag[keyof InfrastructureErrorsByTag];
+
+/** The infrastructure errors an endpoint may let through: exactly those whose contract code it declares. */
+export type InfrastructureErrorFor<Code> = {
+  [Tag in keyof InfrastructureCodes]: InfrastructureCodes[Tag] extends Code
+    ? InfrastructureErrorsByTag[Tag]
+    : never;
+}[keyof InfrastructureCodes];
+
+/** The contract error an infrastructure failure always reads as, minus the request id the boundary adds. */
+export function infrastructureRejection(error: InfrastructureError): Omit<ApiError, 'requestId'> {
+  switch (error._tag) {
+    case 'ProjectPathValidationError':
+      return {
+        code: infrastructureCodes.ProjectPathValidationError,
+        status: 400,
+        message: error.message,
+        data: { reason: error.code, path: error.path },
+      };
+    case 'GitCommandError':
+      return {
+        code: infrastructureCodes.GitCommandError,
+        status: 500,
+        message: `git ${error.args.join(' ')} failed${error.stderr ? `: ${error.stderr.trim()}` : ''}`,
+        data: { args: [...error.args], cwd: error.cwd ?? null },
+      };
+    case 'DatabaseError':
+      return {
+        code: infrastructureCodes.DatabaseError,
+        status: 500,
+        message: `Database operation failed: ${error.operation}`,
+        data: { operation: error.operation },
+      };
+    case 'DataDirectoryError':
+      return {
+        code: infrastructureCodes.DataDirectoryError,
+        status: 500,
+        message: 'Could not prepare the Isagi data directory.',
+      };
+  }
+}
+
+export function isInfrastructureError(error: unknown): error is InfrastructureError {
+  return (
+    error instanceof ProjectPathValidationError ||
+    error instanceof GitCommandError ||
+    error instanceof DatabaseError ||
+    error instanceof DataDirectoryError
+  );
+}
+
+/**
+ * The untyped mapping used by `mapError` functions of routes still on `registerLegacyApiEndpoint`.
+ *
+ * Returning `null` rather than a fallback is deliberate: it says "not mine", and leaves each
+ * boundary to decide what an unrecognised error means there. Every caller already ends in its own
+ * logged `api_unhandled_error`, which stays the single place an unknown failure is reported.
  */
 export function infrastructureApiError(error: unknown, context: ApiRouteContext): ApiError | null {
-  if (error instanceof ProjectPathValidationError) {
-    return {
-      code: 'project_path_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: { reason: error.code, path: error.path },
-    };
-  }
-
-  if (error instanceof GitCommandError) {
-    return {
-      code: 'git_command_failed',
-      status: 500,
-      message: `git ${error.args.join(' ')} failed${error.stderr ? `: ${error.stderr.trim()}` : ''}`,
-      requestId: context.requestId,
-      data: { args: [...error.args], cwd: error.cwd ?? null },
-    };
-  }
-
-  if (error instanceof DatabaseError) {
-    return {
-      code: 'runtime_database_failed',
-      status: 500,
-      message: `Database operation failed: ${error.operation}`,
-      requestId: context.requestId,
-      data: { operation: error.operation },
-    };
-  }
-
-  if (error instanceof DataDirectoryError) {
-    return {
-      code: 'runtime_data_directory_failed',
-      status: 500,
-      message: 'Could not prepare the Isagi data directory.',
-      requestId: context.requestId,
-    };
-  }
-
-  return null;
+  return isInfrastructureError(error)
+    ? withRequestId(infrastructureRejection(error), context.requestId)
+    : null;
 }

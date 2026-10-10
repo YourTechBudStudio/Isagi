@@ -2,7 +2,7 @@ import { Cause, Context, Effect, Layer } from 'effect';
 
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { diagnosticPhase } from '../../platform/diagnostics/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
@@ -19,7 +19,7 @@ export interface SessionGcDependencies {
   readonly agents: AgentSessionRepository['Service'];
   readonly terminals: TerminalSessionRepository['Service'];
   readonly lifecycle: SessionLifecycle['Service'];
-  readonly events: InternalRuntimeEventBus['Service'];
+  readonly events: InternalEvents['Service'];
   readonly artifacts: AgentSessionArtifacts['Service'];
 }
 
@@ -113,7 +113,7 @@ const make = Effect.gen(function* () {
     agents: yield* AgentSessionRepository,
     terminals: yield* TerminalSessionRepository,
     lifecycle: yield* SessionLifecycle,
-    events: yield* InternalRuntimeEventBus,
+    events: yield* InternalEvents,
     artifacts: yield* AgentSessionArtifacts,
   });
   const service = SessionGc.of({ collectOrphans: gc.collectOrphans });
@@ -134,5 +134,14 @@ export class SessionGc extends Context.Service<
     readonly collectOrphans: Effect.Effect<void, DatabaseError>;
   }
 >()('isagi/runtime/environment/SessionGc') {
-  static readonly layer = Layer.effect(SessionGc, make);
+  static readonly layerNoDeps = Layer.effect(SessionGc, make);
+  static readonly layer = SessionGc.layerNoDeps.pipe(
+    Layer.provide([
+      AgentSessionArtifacts.layer,
+      AgentSessionRepository.layer,
+      InternalEvents.layer,
+      SessionLifecycle.layer,
+      TerminalSessionRepository.layer,
+    ]),
+  );
 }

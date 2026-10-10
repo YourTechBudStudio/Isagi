@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect, Layer, Result } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { UserShell } from '../../platform/process/index.js';
@@ -39,13 +39,13 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
     fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
   );
   const userShellLayer = Layer.succeed(UserShell, testUserShell());
-  const service = PtyService.layer.pipe(
+  const service = PtyService.layerNoDeps.pipe(
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(backendLayer),
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
-    Layer.provide(InternalRuntimeEventBus.layer),
+    Layer.provide(InternalEvents.layer),
     Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);

@@ -14,13 +14,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
-import { Effect } from 'effect';
-import type { FastifyInstance } from 'fastify';
-
-import { startRuntimeServer } from '../http-server.js';
+import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 
 describe('cli smoke', () => {
-  let runtime: { readonly server: FastifyInstance; readonly url: string } | undefined;
+  let runtime: BootedRuntime | undefined;
   let dataDir: string | undefined;
   const savedEnvironment = new Map(
     (['ISAGI_DATA_DIR', 'ISAGI_EDITOR_CAPABILITY', 'ISAGI_ALLOWED_ORIGINS'] as const).map(
@@ -35,11 +32,11 @@ describe('cli smoke', () => {
     // Editor provisioning reports `not_applicable` without a capability, so nothing downloads.
     delete process.env.ISAGI_EDITOR_CAPABILITY;
     delete process.env.ISAGI_ALLOWED_ORIGINS;
-    runtime = await Effect.runPromise(startRuntimeServer());
+    runtime = await bootRuntime();
   });
 
   after(async () => {
-    await runtime?.server.close();
+    await runtime?.close();
     for (const [name, value] of savedEnvironment) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;

@@ -18,7 +18,8 @@ import { Effect } from 'effect';
 
 import { HarnessLedgerObserver } from '../../../harnesses/index.js';
 import { pollHarnessLedgerObserverForTest } from '../../../harnesses/testing.js';
-import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { InternalEvents } from '../../../platform/events/index.js';
+import { tapInternalEvents } from '../../../platform/events/testing.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { ptyProcesses } from '../../../pty-processes/tables.js';
 import { agentSessions } from '../../tables.js';
@@ -36,15 +37,14 @@ test('startup replay is non-publishing and cache reads return paired history', a
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+        const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
         const edges = yield* observer.getTurnEdges(10);
         const projectionBefore = yield* observer.getProjection(10);
         yield* pollHarnessLedgerObserverForTest(observer);
         const projectionAfter = yield* observer.getProjection(10);
         yield* subscription.unsubscribe;
         return { edges, sameProjection: projectionBefore === projectionAfter };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.deepEqual(
       result.edges.map((edge) => [edge.type, edge.seq]),
@@ -67,8 +67,7 @@ test('Claude background Stop stays active and empty Stop publishes the paired te
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+        const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
 
         appendFileSync(
           path,
@@ -101,7 +100,7 @@ test('Claude background Stop stays active and empty Stop publishes the paired te
         const edges = yield* observer.getTurnEdges(10);
         yield* subscription.unsubscribe;
         return { started, ended, backgroundAttention, attention, edges };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(result.started.type, 'turn_started');
     assert.equal(result.ended.type, 'turn_ended');
@@ -134,8 +133,8 @@ for (const withPromptIds of [true, false]) {
           Effect.gen(function* () {
             const observer = yield* HarnessLedgerObserver;
             const database = yield* RuntimeDatabase;
-            const bus = yield* InternalRuntimeEventBus;
-            const changes = yield* bus.subscribe({ types: ['agent_session_changed'] });
+            const bus = yield* InternalEvents;
+            const changes = yield* tapInternalEvents(['agent_session_changed']);
             const append = (
               event: string,
               seq: number,
@@ -202,7 +201,7 @@ for (const withPromptIds of [true, false]) {
             const edges = yield* observer.getTurnEdges(10);
             yield* changes.unsubscribe;
             return edges;
-          }).pipe(Effect.provide(testLayer(root))),
+          }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
         );
         assert.deepEqual(
           live.map((edge) => [edge.type, edge.seq, 'reason' in edge ? edge.reason : null]),
@@ -238,9 +237,8 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const sessionChanges = yield* bus.subscribe({ types: ['agent_session_changed'] });
-        const turns = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+        const sessionChanges = yield* tapInternalEvents(['agent_session_changed']);
+        const turns = yield* tapInternalEvents(['turn_started', 'turn_ended']);
 
         appendFileSync(
           path,
@@ -310,7 +308,7 @@ test('Claude AskUserQuestion changes attention without closing the active turn',
           ended,
           endedAttention,
         };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(result.started.type, 'turn_started');
     assert.equal(result.instantQuestionPublished, false);
@@ -337,8 +335,7 @@ test('replacement rebuilds a non-publishing baseline and seeds rebuilt edges', a
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+        const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
         rmSync(path);
         writeFileSync(
           path,
@@ -353,7 +350,7 @@ test('replacement rebuilds a non-publishing baseline and seeds rebuilt edges', a
         const edges = yield* observer.getTurnEdges(10);
         yield* subscription.unsubscribe;
         return { published, edges };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(result.published, false);
     assert.deepEqual(
@@ -557,8 +554,7 @@ test('a live Codex session switch publishes a fully completed first turn', async
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+        const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
 
         writeFileSync(
           newRollout,
@@ -577,7 +573,7 @@ test('a live Codex session switch publishes a fully completed first turn', async
         yield* subscription.unsubscribe;
         const metadata = readHarnessMetadata(root);
         return { published, edges, metadata };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
 
     assert.deepEqual(
@@ -782,8 +778,7 @@ test('Codex recovery publishes a completed turn even when a newer recovered turn
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+        const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
         assert.deepEqual(
           (yield* observer.getTurnEdges(10)).map((edge) => edge.type),
           ['turn_started', 'turn_ended'],
@@ -804,7 +799,7 @@ test('Codex recovery publishes a completed turn even when a newer recovered turn
         ]);
         yield* subscription.unsubscribe;
         return { missingEdges, recoveredEdges, published };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.deepEqual(result.missingEdges, []);
     assert.deepEqual(
@@ -855,7 +850,7 @@ test('active PTY replacement fails the unresolved turn with its opening sequence
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
         const database = yield* RuntimeDatabase;
-        const bus = yield* InternalRuntimeEventBus;
+        const bus = yield* InternalEvents;
         appendFileSync(
           path,
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n`,
@@ -923,15 +918,13 @@ test('terminal PTY facts fail an unresolved turn even when no artifact bytes gro
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
+        const bus = yield* InternalEvents;
         appendFileSync(
           path,
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n`,
         );
         yield* pollHarnessLedgerObserverForTest(observer, 10);
-        const subscription = yield* bus.subscribe({
-          types: ['turn_failed', 'agent_session_changed'],
-        });
+        const subscription = yield* tapInternalEvents(['turn_failed', 'agent_session_changed']);
         yield* bus.publish({
           type: 'pty_process_exited',
           ptyProcessId: 20,
@@ -945,7 +938,7 @@ test('terminal PTY facts fail an unresolved turn even when no artifact bytes gro
         const attention = yield* observer.getAttention(10);
         yield* subscription.unsubscribe;
         return { failed, changed, edges, attention };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(result.failed.type, 'turn_failed');
     assert.equal(result.changed.type, 'agent_session_changed');
@@ -966,8 +959,8 @@ test('terminal PTY facts still publish failure when the source rebases during fi
     const failed = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_failed'] });
+        const bus = yield* InternalEvents;
+        const subscription = yield* tapInternalEvents(['turn_failed']);
         rmSync(path);
         writeFileSync(
           path,
@@ -985,7 +978,7 @@ test('terminal PTY facts still publish failure when the source rebases during fi
         assert.equal((yield* observer.getTurnEdges(10)).at(-1)?.type, 'turn_failed');
         yield* subscription.unsubscribe;
         return event;
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(failed.type, 'turn_failed');
   } finally {
@@ -1001,8 +994,8 @@ test('first active-process handoff publishes after baselining a post-startup ses
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
         const database = yield* RuntimeDatabase;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['agent_session_changed'] });
+        const bus = yield* InternalEvents;
+        const subscription = yield* tapInternalEvents(['agent_session_changed']);
         yield* insertRunningAgent(database, { agentSessionId: 11, ptyProcessId: 21 });
         yield* bus.publish({
           type: 'agent_session_active_process_changed',
@@ -1013,7 +1006,7 @@ test('first active-process handoff publishes after baselining a post-startup ses
         assert.equal(yield* observer.getAttention(11), 'idle');
         yield* subscription.unsubscribe;
         return event;
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.deepEqual(published, { type: 'agent_session_changed', agentSessionId: 11 });
   } finally {
@@ -1032,7 +1025,7 @@ test('source rebase clears incarnation-bound sticky failures before sequences re
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
         const database = yield* RuntimeDatabase;
-        const bus = yield* InternalRuntimeEventBus;
+        const bus = yield* InternalEvents;
         yield* insertReplacementPty(database, { agentSessionId: 10, ptyProcessId: 21 });
         yield* bus.publish({
           type: 'agent_session_active_process_changed',
@@ -1072,7 +1065,7 @@ test('sticky failure remains adjacent to its start before a newer active turn', 
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
         const database = yield* RuntimeDatabase;
-        const bus = yield* InternalRuntimeEventBus;
+        const bus = yield* InternalEvents;
         yield* insertReplacementPty(database, { agentSessionId: 10, ptyProcessId: 21 });
         yield* bus.publish({
           type: 'agent_session_active_process_changed',
@@ -1145,8 +1138,8 @@ test(
       const failed = await Effect.runPromise(
         Effect.gen(function* () {
           yield* HarnessLedgerObserver;
-          const bus = yield* InternalRuntimeEventBus;
-          const subscription = yield* bus.subscribe({ types: ['turn_failed'] });
+          const bus = yield* InternalEvents;
+          const subscription = yield* tapInternalEvents(['turn_failed']);
           chmodSync(directory, 0o000);
           yield* bus.publish({
             type: 'pty_process_exited',
@@ -1158,7 +1151,7 @@ test(
           const event = yield* subscription.take;
           yield* subscription.unsubscribe;
           return event;
-        }).pipe(Effect.provide(testLayer(root))),
+        }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
       );
       assert.equal(failed.type, 'turn_failed');
     } finally {
@@ -1185,8 +1178,7 @@ test(
       const result = await Effect.runPromise(
         Effect.gen(function* () {
           const observer = yield* HarnessLedgerObserver;
-          const bus = yield* InternalRuntimeEventBus;
-          const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_ended'] });
+          const subscription = yield* tapInternalEvents(['turn_started', 'turn_ended']);
           assert.deepEqual(yield* observer.getTurnEdges(10), []);
           chmodSync(path, 0o600);
           yield* pollHarnessLedgerObserverForTest(observer, 10);
@@ -1197,7 +1189,7 @@ test(
           );
           yield* subscription.unsubscribe;
           return { edges, published };
-        }).pipe(Effect.provide(testLayer(root))),
+        }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
       );
       assert.deepEqual(
         result.edges.map((edge) => edge.type),
@@ -1224,8 +1216,8 @@ test(
       const result = await Effect.runPromise(
         Effect.gen(function* () {
           const observer = yield* HarnessLedgerObserver;
-          const bus = yield* InternalRuntimeEventBus;
-          const subscription = yield* bus.subscribe({ types: ['turn_started', 'turn_failed'] });
+          const bus = yield* InternalEvents;
+          const subscription = yield* tapInternalEvents(['turn_started', 'turn_failed']);
           assert.deepEqual(yield* observer.getTurnEdges(10), []);
           chmodSync(path, 0o600);
           yield* bus.publish({
@@ -1239,7 +1231,7 @@ test(
           const edges = yield* observer.getTurnEdges(10);
           yield* subscription.unsubscribe;
           return { published, edges };
-        }).pipe(Effect.provide(testLayer(root))),
+        }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
       );
       assert.equal(result.published.type, 'turn_failed');
       assert.deepEqual(
@@ -1284,8 +1276,7 @@ test('new live ledger discovery publishes once while concurrent polls serialize'
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
-        const bus = yield* InternalRuntimeEventBus;
-        const subscription = yield* bus.subscribe({ types: ['turn_started'] });
+        const subscription = yield* tapInternalEvents(['turn_started']);
         writeFileSync(
           path,
           `${ledgerRecord('pi', 'pi-session', 'agent_start', 0, { context: {} })}\n`,
@@ -1305,7 +1296,7 @@ test('new live ledger discovery publishes once while concurrent polls serialize'
         );
         yield* subscription.unsubscribe;
         return { first, duplicate };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(result.first.type, 'turn_started');
     assert.equal(result.duplicate, false);
@@ -1324,8 +1315,8 @@ test('one global poll refreshes multiple live agents', async () => {
       Effect.gen(function* () {
         const observer = yield* HarnessLedgerObserver;
         const database = yield* RuntimeDatabase;
-        const bus = yield* InternalRuntimeEventBus;
-        const handoff = yield* bus.subscribe({ types: ['agent_session_changed'] });
+        const bus = yield* InternalEvents;
+        const handoff = yield* tapInternalEvents(['agent_session_changed']);
         yield* insertRunningAgent(database, { agentSessionId: 11, ptyProcessId: 21 });
         yield* bus.publish({
           type: 'agent_session_active_process_changed',
@@ -1347,7 +1338,7 @@ test('one global poll refreshes multiple live agents', async () => {
           first: yield* observer.getTurnEdges(10),
           second: yield* observer.getTurnEdges(11),
         };
-      }).pipe(Effect.provide(testLayer(root))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
     );
     assert.equal(edges.first.at(-1)?.type, 'turn_started');
     assert.equal(edges.second.at(-1)?.type, 'turn_started');

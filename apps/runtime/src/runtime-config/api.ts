@@ -1,21 +1,17 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ClientSettingsOutput } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
-import { registerApiEndpoint } from '../platform/http/index.js';
+import { registerLegacyApiEndpoint, type RouteRuntime } from '../platform/http/index.js';
 import { RuntimeConfig } from './service.js';
 
-export function registerClientSettingsApi(
+/** The runtime-config module's routes: client settings. It has no module layer; `RuntimeConfig` is a platform service. */
+export function registerRuntimeConfigRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<RuntimeConfig>,
 ) {
-  const run = <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) => runtime.runPromise(effect, options);
-  registerApiEndpoint(fastify, apiEndpoints.clientSettings, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.clientSettings, {
     handle: () =>
       Effect.gen(function* () {
         const runtimeConfig = yield* RuntimeConfig;
@@ -31,6 +27,5 @@ export function registerClientSettingsApi(
           },
         } satisfies ClientSettingsOutput;
       }),
-    run,
   });
 }

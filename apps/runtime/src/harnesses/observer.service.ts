@@ -1,8 +1,8 @@
-import { Cause, Context, Data, Effect, Layer, Semaphore } from 'effect';
+import { Cause, Context, Data, Effect, Layer, Semaphore, Stream } from 'effect';
 
 import type { AgentHarness, AttentionState } from '@isagi/contracts';
 
-import { InternalRuntimeEventBus, type InternalRuntimeEvent } from '../platform/events/index.js';
+import { InternalEvents, type InternalEvent } from '../platform/events/index.js';
 import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';
 import {
   hookCodexRolloutPaths,
@@ -69,7 +69,7 @@ export type { ObservedHarnessTurnEdge } from './observer-state.js';
 const make = Effect.gen(function* () {
   const artifacts = yield* AgentSessionArtifacts;
   const targets = yield* HarnessObservationTargets;
-  const eventBus = yield* InternalRuntimeEventBus;
+  const eventBus = yield* InternalEvents;
   const states = new Map<number, AgentObserverState>();
   const locks = new Map<number, Semaphore.Semaphore>();
   const activePtyByAgent = new Map<number, number | null>();
@@ -681,20 +681,16 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const subscription = yield* eventBus.subscribe({
-    types: [
-      'pty_process_started',
-      'pty_process_exited',
-      'pty_process_failed',
-      'pty_process_killed',
-      'agent_session_active_process_changed',
-    ],
-  });
-  yield* Effect.addFinalizer(() => subscription.unsubscribe);
-  yield* Effect.forkScoped(
-    Effect.forever(
+  const processEvents = yield* eventBus.subscribe([
+    'pty_process_started',
+    'pty_process_exited',
+    'pty_process_failed',
+    'pty_process_killed',
+    'agent_session_active_process_changed',
+  ]);
+  yield* processEvents.pipe(
+    Stream.runForEach((event) =>
       Effect.gen(function* () {
-        const event = yield* subscription.take;
         if (event.type === 'agent_session_active_process_changed') {
           const inventory = yield* inventoryQuery({ mode: 'one', id: event.agentSessionId });
           applyInventory(inventory, false);
@@ -712,7 +708,7 @@ const make = Effect.gen(function* () {
           return;
         }
         const fact = processFactFromEvent(event);
-        if (!fact || !('ptyProcessId' in event)) return;
+        if (!fact) return;
         processFacts.set(event.ptyProcessId, fact);
         const owner = ownerByPty.get(event.ptyProcessId);
         if (owner === undefined) return;
@@ -724,8 +720,7 @@ const make = Effect.gen(function* () {
           refreshAgent(owner, { publish: true, forceRecompute: true }),
         );
       }).pipe(
-        // `catchCause` also sees self-interruption (a `take` on a shut-down subscription), so
-        // re-raise interruption-only causes to end this loop instead of spinning on `take`.
+        // One failed event must not end the subscriber. An interruption-only cause still ends it.
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
@@ -735,6 +730,7 @@ const make = Effect.gen(function* () {
         ),
       ),
     ),
+    Effect.forkScoped,
   );
 
   // Subscribe before inventory so no process transition can fall between the
@@ -830,7 +826,10 @@ export class HarnessLedgerObserver extends Context.Service<
     readonly getAttention: (agentSessionId: number) => Effect.Effect<AttentionState | undefined>;
   }
 >()('isagi/runtime/harnesses/HarnessLedgerObserver') {
-  static readonly layer = Layer.effect(HarnessLedgerObserver, make);
+  static readonly layerNoDeps = Layer.effect(HarnessLedgerObserver, make);
+  static readonly layer = HarnessLedgerObserver.layerNoDeps.pipe(
+    Layer.provide([AgentSessionArtifacts.layer, InternalEvents.layer]),
+  );
 }
 
 function readSourceLines(path: string, offset: number) {
@@ -873,7 +872,7 @@ function sourceIsAvailable(path: string) {
   }
 }
 
-function processFactFromEvent(event: InternalRuntimeEvent): ProcessFact | null {
+function processFactFromEvent(event: InternalEvent): ProcessFact | null {
   switch (event.type) {
     case 'pty_process_started':
       return { status: event.status, statusReason: null };

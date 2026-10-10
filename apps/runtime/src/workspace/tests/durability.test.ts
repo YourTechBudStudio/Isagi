@@ -8,7 +8,7 @@ import { Effect, Schema, type Layer } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { SurfaceRepository, SurfaceService } from '../../environment/index.js';
+import { SurfaceService } from '../../environment/index.js';
 import {
   surfacePanes,
   worktreeEnvironmentStates,
@@ -19,6 +19,7 @@ import {
 // together. Rebuilding that graph here would be a second definition of the
 // same wiring.
 import { addPaneToSurface, testLayer } from '../../environment/testing.js';
+import { SurfaceRepository } from '../../environment/testing.js';
 import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
 import { RuntimeDatabase } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';

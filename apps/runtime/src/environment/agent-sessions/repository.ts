@@ -162,5 +162,8 @@ export class AgentSessionRepository extends Context.Service<
     >;
   }
 >()('isagi/runtime/environment/AgentSessionRepository') {
-  static readonly layer = Layer.effect(AgentSessionRepository, make);
+  static readonly layerNoDeps = Layer.effect(AgentSessionRepository, make);
+  static readonly layer = AgentSessionRepository.layerNoDeps.pipe(
+    Layer.provide(AgentSessionArtifacts.layer),
+  );
 }

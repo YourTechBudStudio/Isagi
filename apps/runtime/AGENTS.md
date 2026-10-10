@@ -17,7 +17,7 @@ The local-or-remote Isagi runtime. It owns Git, worktrees, PTYs, commands, agent
 - `src/persistence`, `src/session-lifecycle`, `src/session-restore`, and `src/session-gc` own durable state and session lifecycle.
 - `src/agent-sessions/harness/skill-content` contains the handwritten `isagi-docs` skill source. `packages/workflow-verifier/fixtures/minimal-workflow` is its canonical workflow scaffold.
 - `dist/` is generated build output.
-- `drizzle/` contains Drizzle Kit-generated migration artifacts. Do not edit generated migration files by hand; change the Drizzle schema and regenerate migrations instead.
+- `drizzle/` contains Drizzle Kit-generated migration artifacts. Do not edit generated migration files by hand; change the Drizzle schema and regenerate migrations instead with `pnpm -C apps/runtime db:generate` (it runs `drizzle-kit generate` with the `import` export condition the workflow SDK needs).
 
 ## Sessions and PTY processes
 

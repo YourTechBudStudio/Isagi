@@ -5,12 +5,12 @@ import { Effect, Layer, Logger } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import { InternalRuntimeEventBus, RuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from '../agent-sessions/attention.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
-import { SurfaceRepository } from '../index.js';
 import { RuntimeEventProjection } from '../runtime-event-projection.js';
+import { SurfaceRepository } from '../surfaces/repository.js';
 import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 
 /**
@@ -35,12 +35,12 @@ function harness(input: {
   const surfaces = Layer.succeed(SurfaceRepository, {
     findPaneForSession: () => input.placement,
   } as unknown as SurfaceRepository['Service']);
-  const publicBus = Layer.succeed(RuntimeEventBus, {
+  const publicBus = Layer.succeed(RuntimeEvents, {
     publish: (event: RuntimeEvent) => Effect.sync(() => void input.published.push(event)),
     subscribe: Effect.die('the editor projection test never subscribes publicly'),
-  } as unknown as RuntimeEventBus['Service']);
-  return RuntimeEventProjection.layer.pipe(
-    Layer.provideMerge(InternalRuntimeEventBus.layer),
+  } as unknown as RuntimeEvents['Service']);
+  return RuntimeEventProjection.layerNoDeps.pipe(
+    Layer.provideMerge(InternalEvents.layer),
     Layer.provide(surfaces),
     Layer.provide(publicBus),
     Layer.provide(Layer.succeed(AgentSessionRepository, dying('agents'))),
@@ -56,7 +56,7 @@ async function runProjection(placement: Effect.Effect<Placement | null, Database
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const internal = yield* InternalRuntimeEventBus;
+        const internal = yield* InternalEvents;
         yield* internal.publish({ type: 'editor_context_changed', editorContextId: 42 });
         // The subscriber is a forked loop; give it turns to drain.
         yield* Effect.sleep('25 millis');

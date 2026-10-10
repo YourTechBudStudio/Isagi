@@ -8,7 +8,7 @@ import {
   AllowAllHarnessControlPlaneLayer,
   blockedHarnessControlPlaneLayer,
 } from '../../../harnesses/testing.js';
-import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { InternalEvents } from '../../../platform/events/index.js';
 import { EntityLock } from '../../../platform/locks/index.js';
 import { PtyService } from '../../../pty-processes/index.js';
 import type { PtyProcessRow } from '../../../pty-processes/index.js';
@@ -356,7 +356,7 @@ function testLayer(input: {
   readonly placement?: { readonly surfaceId: number; readonly paneId: number } | null | undefined;
   readonly terminate?: PtyService['Service']['terminate'] | undefined;
 }) {
-  return AgentSessionService.layer.pipe(
+  return AgentSessionService.layerNoDeps.pipe(
     Layer.provide(
       Layer.succeed(
         AgentSessionRepository,
@@ -365,8 +365,8 @@ function testLayer(input: {
     ),
     Layer.provide(Layer.succeed(PtyService, fakePtyService(input.ptyLaunches, input.terminate))),
     Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses(input.launchInputs))),
-    Layer.provide(SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer))),
-    Layer.provide(InternalRuntimeEventBus.layer),
+    Layer.provide(SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer))),
+    Layer.provide(InternalEvents.layer),
     Layer.provide(input.controlPlaneLayer ?? AllowAllHarnessControlPlaneLayer),
   );
 }

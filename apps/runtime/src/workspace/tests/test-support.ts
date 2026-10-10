@@ -3,13 +3,13 @@ import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
-import { Effect } from 'effect';
+import { Effect, Stream } from 'effect';
 
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
 import type { CommandService } from '../../commands/index.js';
 import type { SurfaceService } from '../../environment/index.js';
-import type { InternalRuntimeEvent, InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { InternalEvent, InternalEvents } from '../../platform/events/index.js';
 import type { Git } from '../../platform/git/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import type { ProjectRow, WorktreeRow, ProjectRepository } from '../../projects/index.js';
@@ -171,29 +171,21 @@ export const testPtyService = {
 
 export const testInternalEvents = {
   publish: () => Effect.void,
-  subscribe: () =>
-    Effect.succeed({
-      take: Effect.never,
-      unsubscribe: Effect.void,
-    }),
-} satisfies InternalRuntimeEventBus['Service'];
+  subscribe: () => Effect.succeed(Stream.never),
+} satisfies InternalEvents['Service'];
 
 /** An event bus that keeps what was published, so ordering against the DB cascade is assertable. */
 export function recordingInternalEvents() {
-  const published: InternalRuntimeEvent[] = [];
+  const published: InternalEvent[] = [];
   return {
     published,
     service: {
-      publish: (event: InternalRuntimeEvent) =>
+      publish: (event: InternalEvent) =>
         Effect.sync(() => {
           published.push(event);
         }),
-      subscribe: () =>
-        Effect.succeed({
-          take: Effect.never,
-          unsubscribe: Effect.void,
-        }),
-    } satisfies InternalRuntimeEventBus['Service'],
+      subscribe: () => Effect.succeed(Stream.never),
+    } satisfies InternalEvents['Service'],
   };
 }
 

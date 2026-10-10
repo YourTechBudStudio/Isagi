@@ -10,10 +10,10 @@ import {
   EditorContextRepository,
   insertPtyProcess as insertEditorPtyProcess,
 } from '../../../editor/testing.js';
-import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { tapInternalEvents } from '../../../platform/events/testing.js';
 import { DatabaseError } from '../../../platform/persistence/index.js';
 import { PtyServiceError } from '../../../pty-processes/index.js';
-import { SurfaceRepository, SurfaceService } from '../../index.js';
+import { SurfaceService } from '../../index.js';
 import {
   addPaneToSurface,
   insertPtyProcess,
@@ -21,6 +21,7 @@ import {
   replaceSurfaceLayoutWithSingleDeletedPane,
   testLayer,
 } from '../../testing.js';
+import { SurfaceRepository } from '../repository.js';
 
 test('delete pane updates layout and keeps the remaining pane', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-pane-'));
@@ -321,8 +322,7 @@ test('delete pane publishes a shared surface changed event', async () => {
           titleBase: 'Terminal',
         });
         yield* addPaneToSurface(first.surfaceId);
-        const eventBus = yield* InternalRuntimeEventBus;
-        const subscription = yield* eventBus.subscribe({ types: ['surface_changed'] });
+        const subscription = yield* tapInternalEvents(['surface_changed']);
 
         yield* surfaces.deleteSurfacePane({
           surfaceId: first.surfaceId,
@@ -331,7 +331,7 @@ test('delete pane publishes a shared surface changed event', async () => {
         const event = yield* subscription.take;
         yield* subscription.unsubscribe;
         return { event, first, worktreeId };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+      }).pipe(Effect.scoped, Effect.provide(testLayer(dataRoot))),
     );
 
     assert.deepEqual(output.event, {
@@ -656,8 +656,7 @@ test('a release failure after the deletion commits still publishes, then fails h
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const { opened } = yield* openEditorWithIncarnation(worktreeId);
-        const eventBus = yield* InternalRuntimeEventBus;
-        const subscription = yield* eventBus.subscribe({ types: ['surface_changed'] });
+        const subscription = yield* tapInternalEvents(['surface_changed']);
         const surfaces = yield* SurfaceService;
         const result = yield* Effect.result(surfaces.deleteSurface(opened.surfaceId));
         const published = yield* subscription.take;
@@ -665,6 +664,7 @@ test('a release failure after the deletion commits still publishes, then fails h
         const surfaceStillThere = yield* (yield* SurfaceRepository).findSurface(opened.surfaceId);
         return { opened, result, published, surfaceStillThere };
       }).pipe(
+        Effect.scoped,
         Effect.provide(
           testLayer(dataRoot, {
             decorateEditorService: (inner) => ({

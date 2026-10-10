@@ -35,8 +35,8 @@ import type {
 
 import { CommandService } from '../commands/index.js';
 import { SurfaceService } from '../environment/index.js';
-import { diagnosticPhase, logDiagnosticEvent } from '../platform/diagnostics/index.js';
-import { InternalRuntimeEventBus } from '../platform/events/index.js';
+import { diagnosticPhase } from '../platform/diagnostics/index.js';
+import { InternalEvents } from '../platform/events/index.js';
 import {
   branchPathHash,
   classifyProjectRoot,
@@ -164,7 +164,7 @@ const make = Effect.gen(function* () {
   const deleteDiagnostics = yield* WorktreeDeleteDiagnosticsReader;
   const commands = yield* CommandService;
   const pty = yield* PtyService;
-  const internalEvents = yield* InternalRuntimeEventBus;
+  const internalEvents = yield* InternalEvents;
   const deletionParticipant = yield* ProjectDeletionParticipant;
 
   const get = Effect.gen(function* () {
@@ -661,19 +661,21 @@ const make = Effect.gen(function* () {
           // `checkoutRemovalMode: "force"` does not force branch deletion.
           const diagnostics = yield* deleteDiagnostics.read(worktree.id);
           const doomedSessions = yield* durableSessionsInWorktrees(new Set([worktree.id]));
-          logDiagnosticEvent('workspace.delete_worktree.delete_diagnostics', {
-            ...context,
-            agentSessionCount: diagnostics.agentSessionCount,
-            agentSessionActivePtyProcessIds: diagnostics.agentSessionActivePtyProcessIds,
-            commandRunCount: diagnostics.commandRunCount,
-            commandRunPtyProcessIds: diagnostics.commandRunPtyProcessIds,
-            commandStateCount: diagnostics.commandStateCount,
-            commandStateActivePtyProcessIds: diagnostics.commandStateActivePtyProcessIds,
-            paneCount: diagnostics.paneCount,
-            surfaceCount: diagnostics.surfaceCount,
-            terminalSessionCount: diagnostics.terminalSessionCount,
-            terminalSessionActivePtyProcessIds: diagnostics.terminalSessionActivePtyProcessIds,
-          });
+          yield* Effect.logDebug('workspace.delete_worktree.delete_diagnostics').pipe(
+            Effect.annotateLogs({
+              ...context,
+              agentSessionCount: diagnostics.agentSessionCount,
+              agentSessionActivePtyProcessIds: diagnostics.agentSessionActivePtyProcessIds,
+              commandRunCount: diagnostics.commandRunCount,
+              commandRunPtyProcessIds: diagnostics.commandRunPtyProcessIds,
+              commandStateCount: diagnostics.commandStateCount,
+              commandStateActivePtyProcessIds: diagnostics.commandStateActivePtyProcessIds,
+              paneCount: diagnostics.paneCount,
+              surfaceCount: diagnostics.surfaceCount,
+              terminalSessionCount: diagnostics.terminalSessionCount,
+              terminalSessionActivePtyProcessIds: diagnostics.terminalSessionActivePtyProcessIds,
+            }),
+          );
           yield* diagnosticPhase(
             'workspace.delete_worktree.command_cleanup',
             context,
@@ -1020,7 +1022,20 @@ interface WorkspaceServiceShape {
 export class WorkspaceService extends Context.Service<WorkspaceService, WorkspaceServiceShape>()(
   'isagi/runtime/workspace/WorkspaceService',
 ) {
-  static readonly layer = Layer.effect(WorkspaceService, make);
+  static readonly layerNoDeps = Layer.effect(WorkspaceService, make);
+  static readonly layer = WorkspaceService.layerNoDeps.pipe(
+    Layer.provide([
+      CommandService.layer,
+      Git.layer,
+      InternalEvents.layer,
+      ProjectRepository.layer,
+      PtyService.layer,
+      SurfaceService.layer,
+      WorktreeDeleteDiagnosticsReader.layer,
+      WorktreeSetupRepository.layer,
+      WorktreeSetupService.layer,
+    ]),
+  );
 }
 
 /**
@@ -1343,7 +1358,7 @@ function validateActiveContextPersistenceTarget(
 function reconcileProject(
   repository: ProjectRepository['Service'],
   commands: import('../commands/index.js').CommandService['Service'],
-  internalEvents: InternalRuntimeEventBus['Service'],
+  internalEvents: InternalEvents['Service'],
   project: ProjectRow,
 ) {
   return project.kind === 'folder'
@@ -1390,7 +1405,7 @@ function reconcileFolderProject(repository: ProjectRepository['Service'], projec
 function reconcileGitProject(
   repository: ProjectRepository['Service'],
   commands: import('../commands/index.js').CommandService['Service'],
-  internalEvents: InternalRuntimeEventBus['Service'],
+  internalEvents: InternalEvents['Service'],
   project: ProjectRow,
 ) {
   return Effect.gen(function* () {
@@ -1457,7 +1472,7 @@ function reconcileGitProject(
 function pruneMissingWorktrees(
   repository: ProjectRepository['Service'],
   commands: import('../commands/index.js').CommandService['Service'],
-  internalEvents: InternalRuntimeEventBus['Service'],
+  internalEvents: InternalEvents['Service'],
   projectId: number,
   worktrees: readonly Pick<WorktreeRow, 'id'>[],
 ) {

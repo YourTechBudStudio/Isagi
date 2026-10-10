@@ -7,7 +7,7 @@ import { createFixtureWorkspace, type FixtureWorkspace } from '../../platform/gi
 import type { RuntimeDatabase } from '../../platform/persistence/index.js';
 import type { ProjectRepository } from '../../projects/index.js';
 import { WorkspaceService } from '../service.js';
-import { type LiveWorkspaceOptions, runWithLiveWorkspace } from '../testing.js';
+import { type LiveWorkspaceOptions, runWithLiveWorkspace } from './live-workspace-support.js';
 
 /**
  * A real Git repository, registered as a real project, driven through the real workspace service.

@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
@@ -74,11 +74,11 @@ test('project branch listing rejects a present project whose path disappeared be
         const workspace = yield* WorkspaceService;
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -122,11 +122,11 @@ test('project branch listing combines local branches with known open worktrees',
         const workspace = yield* WorkspaceService;
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),

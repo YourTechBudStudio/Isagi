@@ -1,13 +1,13 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
 import {
-  registerApiEndpoint,
+  registerLegacyApiEndpoint,
   type ApiRouteContext,
   unhandledApiError,
+  type RouteRuntime,
 } from '../platform/http/index.js';
 import { DatabaseError } from '../platform/persistence/index.js';
 import {
@@ -16,6 +16,7 @@ import {
   EditorLaunchFailed,
 } from './contexts/errors.js';
 import { EditorContextService } from './contexts/service.js';
+import type { EditorLayer } from './layer.js';
 import {
   EditorUnavailable,
   EditorProvisioning,
@@ -26,16 +27,11 @@ import {
 // is registered by the environment's surface routes, which map its editor
 // failures through `editorApiError` below.
 
-export function registerEditorApi(
+export function registerEditorRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof EditorLayer>>,
 ) {
-  const run = <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) => runtime.runPromise(effect, options);
-
-  registerApiEndpoint(fastify, apiEndpoints.editor.ensureRuntime, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.editor.ensureRuntime, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const editors = yield* EditorContextService;
@@ -46,10 +42,9 @@ export function registerEditorApi(
         return { editorContext };
       }),
     mapError: editorApiError,
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.editor.diagnostics, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.editor.diagnostics, {
     handle: (_input, _context, params, query) =>
       Effect.gen(function* () {
         const editors = yield* EditorContextService;
@@ -59,17 +54,15 @@ export function registerEditorApi(
         });
       }),
     mapError: editorApiError,
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.editor.retryProvisioning, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.editor.retryProvisioning, {
     handle: () =>
       Effect.map(
         Effect.flatMap(EditorProvisioning, (provisioning) => provisioning.retry),
         (provisioning) => ({ provisioning }),
       ),
     mapError: editorApiError,
-    run,
   });
 }
 

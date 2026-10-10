@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, Stream } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -109,12 +109,8 @@ const testPtyService = {
 
 const testInternalEvents = {
   publish: () => Effect.void,
-  subscribe: () =>
-    Effect.succeed({
-      take: Effect.never,
-      unsubscribe: Effect.void,
-    }),
-} satisfies InternalRuntimeEventBus['Service'];
+  subscribe: () => Effect.succeed(Stream.never),
+} satisfies InternalEvents['Service'];
 
 const project: ProjectRow = {
   id: 1,
@@ -477,11 +473,11 @@ test('workspace reads known rows without reconciling Git state', async () => {
         const service = yield* WorkspaceService;
         return yield* service.get;
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),

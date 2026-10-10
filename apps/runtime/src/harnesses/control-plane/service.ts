@@ -204,7 +204,10 @@ export class HarnessControlPlane extends Context.Service<
     ) => Effect.Effect<void, HarnessLaunchBlocked>;
   }
 >()('isagi/runtime/harnesses/HarnessControlPlane') {
-  static readonly layer = Layer.effect(HarnessControlPlane, make);
+  static readonly layerNoDeps = Layer.effect(HarnessControlPlane, make);
+  static readonly layer = HarnessControlPlane.layerNoDeps.pipe(
+    Layer.provide([EditorProvisioning.layer, HostInventory.layer]),
+  );
 }
 function snapshotOf(
   policyState: RuntimeHarnessPolicyState,

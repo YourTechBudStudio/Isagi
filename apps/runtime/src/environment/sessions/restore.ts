@@ -1,9 +1,9 @@
-import { Effect, Layer, Result } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { HarnessLaunchBlocked } from '../../harnesses/index.js';
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
-import { SurfaceRepository } from '../surfaces/repository.js';
-import { TerminalSessionService } from '../terminal-sessions/service.js';
+import { AgentSessionError, type AgentSessionService } from '../agent-sessions/service.js';
+import type { SurfaceRepository } from '../surfaces/repository.js';
+import type { TerminalSessionService } from '../terminal-sessions/service.js';
 import type { PaneSessionBinding } from './types.js';
 
 type RestoreOutcome =
@@ -52,20 +52,6 @@ export function restorePaneBoundSessions(deps: RestoreDependencies): Effect.Effe
     ),
   );
 }
-
-/**
- * `restorePaneBoundSessions` over the services in context. The composition root runs it through
- * `SurfaceService`; this layer form remains for the restore suites until composition is
- * self-wired.
- */
-export const restoreStartupSessions = Effect.gen(function* () {
-  const repository = yield* SurfaceRepository;
-  const agentSessions = yield* AgentSessionService;
-  const terminalSessions = yield* TerminalSessionService;
-  yield* restorePaneBoundSessions({ repository, agentSessions, terminalSessions });
-});
-
-export const StartupSessionRestoreLayer = Layer.effectDiscard(restoreStartupSessions);
 
 function restoreBinding(deps: RestoreDependencies, binding: PaneSessionBinding) {
   return Effect.gen(function* () {

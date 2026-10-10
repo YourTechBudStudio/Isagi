@@ -44,7 +44,14 @@ export class AgentSessionAttentionProjection extends Context.Service<
     readonly workingAgentCount: Effect.Effect<number, DatabaseError>;
   }
 >()('isagi/runtime/environment/AgentSessionAttentionProjection') {
-  static readonly layer = Layer.effect(AgentSessionAttentionProjection, make);
+  static readonly layerNoDeps = Layer.effect(AgentSessionAttentionProjection, make);
+  static readonly layer = AgentSessionAttentionProjection.layerNoDeps.pipe(
+    Layer.provide([
+      AgentSessionArtifacts.layer,
+      HarnessLedgerObserver.layer,
+      PtyForegroundState.layer,
+    ]),
+  );
 }
 
 function workingAgentCount(

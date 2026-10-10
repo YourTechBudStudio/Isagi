@@ -8,9 +8,10 @@ import { eq } from 'drizzle-orm';
 import { Effect, Result, type Layer } from 'effect';
 
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
-import { SurfaceOrderError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { SurfaceOrderError, SurfaceService } from '../../index.js';
 import { worktreeSurfaces } from '../../tables.js';
 import { insertWorktree, testLayer } from '../../testing.js';
+import { SurfaceRepository } from '../repository.js';
 
 /**
  * Surface reordering runs against a real database because the sibling list, the

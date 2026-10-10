@@ -1,53 +1,36 @@
-import { Context, Effect, Layer, Queue } from 'effect';
+import { Context, Effect, Layer, PubSub, Stream, type Scope } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-export interface RuntimeEventSubscription {
-  readonly take: Effect.Effect<RuntimeEvent>;
-  readonly unsubscribe: Effect.Effect<void>;
-}
-
-const make = Effect.gen(function* () {
-  const subscribers = new Set<Queue.Queue<RuntimeEvent>>();
-
-  const service = RuntimeEventBus.of({
-    publish: (event) =>
-      Effect.sync(() => {
-        for (const subscriber of subscribers) {
-          Queue.offerUnsafe(subscriber, event);
-        }
-      }),
-    subscribe: Queue.unbounded<RuntimeEvent>().pipe(
-      Effect.map((queue) => {
-        subscribers.add(queue);
-        return {
-          take: Queue.take(queue),
-          unsubscribe: Effect.sync(() => {
-            subscribers.delete(queue);
-          }).pipe(Effect.andThen(Queue.shutdown(queue))),
-        } satisfies RuntimeEventSubscription;
-      }),
-    ),
-  });
-
-  return yield* Effect.acquireRelease(Effect.succeed(service), () =>
-    Effect.gen(function* () {
-      for (const subscriber of subscribers) {
-        yield* Queue.shutdown(subscriber);
-      }
-      subscribers.clear();
-    }),
-  );
-});
-
-export class RuntimeEventBus extends Context.Service<
-  RuntimeEventBus,
+/**
+ * The public runtime-event bus: what the events WebSocket streams to clients. Published by environment (projection),
+ * commands and workflows; consumed by the `runtime-events` module.
+ *
+ * Built on an unbounded `PubSub`, like `InternalEvents`: publishing never waits for a subscriber, and publishing after
+ * the bus shut down is a no-op.
+ */
+export class RuntimeEvents extends Context.Service<
+  RuntimeEvents,
   {
     readonly publish: (event: RuntimeEvent) => Effect.Effect<void>;
-    readonly subscribe: Effect.Effect<RuntimeEventSubscription>;
+    /**
+     * Subscribes now, in the caller's scope: every event published after this effect completes is delivered to the
+     * returned stream, in publish order. The subscription ends when the scope closes.
+     */
+    readonly subscribe: Effect.Effect<Stream.Stream<RuntimeEvent>, never, Scope.Scope>;
   }
->()('isagi/runtime/platform/events/RuntimeEventBus') {
-  static readonly layer = Layer.effect(RuntimeEventBus, make);
+>()('isagi/runtime/platform/events/RuntimeEvents') {
+  static readonly layer = Layer.effect(
+    RuntimeEvents,
+    Effect.gen(function* () {
+      const pubsub = yield* PubSub.unbounded<RuntimeEvent>();
+      yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
+      return RuntimeEvents.of({
+        publish: (event) => PubSub.publish(pubsub, event).pipe(Effect.asVoid),
+        subscribe: PubSub.subscribe(pubsub).pipe(Effect.map(Stream.fromSubscription)),
+      });
+    }),
+  );
 }
 
 let eventCounter = 0;

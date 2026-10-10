@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { reducePiLifecycle } from './lifecycle.js';
+import { reducePiLifecycle } from './pi/lifecycle.js';
 import type { HarnessObservationRecord } from './projection.js';
 
 test('shared lifecycle surface delegates Pi to its existing start/end and pending-message semantics', () => {

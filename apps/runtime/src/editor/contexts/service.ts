@@ -1,9 +1,9 @@
-import { Context, Deferred, Effect, Fiber, Layer, Result } from 'effect';
+import { Context, Deferred, Effect, Fiber, Layer, Result, Stream } from 'effect';
 
 import type { EditorAttemptFailureReason, EditorDiagnosticsOutput } from '@isagi/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import {
   EntityLock,
   entityLockKeyId,
@@ -89,7 +89,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
     const provisioning = yield* EditorProvisioning;
     const portProbe = yield* LoopbackPortProbe;
     const entityLock = yield* EntityLock;
-    const eventBus = yield* InternalRuntimeEventBus;
+    const eventBus = yield* InternalEvents;
     const serviceScope = yield* Effect.scope;
 
     // All three keyed by PTY process id, so nothing here can outlive — or be
@@ -502,32 +502,28 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
     yield* Effect.forEach(interrupted, publishChanged, { discard: true });
 
     // Construction step 2 — the single interpreter of editor PTY events.
-    const subscription = yield* eventBus.subscribe({
-      types: ['pty_process_exited', 'pty_process_failed', 'pty_process_killed'],
-    });
+    const processEvents = yield* eventBus.subscribe([
+      'pty_process_exited',
+      'pty_process_failed',
+      'pty_process_killed',
+    ]);
     yield* Effect.forkIn(
-      Effect.forever(
-        Effect.gen(function* () {
-          const event = yield* subscription.take;
-          if (
-            event.type !== 'pty_process_exited' &&
-            event.type !== 'pty_process_failed' &&
-            event.type !== 'pty_process_killed'
-          ) {
-            return;
-          }
-          const editorContextId = incarnations.get(event.ptyProcessId);
-          // Not an incarnation this runtime launched, so not this subscriber's to
-          // interpret. Every other domain's processes leave here without a query.
-          if (editorContextId === undefined) return;
-          // Terminal evidence: the process is gone, so ownership of it is over.
-          yield* forgetIncarnation(event.ptyProcessId);
-          const row = yield* repository.find(editorContextId);
-          if (row) yield* publishChanged(editorContextId);
-        }).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(
-              `[runtime] editor PTY event handling failed cause=${describeOperationalCause(error)}`,
+      processEvents.pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            const editorContextId = incarnations.get(event.ptyProcessId);
+            // Not an incarnation this runtime launched, so not this subscriber's to
+            // interpret. Every other domain's processes leave here without a query.
+            if (editorContextId === undefined) return;
+            // Terminal evidence: the process is gone, so ownership of it is over.
+            yield* forgetIncarnation(event.ptyProcessId);
+            const row = yield* repository.find(editorContextId);
+            if (row) yield* publishChanged(editorContextId);
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `[runtime] editor PTY event handling failed cause=${describeOperationalCause(error)}`,
+              ),
             ),
           ),
         ),
@@ -596,5 +592,16 @@ export class EditorContextService extends Context.Service<
     >;
   }
 >()('isagi/runtime/editor/EditorContextService') {
-  static readonly layer = Layer.effect(EditorContextService, makeEditorContextService());
+  static readonly layerNoDeps = Layer.effect(EditorContextService, makeEditorContextService());
+  static readonly layer = EditorContextService.layerNoDeps.pipe(
+    Layer.provide([
+      EditorContextRepository.layer,
+      EditorProvisioning.layer,
+      EntityLock.layer,
+      InternalEvents.layer,
+      LoopbackPortProbe.layer,
+      ProjectRepository.layer,
+      PtyService.layer,
+    ]),
+  );
 }

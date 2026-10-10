@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, FiberSet, Layer, type Scope } from 'effect';
+import { Cause, Context, Effect, FiberSet, Layer, Stream, type Scope } from 'effect';
 
 import type {
   ExportWorkflowCheckpointOutput,
@@ -28,9 +28,9 @@ import {
   HarnessLedgerObserver,
 } from '../../harnesses/index.js';
 import {
-  InternalRuntimeEventBus,
+  InternalEvents,
   nextRuntimeEventEnvelope,
-  RuntimeEventBus,
+  RuntimeEvents,
 } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { RuntimeDatabase, type DatabaseError } from '../../platform/persistence/index.js';
@@ -90,7 +90,7 @@ const make = Effect.gen(function* () {
   const pty = yield* PtyService;
   return yield* startEngine({
     database: yield* RuntimeDatabase,
-    events: yield* RuntimeEventBus,
+    events: yield* RuntimeEvents,
     deps: {
       registry: yield* WorkflowRegistry,
       places: {
@@ -110,7 +110,7 @@ const make = Effect.gen(function* () {
         controlPlane: yield* HarnessControlPlane,
         pty,
       }),
-      internalEvents: yield* InternalRuntimeEventBus,
+      internalEvents: yield* InternalEvents,
     },
   });
 });
@@ -182,12 +182,30 @@ interface WorkflowEngineShape {
 export class WorkflowEngine extends Context.Service<WorkflowEngine, WorkflowEngineShape>()(
   'isagi/runtime/workflows/WorkflowEngine',
 ) {
-  static readonly layer = Layer.effect(WorkflowEngine, make);
+  static readonly layerNoDeps = Layer.effect(WorkflowEngine, make);
+  static readonly layer = WorkflowEngine.layerNoDeps.pipe(
+    Layer.provide([
+      AgentSessionArtifacts.layer,
+      AgentSessionService.layer,
+      Git.layer,
+      HarnessAdapterRegistry.layer,
+      HarnessControlPlane.layer,
+      HarnessLedgerObserver.layer,
+      InternalEvents.layer,
+      ProjectRepository.layer,
+      PtyService.layer,
+      RuntimeEvents.layer,
+      SurfaceService.layer,
+      WorkflowContentStore.layer,
+      WorkflowRegistry.layer,
+      WorkspaceService.layer,
+    ]),
+  );
 }
 
 export function startEngine(input: {
   readonly database: RuntimeDatabase['Service'];
-  readonly events: RuntimeEventBus['Service'];
+  readonly events: RuntimeEvents['Service'];
   readonly deps: EngineDeps;
 }): Effect.Effect<EngineHandle, unknown, Scope.Scope> {
   return Effect.gen(function* () {
@@ -304,58 +322,49 @@ export function startEngine(input: {
     }
 
     // Triggers: a turn edge may answer an agent wait; a PTY exit may settle a headless job.
-    const subscription = yield* deps.internalEvents.subscribe({
-      types: [
-        'turn_started',
-        'turn_ended',
-        'turn_failed',
-        'pty_process_exited',
-        'pty_process_failed',
-        'pty_process_killed',
-      ],
-    });
-    yield* Effect.addFinalizer(() => subscription.unsubscribe);
+    const triggers = yield* deps.internalEvents.subscribe([
+      'turn_started',
+      'turn_ended',
+      'turn_failed',
+      'pty_process_exited',
+      'pty_process_failed',
+      'pty_process_killed',
+    ]);
     runtimeFiber(
-      Effect.forever(
-        Effect.gen(function* () {
-          const event = yield* subscription.take;
-          if (
-            event.type === 'turn_started' ||
-            event.type === 'turn_ended' ||
-            event.type === 'turn_failed'
-          ) {
-            const waiting = yield* database.use('workflow_waiting_runs', (db) =>
-              listRunsWithStatus(db, ['waiting']),
+      triggers.pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            if (
+              event.type === 'turn_started' ||
+              event.type === 'turn_ended' ||
+              event.type === 'turn_failed'
+            ) {
+              const waiting = yield* database.use('workflow_waiting_runs', (db) =>
+                listRunsWithStatus(db, ['waiting']),
+              );
+              for (const run of waiting) rt.kick(run.id);
+              return;
+            }
+            if (!rt.headlessProcesses.has(event.ptyProcessId)) return;
+            rt.fork(
+              settleHeadless(rt, event.ptyProcessId, {
+                status:
+                  event.type === 'pty_process_exited'
+                    ? 'exited'
+                    : event.type === 'pty_process_failed'
+                      ? 'failed'
+                      : 'killed',
+                exitCode: event.type === 'pty_process_exited' ? event.exitCode : null,
+              }),
+              'workflow headless settlement',
             );
-            for (const run of waiting) rt.kick(run.id);
-            return;
-          }
-          if (
-            (event.type !== 'pty_process_exited' &&
-              event.type !== 'pty_process_failed' &&
-              event.type !== 'pty_process_killed') ||
-            !rt.headlessProcesses.has(event.ptyProcessId)
-          ) {
-            return;
-          }
-          rt.fork(
-            settleHeadless(rt, event.ptyProcessId, {
-              status:
-                event.type === 'pty_process_exited'
-                  ? 'exited'
-                  : event.type === 'pty_process_failed'
-                    ? 'failed'
-                    : 'killed',
-              exitCode: event.type === 'pty_process_exited' ? event.exitCode : null,
-            }),
-            'workflow headless settlement',
-          );
-        }).pipe(
-          // A shut-down subscription interrupts `take`; end the loop then instead of spinning on it.
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.interrupt
-              : logCause('workflow trigger handling failed')(cause),
+          }).pipe(
+            // One failed event must not end the trigger loop. An interruption-only cause still ends it.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : logCause('workflow trigger handling failed')(cause),
+            ),
           ),
         ),
       ),

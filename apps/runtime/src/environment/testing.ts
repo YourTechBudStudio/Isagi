@@ -13,7 +13,7 @@ import {
   testSessionSocketDirectory,
 } from '../editor/testing.js';
 import { AgentSessionArtifacts, HarnessLedgerObserver } from '../harnesses/index.js';
-import { InternalRuntimeEventBus } from '../platform/events/index.js';
+import { InternalEvents } from '../platform/events/index.js';
 import { EntityLock } from '../platform/locks/index.js';
 import { LoopbackPortProbe } from '../platform/net/index.js';
 import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
@@ -25,8 +25,9 @@ import { fakeTerminateMany } from '../pty-processes/testing.js';
 import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
 import { HarnessObservationTargetsLayer } from './agent-sessions/observation-targets.js';
 import { AgentSessionService } from './agent-sessions/service.js';
-import { SurfaceRepository, SurfaceService } from './index.js';
+import { SurfaceService } from './index.js';
 import { SessionLifecycle } from './sessions/lifecycle.js';
+import { SurfaceRepository } from './surfaces/repository.js';
 import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from './tables.js';
 import { TerminalSessionRepository } from './terminal-sessions/repository.js';
 import { TerminalSessionService } from './terminal-sessions/service.js';
@@ -276,16 +277,16 @@ export function testLayer(
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
-  const internalRuntimeEventBus = InternalRuntimeEventBus.layer;
+  const internalEventsLayer = InternalEvents.layer;
   const agentSessionArtifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(dataDirectoryLayer));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
-  const harnessLedgerObserver = HarnessLedgerObserver.layer.pipe(
+  const harnessLedgerObserver = HarnessLedgerObserver.layerNoDeps.pipe(
     Layer.provide(dataDirectoryLayer),
     Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
     Layer.provide(agentSessionArtifacts),
-    Layer.provide(internalRuntimeEventBus),
+    Layer.provide(internalEventsLayer),
   );
-  const attentionProjection = AgentSessionAttentionProjection.layer.pipe(
+  const attentionProjection = AgentSessionAttentionProjection.layerNoDeps.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(PtyForegroundState.layer),
@@ -299,7 +300,7 @@ export function testLayer(
     ),
   ).pipe(Layer.provide(database));
   const ptyService = Layer.succeed(PtyService, fakePtyService(options.ptyService));
-  const baseSurfaceRepository = SurfaceRepository.layer.pipe(
+  const baseSurfaceRepository = SurfaceRepository.layerNoDeps.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(attentionProjection),
@@ -311,10 +312,10 @@ export function testLayer(
       )
     : baseSurfaceRepository;
   // One lock value, shared by session lifecycle, the editor service, and the
-  // placement path, exactly as `runtime.layer.ts` shares it. Two would make the
+  // placement path, exactly as the self-wired layers share `EntityLock.layer`. Two would make the
   // per-worktree serialization these tests assert vacuous.
   const entityLock = EntityLock.layer;
-  const sessionLifecycle = SessionLifecycle.layer.pipe(Layer.provide(entityLock));
+  const sessionLifecycle = SessionLifecycle.layerNoDeps.pipe(Layer.provide(entityLock));
   const decorateTerminal = options.decorateTerminalService;
   const terminalService = decorateTerminal
     ? Layer.effect(
@@ -322,10 +323,10 @@ export function testLayer(
         Effect.map(TerminalSessionService, decorateTerminal),
       ).pipe(
         Layer.provide(
-          TerminalSessionService.layer.pipe(
+          TerminalSessionService.layerNoDeps.pipe(
             Layer.provide(TerminalSessionRepository.layer.pipe(Layer.provide(database))),
             Layer.provide(ptyService),
-            Layer.provide(internalRuntimeEventBus),
+            Layer.provide(internalEventsLayer),
             Layer.provide(sessionLifecycle),
           ),
         ),
@@ -340,7 +341,7 @@ export function testLayer(
   // reads and places one. Tests need the former to exercise the latter.
   const editorRepository = EditorContextRepository.layer.pipe(Layer.provide(database));
   // The real service, over this harness's own already-bound dependencies. The
-  // PTY double is the same value `SurfaceService.layer` receives, so the two
+  // PTY double is the same value `SurfaceService.layerNoDeps` receives, so the two
   // services genuinely observe one process world; `editorServiceLayer` is
   // deliberately not reused here because it would construct a second database,
   // bus, lock, and PTY service.
@@ -354,7 +355,7 @@ export function testLayer(
         : readyEditorProvisioningLayer(testInstallation(dataRoot)),
     portProbe: LoopbackPortProbe.layer,
     entityLock,
-    bus: internalRuntimeEventBus,
+    bus: internalEventsLayer,
   });
   const decorate = options.decorateEditorService;
   const editorService = decorate
@@ -362,13 +363,13 @@ export function testLayer(
         Layer.provide(baseEditorService),
       )
     : baseEditorService;
-  const surfaceService = SurfaceService.layer.pipe(
+  const surfaceService = SurfaceService.layerNoDeps.pipe(
     Layer.provide(surfaceRepository),
     Layer.provide(agentService),
     Layer.provide(terminalService),
     Layer.provide(ptyService),
     Layer.provide(sessionLifecycle),
-    Layer.provide(internalRuntimeEventBus),
+    Layer.provide(internalEventsLayer),
     Layer.provide(editorService),
     Layer.provide(entityLock),
   );
@@ -379,7 +380,7 @@ export function testLayer(
     entityLock,
     agentSessionArtifacts,
     attentionProjection,
-    internalRuntimeEventBus,
+    internalEventsLayer,
     projectRepository,
     surfaceRepository,
     surfaceService,
@@ -532,10 +533,12 @@ export function agentSessionRowForTest(input: {
 // Internals and builders other modules' tests use; never imported by production code.
 export { AgentSessionError } from './agent-sessions/service.js';
 export type { StopUnlessPlacedOutcome } from './agent-sessions/service.js';
-export { StartupSessionRestoreLayer } from './sessions/restore.js';
+export { SurfaceRepository } from './surfaces/repository.js';
+export { TerminalSessionService } from './terminal-sessions/service.js';
 export { TerminalSessionError } from './terminal-sessions/service.js';
 export {
   captureStartupLogs,
+  paneBoundRestoreLayer,
   realRestoreLayer,
   realSessionCreationLayer,
   sessionDataLayer,

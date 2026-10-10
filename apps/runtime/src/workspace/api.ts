@@ -1,17 +1,19 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError, type WorktreeSetupRejectionReason } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
 import {
   infrastructureApiError,
-  registerApiEndpoint,
+  registerLegacyApiEndpoint,
   type ApiRouteContext,
   errorMessage,
+  type RouteRuntime,
 } from '../platform/http/index.js';
 import { ProjectConfigError } from '../projects/index.js';
 import { workspaceApiError } from './api-errors.js';
+import type { WorkspaceLayer } from './layer.js';
+import { registerPathsApi } from './path-suggestions-api.js';
 import {
   ProjectOrderError,
   WorkspaceError,
@@ -20,101 +22,92 @@ import {
 } from './service.js';
 import { WorktreeSetupError } from './setup/service.js';
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
+/** The workspace module's routes: projects, worktrees, the workspace snapshot and path suggestions. */
+export function registerWorkspaceRoutes(
+  fastify: FastifyInstance,
+  runtime: RouteRuntime<Layer.Success<typeof WorkspaceLayer>>,
+) {
+  registerWorkspaceApi(fastify, runtime);
+  registerPathsApi(fastify, runtime);
+}
 
 export function registerWorkspaceApi(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<WorkspaceService>,
 ) {
-  const run = runWithRuntime(runtime);
-
-  registerApiEndpoint(fastify, apiEndpoints.workspace.get, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.workspace.get, {
     handle: () =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.get;
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.workspace.getActiveContext, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.workspace.getActiveContext, {
     handle: () =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.getActiveContext;
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.workspace.durableSessions, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.workspace.durableSessions, {
     handle: () =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.durableSessions;
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.workspace.setActiveContext, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.workspace.setActiveContext, {
     handle: (input) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.setActiveContext(input);
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.workspace.reconcile, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.workspace.reconcile, {
     handle: (input) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.reconcileWorkspace(input);
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.projects.add, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.projects.add, {
     handle: (input) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.registerProject(input);
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.projects.relocate, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.projects.relocate, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.relocateProject({ projectId: params.projectId, path: input.path });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.projects.delete, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.projects.delete, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.deleteProject(params.projectId);
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.projects.moveOrder, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.projects.moveOrder, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
@@ -124,10 +117,9 @@ export function registerWorkspaceApi(
         });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.moveOrder, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.moveOrder, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
@@ -138,50 +130,45 @@ export function registerWorkspaceApi(
         });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.branches, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.branches, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.listProjectBranches({ projectId: params.projectId });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.setupPreflight, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.setupPreflight, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.preflightWorktreeSetup({ projectId: params.projectId });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.setupTrust, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.setupTrust, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.trustWorktreeSetup({ projectId: params.projectId, request: input });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.open, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.open, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.openWorktree({ projectId: params.projectId, request: input });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.deletePreflight, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.deletePreflight, {
     handle: (_input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
@@ -191,10 +178,9 @@ export function registerWorkspaceApi(
         });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.delete, {
+  registerLegacyApiEndpoint(fastify, runtime, apiEndpoints.worktrees.delete, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
@@ -205,7 +191,6 @@ export function registerWorkspaceApi(
         });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
   });
 }
 

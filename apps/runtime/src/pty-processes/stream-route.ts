@@ -9,19 +9,13 @@ import {
   type PtyWebSocketInputMessage,
 } from '@isagi/contracts';
 
-import type { RuntimeServices } from '../app/layer.js';
-import { enforceRuntimeWebSocketOrigin } from '../platform/http/index.js';
+import { enforceRuntimeWebSocketOrigin, type RouteRuntime } from '../platform/http/index.js';
 import {
   PtyService,
   type PtyAttachment,
   type PtyAttachmentMode,
   type PtyAttachmentPlan,
 } from './service.js';
-
-type RuntimeRunner = <A>(
-  effect: Effect.Effect<A, unknown, RuntimeServices>,
-  options?: { readonly signal?: AbortSignal | undefined },
-) => Promise<A>;
 
 type StreamSocketMessage<Preamble extends { readonly type: string }> =
   | Preamble
@@ -48,7 +42,8 @@ export interface PtyStreamAttachedControls<
   readonly detach: Effect.Effect<void, never>;
 }
 
-export interface PtyStreamStrategy<Target, Preamble extends { readonly type: string }> {
+/** `R` is the services the strategy's own effects need, beyond `PtyService` which the route itself uses. */
+export interface PtyStreamStrategy<Target, Preamble extends { readonly type: string }, R> {
   readonly path: string;
   readonly logLabel: string;
   readonly mode: PtyAttachmentMode;
@@ -57,7 +52,7 @@ export interface PtyStreamStrategy<Target, Preamble extends { readonly type: str
   readonly closeOnClientError?: boolean | undefined;
   readonly resolveTarget: (
     request: FastifyRequest,
-  ) => Effect.Effect<Target & { readonly ptyProcessId: number | null }, unknown, RuntimeServices>;
+  ) => Effect.Effect<Target & { readonly ptyProcessId: number | null }, unknown, R>;
   readonly preamble: (input: {
     readonly target: Target & { readonly ptyProcessId: number | null };
     readonly plan: PtyAttachmentPlan | null;
@@ -67,18 +62,14 @@ export interface PtyStreamStrategy<Target, Preamble extends { readonly type: str
     readonly target: Target & { readonly ptyProcessId: number | null };
     readonly attachmentId: symbol | null;
     readonly message: PtyWebSocketInputMessage;
-  }) => Effect.Effect<void, unknown, RuntimeServices>;
+  }) => Effect.Effect<void, unknown, R>;
   readonly beforeAttach: (
     target: Target & { readonly ptyProcessId: number },
-  ) => Effect.Effect<void, unknown, RuntimeServices>;
+  ) => Effect.Effect<void, unknown, R>;
   readonly recoverAttachFailure?: (input: {
     readonly target: Target & { readonly ptyProcessId: number };
     readonly cause: unknown;
-  }) => Effect.Effect<
-    (Target & { readonly ptyProcessId: number | null }) | null,
-    unknown,
-    RuntimeServices
-  >;
+  }) => Effect.Effect<(Target & { readonly ptyProcessId: number | null }) | null, unknown, R>;
   readonly supersede: (target: Target & { readonly ptyProcessId: number }) => boolean;
   readonly displace: (input: {
     readonly target: Target & { readonly ptyProcessId: number };
@@ -88,17 +79,17 @@ export interface PtyStreamStrategy<Target, Preamble extends { readonly type: str
     readonly target: Target & { readonly ptyProcessId: number };
     readonly attachment: PtyAttachment;
     readonly controls: PtyStreamAttachedControls<Preamble>;
-  }) => Effect.Effect<() => void, unknown, RuntimeServices>;
+  }) => Effect.Effect<() => void, unknown, R>;
   readonly mapError: (error: unknown) => {
     readonly code: PtyStreamErrorCode;
     readonly message?: string;
   };
 }
 
-export function registerPtyStreamRoute<Target, Preamble extends { readonly type: string }>(
+export function registerPtyStreamRoute<Target, Preamble extends { readonly type: string }, R>(
   fastify: FastifyInstance,
-  run: RuntimeRunner,
-  strategy: PtyStreamStrategy<Target, Preamble>,
+  runtime: RouteRuntime<NoInfer<R> | PtyService>,
+  strategy: PtyStreamStrategy<Target, Preamble, R>,
 ) {
   fastify.get(
     `${apiBasePath}${strategy.path}`,
@@ -107,8 +98,8 @@ export function registerPtyStreamRoute<Target, Preamble extends { readonly type:
       preValidation: enforceRuntimeWebSocketOrigin,
     },
     (socket, request) => {
-      // Effect v4's ManagedRuntime.dispose interrupts every fiber it started, so runtime shutdown interrupts open
-      // connections. That is an orderly close, not a crash: close the socket quietly, as the v3 runtime did.
+      // Runtime shutdown interrupts every fiber the route runtime started, including open connections. That is an
+      // orderly close, not a crash: close the socket quietly, as the v3 runtime did.
       let interrupted = false;
       const scoped = Effect.scoped(runConnection(socket, request, strategy)).pipe(
         Effect.onInterrupt(() =>
@@ -118,7 +109,7 @@ export function registerPtyStreamRoute<Target, Preamble extends { readonly type:
         ),
       );
       setImmediate(() => {
-        void run(scoped).catch((error: unknown) => {
+        void runtime.runPromise(scoped).catch((error: unknown) => {
           if (interrupted) {
             socket.close();
             return;
@@ -137,10 +128,10 @@ export function registerPtyStreamRoute<Target, Preamble extends { readonly type:
   );
 }
 
-function runConnection<Target, Preamble extends { readonly type: string }>(
+function runConnection<Target, Preamble extends { readonly type: string }, R>(
   socket: SocketLike,
   request: FastifyRequest,
-  strategy: PtyStreamStrategy<Target, Preamble>,
+  strategy: PtyStreamStrategy<Target, Preamble, R>,
 ) {
   return Effect.gen(function* () {
     let closed = false;
@@ -382,9 +373,10 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
 function recoverReplayOnlyAfterAttachFailure<
   Target,
   Preamble extends { readonly type: string },
+  R,
 >(input: {
   readonly socket: SocketLike;
-  readonly strategy: PtyStreamStrategy<Target, Preamble>;
+  readonly strategy: PtyStreamStrategy<Target, Preamble, R>;
   readonly target: Target & { readonly ptyProcessId: number };
   readonly cause: unknown;
   readonly sendMessage: (message: StreamSocketMessage<Preamble>) => void;
@@ -434,9 +426,9 @@ function recoverReplayOnlyAfterAttachFailure<
   });
 }
 
-function attachLive<Target, Preamble extends { readonly type: string }>(input: {
+function attachLive<Target, Preamble extends { readonly type: string }, R>(input: {
   readonly socket: SocketLike;
-  readonly strategy: PtyStreamStrategy<Target, Preamble>;
+  readonly strategy: PtyStreamStrategy<Target, Preamble, R>;
   readonly target: Target & { readonly ptyProcessId: number };
   readonly sendLive: (message: PtyStreamOutputMessageSet) => void;
 }) {
@@ -474,8 +466,8 @@ function attachLive<Target, Preamble extends { readonly type: string }>(input: {
   });
 }
 
-function processClientMessages<Target, Preamble extends { readonly type: string }>(
-  strategy: PtyStreamStrategy<Target, Preamble>,
+function processClientMessages<Target, Preamble extends { readonly type: string }, R>(
+  strategy: PtyStreamStrategy<Target, Preamble, R>,
   clientMessages: Queue.Queue<PtyWebSocketInputMessage>,
   ready: Deferred.Deferred<
     {
@@ -505,9 +497,9 @@ function processClientMessages<Target, Preamble extends { readonly type: string 
   );
 }
 
-function closeWithMappedError<Target, Preamble extends { readonly type: string }>(
+function closeWithMappedError<Target, Preamble extends { readonly type: string }, R>(
   socket: SocketLike,
-  strategy: PtyStreamStrategy<Target, Preamble>,
+  strategy: PtyStreamStrategy<Target, Preamble, R>,
   operation: string,
   cause: unknown,
 ) {

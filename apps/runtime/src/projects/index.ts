@@ -8,6 +8,7 @@ export {
   type WorkspaceReconcileProjectWorktreesResult,
   type WorktreeOrderMoveResult,
 } from './repository.js';
+export { ProjectsLayer } from './layer.js';
 export type { DiscoveredWorktree, ProjectRow, ProjectStatus, WorktreeRow } from './types.js';
 export type {
   CommandPortPathConfig,

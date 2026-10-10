@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Result } from 'effect';
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
 import { CliAccess } from '../cli-access/index.js';
-import { InternalRuntimeEventBus } from '../platform/events/index.js';
+import { InternalEvents } from '../platform/events/index.js';
 import { DataDirectory, DatabaseError } from '../platform/persistence/index.js';
 import { launchEnv, UserShell } from '../platform/process/index.js';
 import { PtyBackendCatalog } from './backend.js';
@@ -98,7 +98,7 @@ const make = Effect.gen(function* () {
   const catalog = yield* PtyBackendCatalog;
   const foreground = yield* PtyForegroundState;
   const directory = yield* DataDirectory;
-  const eventBus = yield* InternalRuntimeEventBus;
+  const eventBus = yield* InternalEvents;
   const userShell = yield* UserShell;
   const cliAccess = yield* CliAccess;
   const userProcessEnvironment = launchEnv(userShell.environment.values);
@@ -414,13 +414,22 @@ interface PtyServiceShape {
 export class PtyService extends Context.Service<PtyService, PtyServiceShape>()(
   'isagi/runtime/pty-processes/PtyService',
 ) {
-  static readonly layer = Layer.effect(PtyService, make);
+  static readonly layerNoDeps = Layer.effect(PtyService, make);
+  static readonly layer = PtyService.layerNoDeps.pipe(
+    Layer.provide([
+      CliAccess.layer,
+      InternalEvents.layer,
+      PtyBackendCatalog.layer,
+      PtyForegroundState.layer,
+      PtyRepository.layer,
+    ]),
+  );
 }
 
 function attachToProcess(
   repository: PtyRepository['Service'],
   catalog: PtyBackendCatalog['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   foreground: PtyForegroundState['Service'],
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
@@ -620,7 +629,7 @@ function getAttachmentPlan(
 function startStatusPolling(
   repository: PtyRepository['Service'],
   catalog: PtyBackendCatalog['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
 ) {
   const timer = setInterval(() => {
@@ -644,7 +653,7 @@ function startStatusPolling(
 export function reconcilePersistedProcesses(
   repository: PtyRepository['Service'],
   catalog: PtyBackendCatalog['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
   options: { readonly startup: boolean },
 ) {
@@ -709,7 +718,7 @@ export function reconcilePersistedProcesses(
 function handleAttachFailure(
   repository: PtyRepository['Service'],
   backend: PtyBackendShape,
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
   session: PtyProcessRecord,
   ref: BackendSessionRef,
@@ -747,7 +756,7 @@ function handleAttachFailure(
 
 function transitionIfChanged(
   repository: PtyRepository['Service'],
-  eventBus: InternalRuntimeEventBus['Service'],
+  eventBus: InternalEvents['Service'],
   session: PtyProcessRecord,
   next: {
     readonly status: PtyProcessRecord['status'];

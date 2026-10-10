@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { branchPathHash, Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -76,11 +76,11 @@ test('opening a missing branch without a base asks the client for base selection
           const workspace = yield* WorkspaceService;
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
-          Effect.provide(WorkspaceService.layer),
+          Effect.provide(WorkspaceService.layerNoDeps),
           Effect.provide(NoProjectDeletionParticipant),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
-          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+          Effect.provideService(InternalEvents, testInternalEvents),
           Effect.provideService(ProjectRepository, repository),
           Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
@@ -183,11 +183,11 @@ test('opening a missing branch creates it from a local branch base', async () =>
           request: { branch, base: { kind: 'branch', ref: 'main' } },
         });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -289,11 +289,11 @@ test('opening a missing branch can create it from the current detached worktree'
           request: { branch, base: { kind: 'detached_worktree', worktreeId: detachedWorktree.id } },
         });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -405,11 +405,11 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
               },
             });
           }).pipe(
-            Effect.provide(WorkspaceService.layer),
+            Effect.provide(WorkspaceService.layerNoDeps),
             Effect.provide(NoProjectDeletionParticipant),
             Effect.provideService(CommandService, testCommandService),
             Effect.provideService(PtyService, testPtyService),
-            Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+            Effect.provideService(InternalEvents, testInternalEvents),
             Effect.provideService(ProjectRepository, repository),
             Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
             Effect.provideService(SurfaceService, testSurfaceService),

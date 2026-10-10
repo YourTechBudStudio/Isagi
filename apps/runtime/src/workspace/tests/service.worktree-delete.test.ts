@@ -5,7 +5,7 @@ import { Effect } from 'effect';
 
 import { CommandError, CommandService } from '../../commands/index.js';
 import { SurfaceService } from '../../environment/index.js';
-import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
@@ -70,11 +70,11 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -166,11 +166,11 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         request: { checkoutRemovalMode: 'force', branchRemovalMode: 'preserve' },
       });
     }).pipe(
-      Effect.provide(WorkspaceService.layer),
+      Effect.provide(WorkspaceService.layerNoDeps),
       Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, commandService),
       Effect.provideService(PtyService, ptyService),
-      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+      Effect.provideService(InternalEvents, testInternalEvents),
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -243,11 +243,11 @@ test('delete worktree announces every durable session it cascaded away', async (
         request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
       });
     }).pipe(
-      Effect.provide(WorkspaceService.layer),
+      Effect.provide(WorkspaceService.layerNoDeps),
       Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
-      Effect.provideService(InternalRuntimeEventBus, {
+      Effect.provideService(InternalEvents, {
         ...bus.service,
         publish: (event) =>
           Effect.sync(() => {
@@ -367,11 +367,11 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, ptyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -451,11 +451,11 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -514,11 +514,11 @@ test('delete worktree reports safe branch deletion failure as partial success', 
         request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'delete_if_safe' },
       });
     }).pipe(
-      Effect.provide(WorkspaceService.layer),
+      Effect.provide(WorkspaceService.layerNoDeps),
       Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
-      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+      Effect.provideService(InternalEvents, testInternalEvents),
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -561,11 +561,11 @@ test('delete worktree rejects before destructive work when root fallback is miss
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceService.layer),
+        Effect.provide(WorkspaceService.layerNoDeps),
         Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(InternalEvents, testInternalEvents),
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),

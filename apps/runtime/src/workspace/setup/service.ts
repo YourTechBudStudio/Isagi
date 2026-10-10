@@ -156,7 +156,10 @@ export class WorktreeSetupService extends Context.Service<
     >;
   }
 >()('isagi/runtime/workspace/WorktreeSetupService') {
-  static readonly layer = Layer.effect(WorktreeSetupService, make);
+  static readonly layerNoDeps = Layer.effect(WorktreeSetupService, make);
+  static readonly layer = WorktreeSetupService.layerNoDeps.pipe(
+    Layer.provide(WorktreeSetupRepository.layer),
+  );
 }
 
 function trustStatus(

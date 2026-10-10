@@ -3,8 +3,9 @@ import test from 'node:test';
 
 import { Effect, Fiber } from 'effect';
 
-import { PtyRepository, PtyStartError } from '../../../pty-processes/index.js';
+import { PtyStartError } from '../../../pty-processes/index.js';
 import { isTerminalPtyProcessStatus } from '../../../pty-processes/testing.js';
+import { PtyRepository } from '../../../pty-processes/testing.js';
 import {
   editorBackendStub,
   insertWorktree,
