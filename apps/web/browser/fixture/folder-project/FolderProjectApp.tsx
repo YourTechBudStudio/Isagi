@@ -60,7 +60,12 @@ function FolderProjectBody() {
   // way back to the missing state short of a page reload — and the missing state
   // is the one worth looking at repeatedly.
   const [scenario, setScenario] = useState({ id: DEFAULT_SCENARIO as ScenarioId, run: 0 });
-  const [ready, setReady] = useState(false);
+  // The run whose reset has fully landed (snapshot read, then selection), or null
+  // before the first one has. Published on the shell so a spec can wait for a
+  // scenario click to settle instead of racing its asynchronous reset: re-clicking
+  // the current scenario changes nothing visible, yet its late selection would
+  // overwrite whatever the spec selected in the meantime.
+  const [appliedRun, setAppliedRun] = useState<number | null>(null);
   // The production palette owns its own open state, its own cmd+k handling and
   // its own Escape. Nothing here duplicates them.
   const openPalette = usePaletteStore((state) => state.openPalette);
@@ -92,7 +97,7 @@ function FolderProjectBody() {
       } else {
         store.selectMissingProject(opens.projectId);
       }
-      setReady(true);
+      setAppliedRun(scenario.run);
     };
     void apply();
     // A rapid second click must not let the first switch finish after it.
@@ -104,6 +109,8 @@ function FolderProjectBody() {
   return (
     <div
       data-fixture-shell
+      data-scenario-run={scenario.run}
+      data-scenario-applied={appliedRun ?? undefined}
       className="grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-canvas text-fg"
     >
       <ScenarioBar
@@ -116,7 +123,7 @@ function FolderProjectBody() {
         {/* The production rail, with its drag engine, context menus, update
             footer and order notices intact — the parts phase 06's prototype
             deliberately left out and therefore could say nothing about. */}
-        {ready && <Rail />}
+        {appliedRun !== null && <Rail />}
 
         <div className="grid min-h-0 grid-rows-[1fr_auto]">
           <div className="relative min-h-0 overflow-hidden">

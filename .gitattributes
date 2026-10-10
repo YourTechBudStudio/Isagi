@@ -3,3 +3,6 @@
 *.otf binary
 *.woff binary
 *.woff2 binary
+
+# Generated contract wire goldens (packages/contracts/scripts/capture-wire-goldens.ts).
+packages/contracts/test/wire-goldens/wire-goldens.json -diff linguist-generated

@@ -1064,6 +1064,9 @@ const LIST_HIGHLIGHT = /bg-white\/8/;
 async function highlightRow(page: Page, label: string) {
   const target = listRow(page, label);
   await expect(target).toBeVisible();
+  // The palette focuses its input in a passive effect after the open render; an
+  // arrow pressed before that lands on the document body and moves nothing.
+  await expect(input(page)).toBeFocused();
   const budget = await page.locator(`${PALETTE} button`).count();
   for (let step = 0; step < budget + 1; step += 1) {
     if (LIST_HIGHLIGHT.test((await target.getAttribute('class')) ?? '')) return;

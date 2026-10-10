@@ -104,7 +104,13 @@ const worktreeRow = (page: Page, projectId: number, worktreeId: number) =>
     .first();
 
 async function scenario(page: Page, id: string) {
+  // A scenario click resets asynchronously: the fixture awaits the new snapshot
+  // and only then applies the scenario's selection. Wait for that reset to land,
+  // or it can overwrite a selection the spec makes right after the click.
+  const shell = page.locator('[data-fixture-shell]');
+  const run = Number(await shell.getAttribute('data-scenario-run'));
   await page.locator(`[data-scenario="${id}"]`).click();
+  await expect(shell).toHaveAttribute('data-scenario-applied', String(run + 1));
 }
 
 async function outcome(page: Page, id: string) {
@@ -114,6 +120,10 @@ async function outcome(page: Page, id: string) {
 async function openPalette(page: Page) {
   await page.keyboard.press('Meta+k');
   await expect(palette(page)).toBeVisible();
+  // The palette focuses its input in a passive effect after the open render, and
+  // its keys (Escape included) are handled on the panel. A key pressed before that
+  // lands on the document body and is lost, leaving the palette open.
+  await expect(palette(page).locator('input')).toBeFocused();
 }
 
 test.beforeEach(async ({ page }) => {

@@ -69,6 +69,25 @@ export function runDevelopmentSupervisor(options = {}) {
   );
 }
 
+/**
+ * @typedef {(
+ *   command: string,
+ *   args: readonly string[],
+ *   options: import('node:child_process').SpawnOptions,
+ * ) => import('node:child_process').ChildProcess} SpawnChild
+ */
+
+/**
+ * @param {object} options
+ * @param {string} options.root
+ * @param {ReturnType<typeof developmentPaths>} [options.paths]
+ * @param {(event: { source: string; stream: string; payload: string }) => void} options.presenter
+ * @param {ReturnType<typeof createSupervisorSignalSource>} [options.signals]
+ * @param {string} options.electronExecutable
+ * @param {number} [options.readinessTimeoutMs]
+ * @param {number} [options.outputDrainGraceMs]
+ * @param {SpawnChild} [options.spawnChild]
+ */
 function superviseChildren({
   root,
   paths = developmentPaths(root),
@@ -196,6 +215,7 @@ function superviseChildren({
   });
 }
 
+/** @param {import('node:events').EventEmitter} [signalProcess] */
 function createSupervisorSignalSource(signalProcess = process) {
   let selected;
   const listeners = new Set();
@@ -263,6 +283,7 @@ function pipeStream(stream, source, streamName, presenter) {
   return pipeDecodedStream(stream, decoder);
 }
 
+/** @returns {Promise<void>} */
 function pipeDecodedStream(stream, decoder) {
   stream.setEncoding('utf8');
   return new Promise((resolvePromise) => {

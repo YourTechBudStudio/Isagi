@@ -18,25 +18,27 @@
     "fix": "pnpm lint:fix && pnpm format",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint . --threads=8 --deny-warnings --no-error-on-unmatched-pattern",
+    "lint": "oxlint . --threads=8 --deny-warnings --no-error-on-unmatched-pattern && node scripts/architecture/index.mjs",
     "lint:fix": "oxlint . --threads=8 --fix --no-error-on-unmatched-pattern",
     "pack:desktop": "pnpm build && pnpm --filter @isagi/desktop pack:dir",
     "package:desktop:linux": "pnpm build && pnpm --filter @isagi/desktop dist:linux",
     "package:desktop:mac": "pnpm build && pnpm --filter @isagi/desktop dist:mac",
-    "test": "pnpm test:dev-supervisor && pnpm test:versions-sync && pnpm test:release && pnpm -r --if-present test",
+    "test": "pnpm test:scripts && pnpm test:versions-sync && pnpm test:release && pnpm -r --if-present test",
     "test:browser": "pnpm --filter @isagi/web test:browser",
-    "test:dev-supervisor": "node --test \"scripts/dev-supervisor/*.test.mjs\"",
     "test:release": "node --test \"scripts/release-pipeline/*.test.mjs\"",
+    "test:scripts": "node --test \"scripts/dev-supervisor/*.test.mjs\" \"scripts/architecture/*.test.mjs\"",
     "test:versions-sync": "node --test scripts/sync-package-versions.test.mjs && pnpm versions:verify",
-    "typecheck": "pnpm -r --if-present typecheck",
+    "typecheck": "pnpm -r --if-present typecheck && tsc -p tsconfig.scripts.json",
     "versions:sync": "node scripts/sync-package-versions.mjs",
     "versions:verify": "node scripts/verify-package-versions.mjs"
   },
   "devDependencies": {
+    "@types/node": "^24.10.1",
     "effect": "^3.21.2",
     "oxfmt": "^0.52.0",
     "oxlint": "^1.67.0",
-    "oxlint-tailwindcss": "^1.0.0"
+    "oxlint-tailwindcss": "^1.0.0",
+    "typescript": "^7.0.2"
   },
   "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72"
 }

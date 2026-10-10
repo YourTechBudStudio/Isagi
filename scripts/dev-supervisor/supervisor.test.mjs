@@ -224,13 +224,17 @@ test('fixture stack rejects malformed readiness and cleans up web', async () => 
   assert.ok(events.some((event) => event.payload.includes('malformed JSON')));
 });
 
-for (const [mode, expectedCode, expectedMessage] of [
+for (const [
+  mode,
+  expectedCode,
+  expectedMessage,
+] of /** @type {Array<[string, number, string]>} */ ([
   ['web-duplicate', 1, 'duplicate readiness'],
   ['web-silent', 1, 'Timed out waiting'],
   ['web-failure', 4, 'before readiness'],
   ['web-success', 1, 'before readiness'],
   ['web-ready-exit', 1, 'Web exited while Electron was active'],
-]) {
+])) {
   test(`fixture stack handles ${mode}`, async () => {
     const events = [];
     let acquisition = 0;
@@ -238,7 +242,7 @@ for (const [mode, expectedCode, expectedMessage] of [
       superviseChildren({
         root: process.cwd(),
         electronExecutable: process.execPath,
-        readinessTimeoutMs: 50,
+        readinessTimeoutMs: mode === 'web-silent' ? 50 : 5_000,
         presenter: (event) => events.push(event),
         spawnChild: (_command, _args, options) =>
           spawn(process.execPath, [fixture, acquisition++ === 0 ? mode : 'desktop-wait'], options),
@@ -261,10 +265,10 @@ test('termination escalates a resistant fixture without leaving it running', asy
   assert.notEqual(child.signalCode, null);
 });
 
-for (const [signal, exitCode] of [
+for (const [signal, exitCode] of /** @type {Array<[NodeJS.Signals, number]>} */ ([
   ['SIGINT', 130],
   ['SIGTERM', 143],
-]) {
+])) {
   test(`supervisor ${signal} tears down the fixture tree and returns ${exitCode}`, async () => {
     const child = spawn(process.execPath, [signalFixture], {
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -17,6 +17,7 @@ test('a successful program reports the exit code it produced', () => {
 });
 
 test('a program cancelled by a signal reports the signal code without a cause', () => {
+  // @ts-expect-error Effect v3 types the fiber id as FiberId; v4 takes a number. Remove with the v4 port.
   const exit = Exit.failCause(Cause.interrupt(0));
   assert.deepEqual(classifyProgramExit(exit, 'SIGINT'), { code: 130 });
   assert.deepEqual(classifyProgramExit(exit, 'SIGTERM'), { code: 143 });
@@ -24,6 +25,7 @@ test('a program cancelled by a signal reports the signal code without a cause', 
 
 test('a fault that arrives while unwinding an interruption is still reported', () => {
   const detachFailure = new Error('hdiutil detach failed');
+  // @ts-expect-error Effect v3 types the fiber id as FiberId; v4 takes a number. Remove with the v4 port.
   const cause = Cause.sequential(Cause.interrupt(0), Cause.die(detachFailure));
   const outcome = classifyProgramExit(Exit.failCause(cause), 'SIGINT');
   assert.equal(outcome.code, 1);

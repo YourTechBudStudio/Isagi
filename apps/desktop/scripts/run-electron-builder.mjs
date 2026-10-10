@@ -75,17 +75,22 @@ const program = Effect.gen(function* () {
   ]);
   const packageResult =
     request.kind === 'linux-release'
-      ? yield* Effect.acquireUseRelease(
-          Effect.try({
-            try: () => prepareLinuxIconPackaging(),
-            catch: (cause) => new LinuxReleaseStagingError({ cause }),
-          }),
-          () => packageEffect,
-          (packaging) =>
+      ? // Effect v3 types `release` as infallible although a failing release does fail the
+        // whole effect; v4's signature accepts it. The cast restores the honest result type.
+        yield* /** @type {Effect.Effect<CommandResult, CommandStartError | LinuxReleaseStagingError>} */ (
+          Effect.acquireUseRelease(
             Effect.try({
-              try: () => cleanupLinuxIconPackaging(packaging),
+              try: () => prepareLinuxIconPackaging(),
               catch: (cause) => new LinuxReleaseStagingError({ cause }),
             }),
+            () => packageEffect,
+            (packaging) =>
+              // @ts-expect-error see the comment above; remove with the Effect v4 port.
+              Effect.try({
+                try: () => cleanupLinuxIconPackaging(packaging),
+                catch: (cause) => new LinuxReleaseStagingError({ cause }),
+              }),
+          )
         )
       : yield* packageEffect;
   const packageExitCode = commandExitCode(packageResult);
@@ -184,6 +189,13 @@ const outcome = classifyProgramExit(exit, receivedSignal);
 if (outcome.cause) console.error(Cause.pretty(outcome.cause, { renderErrorCause: true }));
 process.exitCode = outcome.code;
 
+/** @typedef {{ code: number | null; signal: NodeJS.Signals | null }} CommandResult */
+
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @returns {Effect.Effect<CommandResult, CommandStartError>}
+ */
 function runCommand(command, args) {
   return Effect.async((resume) => {
     const child = spawn(command, args, {

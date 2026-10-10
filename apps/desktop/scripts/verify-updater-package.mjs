@@ -6,7 +6,9 @@ import { extractFile, listPackage } from '@electron/asar';
 const archivedBundlePath = 'dist-electron/main/index.js';
 
 export async function verifyUpdaterPackage({ asarPath, sourceRoot }) {
-  const archiveEntries = new Set(listPackage(asarPath).map(normalizeArchivePath));
+  const archiveEntries = new Set(
+    listPackage(asarPath, { isPack: false }).map(normalizeArchivePath),
+  );
   if (!archiveEntries.has(archivedBundlePath))
     throw new Error(`Packaged main bundle is missing: ${archivedBundlePath}`);
 

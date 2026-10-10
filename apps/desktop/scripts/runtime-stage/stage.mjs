@@ -413,7 +413,10 @@ export function validateDependencyTree(root, dependencyVersions, { requireNative
     const packageRoot = findPackageRoot(entry, name);
     assertPathInsideRoot(root, entry, `${name} entrypoint`);
     assertPathInsideRoot(root, packageRoot, `${name} package root`);
-    if (requireNativeArtifacts && runtimeNativeExternals.includes(name)) {
+    if (
+      requireNativeArtifacts &&
+      /** @type {readonly string[]} */ (runtimeNativeExternals).includes(name)
+    ) {
       const nativeFiles = walk(packageRoot).filter((path) => path.endsWith('.node'));
       if (nativeFiles.length === 0) {
         throw new StageValidationError({
@@ -539,7 +542,9 @@ function walk(root, { includeSymlinks = false } = {}) {
 
 function linuxLibcIdentity() {
   if (process.platform !== 'linux') return null;
-  const report = process.report?.getReport();
+  const report = /** @type {{ header?: { glibcVersionRuntime?: string } } | undefined} */ (
+    process.report?.getReport()
+  );
   const glibc = report?.header?.glibcVersionRuntime;
   return glibc ? `glibc-${glibc}` : 'musl-or-unknown';
 }
@@ -547,7 +552,10 @@ function linuxLibcIdentity() {
 function tryOperation(operation, path, run) {
   return Effect.try({
     try: run,
-    catch: (cause) => (cause?._tag ? cause : new StageOperationError({ operation, path, cause })),
+    catch: (cause) =>
+      /** @type {{ _tag?: unknown } | null | undefined} */ (cause)?._tag
+        ? cause
+        : new StageOperationError({ operation, path, cause }),
   });
 }
 
