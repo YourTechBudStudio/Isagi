@@ -1,5 +1,5 @@
 import { and, eq, getTableColumns, inArray, isNotNull } from 'drizzle-orm';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 
 import type {
   DurableSessionInventory,
@@ -30,6 +30,7 @@ import {
   worktreeSurfaces,
 } from '../tables.js';
 import { planSurfacePaneDelete } from './delete-plan.js';
+import { SurfaceError } from './errors.js';
 import {
   decodeSurfaceLayout,
   encodeSurfaceLayout,
@@ -61,18 +62,12 @@ import type {
 export type PaneSessionClaimResult = 'claimed' | 'pane_missing' | 'session_missing';
 
 /**
- * Returned rather than thrown: `database.transaction` converts a throw into a
- * `DatabaseError`, which would report an expected rejection as a runtime fault.
+ * An expected refusal is a result, never a thrown error: `database.transaction` turns a throw into a `DatabaseError`,
+ * which would report it as a runtime fault. The service turns the reason into a `SurfaceOrderError`.
  */
 export type SurfaceOrderMoveResult =
   | { readonly status: 'moved' }
   | { readonly status: 'rejected'; readonly reason: SurfaceOrderRejectionReason };
-
-export class SurfaceRepositoryWorktreeMissing extends Error {
-  constructor(readonly worktreeId: number) {
-    super(`Worktree ${worktreeId} was not found.`);
-  }
-}
 
 /**
  * Why a transactional placement was refused. All three mean a caller reached
@@ -86,17 +81,39 @@ export class SurfaceRepositoryWorktreeMissing extends Error {
  */
 export type InitialSessionRejectionReason = 'missing' | 'foreign_worktree' | 'already_placed';
 
-export class SurfaceRepositoryInitialSessionRejected extends Error {
-  constructor(
-    readonly worktreeId: number,
-    readonly sessionId: number | null,
-    readonly reason: InitialSessionRejectionReason,
-  ) {
-    super(
-      `Editor context ${sessionId ?? 'unknown'} cannot be placed in worktree ${worktreeId}: ${reason}.`,
-    );
-    this.name = 'SurfaceRepositoryInitialSessionRejected';
-  }
+/**
+ * Raised through the transaction's `abort`, so the rollback leaves nothing behind, and then turned into a defect by
+ * the repository method: no caller handles it (see `InitialSessionRejectionReason`).
+ */
+export class SurfaceRepositoryInitialSessionRejected extends Data.TaggedError(
+  'SurfaceRepositoryInitialSessionRejected',
+)<{
+  readonly worktreeId: number;
+  readonly sessionId: number | null;
+  readonly reason: InitialSessionRejectionReason;
+  readonly message: string;
+}> {}
+
+function initialSessionRejected(
+  worktreeId: number,
+  sessionId: number | null,
+  reason: InitialSessionRejectionReason,
+) {
+  return new SurfaceRepositoryInitialSessionRejected({
+    worktreeId,
+    sessionId,
+    reason,
+    message: `Editor context ${sessionId ?? 'unknown'} cannot be placed in worktree ${worktreeId}: ${reason}.`,
+  });
+}
+
+/** The worktree a creating transaction found missing; the same refusal the service's own checks raise. */
+function worktreeMissing(worktreeId: number) {
+  return new SurfaceError({
+    code: 'worktree_not_found',
+    message: `Worktree ${worktreeId} was not found.`,
+    worktreeId,
+  });
 }
 
 const make = Effect.gen(function* () {
@@ -185,8 +202,8 @@ const make = Effect.gen(function* () {
           .get();
         return row ?? null;
       }),
-    findSurfaceDeleteTarget: (surfaceId) =>
-      Effect.gen(function* () {
+    findSurfaceDeleteTarget: Effect.fn('SurfaceRepository.findSurfaceDeleteTarget')(
+      function* (surfaceId) {
         const surface = yield* database.use('find_surface_delete_target_surface', (db) => {
           const row = db
             .select()
@@ -206,7 +223,8 @@ const make = Effect.gen(function* () {
             .map(paneRow),
         );
         return deleteTarget(surface, panes);
-      }),
+      },
+    ),
     renameSurface: (input) =>
       database.use('rename_surface', (db) => {
         db.update(worktreeSurfaces)
@@ -266,107 +284,108 @@ const make = Effect.gen(function* () {
       }),
     createSinglePaneSurface: (input) =>
       database
-        .transaction('create_single_pane_surface', (db) => {
-          const worktree = db
-            .select()
-            .from(worktrees)
-            .where(eq(worktrees.id, input.worktreeId))
-            .get();
-          if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
-          const rejection = input.initialSession
-            ? rejectInitialSession(db, input.worktreeId, input.initialSession)
-            : null;
-          // Checked before anything is inserted, so a rejection leaves no
-          // surface, pane, layout, or focus residue behind.
-          if (rejection) return { status: 'rejected' as const, reason: rejection };
-          const surface = insertEmptySurfaceRow(db, input);
-          const paneId = insertRootPaneRows(db, {
-            surfaceId: surface.surfaceId,
-            title: surface.title,
-            initialSession: input.initialSession,
-          });
-          focusSurfaceRows(db, input.worktreeId, surface.surfaceId, paneId);
-          return {
-            status: 'created' as const,
-            output: { ...surface, paneId, cwd: worktree.path },
-          };
-        })
-        .pipe(
-          Effect.flatMap((result) =>
-            result.status === 'created'
-              ? Effect.succeed(result.output)
-              : // Converted to a defect out here rather than thrown inside the
-                // transaction: `database.transaction` wraps its body in
-                // `Effect.try`, so a throw would be laundered into a
-                // `DatabaseError` and reported as an ordinary database fault.
-                Effect.die(
-                  new SurfaceRepositoryInitialSessionRejected(
-                    input.worktreeId,
-                    input.initialSession?.sessionId ?? null,
-                    result.reason,
-                  ),
+        .transaction(
+          'create_single_pane_surface',
+          (db, abort: (error: SurfaceError | SurfaceRepositoryInitialSessionRejected) => never) => {
+            const worktree = db
+              .select()
+              .from(worktrees)
+              .where(eq(worktrees.id, input.worktreeId))
+              .get();
+            if (!worktree) return abort(worktreeMissing(input.worktreeId));
+            const rejection = input.initialSession
+              ? rejectInitialSession(db, input.worktreeId, input.initialSession)
+              : null;
+            // Checked before anything is inserted, and aborted rather than thrown, so a rejection leaves no surface,
+            // pane, layout, or focus residue behind and is never laundered into a `DatabaseError`.
+            if (rejection)
+              return abort(
+                initialSessionRejected(
+                  input.worktreeId,
+                  input.initialSession?.sessionId ?? null,
+                  rejection,
                 ),
+              );
+            const surface = insertEmptySurfaceRow(db, input);
+            const paneId = insertRootPaneRows(db, {
+              surfaceId: surface.surfaceId,
+              title: surface.title,
+              initialSession: input.initialSession,
+            });
+            focusSurfaceRows(db, input.worktreeId, surface.surfaceId, paneId);
+            return { ...surface, paneId, cwd: worktree.path };
+          },
+        )
+        .pipe(
+          // An integrity defect, never a failure a caller handles: see `InitialSessionRejectionReason`.
+          Effect.catchTag('SurfaceRepositoryInitialSessionRejected', (rejected) =>
+            Effect.die(rejected),
           ),
         ),
     createEmptySurface: (input) =>
-      database.transaction('create_empty_surface', (db) => {
+      database.transaction('create_empty_surface', (db, abort: (error: SurfaceError) => never) => {
         const worktree = db
           .select({ id: worktrees.id })
           .from(worktrees)
           .where(eq(worktrees.id, input.worktreeId))
           .get();
-        if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
+        if (!worktree) return abort(worktreeMissing(input.worktreeId));
         const surface = insertEmptySurfaceRow(db, input);
         focusSurfaceRows(db, input.worktreeId, surface.surfaceId, null);
         return surface;
       }),
     startSurfacePane: (input) =>
       database
-        .transaction('start_surface_pane', (db) => {
-          const surface = db
-            .select()
-            .from(worktreeSurfaces)
-            .where(eq(worktreeSurfaces.id, input.surfaceId))
-            .get();
-          if (!surface) return { status: 'surface_not_found' as const };
-          const existingPane = db
-            .select({ id: surfacePanes.id })
-            .from(surfacePanes)
-            .where(eq(surfacePanes.surfaceId, input.surfaceId))
-            .get();
-          if (existingPane || decodeSurfaceLayout(surface.layoutJson) !== null)
-            return { status: 'surface_not_empty' as const, worktreeId: surface.worktreeId };
-          const rejection = input.initialSession
-            ? rejectInitialSession(db, surface.worktreeId, input.initialSession)
-            : null;
-          if (rejection) return { status: 'rejected' as const, reason: rejection, surface };
-          const paneId = insertRootPaneRows(db, {
-            surfaceId: surface.id,
-            title: input.titleBase,
-            initialSession: input.initialSession,
-          });
-          focusSurfaceRows(db, surface.worktreeId, surface.id, paneId);
-          return {
-            status: 'started' as const,
-            worktreeId: surface.worktreeId,
-            surfaceId: surface.id,
-            paneId,
-            title: input.titleBase,
-          };
-        })
+        .transaction(
+          'start_surface_pane',
+          (
+            db,
+            abort: (error: SurfaceRepositoryInitialSessionRejected) => never,
+          ): StartSurfacePaneResult => {
+            const surface = db
+              .select()
+              .from(worktreeSurfaces)
+              .where(eq(worktreeSurfaces.id, input.surfaceId))
+              .get();
+            if (!surface) return { status: 'surface_not_found' };
+            const existingPane = db
+              .select({ id: surfacePanes.id })
+              .from(surfacePanes)
+              .where(eq(surfacePanes.surfaceId, input.surfaceId))
+              .get();
+            if (existingPane || decodeSurfaceLayout(surface.layoutJson) !== null)
+              return { status: 'surface_not_empty', worktreeId: surface.worktreeId };
+            const rejection = input.initialSession
+              ? rejectInitialSession(db, surface.worktreeId, input.initialSession)
+              : null;
+            // A defect for the same reason as `createSinglePaneSurface`'s.
+            if (rejection)
+              return abort(
+                initialSessionRejected(
+                  surface.worktreeId,
+                  input.initialSession?.sessionId ?? null,
+                  rejection,
+                ),
+              );
+            const paneId = insertRootPaneRows(db, {
+              surfaceId: surface.id,
+              title: input.titleBase,
+              initialSession: input.initialSession,
+            });
+            focusSurfaceRows(db, surface.worktreeId, surface.id, paneId);
+            return {
+              status: 'started',
+              worktreeId: surface.worktreeId,
+              surfaceId: surface.id,
+              paneId,
+              title: input.titleBase,
+            };
+          },
+        )
         .pipe(
-          Effect.flatMap(
-            (result): Effect.Effect<StartSurfacePaneResult> =>
-              result.status === 'rejected'
-                ? // A defect for the same reason as `createSinglePaneSurface`'s.
-                  Effect.die(
-                    new SurfaceRepositoryInitialSessionRejected(
-                      result.surface.worktreeId,
-                      input.initialSession?.sessionId ?? null,
-                      result.reason,
-                    ),
-                  )
-                : Effect.succeed(result),
+          // An integrity defect, never a failure a caller handles: see `InitialSessionRejectionReason`.
+          Effect.catchTag('SurfaceRepositoryInitialSessionRejected', (rejected) =>
+            Effect.die(rejected),
           ),
         ),
     splitSurfacePane: (input) =>
@@ -568,13 +587,14 @@ interface SurfaceRepositoryShape {
     readonly surfaceId: number;
     readonly paneId: number;
   }) => Effect.Effect<DeletePaneRowsOutput, DatabaseError>;
+  /** Refused with `worktree_not_found`, with nothing written, when the worktree is gone. */
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
-  ) => Effect.Effect<CreateSinglePaneSurfaceOutput, DatabaseError>;
-  /** A surface with no panes, focused with no active pane. */
+  ) => Effect.Effect<CreateSinglePaneSurfaceOutput, DatabaseError | SurfaceError>;
+  /** A surface with no panes, focused with no active pane. Refused like `createSinglePaneSurface`. */
   readonly createEmptySurface: (
     input: CreateEmptySurfaceInput,
-  ) => Effect.Effect<CreateEmptySurfaceOutput, DatabaseError>;
+  ) => Effect.Effect<CreateEmptySurfaceOutput, DatabaseError | SurfaceError>;
   /**
    * The first pane of an empty surface, focused. Refused, with nothing written, when the surface is
    * gone or already has panes.
@@ -694,33 +714,26 @@ function moveSurfaceOrderInTransaction(
   return { status: 'moved' };
 }
 
-function listAgentSessionsForPanes(
+const listAgentSessionsForPanes = Effect.fnUntraced(function* (
   artifacts: AgentSessionArtifacts['Service'],
   database: RuntimeDatabase['Service'],
   ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
   paneIds: readonly number[],
 ) {
-  return Effect.gen(function* () {
-    const rows = yield* database.use('list_agent_sessions_for_panes', (db) => {
-      if (paneIds.length === 0) return [];
-      return db
-        .select({ session: agentSessions, process: ptyColumns })
-        .from(surfacePanes)
-        .innerJoin(agentSessions, eq(surfacePanes.sessionId, agentSessions.id))
-        .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
-        .where(
-          and(
-            inArray(surfacePanes.id, [...paneIds]),
-            eq(surfacePanes.sessionKind, 'agent_session'),
-          ),
-        )
-        .all();
-    });
-    return yield* Effect.all(
-      rows.map((row) => agentSessionRow(artifacts, row.session, row.process)),
-    );
+  const rows = yield* database.use('list_agent_sessions_for_panes', (db) => {
+    if (paneIds.length === 0) return [];
+    return db
+      .select({ session: agentSessions, process: ptyColumns })
+      .from(surfacePanes)
+      .innerJoin(agentSessions, eq(surfacePanes.sessionId, agentSessions.id))
+      .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+      .where(
+        and(inArray(surfacePanes.id, [...paneIds]), eq(surfacePanes.sessionKind, 'agent_session')),
+      )
+      .all();
   });
-}
+  return yield* Effect.all(rows.map((row) => agentSessionRow(artifacts, row.session, row.process)));
+});
 
 function listSessionsBoundTo(
   artifacts: AgentSessionArtifacts['Service'],

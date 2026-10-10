@@ -1,133 +1,154 @@
-import { Cause, Context, Effect, Layer } from 'effect';
+import { Cause, Clock, Context, Duration, Effect, Layer } from 'effect';
 
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { diagnosticPhase } from '../../platform/diagnostics/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
+import { runPeriodically } from '../../platform/fibers/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 import { SessionLifecycle } from './lifecycle.js';
 
-const orphanGraceMs = 60_000;
-const orphanGcIntervalMs = 60_000;
-// Session folders no row references wait this long before collection. A folder
-// whose harness is still appending to a ledger stays young, so the grace only
-// has to absorb the mark/list race and a harness that outlives its row.
-const orphanAgentFolderGraceMs = 60 * 60_000;
-
-export interface SessionGcDependencies {
-  readonly agents: AgentSessionRepository['Service'];
-  readonly terminals: TerminalSessionRepository['Service'];
-  readonly lifecycle: SessionLifecycle['Service'];
-  readonly events: InternalEvents['Service'];
-  readonly artifacts: AgentSessionArtifacts['Service'];
+/**
+ * The session GC's timings. Production uses the defaults; tests provide other values with
+ * `Layer.succeed(SessionGcSettings, {...})`.
+ */
+export interface SessionGcTimings {
+  /** How often a collection pass runs. The first pass runs one interval after startup. */
+  readonly interval: Duration.Duration;
+  /** How long an unplaced session row must have been untouched before it is collected. */
+  readonly orphanGrace: Duration.Duration;
+  /**
+   * How old a session folder that no row references must be before it is collected. A folder whose harness is still
+   * appending to a ledger stays young, so the grace only has to absorb the mark/list race and a harness that outlives
+   * its row.
+   */
+  readonly orphanFolderGrace: Duration.Duration;
 }
 
+export const SessionGcSettings = Context.Reference<SessionGcTimings>(
+  'isagi/runtime/environment/SessionGcSettings',
+  {
+    defaultValue: () => ({
+      interval: Duration.minutes(1),
+      orphanGrace: Duration.minutes(1),
+      orphanFolderGrace: Duration.hours(1),
+    }),
+  },
+);
+
+/** The services one collection pass reads. */
+type SessionGcServices =
+  | AgentSessionArtifacts
+  | AgentSessionRepository
+  | InternalEvents
+  | SessionLifecycle
+  | TerminalSessionRepository;
+
 /**
- * Builds the row collector and the timer tick. `tick` is what the timer runs and never fails; it is
- * exported for tests only and deliberately not on the service tag, so no caller can trigger a
- * collection.
+ * Deletes agent and terminal session rows that no pane holds and that have been untouched for the orphan grace,
+ * unless a client is still attached to them, and announces each deletion.
  */
-export function makeSessionGc({
-  agents,
-  terminals,
-  lifecycle,
-  events,
-  artifacts,
-}: SessionGcDependencies) {
-  const collectOrphans = Effect.gen(function* () {
-    const cutoff = new Date(Date.now() - orphanGraceMs).toISOString();
-    const [orphanAgents, orphanTerminals] = yield* Effect.all([
-      agents.listOrphans({ updatedBefore: cutoff }),
-      terminals.listOrphans({ updatedBefore: cutoff }),
-    ]);
+const collectOrphanSessions = Effect.fn('SessionGc.collectOrphans')(function* () {
+  const agents = yield* AgentSessionRepository;
+  const terminals = yield* TerminalSessionRepository;
+  const lifecycle = yield* SessionLifecycle;
+  const events = yield* InternalEvents;
+  const { orphanGrace } = yield* SessionGcSettings;
+  const now = yield* Clock.currentTimeMillis;
+  const cutoff = new Date(now - Duration.toMillis(orphanGrace)).toISOString();
+  const [orphanAgents, orphanTerminals] = yield* Effect.all([
+    agents.listOrphans({ updatedBefore: cutoff }),
+    terminals.listOrphans({ updatedBefore: cutoff }),
+  ]);
 
-    for (const session of orphanAgents) {
-      const key = { kind: 'agent_session' as const, sessionId: session.id };
-      if (yield* lifecycle.hasActiveAttachment(key)) continue;
-      yield* lifecycle.supersedeAttachment(key).pipe(Effect.ignore);
-      yield* agents.delete(session.id);
-      yield* events.publish({
-        type: 'durable_session_deleted',
-        identity: {
-          kind: 'agent_session',
-          sessionId: session.id,
-          worktreeId: session.worktreeId,
-        },
-      });
-    }
+  for (const session of orphanAgents) {
+    const key = { kind: 'agent_session' as const, sessionId: session.id };
+    if (yield* lifecycle.hasActiveAttachment(key)) continue;
+    yield* lifecycle.supersedeAttachment(key);
+    yield* agents.delete(session.id);
+    yield* events.publish({
+      type: 'durable_session_deleted',
+      identity: { kind: 'agent_session', sessionId: session.id, worktreeId: session.worktreeId },
+    });
+  }
 
-    for (const session of orphanTerminals) {
-      const key = { kind: 'terminal_session' as const, sessionId: session.id };
-      if (yield* lifecycle.hasActiveAttachment(key)) continue;
-      yield* lifecycle.supersedeAttachment(key).pipe(Effect.ignore);
-      yield* terminals.delete(session.id);
-      yield* events.publish({
-        type: 'durable_session_deleted',
-        identity: {
-          kind: 'terminal_session',
-          sessionId: session.id,
-          worktreeId: session.worktreeId,
-        },
-      });
-    }
-  });
+  for (const session of orphanTerminals) {
+    const key = { kind: 'terminal_session' as const, sessionId: session.id };
+    if (yield* lifecycle.hasActiveAttachment(key)) continue;
+    yield* lifecycle.supersedeAttachment(key);
+    yield* terminals.delete(session.id);
+    yield* events.publish({
+      type: 'durable_session_deleted',
+      identity: {
+        kind: 'terminal_session',
+        sessionId: session.id,
+        worktreeId: session.worktreeId,
+      },
+    });
+  }
+});
 
-  // Deleting a session (directly or by cascade) removes its row only; its
-  // folder is reclaimed here. The mark is read before the folders are listed.
-  const collectOrphanAgentFolders = diagnosticPhase(
+/**
+ * Deleting a session (directly or by cascade) removes its row only; its folder is reclaimed here. The live ids are
+ * read before the folders are listed, so a session created in between keeps its folder through the folder grace.
+ */
+const collectOrphanAgentFolders = Effect.fn('SessionGc.collectOrphanAgentFolders')(function* () {
+  const agents = yield* AgentSessionRepository;
+  const artifacts = yield* AgentSessionArtifacts;
+  const { orphanFolderGrace } = yield* SessionGcSettings;
+  yield* diagnosticPhase(
     'session_gc.orphan_agent_folders',
     {},
     Effect.gen(function* () {
       const liveIds = yield* agents.listIds;
       yield* artifacts.collectOrphanFolders({
         liveIds,
-        minAgeMs: orphanAgentFolderGraceMs,
-        nowMs: Date.now(),
+        minAgeMs: Duration.toMillis(orphanFolderGrace),
+        nowMs: yield* Clock.currentTimeMillis,
       });
     }),
   );
-
-  const tick: Effect.Effect<void> = Effect.gen(function* () {
-    yield* collectOrphans.pipe(
-      Effect.catch((error) =>
-        Effect.sync(() => console.warn('[runtime] orphan session GC failed', error)),
-      ),
-    );
-    // catchCause, not catch: a defect here (such as a rejected promise)
-    // must be logged and leave the next tick running.
-    yield* collectOrphanAgentFolders.pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() =>
-          console.warn('[runtime] orphan agent folder GC failed', Cause.pretty(cause)),
-        ),
-      ),
-    );
-  });
-
-  return { collectOrphans, tick };
-}
-
-const make = Effect.gen(function* () {
-  const gc = makeSessionGc({
-    agents: yield* AgentSessionRepository,
-    terminals: yield* TerminalSessionRepository,
-    lifecycle: yield* SessionLifecycle,
-    events: yield* InternalEvents,
-    artifacts: yield* AgentSessionArtifacts,
-  });
-  const service = SessionGc.of({ collectOrphans: gc.collectOrphans });
-
-  const timer = setInterval(() => {
-    void Effect.runPromise(gc.tick);
-  }, orphanGcIntervalMs);
-  timer.unref();
-
-  return yield* Effect.acquireRelease(Effect.succeed(service), () =>
-    Effect.sync(() => clearInterval(timer)),
-  );
 });
 
+/**
+ * One collection pass, the tick the session GC loop runs: orphan rows, then orphan agent folders. The phases fail
+ * independently: each failure is logged as a `Warning` and the other phase still runs, and the loop runs the next pass
+ * one interval later. The folder phase also survives defects (such as a rejected promise inside the collector).
+ *
+ * Exported for this module's tests only, not on the service and not from the module's `index.ts`: no caller can
+ * trigger a collection.
+ */
+export const collectSessionGarbage: Effect.Effect<void, never, SessionGcServices> = Effect.gen(
+  function* () {
+    yield* collectOrphanSessions().pipe(
+      Effect.catch((error) => Effect.logWarning('Orphan session GC failed', Cause.fail(error))),
+    );
+    yield* collectOrphanAgentFolders().pipe(
+      // An interruption is not a failure of the phase: it stops the pass.
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning('Orphan agent folder GC failed', cause),
+      ),
+    );
+  },
+);
+
+const make = Effect.gen(function* () {
+  const services = yield* Effect.context<SessionGcServices>();
+  const { interval } = yield* SessionGcSettings;
+  // Owned by the layer scope: the loop is interrupted when the runtime shuts down.
+  yield* runPeriodically('Session GC', interval, collectSessionGarbage);
+  return SessionGc.of({
+    collectOrphans: collectOrphanSessions().pipe(Effect.provideContext(services)),
+  });
+});
+
+/**
+ * Collects durable sessions nothing holds any more: unplaced, idle session rows every interval, and the agent session
+ * folders whose rows are gone. The loop lives as long as the layer.
+ */
 export class SessionGc extends Context.Service<
   SessionGc,
   {

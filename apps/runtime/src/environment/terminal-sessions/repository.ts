@@ -2,8 +2,8 @@ import { and, eq, isNull, lt } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
-import { ptyProcessRow } from '../../pty-processes/index.js';
 import { ptyProcesses } from '../../pty-processes/tables.js';
+import { terminalSessionRow } from '../sessions/row-mappers.js';
 import type { TerminalSessionRow } from '../sessions/types.js';
 import { surfacePanes, terminalSessions } from '../tables.js';
 
@@ -104,33 +104,4 @@ export class TerminalSessionRepository extends Context.Service<
   }
 >()('isagi/runtime/environment/TerminalSessionRepository') {
   static readonly layer = Layer.effect(TerminalSessionRepository, make);
-}
-
-function terminalSessionRow(
-  row: typeof terminalSessions.$inferSelect,
-  process: typeof ptyProcesses.$inferSelect | null,
-): TerminalSessionRow {
-  return {
-    id: row.id,
-    worktreeId: row.worktreeId,
-    cwd: row.cwd,
-    shellCommand: row.shellCommand,
-    shellArgs: decodeArgs(row.shellArgsJson),
-    shellArgsJson: row.shellArgsJson,
-    activePtyProcessId: row.activePtyProcessId,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    activePtyProcess: process ? ptyProcessRow(process) : null,
-  };
-}
-
-function decodeArgs(json: string) {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : [];
-  } catch {
-    return [];
-  }
 }

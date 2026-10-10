@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { websocketError } from '../sessions/attach-route.js';
-import { toSurfaceApiError } from '../surfaces/api.js';
+import { sessionLaunchRejection } from '../surfaces/api.js';
 
 test('launch blocks retain stable reasons and diagnostics across HTTP and PTY websocket errors', () => {
   const blocked = new HarnessLaunchBlocked({
@@ -11,15 +11,11 @@ test('launch blocks retain stable reasons and diagnostics across HTTP and PTY we
     reason: 'harness_probe_failed',
     diagnostic: 'probe timed out',
   });
-  const api = toSurfaceApiError(blocked, {
-    endpointId: 'surfaces.createPaneSession',
-    requestId: 'request-1',
-  });
-  assert.deepEqual(api, {
+  // The route boundary adds the request id.
+  assert.deepEqual(sessionLaunchRejection(blocked), {
     code: 'session_launch_rejected',
     status: 400,
     message: 'Harness process creation is blocked: harness_probe_failed.',
-    requestId: 'request-1',
     data: { reason: 'harness_probe_failed', diagnostic: 'probe timed out' },
   });
   assert.deepEqual(websocketError(blocked), {

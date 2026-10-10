@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Logger, References } from 'effect';
 
 import { EditorContextService } from '../../editor/index.js';
 import { AgentSessionArtifacts, HarnessAdapterRegistry } from '../../harnesses/index.js';
@@ -42,7 +42,9 @@ export const paneBoundRestoreLayer = Layer.effectDiscard(
     const repository = yield* SurfaceRepository;
     const agentSessions = yield* AgentSessionService;
     const terminalSessions = yield* TerminalSessionService;
-    yield* restorePaneBoundSessions({ repository, agentSessions, terminalSessions });
+    yield* restorePaneBoundSessions({ repository, agentSessions, terminalSessions }).pipe(
+      withStartupLogCapture,
+    );
   }),
 );
 
@@ -311,21 +313,46 @@ const dyingEditorContextService: EditorContextService['Service'] = {
   diagnostics: () => Effect.die('editor diagnostics is not used by session tests'),
 };
 
-/** Startup restore reports through `console`; these tests read what it reported. */
-export async function captureStartupLogs(run: () => Promise<void>) {
-  const info = console.info;
-  const warn = console.warn;
-  const captured = {
-    info: [] as unknown[][],
-    warn: [] as unknown[][],
-  };
-  console.info = (...args: unknown[]) => captured.info.push(args);
-  console.warn = (...args: unknown[]) => captured.warn.push(args);
+/**
+ * What startup restore reported, by level. Each entry is `[message, data]`, where `data` is the log line's annotations
+ * without the `component` annotation every restore line carries.
+ */
+export interface StartupLogs {
+  readonly info: unknown[][];
+  readonly warn: unknown[][];
+}
+
+let startupLogSink: StartupLogs | undefined;
+
+const startupLogCaptureLayer = (sink: StartupLogs) =>
+  Logger.layer([
+    Logger.make(({ logLevel, message, fiber }) => {
+      const { component: _component, ...data } = fiber.getRef(References.CurrentLogAnnotations);
+      const text = (Array.isArray(message) ? message : [message]).map(String).join(' ');
+      if (logLevel === 'Info') sink.info.push([text, data]);
+      if (logLevel === 'Warn') sink.warn.push([text, data]);
+    }),
+  ]);
+
+/** Routes the restore's log lines to the active `captureStartupLogs` call, if there is one. */
+function withStartupLogCapture<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return Effect.suspend(() =>
+    startupLogSink ? effect.pipe(Effect.provide(startupLogCaptureLayer(startupLogSink))) : effect,
+  );
+}
+
+/**
+ * Startup restore reports through the Effect logger; these tests read what it reported. Captures the lines logged by
+ * every `paneBoundRestoreLayer` (and so `realRestoreLayer`) built while `run` is pending. Captured lines are not
+ * printed.
+ */
+export async function captureStartupLogs(run: () => Promise<void>): Promise<StartupLogs> {
+  const captured: StartupLogs = { info: [], warn: [] };
+  startupLogSink = captured;
   try {
     await run();
     return captured;
   } finally {
-    console.info = info;
-    console.warn = warn;
+    startupLogSink = undefined;
   }
 }

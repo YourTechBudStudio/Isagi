@@ -74,44 +74,35 @@ const make = Effect.gen(function* () {
         tokensBySession.set(keyId, sessionTokens);
         return record;
       }),
-    consumeAttachToken: (input) =>
-      Effect.gen(function* () {
-        if (!input.token) {
-          return yield* Effect.fail(
-            new SessionLifecycleError({
-              code: 'attach_token_missing',
-              message: 'Attach token is required.',
-            }),
-          );
-        }
-        const record = tokens.get(input.token);
-        if (!record) {
-          return yield* Effect.fail(
-            new SessionLifecycleError({
-              code: 'attach_token_invalid',
-              message: 'Attach token was not recognized.',
-            }),
-          );
-        }
-        deleteToken(tokens, tokensBySession, record);
-        if (!sameSessionKey(record.key, input.key)) {
-          return yield* Effect.fail(
-            new SessionLifecycleError({
-              code: 'attach_token_session_mismatch',
-              message: 'Attach token does not match this session.',
-            }),
-          );
-        }
-        if (record.expiresAt <= Date.now()) {
-          return yield* Effect.fail(
-            new SessionLifecycleError({
-              code: 'attach_token_expired',
-              message: 'Attach token expired.',
-            }),
-          );
-        }
-        return record;
-      }),
+    consumeAttachToken: Effect.fn('SessionLifecycle.consumeAttachToken')(function* (input) {
+      if (!input.token) {
+        return yield* new SessionLifecycleError({
+          code: 'attach_token_missing',
+          message: 'Attach token is required.',
+        });
+      }
+      const record = tokens.get(input.token);
+      if (!record) {
+        return yield* new SessionLifecycleError({
+          code: 'attach_token_invalid',
+          message: 'Attach token was not recognized.',
+        });
+      }
+      deleteToken(tokens, tokensBySession, record);
+      if (!sameSessionKey(record.key, input.key)) {
+        return yield* new SessionLifecycleError({
+          code: 'attach_token_session_mismatch',
+          message: 'Attach token does not match this session.',
+        });
+      }
+      if (record.expiresAt <= Date.now()) {
+        return yield* new SessionLifecycleError({
+          code: 'attach_token_expired',
+          message: 'Attach token expired.',
+        });
+      }
+      return record;
+    }),
     revokeAttachTokens: (key) =>
       Effect.sync(() => {
         revokeTokensForKey(tokens, tokensBySession, key);
@@ -126,15 +117,14 @@ const make = Effect.gen(function* () {
         };
       }),
     hasActiveAttachment: (key) => Effect.sync(() => activeAttachments.has(sessionKeyId(key))),
-    supersedeAttachment: (key) =>
-      Effect.gen(function* () {
-        yield* service.revokeAttachTokens(key);
-        const keyId = sessionKeyId(key);
-        const active = activeAttachments.get(keyId);
-        if (!active) return;
-        activeAttachments.delete(keyId);
-        yield* active.handle.moved;
-      }),
+    supersedeAttachment: Effect.fn('SessionLifecycle.supersedeAttachment')(function* (key) {
+      revokeTokensForKey(tokens, tokensBySession, key);
+      const keyId = sessionKeyId(key);
+      const active = activeAttachments.get(keyId);
+      if (!active) return;
+      activeAttachments.delete(keyId);
+      yield* active.handle.moved;
+    }),
   });
 
   return yield* Effect.acquireRelease(Effect.succeed(service), () =>

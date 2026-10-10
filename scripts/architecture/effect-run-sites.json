@@ -4,7 +4,6 @@
   "apps/desktop/src/main/runtime.ts": "Desktop runtime-process wiring (transitional): RuntimeLifecycle takes a Promise health check until desktop services become layers.",
   "apps/desktop/src/main/shutdown.ts": "Electron quit boundary (transitional): the quit handler runs the desktop-services shutdown effect until desktop composition owns shutdown.",
   "apps/desktop/src/main/updater/desktop-update-ipc.ts": "IPC boundary: each update intent from the renderer runs one updater effect.",
-  "apps/runtime/src/environment/sessions/gc.ts": "Transitional deep run: setInterval orphan-session GC tick; phase 3 replaces it with a scheduled scoped fiber.",
   "apps/runtime/src/platform/http/route-runtime.ts": "HTTP/WebSocket boundary: the one place a Fastify request or socket callback becomes a fiber on the server request runtime (RouteRuntime.runPromise in runRouteRequest; RouteRuntime.runFork for the post-200 content-stream failure log).",
   "apps/runtime/src/pty-processes/stream-route.ts": "PTY WebSocket boundary: forks one scoped connection fiber per socket on the RouteRuntime.",
   "apps/runtime/src/runtime-events/api.ts": "Runtime-events WebSocket boundary: forks one scoped connection fiber per socket on the RouteRuntime.",

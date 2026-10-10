@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, Logger } from 'effect';
+import { Effect, Layer } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
+import { makeLogCapture } from '@isagi/testing';
 
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
@@ -87,8 +88,7 @@ async function runProjection(input: {
   readonly events: number;
 }) {
   const published: RuntimeEvent[] = [];
-  const logged: string[] = [];
-  const capture = Logger.layer([Logger.make(({ message }) => void logged.push(String(message)))]);
+  const logs = makeLogCapture();
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -102,10 +102,10 @@ async function runProjection(input: {
         }
         // The subscriber is a forked loop; give it turns to drain.
         yield* Effect.sleep('25 millis');
-      }).pipe(Effect.provide(harness({ ...input, published })), Effect.provide(capture)),
+      }).pipe(Effect.provide(harness({ ...input, published })), Effect.provide(logs.layer)),
     ),
   );
-  return { published, logged };
+  return { published, logged: logs.lines };
 }
 
 for (const kind of ['agent_session', 'terminal_session'] as const) {
@@ -130,8 +130,8 @@ for (const kind of ['agent_session', 'terminal_session'] as const) {
     });
     // The second event proves the subscriber survived the failed read.
     assert.equal(logged.length, 1);
-    assert.match(logged[0] ?? '', new RegExp(`lookup=${kind}_row`));
-    assert.match(logged[0] ?? '', /entityId=7/);
+    assert.equal(logged[0]?.annotations.lookup, `${kind}_row`);
+    assert.equal(logged[0]?.annotations.entityId, 7);
   });
 
   test(`a failed ${kind} placement lookup removes no attention`, async () => {
@@ -146,7 +146,7 @@ for (const kind of ['agent_session', 'terminal_session'] as const) {
     // removal here would tell the user a live session stopped needing them.
     assert.deepEqual(published, []);
     assert.equal(logged.length, 1);
-    assert.match(logged[0] ?? '', new RegExp(`lookup=${kind}_placement`));
-    assert.match(logged[0] ?? '', /cause=Database operation select failed/);
+    assert.equal(logged[0]?.annotations.lookup, `${kind}_placement`);
+    assert.match(String(logged[0]?.annotations.cause), /Database operation select failed/);
   });
 }

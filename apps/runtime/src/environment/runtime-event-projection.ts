@@ -8,6 +8,7 @@ import {
   nextRuntimeEventEnvelope,
   RuntimeEvents,
 } from '../platform/events/index.js';
+import type { DatabaseError } from '../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
 import { AgentSessionRepository } from './agent-sessions/repository.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './sessions/status.js';
@@ -157,7 +158,7 @@ type LookupOutcome<A> =
   | { readonly outcome: 'failed' };
 
 function resolveLookup<A>(
-  lookup: Effect.Effect<A | null, unknown>,
+  lookup: Effect.Effect<A | null, DatabaseError>,
   context: { readonly lookup: string; readonly entityId: number },
 ): Effect.Effect<LookupOutcome<A>> {
   return lookup.pipe(
@@ -165,94 +166,94 @@ function resolveLookup<A>(
       (value): LookupOutcome<A> =>
         value === null ? { outcome: 'absent' } : { outcome: 'found', value },
     ),
-    Effect.catch((error) =>
-      Effect.logWarning(
-        `[runtime] runtime event projection lookup failed lookup=${context.lookup} ` +
-          `entityId=${context.entityId} cause=${describeOperationalCause(error)}`,
-      ).pipe(Effect.as<LookupOutcome<A>>({ outcome: 'failed' })),
+    Effect.catchTag('DatabaseError', (error) =>
+      Effect.logWarning('Runtime event projection lookup failed').pipe(
+        Effect.annotateLogs({
+          lookup: context.lookup,
+          entityId: context.entityId,
+          cause: describeOperationalCause(error),
+        }),
+        Effect.as<LookupOutcome<A>>({ outcome: 'failed' }),
+      ),
     ),
   );
 }
 
-function publishAgentSessionChanged(
+const publishAgentSessionChanged = Effect.fnUntraced(function* (
   publicBus: RuntimeEvents['Service'],
   surfaces: SurfaceRepository['Service'],
-  attention: import('./agent-sessions/attention.js').AgentSessionAttentionProjection['Service'],
+  attention: AgentSessionAttentionProjection['Service'],
   agent: AgentSessionRow,
 ) {
-  return Effect.gen(function* () {
-    const placement = yield* resolveLookup(
-      surfaces.findPaneForSession({ sessionKind: 'agent_session', sessionId: agent.id }),
-      { lookup: 'agent_session_placement', entityId: agent.id },
-    );
-    if (placement.outcome === 'failed') return;
-    if (placement.outcome === 'absent') {
-      yield* publishAttentionSourceRemoved(publicBus, { kind: 'agent_session', id: agent.id });
-      return;
-    }
-    const state = deriveAgentSessionState(agent);
-    const attentionState = yield* attention.agentSessionAttention(agent);
-    yield* publicBus.publish({
-      ...nextRuntimeEventEnvelope(),
-      type: 'agent_session_changed',
-      payload: {
-        agentSessionId: agent.id,
-        worktreeId: placement.value.worktreeId,
-        surfaceId: placement.value.surfaceId,
-        paneId: placement.value.paneId,
-        status: state.status,
-        statusReason: state.statusReason,
-        diagnosticCode: state.diagnosticCode,
-      },
-    });
-    yield* publishAttentionSourceChanged(publicBus, {
-      ...placement.value,
-      source: { kind: 'agent_session', id: agent.id },
-      attention: attentionState,
-    });
+  const placement = yield* resolveLookup(
+    surfaces.findPaneForSession({ sessionKind: 'agent_session', sessionId: agent.id }),
+    { lookup: 'agent_session_placement', entityId: agent.id },
+  );
+  if (placement.outcome === 'failed') return;
+  if (placement.outcome === 'absent') {
+    yield* publishAttentionSourceRemoved(publicBus, { kind: 'agent_session', id: agent.id });
+    return;
+  }
+  const state = deriveAgentSessionState(agent);
+  const attentionState = yield* attention.agentSessionAttention(agent);
+  yield* publicBus.publish({
+    ...nextRuntimeEventEnvelope(),
+    type: 'agent_session_changed',
+    payload: {
+      agentSessionId: agent.id,
+      worktreeId: placement.value.worktreeId,
+      surfaceId: placement.value.surfaceId,
+      paneId: placement.value.paneId,
+      status: state.status,
+      statusReason: state.statusReason,
+      diagnosticCode: state.diagnosticCode,
+    },
   });
-}
+  yield* publishAttentionSourceChanged(publicBus, {
+    ...placement.value,
+    source: { kind: 'agent_session', id: agent.id },
+    attention: attentionState,
+  });
+});
 
-function publishTerminalSessionChanged(
+const publishTerminalSessionChanged = Effect.fnUntraced(function* (
   publicBus: RuntimeEvents['Service'],
   surfaces: SurfaceRepository['Service'],
-  attention: import('./agent-sessions/attention.js').AgentSessionAttentionProjection['Service'],
+  attention: AgentSessionAttentionProjection['Service'],
   terminal: TerminalSessionRow,
 ) {
-  return Effect.gen(function* () {
-    const placement = yield* resolveLookup(
-      surfaces.findPaneForSession({ sessionKind: 'terminal_session', sessionId: terminal.id }),
-      { lookup: 'terminal_session_placement', entityId: terminal.id },
-    );
-    if (placement.outcome === 'failed') return;
-    if (placement.outcome === 'absent') {
-      yield* publishAttentionSourceRemoved(publicBus, {
-        kind: 'terminal_session',
-        id: terminal.id,
-      });
-      return;
-    }
-    const state = deriveTerminalSessionState(terminal);
-    yield* publicBus.publish({
-      ...nextRuntimeEventEnvelope(),
-      type: 'terminal_session_changed',
-      payload: {
-        terminalSessionId: terminal.id,
-        worktreeId: placement.value.worktreeId,
-        surfaceId: placement.value.surfaceId,
-        paneId: placement.value.paneId,
-        status: state.status,
-        statusReason: state.statusReason,
-        diagnosticCode: state.diagnosticCode,
-      },
+  const placement = yield* resolveLookup(
+    surfaces.findPaneForSession({ sessionKind: 'terminal_session', sessionId: terminal.id }),
+    { lookup: 'terminal_session_placement', entityId: terminal.id },
+  );
+  if (placement.outcome === 'failed') return;
+  if (placement.outcome === 'absent') {
+    yield* publishAttentionSourceRemoved(publicBus, {
+      kind: 'terminal_session',
+      id: terminal.id,
     });
-    yield* publishAttentionSourceChanged(publicBus, {
-      ...placement.value,
-      source: { kind: 'terminal_session', id: terminal.id },
-      attention: attention.terminalSessionAttention(terminal),
-    });
+    return;
+  }
+  const state = deriveTerminalSessionState(terminal);
+  yield* publicBus.publish({
+    ...nextRuntimeEventEnvelope(),
+    type: 'terminal_session_changed',
+    payload: {
+      terminalSessionId: terminal.id,
+      worktreeId: placement.value.worktreeId,
+      surfaceId: placement.value.surfaceId,
+      paneId: placement.value.paneId,
+      status: state.status,
+      statusReason: state.statusReason,
+      diagnosticCode: state.diagnosticCode,
+    },
   });
-}
+  yield* publishAttentionSourceChanged(publicBus, {
+    ...placement.value,
+    source: { kind: 'terminal_session', id: terminal.id },
+    attention: attention.terminalSessionAttention(terminal),
+  });
+});
 
 /**
  * The internal-to-public bridge for editors, deliberately shaped like the two
@@ -269,27 +270,25 @@ function publishTerminalSessionChanged(
  * surface deletion removes placement and then publishes `surface_changed`, which
  * is what the client acts on.
  */
-function publishEditorContextChanged(
+const publishEditorContextChanged = Effect.fnUntraced(function* (
   publicBus: RuntimeEvents['Service'],
   surfaces: SurfaceRepository['Service'],
   editorContextId: number,
 ) {
-  return Effect.gen(function* () {
-    const placement = yield* resolveLookup(
-      surfaces.findPaneForSession({ sessionKind: 'editor_context', sessionId: editorContextId }),
-      { lookup: 'editor_context_placement', entityId: editorContextId },
-    );
-    // Editors publish no attention source, so absence and failure agree here on
-    // what to emit — nothing. They still differ in what they mean, which is why
-    // only the failed one left a breadcrumb.
-    if (placement.outcome !== 'found') return;
-    yield* publicBus.publish({
-      ...nextRuntimeEventEnvelope(),
-      type: 'editor_context_changed',
-      payload: { editorContextId, ...placement.value },
-    });
+  const placement = yield* resolveLookup(
+    surfaces.findPaneForSession({ sessionKind: 'editor_context', sessionId: editorContextId }),
+    { lookup: 'editor_context_placement', entityId: editorContextId },
+  );
+  // Editors publish no attention source, so absence and failure agree here on
+  // what to emit — nothing. They still differ in what they mean, which is why
+  // only the failed one left a breadcrumb.
+  if (placement.outcome !== 'found') return;
+  yield* publicBus.publish({
+    ...nextRuntimeEventEnvelope(),
+    type: 'editor_context_changed',
+    payload: { editorContextId, ...placement.value },
   });
-}
+});
 
 function publishAttentionSourceChanged(
   publicBus: RuntimeEvents['Service'],

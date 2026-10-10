@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Cause, Context, Effect, Layer } from 'effect';
 
 import type {
   CreateSurfaceOutput,
@@ -32,20 +32,21 @@ import {
   type EditorReadinessObservation,
   type EditorUnavailable,
 } from '../../editor/index.js';
-import type { HarnessLaunchBlocked } from '../../harnesses/index.js';
-import { displayNameForHarness, HarnessAdapterError } from '../../harnesses/index.js';
+import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';
+import { displayNameForHarness } from '../../harnesses/index.js';
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock, type EntityLockHeld } from '../../platform/locks/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import type { PtyLaunchError } from '../../pty-processes/index.js';
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
+import { AgentSessionService } from '../agent-sessions/service.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { restorePaneBoundSessions } from '../sessions/restore.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from '../sessions/status.js';
 import { activePtyProcessIdsForSessions } from '../sessions/teardown.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
-import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/service.js';
+import { TerminalSessionService } from '../terminal-sessions/service.js';
 import { planSurfacePaneDelete, type SurfacePaneDeletePlan } from './delete-plan.js';
 import { SurfaceError, SurfaceOrderError } from './errors.js';
 import { decodeSurfaceLayout, setNodeWeights } from './layout.js';
@@ -66,10 +67,11 @@ import type {
 export type SurfaceServiceError = DatabaseError | SurfaceError;
 
 /**
- * Extends the shared union for the reorder method only, so no other surface
- * operation can be typed to fail with a rejection its contract cannot encode.
+ * The reorder method's own union: its refusals are `SurfaceOrderError`s, never `SurfaceError`s, so no other surface
+ * operation can be typed to fail with a rejection the reorder contract cannot encode, and the reorder route maps
+ * exactly the one refusal its contract declares.
  */
-export type MoveSurfaceOrderServiceError = SurfaceServiceError | SurfaceOrderError;
+export type MoveSurfaceOrderServiceError = DatabaseError | SurfaceOrderError;
 type PaneSessionClaimError =
   | SurfaceServiceError
   | PtyLaunchError
@@ -88,31 +90,39 @@ const make = Effect.gen(function* () {
   // `EditorContextService` are built on, so placement and the editor's own
   // lifecycle genuinely serialize against each other.
   const entityLock = yield* EntityLock;
+  const sessionDeps: PaneSessionDependencies = {
+    repository,
+    agents,
+    terminals,
+    lifecycle,
+    eventBus,
+  };
 
-  const deleteSurfacePane: SurfaceService['Service']['deleteSurfacePane'] = (input) =>
-    Effect.gen(function* () {
-      const target = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
-      if (!target) return emptyPaneDeleteOutput;
-      if (!target.panes.some(({ pane }) => pane.id === input.paneId)) return emptyPaneDeleteOutput;
-      const plan = planSurfacePaneDelete(target, input.paneId);
-      const deps = { repository, pty, eventBus, editors, entityLock };
-      // The lock decision inspects the pane the plan will actually delete,
-      // not whether the surface happens to hold an editor. Deleting an
-      // unrelated terminal pane from a surface that also holds one keeps the
-      // fast path; only deleting the editor pane itself needs the lock.
-      if (editorContextIdsOfPanes(panesForPlan(target, plan)).length === 0)
-        return yield* deletePlannedPanes(deps, target, plan, input.paneId, null);
-      return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
-        Effect.gen(function* () {
-          const fresh = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
-          if (!fresh) return emptyPaneDeleteOutput;
-          if (!fresh.panes.some(({ pane }) => pane.id === input.paneId))
-            return emptyPaneDeleteOutput;
-          const freshPlan = planSurfacePaneDelete(fresh, input.paneId);
-          return yield* deletePlannedPanes(deps, fresh, freshPlan, input.paneId, held);
-        }),
-      );
-    });
+  const deleteSurfacePane = Effect.fn('SurfaceService.deleteSurfacePane')(function* (input: {
+    readonly surfaceId: number;
+    readonly paneId: number;
+  }) {
+    const target = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
+    if (!target) return emptyPaneDeleteOutput;
+    if (!target.panes.some(({ pane }) => pane.id === input.paneId)) return emptyPaneDeleteOutput;
+    const plan = planSurfacePaneDelete(target, input.paneId);
+    const deps = { repository, pty, eventBus, editors, entityLock };
+    // The lock decision inspects the pane the plan will actually delete,
+    // not whether the surface happens to hold an editor. Deleting an
+    // unrelated terminal pane from a surface that also holds one keeps the
+    // fast path; only deleting the editor pane itself needs the lock.
+    if (editorContextIdsOfPanes(panesForPlan(target, plan)).length === 0)
+      return yield* deletePlannedPanes(deps, target, plan, input.paneId, null);
+    return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
+      Effect.gen(function* () {
+        const fresh = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
+        if (!fresh) return emptyPaneDeleteOutput;
+        if (!fresh.panes.some(({ pane }) => pane.id === input.paneId)) return emptyPaneDeleteOutput;
+        const freshPlan = planSurfacePaneDelete(fresh, input.paneId);
+        return yield* deletePlannedPanes(deps, fresh, freshPlan, input.paneId, held);
+      }),
+    );
+  });
 
   /**
    * Compensation for a first pane whose session never started. Best effort:
@@ -121,18 +131,21 @@ const make = Effect.gen(function* () {
    */
   const removeStartedPane = (input: { readonly surfaceId: number; readonly paneId: number }) =>
     deleteSurfacePane(input).pipe(
+      // A compensation guard: whatever this cleanup ends with, the caller's own failure is the one reported.
       Effect.catchCause((cause) =>
-        Effect.sync(() =>
-          console.warn('[runtime] Could not remove a first pane whose session failed to start', {
+        Effect.logWarning('Could not remove a first pane whose session failed to start').pipe(
+          Effect.annotateLogs({
             ...input,
-            cause,
+            cause: describeOperationalCause(Cause.squash(cause)),
           }),
         ),
       ),
     );
 
   return SurfaceService.of({
-    findSurface: (surfaceId) => repository.findSurface(surfaceId),
+    findSurface: Effect.fn('SurfaceService.findSurface')(function* (surfaceId) {
+      return yield* repository.findSurface(surfaceId);
+    }),
     listWorkspaceSurfaceMetadata: repository.listWorkspaceSurfaceMetadata,
     listEnvironmentFocusStates: repository.listEnvironmentFocusStates,
     listDurableSessions: repository.listDurableSessions,
@@ -141,341 +154,275 @@ const make = Effect.gen(function* () {
       agentSessions: agents,
       terminalSessions: terminals,
     }),
-    getSurfaceDetail: (surfaceId) =>
-      Effect.gen(function* () {
-        const surface = yield* repository.findSurface(surfaceId);
-        if (!surface)
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'surface_not_found',
-              message: `Surface ${surfaceId} was not found.`,
-              surfaceId,
-            }),
-          );
-        const panes = yield* repository.listPanesForSurface(surface.id);
-        const paneIds = panes.map((pane) => pane.id);
-        const [agentSessions, terminalSessions, editorContexts] = yield* Effect.all([
-          repository.listAgentSessionsForPanes(paneIds),
-          repository.listTerminalSessionsForPanes(paneIds),
-          repository.listEditorContextsForPanes(paneIds),
-        ]);
-        // Readiness is the editor service's in-memory half of the projection:
-        // it belongs to the current incarnation and is deliberately not
-        // persisted, so it is composed here rather than joined in SQL.
-        const readiness = yield* editors.readinessFor(
-          editorContexts.flatMap((row) => (row.activePtyProcessId ? [row.activePtyProcessId] : [])),
-        );
-        const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
-        const activePaneId = activePaneForSurface(surface.id, panes, focus);
-        return {
-          id: surface.id,
-          worktreeId: surface.worktreeId,
-          title: surface.title,
-          layout: decodeSurfaceLayout(surface.layoutJson),
-          activePaneId,
-          panes: panes.map((pane) => ({
-            id: pane.id,
-            surfaceId: pane.surfaceId,
-            title: pane.title,
-            sortOrder: pane.sortOrder,
-            session: sessionForPane(
-              { agentSessions, terminalSessions, editorContexts, readiness },
-              pane,
-            ),
-          })),
-        } satisfies SurfaceDetail;
-      }),
-    openEditor: (input) => openEditor({ repository, editors, entityLock, eventBus }, input),
-    renameSurface: (input) =>
-      Effect.gen(function* () {
-        const title = yield* validateSurfaceTitle(input.title);
-        const surface = yield* repository.findSurface(input.surfaceId);
-        if (!surface)
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'surface_not_found',
-              message: `Surface ${input.surfaceId} was not found.`,
-              surfaceId: input.surfaceId,
-            }),
-          );
-        const output = yield* repository.renameSurface({ surfaceId: input.surfaceId, title });
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: surface.worktreeId,
-          surfaceId: input.surfaceId,
-          change: 'renamed',
+    getSurfaceDetail: Effect.fn('SurfaceService.getSurfaceDetail')(function* (surfaceId) {
+      const surface = yield* repository.findSurface(surfaceId);
+      if (!surface)
+        return yield* new SurfaceError({
+          code: 'surface_not_found',
+          message: `Surface ${surfaceId} was not found.`,
+          surfaceId,
         });
-        return output;
-      }),
-    deleteSurface: (surfaceId) =>
-      Effect.gen(function* () {
-        const target = yield* loadDeleteTarget(repository, surfaceId);
-        const deps = { repository, pty, eventBus, editors, entityLock };
-        // Deleting this surface removes every one of its panes, so the whole
-        // capture is what the lock decision inspects.
-        if (editorContextIdsOfPanes(target.panes.map(({ pane }) => pane)).length === 0)
-          return yield* deleteWholeSurface(deps, target, null);
-        return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
-          Effect.gen(function* () {
-            const fresh = yield* loadDeleteTargetOrNull(repository, surfaceId);
-            if (!fresh) return emptyDeleteOutput;
-            return yield* deleteWholeSurface(deps, fresh, held);
-          }),
-        );
-      }),
-    deleteSurfacePane,
-    createSurface: (input) =>
-      Effect.gen(function* () {
-        const surface = yield* createSinglePaneSurface(repository, {
-          worktreeId: input.worktreeId,
-          titleBase: titleBaseForInitialPane(input.initialPane),
-        });
-        yield* createPaneSession(
-          repository,
-          agents,
-          terminals,
-          lifecycle,
-          eventBus,
-          input.worktreeId,
-          paneSessionCreateInput(surface.paneId, input.initialPane),
-        );
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: input.worktreeId,
-          surfaceId: surface.surfaceId,
-          change: 'created',
-        });
-        return {
-          worktreeId: input.worktreeId,
-          surfaceId: surface.surfaceId,
-          paneId: surface.paneId,
-          title: surface.title,
-        } satisfies CreateSurfaceOutput;
-      }),
-    splitPane: (input) =>
-      Effect.gen(function* () {
-        const target = yield* loadPaneSessionTarget(
-          repository,
-          input.worktreeId,
-          input.split.paneId,
-        );
-        const split = yield* repository.splitSurfacePane({
-          surfaceId: target.surface.id,
-          sourcePaneId: target.pane.id,
-          titleBase: titleBaseForInitialPane(input.split.newPane),
-          direction: input.split.direction,
-        });
-        if (!split)
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'pane_not_found',
-              message: `Pane ${input.split.paneId} was not found in the surface layout.`,
-              worktreeId: input.worktreeId,
-              surfaceId: target.surface.id,
-              paneId: input.split.paneId,
-            }),
-          );
-        yield* createPaneSession(
-          repository,
-          agents,
-          terminals,
-          lifecycle,
-          eventBus,
-          input.worktreeId,
-          paneSessionCreateInput(split.paneId, input.split.newPane),
-        );
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: input.worktreeId,
-          surfaceId: split.surfaceId,
-          change: 'layout_changed',
-        });
-        return {
-          worktreeId: input.worktreeId,
-          surfaceId: split.surfaceId,
-          paneId: split.paneId,
-          title: split.title,
-        } satisfies CreateSurfaceOutput;
-      }),
-    startPane: (input) =>
-      Effect.gen(function* () {
-        const newPane = input.start.newPane;
-        const started = yield* repository.startSurfacePane({
-          surfaceId: input.surfaceId,
-          titleBase: titleBaseForInitialPane(newPane),
-        });
-        if (started.status === 'surface_not_found')
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'surface_not_found',
-              message: `Surface ${input.surfaceId} was not found.`,
-              surfaceId: input.surfaceId,
-            }),
-          );
-        if (started.status === 'surface_not_empty')
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'surface_not_empty',
-              message: `Surface ${input.surfaceId} already has panes; split one instead.`,
-              worktreeId: started.worktreeId,
-              surfaceId: input.surfaceId,
-            }),
-          );
-        // The pane exists first, then its session is created and bound. If
-        // that fails the pane is removed again, so the surface goes back to
-        // honestly empty (with its start actions) rather than holding a
-        // sessionless pane nothing will ever claim.
-        yield* createPaneSession(
-          repository,
-          agents,
-          terminals,
-          lifecycle,
-          eventBus,
-          started.worktreeId,
-          paneSessionCreateInput(started.paneId, newPane),
-        ).pipe(
-          Effect.onError(() =>
-            removeStartedPane({
-              surfaceId: started.surfaceId,
-              paneId: started.paneId,
-            }),
+      const panes = yield* repository.listPanesForSurface(surface.id);
+      const paneIds = panes.map((pane) => pane.id);
+      const [agentSessions, terminalSessions, editorContexts] = yield* Effect.all([
+        repository.listAgentSessionsForPanes(paneIds),
+        repository.listTerminalSessionsForPanes(paneIds),
+        repository.listEditorContextsForPanes(paneIds),
+      ]);
+      // Readiness is the editor service's in-memory half of the projection:
+      // it belongs to the current incarnation and is deliberately not
+      // persisted, so it is composed here rather than joined in SQL.
+      const readiness = yield* editors.readinessFor(
+        editorContexts.flatMap((row) => (row.activePtyProcessId ? [row.activePtyProcessId] : [])),
+      );
+      const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
+      const activePaneId = activePaneForSurface(surface.id, panes, focus);
+      return {
+        id: surface.id,
+        worktreeId: surface.worktreeId,
+        title: surface.title,
+        layout: decodeSurfaceLayout(surface.layoutJson),
+        activePaneId,
+        panes: panes.map((pane) => ({
+          id: pane.id,
+          surfaceId: pane.surfaceId,
+          title: pane.title,
+          sortOrder: pane.sortOrder,
+          session: sessionForPane(
+            { agentSessions, terminalSessions, editorContexts, readiness },
+            pane,
           ),
-        );
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: started.worktreeId,
-          surfaceId: started.surfaceId,
-          change: 'layout_changed',
-        });
-        return {
-          worktreeId: started.worktreeId,
-          surfaceId: started.surfaceId,
-          paneId: started.paneId,
-          title: started.title,
-        } satisfies CreateSurfaceOutput;
-      }),
-    setSplitWeights: (input) =>
-      Effect.gen(function* () {
-        const surface = yield* repository.findSurface(input.surfaceId);
-        if (!surface)
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'surface_not_found',
-              message: `Surface ${input.surfaceId} was not found.`,
-              surfaceId: input.surfaceId,
-            }),
-          );
-        const layout = decodeSurfaceLayout(surface.layoutJson);
-        const nextLayout =
-          layout && setNodeWeights(layout, input.weights.nodeId, input.weights.weights);
-        if (!nextLayout)
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'layout_node_stale',
-              message: `Layout node ${input.weights.nodeId} is no longer valid for surface ${input.surfaceId}.`,
-              surfaceId: input.surfaceId,
-            }),
-          );
-        const output = yield* repository.setSurfaceLayout({
+        })),
+      } satisfies SurfaceDetail;
+    }),
+    openEditor: Effect.fn('SurfaceService.openEditor')(function* (input) {
+      return yield* openEditor({ repository, editors, entityLock, eventBus }, input);
+    }),
+    renameSurface: Effect.fn('SurfaceService.renameSurface')(function* (input) {
+      const title = yield* validateSurfaceTitle(input.title);
+      const surface = yield* repository.findSurface(input.surfaceId);
+      if (!surface)
+        return yield* new SurfaceError({
+          code: 'surface_not_found',
+          message: `Surface ${input.surfaceId} was not found.`,
           surfaceId: input.surfaceId,
-          layout: nextLayout,
         });
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: surface.worktreeId,
+      const output = yield* repository.renameSurface({ surfaceId: input.surfaceId, title });
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: surface.worktreeId,
+        surfaceId: input.surfaceId,
+        change: 'renamed',
+      });
+      return output;
+    }),
+    deleteSurface: Effect.fn('SurfaceService.deleteSurface')(function* (surfaceId) {
+      const target = yield* loadDeleteTarget(repository, surfaceId);
+      const deps = { repository, pty, eventBus, editors, entityLock };
+      // Deleting this surface removes every one of its panes, so the whole
+      // capture is what the lock decision inspects.
+      if (editorContextIdsOfPanes(target.panes.map(({ pane }) => pane)).length === 0)
+        return yield* deleteWholeSurface(deps, target, null);
+      return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
+        Effect.gen(function* () {
+          const fresh = yield* loadDeleteTargetOrNull(repository, surfaceId);
+          if (!fresh) return emptyDeleteOutput;
+          return yield* deleteWholeSurface(deps, fresh, held);
+        }),
+      );
+    }),
+    deleteSurfacePane,
+    createSurface: Effect.fn('SurfaceService.createSurface')(function* (input) {
+      const surface = yield* repository.createSinglePaneSurface({
+        worktreeId: input.worktreeId,
+        titleBase: titleBaseForInitialPane(input.initialPane),
+      });
+      yield* createPaneSession(
+        sessionDeps,
+        input.worktreeId,
+        paneSessionCreateInput(surface.paneId, input.initialPane),
+      );
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: input.worktreeId,
+        surfaceId: surface.surfaceId,
+        change: 'created',
+      });
+      return {
+        worktreeId: input.worktreeId,
+        surfaceId: surface.surfaceId,
+        paneId: surface.paneId,
+        title: surface.title,
+      } satisfies CreateSurfaceOutput;
+    }),
+    splitPane: Effect.fn('SurfaceService.splitPane')(function* (input) {
+      const target = yield* loadPaneSessionTarget(repository, input.worktreeId, input.split.paneId);
+      const split = yield* repository.splitSurfacePane({
+        surfaceId: target.surface.id,
+        sourcePaneId: target.pane.id,
+        titleBase: titleBaseForInitialPane(input.split.newPane),
+        direction: input.split.direction,
+      });
+      if (!split)
+        return yield* new SurfaceError({
+          code: 'pane_not_found',
+          message: `Pane ${input.split.paneId} was not found in the surface layout.`,
+          worktreeId: input.worktreeId,
+          surfaceId: target.surface.id,
+          paneId: input.split.paneId,
+        });
+      yield* createPaneSession(
+        sessionDeps,
+        input.worktreeId,
+        paneSessionCreateInput(split.paneId, input.split.newPane),
+      );
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: input.worktreeId,
+        surfaceId: split.surfaceId,
+        change: 'layout_changed',
+      });
+      return {
+        worktreeId: input.worktreeId,
+        surfaceId: split.surfaceId,
+        paneId: split.paneId,
+        title: split.title,
+      } satisfies CreateSurfaceOutput;
+    }),
+    startPane: Effect.fn('SurfaceService.startPane')(function* (input) {
+      const newPane = input.start.newPane;
+      const started = yield* repository.startSurfacePane({
+        surfaceId: input.surfaceId,
+        titleBase: titleBaseForInitialPane(newPane),
+      });
+      if (started.status === 'surface_not_found')
+        return yield* new SurfaceError({
+          code: 'surface_not_found',
+          message: `Surface ${input.surfaceId} was not found.`,
           surfaceId: input.surfaceId,
-          change: 'layout_changed',
         });
-        return output;
-      }),
-    createPaneSession: (input) =>
-      Effect.gen(function* () {
-        const output = yield* createPaneSession(
-          repository,
-          agents,
-          terminals,
-          lifecycle,
-          eventBus,
-          input.worktreeId,
-          input.create,
-        );
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: output.worktreeId,
-          surfaceId: output.surfaceId,
-          change: 'session_changed',
+      if (started.status === 'surface_not_empty')
+        return yield* new SurfaceError({
+          code: 'surface_not_empty',
+          message: `Surface ${input.surfaceId} already has panes; split one instead.`,
+          worktreeId: started.worktreeId,
+          surfaceId: input.surfaceId,
         });
-        return output;
-      }),
-    claimPaneSession: (input) =>
-      Effect.gen(function* () {
-        const output = yield* claimPaneSession(
-          repository,
-          agents,
-          terminals,
-          lifecycle,
-          eventBus,
-          input.worktreeId,
-          input.claim,
-        );
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: output.worktreeId,
-          surfaceId: output.surfaceId,
-          change: 'session_changed',
+      // The pane exists first, then its session is created and bound. If
+      // that fails the pane is removed again, so the surface goes back to
+      // honestly empty (with its start actions) rather than holding a
+      // sessionless pane nothing will ever claim.
+      yield* createPaneSession(
+        sessionDeps,
+        started.worktreeId,
+        paneSessionCreateInput(started.paneId, newPane),
+      ).pipe(
+        Effect.onError(() =>
+          removeStartedPane({
+            surfaceId: started.surfaceId,
+            paneId: started.paneId,
+          }),
+        ),
+      );
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: started.worktreeId,
+        surfaceId: started.surfaceId,
+        change: 'layout_changed',
+      });
+      return {
+        worktreeId: started.worktreeId,
+        surfaceId: started.surfaceId,
+        paneId: started.paneId,
+        title: started.title,
+      } satisfies CreateSurfaceOutput;
+    }),
+    setSplitWeights: Effect.fn('SurfaceService.setSplitWeights')(function* (input) {
+      const surface = yield* repository.findSurface(input.surfaceId);
+      if (!surface)
+        return yield* new SurfaceError({
+          code: 'surface_not_found',
+          message: `Surface ${input.surfaceId} was not found.`,
+          surfaceId: input.surfaceId,
         });
-        return output;
-      }),
-    createSinglePaneSurface: (input) =>
-      Effect.gen(function* () {
-        // Validated here and not only in `renameSurface`: a title that cannot be set by rename
-        // has no business being created either, and launch-time placement validation calls the
-        // same rule so a title is refused before anything is allocated rather than after.
-        const titleBase = yield* validateSurfaceTitle(input.titleBase);
-        const output = yield* createSinglePaneSurface(repository, { ...input, titleBase });
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: input.worktreeId,
-          surfaceId: output.surfaceId,
-          change: 'created',
+      const layout = decodeSurfaceLayout(surface.layoutJson);
+      const nextLayout =
+        layout && setNodeWeights(layout, input.weights.nodeId, input.weights.weights);
+      if (!nextLayout)
+        return yield* new SurfaceError({
+          code: 'layout_node_stale',
+          message: `Layout node ${input.weights.nodeId} is no longer valid for surface ${input.surfaceId}.`,
+          surfaceId: input.surfaceId,
         });
-        return output;
-      }),
-    createEmptySurface: (input) =>
-      Effect.gen(function* () {
-        const titleBase = yield* validateSurfaceTitle(input.titleBase);
-        const exists = yield* repository.worktreeExists(input.worktreeId);
-        if (!exists)
-          return yield* Effect.fail(
-            new SurfaceError({
-              code: 'worktree_not_found',
-              message: `Worktree ${input.worktreeId} was not found.`,
-              worktreeId: input.worktreeId,
-            }),
-          );
-        const output = yield* repository.createEmptySurface({ ...input, titleBase });
-        yield* publishSurfaceChanged(eventBus, {
-          worktreeId: input.worktreeId,
-          surfaceId: output.surfaceId,
-          change: 'created',
-        });
-        return output;
-      }),
-    setWorktreeEnvironmentFocus: (input) => setWorktreeEnvironmentFocus(repository, input),
+      const output = yield* repository.setSurfaceLayout({
+        surfaceId: input.surfaceId,
+        layout: nextLayout,
+      });
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: surface.worktreeId,
+        surfaceId: input.surfaceId,
+        change: 'layout_changed',
+      });
+      return output;
+    }),
+    createPaneSession: Effect.fn('SurfaceService.createPaneSession')(function* (input) {
+      const output = yield* createPaneSession(sessionDeps, input.worktreeId, input.create);
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: output.worktreeId,
+        surfaceId: output.surfaceId,
+        change: 'session_changed',
+      });
+      return output;
+    }),
+    claimPaneSession: Effect.fn('SurfaceService.claimPaneSession')(function* (input) {
+      const output = yield* claimPaneSession(sessionDeps, input.worktreeId, input.claim);
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: output.worktreeId,
+        surfaceId: output.surfaceId,
+        change: 'session_changed',
+      });
+      return output;
+    }),
+    createSinglePaneSurface: Effect.fn('SurfaceService.createSinglePaneSurface')(function* (input) {
+      // Validated here and not only in `renameSurface`: a title that cannot be set by rename
+      // has no business being created either, and launch-time placement validation calls the
+      // same rule so a title is refused before anything is allocated rather than after.
+      const titleBase = yield* validateSurfaceTitle(input.titleBase);
+      const output = yield* repository.createSinglePaneSurface({ ...input, titleBase });
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: input.worktreeId,
+        surfaceId: output.surfaceId,
+        change: 'created',
+      });
+      return output;
+    }),
+    createEmptySurface: Effect.fn('SurfaceService.createEmptySurface')(function* (input) {
+      const titleBase = yield* validateSurfaceTitle(input.titleBase);
+      const output = yield* repository.createEmptySurface({ ...input, titleBase });
+      yield* publishSurfaceChanged(eventBus, {
+        worktreeId: input.worktreeId,
+        surfaceId: output.surfaceId,
+        change: 'created',
+      });
+      return output;
+    }),
+    setWorktreeEnvironmentFocus: Effect.fn('SurfaceService.setWorktreeEnvironmentFocus')(
+      function* (input) {
+        return yield* setWorktreeEnvironmentFocus(repository, input);
+      },
+    ),
     // Reordering changes no surface's identity, panes, sessions, or layout, so
     // it publishes no `surface_changed` event: that event drives surface-detail
     // invalidation, and nothing in a surface's detail has changed. The client
     // that issued the move refetches the workspace snapshot itself.
-    moveSurfaceOrder: (input) =>
-      repository.moveSurfaceOrder(input).pipe(
-        Effect.flatMap((result) =>
-          result.status === 'moved'
-            ? Effect.succeed({ worktreeId: input.worktreeId, surfaceId: input.surfaceId })
-            : Effect.fail(
-                new SurfaceOrderError({
-                  reason: result.reason,
-                  message: surfaceOrderMessage(result.reason),
-                  worktreeId: input.worktreeId,
-                  surfaceId: input.surfaceId,
-                  ...(input.beforeSurfaceId === null
-                    ? {}
-                    : { beforeSurfaceId: input.beforeSurfaceId }),
-                }),
-              ),
-        ),
-      ),
+    moveSurfaceOrder: Effect.fn('SurfaceService.moveSurfaceOrder')(function* (input) {
+      const result = yield* repository.moveSurfaceOrder(input);
+      if (result.status === 'moved')
+        return { worktreeId: input.worktreeId, surfaceId: input.surfaceId };
+      return yield* new SurfaceOrderError({
+        reason: result.reason,
+        message: surfaceOrderMessage(result.reason),
+        worktreeId: input.worktreeId,
+        surfaceId: input.surfaceId,
+        ...(input.beforeSurfaceId === null ? {} : { beforeSurfaceId: input.beforeSurfaceId }),
+      });
+    }),
   });
 });
 
@@ -598,24 +545,6 @@ function surfaceOrderMessage(reason: SurfaceOrderRejectionReason) {
   }
 }
 
-function createSinglePaneSurface(
-  repository: SurfaceRepository['Service'],
-  input: CreateSinglePaneSurfaceInput,
-) {
-  return Effect.gen(function* () {
-    const exists = yield* repository.worktreeExists(input.worktreeId);
-    if (!exists)
-      return yield* Effect.fail(
-        new SurfaceError({
-          code: 'worktree_not_found',
-          message: `Worktree ${input.worktreeId} was not found.`,
-          worktreeId: input.worktreeId,
-        }),
-      );
-    return yield* repository.createSinglePaneSurface(input);
-  });
-}
-
 function titleBaseForInitialPane(initialPane: PaneSessionSpec) {
   return initialPane.kind === 'agent_session'
     ? displayNameForHarness(initialPane.harness)
@@ -631,270 +560,228 @@ function paneSessionCreateInput(
     : { kind: 'terminal_session', paneId };
 }
 
-function createPaneSession(
-  repository: SurfaceRepository['Service'],
-  agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
-  terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
-  lifecycle: import('../sessions/lifecycle.js').SessionLifecycle['Service'],
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
+/** What creating or claiming a pane's session reads and writes. */
+interface PaneSessionDependencies {
+  readonly repository: SurfaceRepository['Service'];
+  readonly agents: AgentSessionService['Service'];
+  readonly terminals: TerminalSessionService['Service'];
+  readonly lifecycle: SessionLifecycle['Service'];
+  readonly eventBus: InternalEvents['Service'];
+}
+
+const createPaneSession = Effect.fnUntraced(function* (
+  deps: PaneSessionDependencies,
   worktreeId: number,
   create: PaneSessionCreateInput,
-): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
-  return Effect.gen(function* () {
-    const target = yield* loadPaneSessionTarget(repository, worktreeId, create.paneId);
-    const session = yield* resolveCreatedSession(agents, terminals, worktreeId, target.cwd, create);
-    // If the pane was removed meanwhile (its surface closed during startup), the
-    // claim fails and the new, never-started session is left for orphan GC.
-    const output = yield* assignPaneSession(repository, lifecycle, eventBus, {
-      worktreeId,
-      surfaceId: target.surface.id,
-      paneId: target.pane.id,
-      session,
-    });
-    yield* publishReplacedPaneSessionChange(eventBus, target.pane, session);
-    return output;
+) {
+  const target = yield* loadPaneSessionTarget(deps.repository, worktreeId, create.paneId);
+  const session = yield* resolveCreatedSession(deps, worktreeId, target.cwd, create);
+  // If the pane was removed meanwhile (its surface closed during startup), the
+  // claim fails and the new, never-started session is left for orphan GC.
+  const output = yield* assignPaneSession(deps, {
+    worktreeId,
+    surfaceId: target.surface.id,
+    paneId: target.pane.id,
+    session,
   });
-}
+  yield* publishReplacedPaneSessionChange(deps.eventBus, target.pane, session);
+  return output;
+});
 
-function claimPaneSession(
-  repository: SurfaceRepository['Service'],
-  agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
-  terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
-  lifecycle: import('../sessions/lifecycle.js').SessionLifecycle['Service'],
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
+const claimPaneSession = Effect.fnUntraced(function* (
+  deps: PaneSessionDependencies,
   worktreeId: number,
   claim: PaneSessionClaimInput,
-): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
-  return Effect.gen(function* () {
-    const target = yield* loadPaneSessionTarget(repository, worktreeId, claim.paneId);
-    const session = yield* resolveClaimSession(agents, terminals, worktreeId, claim);
-    const output = yield* assignPaneSession(repository, lifecycle, eventBus, {
-      worktreeId,
-      surfaceId: target.surface.id,
-      paneId: target.pane.id,
-      session,
-    });
-    yield* publishReplacedPaneSessionChange(eventBus, target.pane, session);
-    return output;
+) {
+  const target = yield* loadPaneSessionTarget(deps.repository, worktreeId, claim.paneId);
+  const session = yield* resolveClaimSession(deps, worktreeId, claim);
+  const output = yield* assignPaneSession(deps, {
+    worktreeId,
+    surfaceId: target.surface.id,
+    paneId: target.pane.id,
+    session,
   });
-}
+  yield* publishReplacedPaneSessionChange(deps.eventBus, target.pane, session);
+  return output;
+});
 
-function loadPaneSessionTarget(
+const loadPaneSessionTarget = Effect.fnUntraced(function* (
   repository: SurfaceRepository['Service'],
   worktreeId: number,
   paneId: number,
 ) {
-  return Effect.gen(function* () {
-    const pane = yield* repository.findPane(paneId);
-    if (!pane)
-      return yield* Effect.fail(
-        new SurfaceError({
-          code: 'pane_not_found',
-          message: `Pane ${paneId} was not found.`,
-          worktreeId,
-          paneId,
-        }),
-      );
-    const surface = yield* repository.findSurface(pane.surfaceId);
-    if (!surface || surface.worktreeId !== worktreeId)
-      return yield* Effect.fail(
-        new SurfaceError({
-          code: 'pane_not_found',
-          message: `Pane ${paneId} was not found for worktree ${worktreeId}.`,
-          worktreeId,
-          surfaceId: pane.surfaceId,
-          paneId,
-        }),
-      );
-    const cwd = yield* repository.findWorktreePath(worktreeId);
-    if (!cwd)
-      return yield* Effect.fail(
-        new SurfaceError({
-          code: 'worktree_not_found',
-          message: `Worktree ${worktreeId} was not found.`,
-          worktreeId,
-        }),
-      );
-    return { pane, surface, cwd };
-  });
-}
+  const pane = yield* repository.findPane(paneId);
+  if (!pane)
+    return yield* new SurfaceError({
+      code: 'pane_not_found',
+      message: `Pane ${paneId} was not found.`,
+      worktreeId,
+      paneId,
+    });
+  const surface = yield* repository.findSurface(pane.surfaceId);
+  if (!surface || surface.worktreeId !== worktreeId)
+    return yield* new SurfaceError({
+      code: 'pane_not_found',
+      message: `Pane ${paneId} was not found for worktree ${worktreeId}.`,
+      worktreeId,
+      surfaceId: pane.surfaceId,
+      paneId,
+    });
+  const cwd = yield* repository.findWorktreePath(worktreeId);
+  if (!cwd)
+    return yield* new SurfaceError({
+      code: 'worktree_not_found',
+      message: `Worktree ${worktreeId} was not found.`,
+      worktreeId,
+    });
+  return { pane, surface, cwd };
+});
 
-function assignPaneSession(
-  repository: SurfaceRepository['Service'],
-  lifecycle: import('../sessions/lifecycle.js').SessionLifecycle['Service'],
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
+type PlacedSession = {
+  readonly kind: 'agent_session' | 'terminal_session';
+  readonly sessionId: number;
+};
+
+const assignPaneSession = Effect.fnUntraced(function* (
+  deps: PaneSessionDependencies,
   input: {
     readonly worktreeId: number;
     readonly surfaceId: number;
     readonly paneId: number;
-    readonly session: {
-      readonly kind: 'agent_session' | 'terminal_session';
-      readonly sessionId: number;
-    };
+    readonly session: PlacedSession;
   },
 ) {
-  return Effect.gen(function* () {
-    const key = { kind: input.session.kind, sessionId: input.session.sessionId };
-    // Under the session's lock, shared with process launch and
-    // `stopUnlessPlaced`: whoever decides a session is unplaced decides it
-    // before or after this binding, never across it.
-    const claimed = yield* lifecycle.withRestoreLock(
-      key,
-      repository.claimPaneSession({
-        paneId: input.paneId,
-        sessionKind: input.session.kind,
-        sessionId: input.session.sessionId,
-      }),
-    );
-    if (claimed !== 'claimed')
-      return yield* Effect.fail(
-        new SurfaceError({
-          code: claimed === 'pane_missing' ? 'pane_not_found' : 'session_not_found',
-          message:
-            claimed === 'pane_missing'
-              ? `Pane ${input.paneId} was removed before its session could be placed.`
-              : `Session ${input.session.sessionId} was removed before it could be placed.`,
-          worktreeId: input.worktreeId,
-          surfaceId: input.surfaceId,
-          paneId: input.paneId,
-          sessionId: input.session.sessionId,
-        }),
-      );
-    yield* lifecycle.supersedeAttachment(key);
-    const attachToken = yield* lifecycle.issueAttachToken(key);
-    yield* repository.setEnvironmentFocus({
-      worktreeId: input.worktreeId,
-      activeSurfaceId: input.surfaceId,
-      activePaneId: input.paneId,
-    });
-    yield* publishSessionChanged(eventBus, input.session.kind, input.session.sessionId);
-
-    return {
+  const { repository, lifecycle, eventBus } = deps;
+  const key = { kind: input.session.kind, sessionId: input.session.sessionId };
+  // Under the session's lock, shared with process launch and
+  // `stopUnlessPlaced`: whoever decides a session is unplaced decides it
+  // before or after this binding, never across it.
+  const claimed = yield* lifecycle.withRestoreLock(
+    key,
+    repository.claimPaneSession({
+      paneId: input.paneId,
+      sessionKind: input.session.kind,
+      sessionId: input.session.sessionId,
+    }),
+  );
+  if (claimed !== 'claimed')
+    return yield* new SurfaceError({
+      code: claimed === 'pane_missing' ? 'pane_not_found' : 'session_not_found',
+      message:
+        claimed === 'pane_missing'
+          ? `Pane ${input.paneId} was removed before its session could be placed.`
+          : `Session ${input.session.sessionId} was removed before it could be placed.`,
       worktreeId: input.worktreeId,
       surfaceId: input.surfaceId,
       paneId: input.paneId,
-      attachToken: attachToken.token,
-      session:
-        input.session.kind === 'agent_session'
-          ? { kind: 'agent_session', agentSessionId: input.session.sessionId }
-          : { kind: 'terminal_session', terminalSessionId: input.session.sessionId },
-    } satisfies PaneSessionClaimOutput;
+      sessionId: input.session.sessionId,
+    });
+  yield* lifecycle.supersedeAttachment(key);
+  const attachToken = yield* lifecycle.issueAttachToken(key);
+  yield* repository.setEnvironmentFocus({
+    worktreeId: input.worktreeId,
+    activeSurfaceId: input.surfaceId,
+    activePaneId: input.paneId,
   });
-}
+  yield* publishSessionChanged(eventBus, input.session.kind, input.session.sessionId);
 
-function resolveCreatedSession(
-  agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
-  terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
+  return {
+    worktreeId: input.worktreeId,
+    surfaceId: input.surfaceId,
+    paneId: input.paneId,
+    attachToken: attachToken.token,
+    session:
+      input.session.kind === 'agent_session'
+        ? { kind: 'agent_session', agentSessionId: input.session.sessionId }
+        : { kind: 'terminal_session', terminalSessionId: input.session.sessionId },
+  } satisfies PaneSessionClaimOutput;
+});
+
+const resolveCreatedSession = Effect.fnUntraced(function* (
+  deps: PaneSessionDependencies,
   worktreeId: number,
   cwd: string,
   create: PaneSessionCreateInput,
-): Effect.Effect<
-  { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
-  PaneSessionClaimError
-> {
-  return Effect.gen(function* () {
-    switch (create.kind) {
-      case 'agent_session': {
-        const created = yield* agents.startFresh({ worktreeId, harness: create.harness, cwd });
-        return { kind: 'agent_session' as const, sessionId: created.agentSessionId };
-      }
-      case 'terminal_session': {
-        const created = yield* terminals.startFresh({ worktreeId, cwd });
-        return { kind: 'terminal_session' as const, sessionId: created.terminalSessionId };
-      }
+) {
+  switch (create.kind) {
+    case 'agent_session': {
+      const created = yield* deps.agents.startFresh({ worktreeId, harness: create.harness, cwd });
+      return { kind: 'agent_session', sessionId: created.agentSessionId } satisfies PlacedSession;
     }
-    return yield* Effect.die('Unhandled pane session create kind.');
-  });
-}
+    case 'terminal_session': {
+      const created = yield* deps.terminals.startFresh({ worktreeId, cwd });
+      return {
+        kind: 'terminal_session',
+        sessionId: created.terminalSessionId,
+      } satisfies PlacedSession;
+    }
+  }
+});
 
-function resolveClaimSession(
-  agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
-  terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
+const resolveClaimSession = Effect.fnUntraced(function* (
+  deps: PaneSessionDependencies,
   worktreeId: number,
   claim: PaneSessionClaimInput,
-): Effect.Effect<
-  { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
-  PaneSessionClaimError
-> {
-  return Effect.gen(function* () {
-    switch (claim.action) {
-      case 'claim_agent_session': {
-        yield* ensureAgentSessionInWorktree(agents, claim.agentSessionId, worktreeId);
-        return { kind: 'agent_session' as const, sessionId: claim.agentSessionId };
-      }
-      case 'claim_terminal_session': {
-        yield* ensureTerminalSessionInWorktree(terminals, claim.terminalSessionId, worktreeId);
-        return { kind: 'terminal_session' as const, sessionId: claim.terminalSessionId };
-      }
+) {
+  switch (claim.action) {
+    case 'claim_agent_session': {
+      yield* ensureAgentSessionInWorktree(deps.agents, claim.agentSessionId, worktreeId);
+      return { kind: 'agent_session', sessionId: claim.agentSessionId } satisfies PlacedSession;
     }
-    return yield* Effect.die('Unhandled pane session claim action.');
-  });
-}
+    case 'claim_terminal_session': {
+      yield* ensureTerminalSessionInWorktree(deps.terminals, claim.terminalSessionId, worktreeId);
+      return {
+        kind: 'terminal_session',
+        sessionId: claim.terminalSessionId,
+      } satisfies PlacedSession;
+    }
+  }
+});
 
-function ensureAgentSessionInWorktree(
-  agents: import('../agent-sessions/service.js').AgentSessionService['Service'],
-  agentSessionId: number,
-  worktreeId: number,
-) {
-  return agents.get(agentSessionId).pipe(
-    Effect.flatMap((session) => {
-      if (session.worktreeId === worktreeId) return Effect.void;
-      return Effect.fail(
-        new SurfaceError({
-          code: 'session_worktree_mismatch',
-          message: `Agent session ${agentSessionId} does not belong to worktree ${worktreeId}.`,
-          worktreeId,
-          sessionId: agentSessionId,
-        }),
-      );
-    }),
-    Effect.catch((error) =>
-      error instanceof AgentSessionError
-        ? Effect.fail(sessionSurfaceError(error, worktreeId, agentSessionId))
-        : Effect.fail(error),
+// The only failing call routed through the two guards below is `get()`, which fails with `session_not_found` (or the
+// database). The other session-error codes never reach this path and have no `SurfaceError` equivalent, so mapping
+// the tag to `session_not_found` is correct, not lossy.
+
+const ensureAgentSessionInWorktree = Effect.fnUntraced(
+  function* (agents: AgentSessionService['Service'], agentSessionId: number, worktreeId: number) {
+    const session = yield* agents.get(agentSessionId);
+    if (session.worktreeId === worktreeId) return;
+    return yield* new SurfaceError({
+      code: 'session_worktree_mismatch',
+      message: `Agent session ${agentSessionId} does not belong to worktree ${worktreeId}.`,
+      worktreeId,
+      sessionId: agentSessionId,
+    });
+  },
+  (effect, _agents, agentSessionId, worktreeId) =>
+    Effect.catchTag(effect, 'AgentSessionError', (error) =>
+      Effect.fail(sessionNotFound(error.message, worktreeId, agentSessionId)),
     ),
-  );
-}
+);
 
-function ensureTerminalSessionInWorktree(
-  terminals: import('../terminal-sessions/service.js').TerminalSessionService['Service'],
-  terminalSessionId: number,
-  worktreeId: number,
-) {
-  return terminals.get(terminalSessionId).pipe(
-    Effect.flatMap((session) => {
-      if (session.worktreeId === worktreeId) return Effect.void;
-      return Effect.fail(
-        new SurfaceError({
-          code: 'session_worktree_mismatch',
-          message: `Terminal session ${terminalSessionId} does not belong to worktree ${worktreeId}.`,
-          worktreeId,
-          sessionId: terminalSessionId,
-        }),
-      );
-    }),
-    Effect.catch((error) =>
-      error instanceof TerminalSessionError
-        ? Effect.fail(sessionSurfaceError(error, worktreeId, terminalSessionId))
-        : Effect.fail(error),
+const ensureTerminalSessionInWorktree = Effect.fnUntraced(
+  function* (
+    terminals: TerminalSessionService['Service'],
+    terminalSessionId: number,
+    worktreeId: number,
+  ) {
+    const session = yield* terminals.get(terminalSessionId);
+    if (session.worktreeId === worktreeId) return;
+    return yield* new SurfaceError({
+      code: 'session_worktree_mismatch',
+      message: `Terminal session ${terminalSessionId} does not belong to worktree ${worktreeId}.`,
+      worktreeId,
+      sessionId: terminalSessionId,
+    });
+  },
+  (effect, _terminals, terminalSessionId, worktreeId) =>
+    Effect.catchTag(effect, 'TerminalSessionError', (error) =>
+      Effect.fail(sessionNotFound(error.message, worktreeId, terminalSessionId)),
     ),
-  );
-}
+);
 
-function sessionSurfaceError(
-  error: AgentSessionError | TerminalSessionError,
-  worktreeId: number,
-  sessionId: number,
-) {
-  // The only failing call routed here is `get()`, which fails exclusively with
-  // `session_not_found`. The other session-error codes never reach this path and
-  // have no SurfaceError equivalent, so a single mapping is correct, not lossy.
-  return new SurfaceError({
-    code: 'session_not_found',
-    message: error.message,
-    worktreeId,
-    sessionId,
-  });
+function sessionNotFound(message: string, worktreeId: number, sessionId: number) {
+  return new SurfaceError({ code: 'session_not_found', message, worktreeId, sessionId });
 }
 
 export function validateSurfaceTitle(title: string) {
@@ -909,23 +796,19 @@ export function validateSurfaceTitle(title: string) {
   return Effect.succeed(trimmed);
 }
 
-function loadDeleteTarget(
+const loadDeleteTarget = Effect.fnUntraced(function* (
   repository: Pick<SurfaceRepository['Service'], 'findSurfaceDeleteTarget'>,
   surfaceId: number,
 ) {
-  return Effect.gen(function* () {
-    const target = yield* repository.findSurfaceDeleteTarget(surfaceId);
-    if (!target)
-      return yield* Effect.fail(
-        new SurfaceError({
-          code: 'surface_not_found',
-          message: `Surface ${surfaceId} was not found.`,
-          surfaceId,
-        }),
-      );
-    return target;
-  });
-}
+  const target = yield* repository.findSurfaceDeleteTarget(surfaceId);
+  if (!target)
+    return yield* new SurfaceError({
+      code: 'surface_not_found',
+      message: `Surface ${surfaceId} was not found.`,
+      surfaceId,
+    });
+  return target;
+});
 
 function activePaneForSurface(
   surfaceId: number,
@@ -977,82 +860,79 @@ function panesForPlan(target: SurfaceDeleteTarget, plan: SurfacePaneDeletePlan) 
  * was, which is what makes releasing an incarnation without the lock
  * unrepresentable rather than merely discouraged.
  */
-function deleteWholeSurface(
+const deleteWholeSurface = Effect.fnUntraced(function* (
   deps: SurfaceDeleteDependencies,
   target: SurfaceDeleteTarget,
   held: EntityLockHeld | null,
 ) {
-  return Effect.gen(function* () {
-    // Cleanup acts on the panes the delete actually removed, read inside its
-    // transaction: a first pane whose session was bound after `target` was
-    // read still has that session stopped.
-    const deleted = yield* deps.repository.deleteSurface(target.surface.id);
-    if (deleted.deletedSurfaceId === null) return emptyDeleteOutput;
-    const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
-    yield* finishSurfaceDelete(deps, {
-      deletedPanes: deleted.deletedPanes,
-      held,
-      surfaceChanged: {
-        worktreeId: target.surface.worktreeId,
-        surfaceId: target.surface.id,
-        change: 'deleted',
-        deletedPaneIds,
-      },
-    });
-    return {
-      deletedSurfaceId: deleted.deletedSurfaceId,
+  // Cleanup acts on the panes the delete actually removed, read inside its
+  // transaction: a first pane whose session was bound after `target` was
+  // read still has that session stopped.
+  const deleted = yield* deps.repository.deleteSurface(target.surface.id);
+  if (deleted.deletedSurfaceId === null) return emptyDeleteOutput;
+  const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
+  yield* finishSurfaceDelete(deps, {
+    deletedPanes: deleted.deletedPanes,
+    held,
+    surfaceChanged: {
+      worktreeId: target.surface.worktreeId,
+      surfaceId: target.surface.id,
+      change: 'deleted',
       deletedPaneIds,
-    } satisfies DeleteSurfaceOutput;
+    },
   });
-}
+  return {
+    deletedSurfaceId: deleted.deletedSurfaceId,
+    deletedPaneIds,
+  } satisfies DeleteSurfaceOutput;
+});
 
 /** `deleteSurfacePane`'s body once its target and plan are final. */
-function deletePlannedPanes(
+const deletePlannedPanes = Effect.fnUntraced(function* (
   deps: SurfaceDeleteDependencies,
   target: SurfaceDeleteTarget,
   plan: SurfacePaneDeletePlan,
   requestedPaneId: number,
   held: EntityLockHeld | null,
 ) {
-  return Effect.gen(function* () {
-    // `plan` only decides the lock. The repository re-plans against the rows
-    // inside its transaction and removes only what that says, so a concurrent
-    // delete can never leave a stale layout behind, and cleanup acts on the
-    // sessions bound to the panes it actually removed.
-    const deleted = yield* deps.repository.deleteSurfacePane({
-      surfaceId: target.surface.id,
-      paneId: requestedPaneId,
-    });
-    if (deleted.deletedPanes.length === 0) {
-      // The pane existed at load time, yet the repository removed nothing. This
-      // is not the idempotent "already gone" case (handled by the caller) — it
-      // is a concurrent deletion racing this one, so leave a breadcrumb to
-      // distinguish it from a genuine repository miss. Nothing committed, so
-      // nothing is published.
-      console.warn(
-        '[runtime] Surface pane delete planned a removal but the repository deleted nothing; treating as already gone',
-        {
-          surfaceId: target.surface.id,
-          paneId: requestedPaneId,
-          plannedDeletedPaneIds: plan.deletedPaneIds,
-        },
-      );
-      return emptyPaneDeleteOutput;
-    }
-    const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
-    yield* finishSurfaceDelete(deps, {
-      deletedPanes: deleted.deletedPanes,
-      held,
-      surfaceChanged: {
-        worktreeId: target.surface.worktreeId,
-        surfaceId: target.surface.id,
-        change: 'pane_deleted',
-        deletedPaneIds,
-      },
-    });
-    return { deletedPaneIds } satisfies DeletePaneOutput;
+  // `plan` only decides the lock. The repository re-plans against the rows
+  // inside its transaction and removes only what that says, so a concurrent
+  // delete can never leave a stale layout behind, and cleanup acts on the
+  // sessions bound to the panes it actually removed.
+  const deleted = yield* deps.repository.deleteSurfacePane({
+    surfaceId: target.surface.id,
+    paneId: requestedPaneId,
   });
-}
+  if (deleted.deletedPanes.length === 0) {
+    // The pane existed at load time, yet the repository removed nothing. This
+    // is not the idempotent "already gone" case (handled by the caller) — it
+    // is a concurrent deletion racing this one, so leave a breadcrumb to
+    // distinguish it from a genuine repository miss. Nothing committed, so
+    // nothing is published.
+    yield* Effect.logWarning(
+      'Surface pane delete planned a removal but the repository deleted nothing; treating as already gone',
+    ).pipe(
+      Effect.annotateLogs({
+        surfaceId: target.surface.id,
+        paneId: requestedPaneId,
+        plannedDeletedPaneIds: plan.deletedPaneIds,
+      }),
+    );
+    return emptyPaneDeleteOutput;
+  }
+  const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
+  yield* finishSurfaceDelete(deps, {
+    deletedPanes: deleted.deletedPanes,
+    held,
+    surfaceChanged: {
+      worktreeId: target.surface.worktreeId,
+      surfaceId: target.surface.id,
+      change: 'pane_deleted',
+      deletedPaneIds,
+    },
+  });
+  return { deletedPaneIds } satisfies DeletePaneOutput;
+});
 
 /**
  * Everything after the placement removal has committed.
@@ -1129,14 +1009,14 @@ function terminateDeletedPanePtys(
 }
 
 function publishSurfaceChanged(
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
-  payload: import('@isagi/contracts').SurfaceChangedEvent['payload'],
+  eventBus: InternalEvents['Service'],
+  payload: SurfaceChangedEvent['payload'],
 ) {
   return eventBus.publish({ type: 'surface_changed', payload });
 }
 
 function publishDeletedPaneSessionChanges(
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
+  eventBus: InternalEvents['Service'],
   panes: readonly SurfacePaneRow[],
 ) {
   return Effect.all(
@@ -1150,7 +1030,7 @@ function publishDeletedPaneSessionChanges(
 }
 
 function publishReplacedPaneSessionChange(
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
+  eventBus: InternalEvents['Service'],
   pane: SurfacePaneRow,
   next: { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
 ) {
@@ -1171,7 +1051,7 @@ function publishReplacedPaneSessionChange(
  * only; the projection layer adds placement.
  */
 function publishSessionChanged(
-  eventBus: import('../../platform/events/index.js').InternalEvents['Service'],
+  eventBus: InternalEvents['Service'],
   sessionKind: NonNullable<SurfacePaneRow['sessionKind']>,
   sessionId: number,
 ) {
@@ -1264,49 +1144,47 @@ function sessionForPane(
   return null;
 }
 
-function setWorktreeEnvironmentFocus(
+const setWorktreeEnvironmentFocus = Effect.fnUntraced(function* (
   repository: SurfaceRepository['Service'],
   input: { readonly worktreeId: number; readonly focus: SetWorktreeEnvironmentFocusInput },
 ) {
-  return Effect.gen(function* () {
-    const exists = yield* repository.worktreeExists(input.worktreeId);
-    if (!exists)
+  const exists = yield* repository.worktreeExists(input.worktreeId);
+  if (!exists)
+    return yield* Effect.fail(
+      new SurfaceError({
+        code: 'worktree_not_found',
+        message: `Worktree ${input.worktreeId} was not found.`,
+        worktreeId: input.worktreeId,
+      }),
+    );
+  if (input.focus.activeSurfaceId !== null) {
+    const surface = yield* repository.findSurface(input.focus.activeSurfaceId);
+    if (!surface || surface.worktreeId !== input.worktreeId)
       return yield* Effect.fail(
         new SurfaceError({
-          code: 'worktree_not_found',
-          message: `Worktree ${input.worktreeId} was not found.`,
+          code: 'surface_not_found',
+          message: `Surface ${input.focus.activeSurfaceId} was not found for worktree ${input.worktreeId}.`,
           worktreeId: input.worktreeId,
+          surfaceId: input.focus.activeSurfaceId,
         }),
       );
-    if (input.focus.activeSurfaceId !== null) {
-      const surface = yield* repository.findSurface(input.focus.activeSurfaceId);
-      if (!surface || surface.worktreeId !== input.worktreeId)
-        return yield* Effect.fail(
-          new SurfaceError({
-            code: 'surface_not_found',
-            message: `Surface ${input.focus.activeSurfaceId} was not found for worktree ${input.worktreeId}.`,
-            worktreeId: input.worktreeId,
-            surfaceId: input.focus.activeSurfaceId,
-          }),
-        );
-    }
-    if (input.focus.activePaneId !== null) {
-      const pane = yield* repository.findPane(input.focus.activePaneId);
-      if (!pane || pane.surfaceId !== input.focus.activeSurfaceId)
-        return yield* Effect.fail(
-          new SurfaceError({
-            code: 'pane_not_found',
-            message: `Pane ${input.focus.activePaneId} was not found for surface ${input.focus.activeSurfaceId}.`,
-            worktreeId: input.worktreeId,
-            surfaceId: input.focus.activeSurfaceId ?? undefined,
-            paneId: input.focus.activePaneId,
-          }),
-        );
-    }
-    return yield* repository.setEnvironmentFocus({
-      worktreeId: input.worktreeId,
-      activeSurfaceId: input.focus.activeSurfaceId,
-      activePaneId: input.focus.activePaneId,
-    });
+  }
+  if (input.focus.activePaneId !== null) {
+    const pane = yield* repository.findPane(input.focus.activePaneId);
+    if (!pane || pane.surfaceId !== input.focus.activeSurfaceId)
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: 'pane_not_found',
+          message: `Pane ${input.focus.activePaneId} was not found for surface ${input.focus.activeSurfaceId}.`,
+          worktreeId: input.worktreeId,
+          surfaceId: input.focus.activeSurfaceId ?? undefined,
+          paneId: input.focus.activePaneId,
+        }),
+      );
+  }
+  return yield* repository.setEnvironmentFocus({
+    worktreeId: input.worktreeId,
+    activeSurfaceId: input.focus.activeSurfaceId,
+    activePaneId: input.focus.activePaneId,
   });
-}
+});
