@@ -6,5 +6,5 @@ export {
   makeCliAccess,
   noCliAccess,
   type CliAccessService,
-} from './cli-access.service.js';
+} from './service.js';
 export { cliShimPath, renderCliShim, writeCliShim } from './shim.js';

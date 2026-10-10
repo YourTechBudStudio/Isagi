@@ -14,23 +14,23 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
-import { Git, GitLive } from '../../git/index.js';
-import {
-  DatabaseError,
-  type RuntimeDatabaseService,
-  type RuntimeDrizzleDatabase,
-} from '../../persistence/database.service.js';
-import { migrationsDirectory } from '../../persistence/migrations.js';
 import * as schema from '../../persistence/schema.js';
 import {
   InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
-} from '../../runtime-events/index.js';
+} from '../../platform/events/index.js';
+import { Git, GitLive } from '../../platform/git/index.js';
+import {
+  DatabaseError,
+  type RuntimeDatabaseService,
+  type RuntimeDrizzleDatabase,
+} from '../../platform/persistence/database.js';
+import { migrationsDirectory } from '../../platform/persistence/migrations.js';
 import { DetachedWorktreeError } from '../../workspace/detached-worktree.js';
 import { checkNewDirectory } from '../../workspace/new-directory.js';
-import { WorkspaceError } from '../../workspace/workspace.service.js';
+import { WorkspaceError } from '../../workspace/service.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
 import {
   makeWorkflowContentStore,

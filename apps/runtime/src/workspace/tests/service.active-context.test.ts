@@ -4,18 +4,22 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { Git } from '../../git/index.js';
-import { DataDirectory, StateFile, stateFromActiveContext } from '../../persistence/index.js';
-import { PtyService } from '../../pty-processes/index.js';
+import { SurfaceService, SurfaceRepository } from '../../environment/index.js';
 import {
   InternalRuntimeEventBus,
   type InternalRuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
+} from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
+import {
+  DataDirectory,
+  StateFile,
+  stateFromActiveContext,
+} from '../../platform/persistence/index.js';
+import { WorkspaceRepository } from '../../projects/repository.js';
+import { PtyService } from '../../pty-processes/index.js';
 import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
-import { WorkspaceRepository } from '../workspace.repository.js';
-import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
+import { WorkspaceService, WorkspaceServiceLive } from '../service.js';
+import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
 import {
   featureWorktree,
   git,

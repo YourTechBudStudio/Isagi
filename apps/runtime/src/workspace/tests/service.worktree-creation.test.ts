@@ -5,12 +5,12 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { branchPathHash } from '../../git/index.js';
-import { createFixtureWorkspace } from '../../git/tests/fixtures.js';
-import { WorkspaceRepository } from '../workspace.repository.js';
-import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
+import { branchPathHash } from '../../platform/git/index.js';
+import { createFixtureWorkspace } from '../../platform/git/testing.js';
+import { WorkspaceRepository } from '../../projects/repository.js';
+import { WorkspaceError, WorkspaceService } from '../service.js';
+import type { LiveWorkspaceOptions } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
-import type { LiveWorkspaceOptions } from './live-workspace-support.js';
 
 /**
  * These exercise the owner-side operations the workflow engine composes, against real Git.

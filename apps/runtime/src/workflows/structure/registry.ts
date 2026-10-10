@@ -2,7 +2,7 @@ import { join, normalize } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
-import { DataDirectory } from '../../persistence/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
 import { RuntimeConfig } from '../../runtime-config/index.js';
 import {
   dedupeWorkflowSources,

@@ -5,7 +5,7 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Data, Effect } from 'effect';
 
-import { harnessDefinition } from '../agent-sessions/harness/definitions.js';
+import { harnessDefinition } from '../harnesses/definitions.js';
 
 export type WorkflowPromptOperation =
   | 'spawn_agent_session'

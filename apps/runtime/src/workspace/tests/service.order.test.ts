@@ -4,25 +4,25 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { Git } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
-import { PtyService } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
+import { SurfaceRepository, SurfaceService } from '../../environment/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
+import { DataDirectory, StateFile } from '../../platform/persistence/index.js';
 import {
   WorkspaceRepository,
   type ProjectOrderMoveResult,
   type WorkspaceRepositoryService,
   type WorktreeOrderMoveResult,
-} from '../workspace.repository.js';
+} from '../../projects/repository.js';
+import { PtyService } from '../../pty-processes/index.js';
+import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
 import {
   ProjectOrderError,
   WorkspaceService,
   WorkspaceServiceLive,
   WorktreeOrderError,
-} from '../workspace.service.js';
+} from '../service.js';
+import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
 import {
   git,
   project,

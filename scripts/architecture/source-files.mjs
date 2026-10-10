@@ -30,12 +30,14 @@ export const listSources = (root) => {
 };
 
 /**
- * Test-only code: `*.test.*`/`*.spec.*`, `test-support.ts`/`<name>-test-support.ts`, and anything under a `tests/` dir.
+ * Test-only code: `*.test.*`/`*.spec.*`, `test-support.ts`/`<name>-test-support.ts`, a module's `testing.ts` (the
+ * test-only surface other modules' tests import, runtime-modules §4), and anything under a `tests/` dir.
  * @param {string} relPath repo-relative, `/`-separated path (relative so the repo's own location never matters)
  */
 export const isTestFile = (relPath) =>
   /\.(test|spec)\.(ts|tsx|mts|mjs)$/.test(relPath) ||
   /(^|\/)([a-z-]+-)?test-support\.ts$/.test(relPath) ||
+  /(^|\/)testing\.ts$/.test(relPath) ||
   /(^|\/)tests\//.test(relPath);
 
 /** @param {string} root @param {string} path */

@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { PtyRepositoryService } from '../repository.js';
 import type { PtyProcessStatusReason } from '../types.js';
 import type { PtyExit } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';

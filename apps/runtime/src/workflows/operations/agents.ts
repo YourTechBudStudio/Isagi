@@ -4,17 +4,17 @@ import { Effect } from 'effect';
 
 import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 
-import { getConversationHistory as readConversationHistory } from '../../agent-sessions/harness/conversation.js';
-import type { HarnessConversationTurn } from '../../agent-sessions/harness/definition-types.js';
-import type { AgentSessionArtifactsService } from '../../agent-sessions/harness/ledger.js';
+import type { AgentSessionService as AgentSessionServiceShape } from '../../environment/agent-sessions/index.js';
+import type { SurfaceServiceShape } from '../../environment/index.js';
+import { getConversationHistory as readConversationHistory } from '../../harnesses/conversation.js';
+import type { HarnessConversationTurn } from '../../harnesses/definition-types.js';
+import type { AgentSessionArtifactsService } from '../../harnesses/ledger.js';
 import {
   HarnessLedgerObserver,
   type HarnessLedgerObserverService,
-} from '../../agent-sessions/harness/observer.service.js';
-import type { AgentSessionService as AgentSessionServiceShape } from '../../agent-sessions/index.js';
-import { diagnosticPhase } from '../../diagnostics/phase.js';
+} from '../../harnesses/observer.service.js';
+import { diagnosticPhase } from '../../platform/diagnostics/phase.js';
 import type { PtyServiceShape } from '../../pty-processes/index.js';
-import type { SurfaceServiceShape } from '../../surfaces/index.js';
 import type { AgentPort } from '../engine/runtime.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import { hasInFlightTurn } from '../waits/latest-turn.js';

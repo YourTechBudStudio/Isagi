@@ -1,8 +1,8 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
+import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
 import type { PtyForegroundStateService } from '../foreground-state.js';
-import type { PtyProcessTransitionResult, PtyRepositoryService } from '../pty.repository.js';
+import type { PtyProcessTransitionResult, PtyRepositoryService } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
 import type {
   PtyForegroundCommandState,

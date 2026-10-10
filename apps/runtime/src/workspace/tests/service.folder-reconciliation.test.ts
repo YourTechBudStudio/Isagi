@@ -8,13 +8,13 @@ import { Effect } from 'effect';
 
 import type { ReconciliationFinding } from '@isagi/contracts';
 
-import type { GitService } from '../../git/index.js';
-import { createFixtureWorkspace, removeTree } from '../../git/tests/fixtures.js';
-import { RuntimeDatabase } from '../../persistence/index.js';
 import { surfacePanes, worktreeSurfaces } from '../../persistence/schema.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceService } from '../workspace.service.js';
-import { runWithLiveWorkspace } from './live-workspace-support.js';
+import type { GitService } from '../../platform/git/index.js';
+import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
+import { RuntimeDatabase } from '../../platform/persistence/index.js';
+import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
+import { WorkspaceService } from '../service.js';
+import { runWithLiveWorkspace } from '../testing.js';
 
 const workspace = createFixtureWorkspace('folder-reconciliation');
 afterAll(() => {

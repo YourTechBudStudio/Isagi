@@ -22,8 +22,8 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Either, Layer, Ref } from 'effect';
 
-import { DataDirectory, type IsagiDataDirectory } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { defaultRuntimeConfig, RuntimeConfig } from '../../runtime-config/index.js';
 import { scanWorkflowSource } from './discovery.js';
 import { WorkflowLoadError } from './loader.js';

@@ -11,8 +11,8 @@ import {
   RuntimeDatabase,
   RuntimeDatabaseLive,
   type RuntimeDatabaseService,
-} from '../persistence/index.js';
-import { makeTestDataDirectory } from '../persistence/test-support.js';
+} from '../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../platform/persistence/testing.js';
 import { WorkflowRunErasure, WorkflowRunErasureLive } from './erasure.js';
 import { countRunRows, seedProjectRuns } from './store/test-support.js';
 

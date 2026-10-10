@@ -7,4 +7,4 @@ export {
   type AttachTokenRecord,
   type SessionLifecycleKey,
   type SessionLifecycleService,
-} from './session-lifecycle.service.js';
+} from '../environment/sessions/lifecycle.js';

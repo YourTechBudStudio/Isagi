@@ -2,8 +2,8 @@ import process from 'node:process';
 
 import { Effect, Exit } from 'effect';
 
-import { formatReadyLine, parsePort, startRuntimeServer } from './server.js';
-import { formatStartupFailure } from './startup-diagnostics.js';
+import { formatReadyLine, parsePort, startRuntimeServer } from './app/http-server.js';
+import { formatStartupFailure } from './app/startup-diagnostics.js';
 
 const program = Effect.gen(function* () {
   const host = process.env.HOST;

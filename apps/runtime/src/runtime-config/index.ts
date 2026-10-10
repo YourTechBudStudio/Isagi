@@ -4,7 +4,7 @@ export {
   RuntimeConfigError,
   RuntimeConfigLive,
   RuntimeHarnessConfigInvalid,
-} from './runtime-config.service.js';
-export type { RuntimeConfigService } from './runtime-config.service.js';
-export * from './runtime-config.schema.js';
-export * from './runtime-config.policy.js';
+} from './service.js';
+export type { RuntimeConfigService } from './service.js';
+export * from './config-schema.js';
+export * from './policy.js';

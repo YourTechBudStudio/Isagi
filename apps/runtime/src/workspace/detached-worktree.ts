@@ -5,13 +5,18 @@ import { Data, Effect } from 'effect';
 
 import type { WorktreeDestinationIssue } from '@isagi/contracts';
 
-import { diagnosticPhase } from '../diagnostics/phase.js';
-import { Git, type GitCommandError, type GitService, listGitWorktrees } from '../git/index.js';
-import type { DatabaseError } from '../persistence/index.js';
+import { diagnosticPhase } from '../platform/diagnostics/phase.js';
+import {
+  Git,
+  type GitCommandError,
+  type GitService,
+  listGitWorktrees,
+} from '../platform/git/index.js';
+import type { DatabaseError } from '../platform/persistence/index.js';
+import type { WorkspaceRepositoryService } from '../projects/repository.js';
+import type { ProjectRow } from '../projects/types.js';
 import { directoryAvailability } from './directory-availability.js';
 import { checkNewDirectory } from './new-directory.js';
-import type { ProjectRow } from './types.js';
-import type { WorkspaceRepositoryService } from './workspace.repository.js';
 
 /**
  * Detached creation fails with its own tagged error rather than new `WorkspaceError` codes, for the

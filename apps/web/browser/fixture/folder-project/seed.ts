@@ -29,7 +29,7 @@ import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
  * What a folder project's single environment is called.
  *
  * Mirrors `FOLDER_ENVIRONMENT_TITLE` in
- * `apps/runtime/src/workspace/workspace.snapshot.ts`, which is where the real
+ * `apps/runtime/src/workspace/snapshot.ts`, which is where the real
  * value lives — the title arrives from the runtime, so this constant exists only
  * because the fixture builds its own snapshots and the web package does not
  * depend on the runtime package. It is no longer a stand-in for a value the

@@ -3,15 +3,15 @@ import { dirname } from 'node:path';
 
 import { Cause, Effect, Either } from 'effect';
 
-import { diagnosticPhase, logDiagnosticEvent } from '../../diagnostics/phase.js';
+import { diagnosticPhase, logDiagnosticEvent } from '../../platform/diagnostics/phase.js';
 import {
   isIdName,
   listOrphanCandidates,
   openCollectorRoot,
   sweepOrphans,
-} from '../../persistence/orphan-files.js';
+} from '../../platform/persistence/orphan-files.js';
 import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyRepositoryService } from '../repository.js';
 import type { PtyProcessRow } from '../types.js';
 import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../types.js';
 import { decodeBackendRef } from './backend-ref.js';

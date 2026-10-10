@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 
 import { Effect } from 'effect';
 
-import { harnessDefinition } from '../../agent-sessions/harness/definitions.js';
-import type { HarnessAdapterRegistryService } from '../../agent-sessions/harness/index.js';
-import type { HarnessControlPlaneService } from '../../harness-control-plane/index.js';
+import type { HarnessControlPlaneService } from '../../harnesses/control-plane/index.js';
+import { harnessDefinition } from '../../harnesses/definitions.js';
+import type { HarnessAdapterRegistryService } from '../../harnesses/index.js';
 import type { PtyServiceShape } from '../../pty-processes/index.js';
 import type { EngineRuntime, HeadlessExit, HeadlessPort } from '../engine/runtime.js';
 import { errorMessage } from '../state/pure.js';

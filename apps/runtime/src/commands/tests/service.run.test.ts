@@ -5,10 +5,10 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { DatabaseError } from '../../persistence/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { type CommandRunRow } from '../commands.repository.js';
-import { CommandService } from '../commands.service.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
+import { type CommandRunRow } from '../repository.js';
+import { CommandService } from '../service.js';
 import {
   commandLaunchAllocation,
   commandPortProbe,

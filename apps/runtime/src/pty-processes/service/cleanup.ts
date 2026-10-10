@@ -1,9 +1,9 @@
 import { Effect } from 'effect';
 
-import type { DatabaseError } from '../../persistence/index.js';
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
+import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyRepositoryService } from '../repository.js';
 import {
   isTerminalPtyProcessStatus,
   missingStatusReasonForBackend,

@@ -13,7 +13,7 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 - `packages/workflow-sdk` is the independently versioned public workflow authoring contract.
 - `packages/workflow-verifier` owns workflow verification, build receipts, and the canonical scaffold.
 - `apps/runtime/src/workflows` discovers, loads, and executes verified workflows.
-- `apps/runtime/src/agent-sessions/harness/skill-content` is the source of the shipped `isagi-docs` skill for configuring Isagi and authoring workflows.
+- `apps/runtime/src/harnesses/skill-content` is the source of the shipped `isagi-docs` skill for configuring Isagi and authoring workflows.
 - `docs/issue-tracking-guidance.md` defines how epics and stories are represented in GitHub issues, including how to label, relate, maintain, and close them.
 
 ## Rules
@@ -30,5 +30,5 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 - Never start run `pnpm run dev` or `pnpm run start` to run the Isagi app yourself. Instead suggest the user to run those commands instead.
 - Don't run state-changing Git commands unless the user explicitly asks; read-only Git (diffs, status, commit history, etc.) is allowed.
 - We haven't launched yet, so prefer bold refactors for better maitainability and correctness over backwards compatibility.
-- Isagi ships an agent skill, `isagi-docs`, that teaches a user's coding agent how to configure Isagi and author workflows. Its source is `apps/runtime/src/agent-sessions/harness/skill-content/`. Any change to Isagi's user-configurable **surface** must ship skill coverage in the same change: an index row in `SKILL.md` plus reference content.
+- Isagi ships an agent skill, `isagi-docs`, that teaches a user's coding agent how to configure Isagi and author workflows. Its source is `apps/runtime/src/harnesses/skill-content/`. Any change to Isagi's user-configurable **surface** must ship skill coverage in the same change: an index row in `SKILL.md` plus reference content.
 - Workflow contract changes must keep the SDK exports/types, verifier behavior and receipt format, runtime loader, workflow documentation, shipped configuration skill, and canonical fixtures synchronized. Treat those surfaces as one cross-cutting public contract even though their package versions and release timing differ. We are talking about `@yourtechbudstudio/isagi-workflow-sdk` and `@yourtechbudstudio/isagi-workflow-verifier` packages

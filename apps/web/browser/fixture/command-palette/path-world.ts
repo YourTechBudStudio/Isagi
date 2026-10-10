@@ -2,7 +2,7 @@ import type { PathSuggestOutput } from '@isagi/contracts';
 
 /**
  * Runtime-spelled directory strings for browser interactions. Filesystem behavior
- * belongs in apps/runtime/src/paths/path.suggestions.test.ts.
+ * belongs in apps/runtime/src/workspace/path-suggestions.test.ts.
  * Includes multiple, single, empty, nested, hidden, and outside-home cases.
  */
 export const FIXTURE_PATH_TREE: readonly string[] = [

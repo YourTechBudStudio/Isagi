@@ -9,14 +9,14 @@ import {
   type PtyWebSocketInputMessage,
 } from '@isagi/contracts';
 
-import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
-import type { RuntimeServices } from '../runtime.layer.js';
+import type { RuntimeServices } from '../app/layer.js';
+import { enforceRuntimeWebSocketOrigin } from '../platform/http/origin.js';
 import {
   PtyService,
   type PtyAttachment,
   type PtyAttachmentMode,
   type PtyAttachmentPlan,
-} from './pty.service.js';
+} from './service.js';
 
 type RuntimeRunner = <A>(
   effect: Effect.Effect<A, unknown, RuntimeServices>,

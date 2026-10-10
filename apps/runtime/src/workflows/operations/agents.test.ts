@@ -5,7 +5,7 @@ import { Effect, Either } from 'effect';
 
 import type { SurfaceDetail } from '@isagi/contracts';
 
-import type { StopUnlessPlacedOutcome } from '../../agent-sessions/agent-sessions.service.js';
+import type { StopUnlessPlacedOutcome } from '../../environment/agent-sessions/service.js';
 import { spawnAgentSession, type AgentDeps } from './agents.js';
 
 /**

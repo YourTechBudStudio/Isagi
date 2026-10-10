@@ -1,6 +1,6 @@
 import { Context, Layer } from 'effect';
 
-import type { RuntimeDrizzleDatabase } from '../persistence/index.js';
+import type { RuntimeDrizzleDatabase } from '../platform/persistence/index.js';
 import { deleteRunsOfProject } from './store/runs.js';
 
 /**

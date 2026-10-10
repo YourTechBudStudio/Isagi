@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { GitService } from '../../git/index.js';
+import type { GitService } from '../../platform/git/index.js';
 import type { WorkspaceServiceShape } from '../../workspace/index.js';
 import type { CheckpointsPort } from '../engine/runtime.js';
 import type { WorkflowContentStoreService } from '../store/content-store.js';

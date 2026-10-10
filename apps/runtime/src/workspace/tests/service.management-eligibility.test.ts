@@ -10,23 +10,23 @@ import type { FastifyInstance } from 'fastify';
 import { apiEndpoints } from '@isagi/contracts';
 
 import { CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { Git, type GitService } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
+import { SurfaceRepository } from '../../environment/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { Git, type GitService } from '../../platform/git/index.js';
+import { DataDirectory, StateFile } from '../../platform/persistence/index.js';
+import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
+import { runWithDatabase } from '../../projects/testing.js';
+import type { ProjectRow } from '../../projects/types.js';
 import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceRepository } from '../../surfaces/index.js';
 import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
+import { WorkspaceServiceLive } from '../service.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
   type WorktreeSetupRepositoryService,
   type WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../../worktree-setup/index.js';
-import type { ProjectRow } from '../types.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceServiceLive } from '../workspace.service.js';
+} from '../setup/index.js';
 import { withWorkspaceApi } from './api-test-support.js';
-import { runWithDatabase } from './repository-test-support.js';
 import {
   project,
   stateFileWithWriteCounter,

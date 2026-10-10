@@ -8,21 +8,21 @@ import { Effect } from 'effect';
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
 import type { CommandServiceShape } from '../../commands/index.js';
-import type { GitService } from '../../git/index.js';
-import { stateFromActiveContext, type StateFileService } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import type { PtyServiceShape } from '../../pty-processes/index.js';
+import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../environment/index.js';
 import type {
   InternalRuntimeEvent,
   InternalRuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../surfaces/index.js';
+} from '../../platform/events/index.js';
+import type { GitService } from '../../platform/git/index.js';
+import { stateFromActiveContext, type StateFileService } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import type { WorkspaceRepositoryService } from '../../projects/repository.js';
+import type { ProjectRow, WorktreeRow } from '../../projects/types.js';
+import type { PtyServiceShape } from '../../pty-processes/index.js';
 import type {
   WorktreeSetupRepositoryService,
   WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../../worktree-setup/index.js';
-import type { ProjectRow, WorktreeRow } from '../types.js';
-import type { WorkspaceRepositoryService } from '../workspace.repository.js';
+} from '../setup/index.js';
 
 export const project: ProjectRow = {
   id: 1,

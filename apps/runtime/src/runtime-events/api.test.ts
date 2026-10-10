@@ -7,13 +7,13 @@ import Fastify from 'fastify';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
-import { registerRuntimeEventsApi } from './api.js';
+import { AgentSessionAttentionProjection } from '../environment/agent-sessions/index.js';
 import {
   RuntimeEventBus,
   RuntimeEventBusLive,
   type RuntimeEventSubscription,
-} from './event-bus.js';
+} from '../platform/events/runtime-events.js';
+import { registerRuntimeEventsApi } from './api.js';
 
 test('runtime events websocket streams published events through the contract path', async () => {
   const event = agentSessionChangedEvent();

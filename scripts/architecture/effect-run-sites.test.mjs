@@ -110,6 +110,7 @@ describe('effect-run-sites', () => {
       'apps/web/src/b.test.tsx': 'Effect.runSync(e);',
       'apps/runtime/src/area/test-support.ts': 'Effect.runSync(e);',
       'apps/runtime/src/area/process-tree-test-support.ts': 'Effect.runSync(e);',
+      'apps/runtime/src/area/testing.ts': 'Effect.runSync(e);',
       'apps/runtime/src/area/tests/helpers.ts': 'Effect.runSync(e);',
       'apps/runtime/src/area/types.d.ts': 'declare const x: typeof Effect.runSync;',
       'apps/desktop/scripts/stage.mjs': 'await Effect.runPromise(main);',
@@ -245,12 +246,21 @@ describe('source scanner', () => {
       'a/b.test.mjs',
       'a/test-support.ts',
       'a/process-tree-test-support.ts',
+      'a/testing.ts',
+      'testing.ts',
       'a/tests/x.ts',
       'tests/x.ts',
     ]) {
       assert.ok(isTestFile(path), path);
     }
-    for (const path of ['a/b.ts', 'a/latest.ts', 'a/contests/x.ts', 'a/testing.ts'])
+    for (const path of [
+      'a/b.ts',
+      'a/latest.ts',
+      'a/contests/x.ts',
+      'a/attesting.ts',
+      'a/testing-utils.ts',
+      'a/testing/x.ts',
+    ])
       assert.ok(!isTestFile(path), path);
   });
 });

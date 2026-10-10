@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import type { PtyProcessLogMode, PtyStreamOutputMessageSet } from '@isagi/contracts';
 
 import { replayUtf8LogFile } from '../log-replay.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyRepositoryService } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
 import { PtyServiceError } from '../types.js';
 

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect, Exit } from 'effect';
 
 import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
-import type { CommandRunRow, CommandStateRow } from '../commands.repository.js';
+import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
   commandRun,
   commandState,

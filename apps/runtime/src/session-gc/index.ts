@@ -1,1 +1,1 @@
-export { SessionGc, SessionGcLive, type SessionGcService } from './session-gc.service.js';
+export { SessionGc, SessionGcLive, type SessionGcService } from '../environment/sessions/gc.js';

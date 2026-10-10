@@ -5,9 +5,9 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
-import { DatabaseError } from '../../persistence/index.js';
-import { type ResolvedPortEntry } from '../commands.ports.js';
-import { type CommandRunRow, type CommandStateRow } from '../commands.repository.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
+import { type ResolvedPortEntry } from '../ports.js';
+import { type CommandRunRow, type CommandStateRow } from '../repository.js';
 import {
   commandLaunchAllocation,
   commandPortProbe,

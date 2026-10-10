@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
  * The canonical form of a path that may not exist yet: the native realpath of its nearest existing
  * ancestor, with the missing segments appended.
  *
- * This must match `canonicalizeProspectivePath` in `apps/runtime/src/paths/path.utils.ts` exactly.
+ * This must match `canonicalizeProspectivePath` in `apps/runtime/src/platform/fs/paths.ts` exactly.
  * The CLI checks an export destination with this rule before asking the runtime to create a
  * worktree there, and then requires the runtime to report the very same path back; if the two
  * derivations drifted, a correct export would fail, or a precheck would judge a different path than

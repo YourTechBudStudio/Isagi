@@ -7,10 +7,10 @@ import { Effect, Schema } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { createFixtureWorkspace, removeTree } from '../../git/tests/fixtures.js';
-import { WorkspaceRepository } from '../workspace.repository.js';
-import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
-import { runWithLiveWorkspace } from './live-workspace-support.js';
+import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
+import { WorkspaceRepository } from '../../projects/repository.js';
+import { WorkspaceError, WorkspaceService } from '../service.js';
+import { runWithLiveWorkspace } from '../testing.js';
 import { directoryTree } from './test-support.js';
 
 const workspace = createFixtureWorkspace('folder-registration');

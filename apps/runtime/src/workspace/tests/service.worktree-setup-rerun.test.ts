@@ -3,11 +3,11 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { WorktreeSetupError } from '../../worktree-setup/index.js';
-import type { WorktreeSetupService } from '../../worktree-setup/worktree-setup.service.js';
-import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
+import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorktreeSetupError } from '../setup/index.js';
+import type { WorktreeSetupService } from '../setup/service.js';
+import type { LiveWorkspaceOptions } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
-import type { LiveWorkspaceOptions } from './live-workspace-support.js';
 import { testWorktreeSetup, testWorktreeSetupRepository } from './test-support.js';
 
 /**

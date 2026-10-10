@@ -3,11 +3,11 @@ import { join } from 'node:path';
 
 import { Effect } from 'effect';
 
-import { createFixtureWorkspace, type FixtureWorkspace } from '../../git/tests/fixtures.js';
-import type { RuntimeDatabaseService } from '../../persistence/index.js';
-import type { WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceService } from '../workspace.service.js';
-import { type LiveWorkspaceOptions, runWithLiveWorkspace } from './live-workspace-support.js';
+import { createFixtureWorkspace, type FixtureWorkspace } from '../../platform/git/testing.js';
+import type { RuntimeDatabaseService } from '../../platform/persistence/index.js';
+import type { WorkspaceRepositoryService } from '../../projects/repository.js';
+import { WorkspaceService } from '../service.js';
+import { type LiveWorkspaceOptions, runWithLiveWorkspace } from '../testing.js';
 
 /**
  * A real Git repository, registered as a real project, driven through the real workspace service.

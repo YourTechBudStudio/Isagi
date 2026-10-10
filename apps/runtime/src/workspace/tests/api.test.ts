@@ -6,7 +6,7 @@ import type Fastify from 'fastify';
 
 import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
 
-import { DatabaseError } from '../../persistence/index.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
 import {
   ProjectOrderError,
   WorkspaceError,

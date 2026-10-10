@@ -3,21 +3,21 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError, type WorktreeSetupRejectionReason } from '@isagi/contracts';
 
+import type { RuntimeServices } from '../app/layer.js';
 import {
   infrastructureApiError,
   registerApiEndpoint,
   type ApiRouteContext,
   errorMessage,
-} from '../lib/api/index.js';
-import { ProjectConfigError } from '../project-config/project-config.service.js';
-import type { RuntimeServices } from '../runtime.layer.js';
-import { WorktreeSetupError } from '../worktree-setup/index.js';
+} from '../platform/http/index.js';
+import { ProjectConfigError } from '../projects/config/service.js';
 import {
   ProjectOrderError,
   WorkspaceError,
   WorkspaceService,
   WorktreeOrderError,
 } from './index.js';
+import { WorktreeSetupError } from './setup/index.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>

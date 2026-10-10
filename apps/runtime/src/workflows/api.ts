@@ -8,14 +8,14 @@ import {
   type WorkflowRejectionData,
 } from '@isagi/contracts';
 
+import type { RuntimeServices } from '../app/layer.js';
 import {
   errorMessage,
   infrastructureApiError,
   registerApiEndpoint,
   registerContentEndpoint,
   type ApiRouteContext,
-} from '../lib/api/index.js';
-import type { RuntimeServices } from '../runtime.layer.js';
+} from '../platform/http/index.js';
 import { WorkflowEngine } from './engine/service.js';
 import { WorkflowEngineError } from './errors.js';
 

@@ -20,27 +20,27 @@ import type {
   WorkflowUserInputAnswers,
 } from '@isagi/contracts';
 
-import { HarnessAdapterRegistry } from '../../agent-sessions/harness/index.js';
-import { AgentSessionArtifacts } from '../../agent-sessions/harness/ledger.js';
-import { HarnessLedgerObserver } from '../../agent-sessions/harness/observer.service.js';
-import { AgentSessionService } from '../../agent-sessions/index.js';
-import { Git } from '../../git/index.js';
-import { HarnessControlPlane } from '../../harness-control-plane/index.js';
-import {
-  RuntimeDatabase,
-  type DatabaseError,
-  type RuntimeDatabaseService,
-} from '../../persistence/index.js';
-import { PtyService } from '../../pty-processes/index.js';
+import { AgentSessionService } from '../../environment/agent-sessions/index.js';
+import { SurfaceRepository, SurfaceService } from '../../environment/index.js';
+import { HarnessControlPlane } from '../../harnesses/control-plane/index.js';
+import { HarnessAdapterRegistry } from '../../harnesses/index.js';
+import { AgentSessionArtifacts } from '../../harnesses/ledger.js';
+import { HarnessLedgerObserver } from '../../harnesses/observer.service.js';
 import {
   InternalRuntimeEventBus,
   nextRuntimeEventEnvelope,
   RuntimeEventBus,
   type RuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
+} from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
+import {
+  RuntimeDatabase,
+  type DatabaseError,
+  type RuntimeDatabaseService,
+} from '../../platform/persistence/index.js';
+import { WorkspaceRepository } from '../../projects/repository.js';
+import { PtyService } from '../../pty-processes/index.js';
 import { WorkspaceService } from '../../workspace/index.js';
-import { WorkspaceRepository } from '../../workspace/workspace.repository.js';
 import { exportCheckpoint } from '../checkpoints/export.js';
 import { openCheckpointFile, type CheckpointFileContent } from '../checkpoints/files.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';

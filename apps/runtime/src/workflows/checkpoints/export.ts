@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 
 import type { ExportWorkflowCheckpointOutput } from '@isagi/contracts';
 
-import type { DatabaseError } from '../../persistence/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { DetachedWorktreeError } from '../../workspace/index.js';
 import type { EngineRuntime } from '../engine/runtime.js';
 import { WorkflowEngineError } from '../errors.js';

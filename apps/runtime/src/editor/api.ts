@@ -3,20 +3,24 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
+import type { RuntimeServices } from '../app/layer.js';
+import { SurfaceService } from '../environment/index.js';
+import { toSurfaceApiError } from '../environment/surfaces/api.js';
+import { SurfaceError } from '../environment/surfaces/errors.js';
+import {
+  registerApiEndpoint,
+  type ApiRouteContext,
+  unhandledApiError,
+} from '../platform/http/index.js';
+import { DatabaseError } from '../platform/persistence/index.js';
 import {
   EditorContextService,
   EditorDiagnosticsUnavailable,
   EditorError,
   EditorLaunchFailed,
   EditorUnavailable,
-} from '../editor-contexts/index.js';
-import { EditorProvisioning, EditorProvisioningBusy } from '../editor-provisioning/index.js';
-import { registerApiEndpoint, type ApiRouteContext, unhandledApiError } from '../lib/api/index.js';
-import { DatabaseError } from '../persistence/index.js';
-import type { RuntimeServices } from '../runtime.layer.js';
-import { toSurfaceApiError } from '../surfaces/api.js';
-import { SurfaceError } from '../surfaces/errors.js';
-import { SurfaceService } from '../surfaces/index.js';
+} from './contexts/index.js';
+import { EditorProvisioning, EditorProvisioningBusy } from './provisioning/index.js';
 
 // The editor feature spans two domains — placement is a surfaces operation and
 // the runtime lifecycle is an editor one — so its HTTP routes live in a

@@ -2,7 +2,7 @@ import { Layer, ManagedRuntime } from 'effect';
 import Fastify from 'fastify';
 
 import { registerWorkspaceApi } from '../api.js';
-import { WorkspaceService } from '../workspace.service.js';
+import { WorkspaceService } from '../service.js';
 
 /**
  * Runs the real workspace routes against a caller-supplied workspace service.

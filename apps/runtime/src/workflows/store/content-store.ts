@@ -7,8 +7,8 @@ import { pipeline } from 'node:stream/promises';
 
 import { Cause, Context, Data, Effect, Layer, Scope } from 'effect';
 
-import { diagnosticPhase } from '../../diagnostics/phase.js';
-import { DataDirectory, RuntimeDatabase } from '../../persistence/index.js';
+import { diagnosticPhase } from '../../platform/diagnostics/phase.js';
+import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import {
   childDirectory,
   listOrphanCandidates,
@@ -17,7 +17,7 @@ import {
   type GuardedDirectory,
   type OrphanCandidate,
   type OrphanSweepStats,
-} from '../../persistence/orphan-files.js';
+} from '../../platform/persistence/orphan-files.js';
 import { listReferencedContentHashes } from './checkpoints.js';
 
 /**

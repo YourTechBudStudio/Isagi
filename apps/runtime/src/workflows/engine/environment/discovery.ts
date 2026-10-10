@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 
-import type { SurfaceRepositoryService } from '../../../surfaces/index.js';
-import type { WorkspaceRepositoryService } from '../../../workspace/workspace.repository.js';
+import type { SurfaceRepositoryService } from '../../../environment/index.js';
+import type { WorkspaceRepositoryService } from '../../../projects/repository.js';
 import type {
   WorkflowOrigin,
   WorkflowPlacementContext,

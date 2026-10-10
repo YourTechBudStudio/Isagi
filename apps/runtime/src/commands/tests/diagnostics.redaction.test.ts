@@ -5,9 +5,9 @@ import { Effect } from 'effect';
 
 import { decodeBackendRef } from '../../pty-processes/service/backend-ref.js';
 import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
-import { describeCommandCause } from '../commands.diagnostics.js';
-import { CommandError } from '../commands.errors.js';
-import { CommandPortAllocationError } from '../commands.ports.js';
+import { describeCommandCause } from '../diagnostics.js';
+import { CommandError } from '../errors.js';
+import { CommandPortAllocationError } from '../ports.js';
 import {
   commandRun,
   commandState,

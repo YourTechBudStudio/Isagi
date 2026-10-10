@@ -7,6 +7,6 @@ The independently versioned public verifier and build-receipt contract for Isagi
 ## Rules
 
 - `fixtures/minimal-workflow` is the canonical workflow scaffold shipped with `isagi-docs`.
-- Changes to verification behavior, package compatibility, receipt format, or the scaffold must keep the workflow SDK, runtime loader, workflow documentation, and `apps/runtime/src/agent-sessions/harness/skill-content/workflows.md` synchronized.
+- Changes to verification behavior, package compatibility, receipt format, or the scaffold must keep the workflow SDK, runtime loader, workflow documentation, and `apps/runtime/src/harnesses/skill-content/workflows.md` synchronized.
 - Keep SDK and verifier compatibility explicit and covered by tests.
 - Do not bump this package for unrelated application releases.

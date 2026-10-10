@@ -5,7 +5,6 @@ import type {
   WorkflowPlacementSource,
 } from '@isagi/contracts';
 
-import type { RuntimeDrizzleDatabase } from '../../persistence/index.js';
 import type {
   workflowArtifacts,
   workflowCheckpoints,
@@ -15,6 +14,7 @@ import type {
   workflowOperations,
   workflowRuns,
 } from '../../persistence/schema.js';
+import type { RuntimeDrizzleDatabase } from '../../platform/persistence/index.js';
 
 /**
  * Row shapes and the JSON column helpers every store file shares.

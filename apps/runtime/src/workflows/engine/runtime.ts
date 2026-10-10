@@ -1,11 +1,11 @@
 import type { Effect } from 'effect';
 
-import type { HarnessConversationTurn } from '../../agent-sessions/harness/definition-types.js';
-import type { DatabaseError } from '../../persistence/index.js';
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../surfaces/index.js';
+import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../environment/index.js';
+import type { HarnessConversationTurn } from '../../harnesses/definition-types.js';
+import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { WorkspaceRepositoryService } from '../../projects/repository.js';
 import type { WorkspaceServiceShape } from '../../workspace/index.js';
-import type { WorkspaceRepositoryService } from '../../workspace/workspace.repository.js';
 import type { WorkflowEngineError } from '../errors.js';
 import type { WorkflowContentStoreService } from '../store/content-store.js';
 import type { EventDraft } from '../store/events.js';

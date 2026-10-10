@@ -10,11 +10,11 @@ import {
   type RuntimeEventInputMessage,
 } from '@isagi/contracts';
 
-import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
-import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
-import type { RuntimeServices } from '../runtime.layer.js';
+import type { RuntimeServices } from '../app/layer.js';
+import { AgentSessionAttentionProjection } from '../environment/agent-sessions/index.js';
+import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../platform/events/runtime-events.js';
+import { enforceRuntimeWebSocketOrigin } from '../platform/http/origin.js';
 import { WorkflowEngine } from '../workflows/index.js';
-import { nextRuntimeEventEnvelope, RuntimeEventBus } from './event-bus.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>

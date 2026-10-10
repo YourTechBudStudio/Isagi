@@ -8,24 +8,24 @@ import { Effect, Schema, type Layer } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { createFixtureWorkspace, removeTree } from '../../git/tests/fixtures.js';
-import { RuntimeDatabase, type RuntimeDatabaseService } from '../../persistence/index.js';
+import { SurfaceRepository, SurfaceService } from '../../environment/index.js';
+// The surfaces layer is the only test layer that composes all three ordered
+// scopes at once, and this test is specifically about the three surviving
+// together. Rebuilding that graph here would be a second definition of the
+// same wiring.
+import { addPaneToSurface, testLayer } from '../../environment/testing.js';
 import {
   surfacePanes,
   worktreeEnvironmentStates,
   worktrees,
   worktreeSurfaces,
 } from '../../persistence/schema.js';
-import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
-// The surfaces layer is the only test layer that composes all three ordered
-// scopes at once, and this test is specifically about the three surviving
-// together. Rebuilding that graph here would be a second definition of the
-// same wiring.
-import { addPaneToSurface, testLayer } from '../../surfaces/tests/test-support.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceService } from '../workspace.service.js';
-import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../workspace.snapshot.js';
-import { liveWorkspaceLayer } from './live-workspace-support.js';
+import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
+import { RuntimeDatabase, type RuntimeDatabaseService } from '../../platform/persistence/index.js';
+import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
+import { WorkspaceService } from '../service.js';
+import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../snapshot.js';
+import { liveWorkspaceLayer } from '../testing.js';
 
 /**
  * Order is durable or it is not a feature: a rank that only survives while the

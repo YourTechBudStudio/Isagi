@@ -9,40 +9,40 @@ import { Effect, Schema } from 'effect';
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { Git, GitCommandError } from '../../git/index.js';
-import {
-  DataDirectory,
-  StateFile,
-  stateFromActiveContext,
-  type WorkspaceState,
-} from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
-import {
-  InternalRuntimeEventBus,
-  type InternalRuntimeEventBusService,
-} from '../../runtime-events/index.js';
 import {
   SurfaceService,
   SurfaceRepository,
   type SurfaceRepositoryService,
   type SurfaceServiceShape,
-} from '../../surfaces/index.js';
+} from '../../environment/index.js';
+import {
+  InternalRuntimeEventBus,
+  type InternalRuntimeEventBusService,
+} from '../../platform/events/index.js';
+import { Git, GitCommandError } from '../../platform/git/index.js';
+import {
+  DataDirectory,
+  StateFile,
+  stateFromActiveContext,
+  type WorkspaceState,
+} from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import {
+  prunedWorktreeIds,
+  WorkspaceRepository,
+  type WorkspaceRepositoryService,
+} from '../../projects/repository.js';
+import type { ProjectRow, WorktreeRow } from '../../projects/types.js';
+import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
 import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
+import { WorkspaceService, WorkspaceServiceLive } from '../service.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
   type WorktreeSetupRepositoryService,
   type WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../../worktree-setup/index.js';
-import type { ProjectRow, WorktreeRow } from '../types.js';
-import {
-  prunedWorktreeIds,
-  WorkspaceRepository,
-  type WorkspaceRepositoryService,
-} from '../workspace.repository.js';
-import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
-import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../workspace.snapshot.js';
+} from '../setup/index.js';
+import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../snapshot.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>

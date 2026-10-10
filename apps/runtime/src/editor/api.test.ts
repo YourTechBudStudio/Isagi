@@ -11,22 +11,22 @@ import type {
   RetryEditorProvisioningOutput,
 } from '@isagi/contracts';
 
+import { SurfaceError, SurfaceService, type SurfaceServiceShape } from '../environment/index.js';
+import { DatabaseError } from '../platform/persistence/index.js';
+import { registerEditorApi } from './api.js';
 import {
   EditorContextService,
   EditorDiagnosticsUnavailable,
   EditorError,
   EditorLaunchFailed,
   type EditorContextServiceShape,
-} from '../editor-contexts/index.js';
+} from './contexts/index.js';
 import {
   EditorProvisioning,
   EditorProvisioningBusy,
   EditorUnavailable,
   type EditorProvisioningService,
-} from '../editor-provisioning/index.js';
-import { DatabaseError } from '../persistence/index.js';
-import { SurfaceError, SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
-import { registerEditorApi } from './api.js';
+} from './provisioning/index.js';
 
 function fakeProvisioning(
   overrides: Partial<EditorProvisioningService>,

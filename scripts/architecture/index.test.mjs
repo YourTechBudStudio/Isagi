@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ALLOWLIST_PATH } from './effect-run-sites.mjs';
 import { CHECKS, runArchitectureChecks } from './index.mjs';
+import { CONFIG_PATH } from './module-boundaries.mjs';
 
 const indexPath = fileURLToPath(new URL('./index.mjs', import.meta.url));
 
@@ -80,6 +81,66 @@ test('an unknown mode is a configuration error', () => {
   assert.throws(() => run([{ check: 'typo', mode: 'warn', run: () => [] }]), /unknown mode "warn"/);
 });
 
+test('reportRules keeps those rules report-only under enforce: printed and counted, never failing', () => {
+  const rules = (violations) => [
+    { check: 'mb', mode: 'enforce', reportRules: ['R9'], run: () => violations },
+  ];
+  const onlyReported = run(rules(['R9 a.ts:1: child_process', 'R9 b.ts:2: child_process']));
+  assert.equal(onlyReported.exitCode, 0);
+  assert.deepEqual(onlyReported.out, [
+    'R9 a.ts:1: child_process',
+    'R9 b.ts:2: child_process',
+    'mb [enforce]: 0 violation(s), 2 report-only (R9)',
+  ]);
+  assert.deepEqual(onlyReported.err, []);
+  assert.deepEqual(onlyReported.results, [
+    { check: 'mb', mode: 'enforce', violations: 0, reportOnly: 2, failed: false, crashed: false },
+  ]);
+
+  const mixed = run(
+    rules(['R9 a.ts:1: child_process', 'R2 c.ts:3: deep import', 'R90 d.ts:4: other rule']),
+  );
+  assert.equal(mixed.exitCode, 1);
+  assert.deepEqual(mixed.out, ['R9 a.ts:1: child_process']);
+  assert.deepEqual(mixed.err, [
+    'R2 c.ts:3: deep import',
+    'R90 d.ts:4: other rule',
+    'mb [enforce]: 2 violation(s), 1 report-only (R9)',
+  ]);
+});
+
+test('reportRules under report mode splits the count and prints no violations', () => {
+  const result = run([
+    {
+      check: 'mb',
+      mode: 'report',
+      reportRules: ['R9'],
+      run: () => ['R9 a.ts:1: x', 'R2 b.ts:1: y'],
+    },
+  ]);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.out, ['mb [report]: 1 violation(s), 1 report-only (R9)']);
+  assert.deepEqual(result.err, []);
+});
+
+test('malformed reportRules are a configuration error', () => {
+  for (const reportRules of [[], [''], ['R 9'], 'R9']) {
+    assert.throws(
+      () => run([{ check: 'mb', mode: 'enforce', reportRules, run: () => [] }]),
+      /invalid reportRules/,
+    );
+  }
+});
+
+test('the registry reports module-boundaries with R9 report-only (plan R27)', () => {
+  assert.deepEqual(
+    CHECKS.filter(({ check }) => check === 'module-boundaries').map(
+      ({ check, mode, reportRules }) => ({ check, mode, reportRules }),
+    ),
+    [{ check: 'module-boundaries', mode: 'report', reportRules: ['R9'] }],
+  );
+});
+
 test('the registry enforces effect-run-sites', () => {
   assert.deepEqual(
     CHECKS.map(({ check, mode }) => ({ check, mode })).filter(
@@ -96,9 +157,17 @@ test('the CLI runs the registry against the given repo root and sets the exit co
     mkdirSync(dirname(join(repo, ALLOWLIST_PATH)), { recursive: true });
     writeFileSync(join(repo, ALLOWLIST_PATH), '{}');
     writeFileSync(join(repo, 'apps/runtime/src/a.ts'), 'export {};');
+    writeFileSync(
+      join(repo, CONFIG_PATH),
+      JSON.stringify({ root: 'apps/runtime/src', compositionRoot: ['a.ts'], modules: {} }),
+    );
     const clean = spawnSync(process.execPath, [indexPath, repo], { encoding: 'utf8' });
     assert.equal(clean.status, 0, clean.stderr);
     assert.match(clean.stdout, /effect-run-sites \[enforce\]: 0 violation\(s\)/);
+    assert.match(
+      clean.stdout,
+      /module-boundaries \[report\]: 0 violation\(s\), 0 report-only \(R9\)/,
+    );
 
     writeFileSync(join(repo, 'apps/runtime/src/a.ts'), 'void Effect.runPromise(e);');
     const failing = spawnSync(process.execPath, [indexPath, repo], { encoding: 'utf8' });

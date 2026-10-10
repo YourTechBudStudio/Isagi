@@ -6,8 +6,16 @@ import websocket from '@fastify/websocket';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import Fastify from 'fastify';
 
-import { DatabaseError, DataDirectory } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import {
+  InternalRuntimeEventBus,
+  InternalRuntimeEventBusLive,
+  RuntimeEventBus,
+  RuntimeEventBusLive,
+  type InternalRuntimeEventBusService,
+  type RuntimeEventBusService,
+} from '../../platform/events/index.js';
+import { DatabaseError, DataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import {
   PtyRepository,
   PtyService,
@@ -16,17 +24,9 @@ import {
   type PtyServiceShape,
 } from '../../pty-processes/index.js';
 import type { PtyProcessRow } from '../../pty-processes/index.js';
-import type { PtyAttachment } from '../../pty-processes/pty.service.js';
-import { fakePtyAllocation } from '../../pty-processes/test-support.js';
+import type { PtyAttachment } from '../../pty-processes/service.js';
+import { fakePtyAllocation } from '../../pty-processes/testing.js';
 import type { PtyProcessLaunchMetadata } from '../../pty-processes/types.js';
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-  RuntimeEventBus,
-  RuntimeEventBusLive,
-  type InternalRuntimeEventBusService,
-  type RuntimeEventBusService,
-} from '../../runtime-events/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../workspace/index.js';
 import { registerCommandsApi } from '../api.js';
 import {
@@ -34,7 +34,7 @@ import {
   CommandPortProbe,
   type CommandPortProbeService,
   type ResolvedPortEntry,
-} from '../commands.ports.js';
+} from '../ports.js';
 import {
   CommandRepository,
   type CommandFinalizeResult,
@@ -42,12 +42,12 @@ import {
   type CommandRepositoryService,
   type CommandRunRow,
   type CommandStateRow,
-} from '../commands.repository.js';
+} from '../repository.js';
 import {
   CommandService,
   CommandServiceLive,
   type CommandService as CommandServiceShape,
-} from '../commands.service.js';
+} from '../service.js';
 
 // ---------------------------------------------------------------------------
 // API / websocket test support
@@ -301,13 +301,11 @@ export async function runCommandService(rootPath: string, options: CommandReposi
 export async function runCommandServiceEffect<A>(
   rootPath: string,
   effect: (
-    service: import('../commands.service.js').CommandService,
+    service: import('../service.js').CommandService,
   ) => Effect.Effect<
     A,
     unknown,
-    | import('../commands.service.js').CommandService
-    | InternalRuntimeEventBusService
-    | RuntimeEventBusService
+    import('../service.js').CommandService | InternalRuntimeEventBusService | RuntimeEventBusService
   >,
   options: CommandRepositoryOptions = {},
 ) {

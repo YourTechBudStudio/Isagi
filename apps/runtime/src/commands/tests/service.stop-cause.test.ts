@@ -3,9 +3,9 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit } from 'effect';
 
-import { DatabaseError } from '../../persistence/index.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyKillError } from '../../pty-processes/types.js';
-import type { CommandRunRow, CommandStateRow } from '../commands.repository.js';
+import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
   commandRun,
   commandState,

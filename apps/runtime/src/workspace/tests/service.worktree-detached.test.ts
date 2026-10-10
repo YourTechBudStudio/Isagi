@@ -17,13 +17,13 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { GitCommandError, type GitService } from '../../git/index.js';
-import { createFixtureWorkspace } from '../../git/tests/fixtures.js';
+import { GitCommandError, type GitService } from '../../platform/git/index.js';
+import { createFixtureWorkspace } from '../../platform/git/testing.js';
+import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
 import { DetachedWorktreeError } from '../detached-worktree.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceService } from '../workspace.service.js';
+import { WorkspaceService } from '../service.js';
+import { type LiveWorkspaceOptions, runWithLiveWorkspace } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
-import { type LiveWorkspaceOptions, runWithLiveWorkspace } from './live-workspace-support.js';
 
 /**
  * Detached creation against real Git, a real database and the real service.

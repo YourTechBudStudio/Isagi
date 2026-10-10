@@ -1,11 +1,8 @@
 import { Effect } from 'effect';
 
-import type { DatabaseError } from '../../../persistence/index.js';
-import { SurfaceError, validateSurfaceTitle } from '../../../surfaces/index.js';
-import {
-  WorkspaceError,
-  type WorkspaceServiceError,
-} from '../../../workspace/workspace.service.js';
+import { SurfaceError, validateSurfaceTitle } from '../../../environment/index.js';
+import type { DatabaseError } from '../../../platform/persistence/index.js';
+import { WorkspaceError, type WorkspaceServiceError } from '../../../workspace/service.js';
 import { WorkflowEngineError } from '../../errors.js';
 import type { WorkflowOrigin } from '../../types.js';
 import type { LaunchProject, PlacementSelection, ResolvedPlacement } from './types.js';

@@ -3,11 +3,12 @@ import { existsSync } from 'node:fs';
 import { Effect, Either } from 'effect';
 
 import type { CliAccessService } from '../../cli-access/index.js';
-import type { DatabaseError } from '../../persistence/index.js';
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
+import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import { backendLaunchCommand } from '../../platform/process/shell-launch.js';
 import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyForegroundStateService } from '../foreground-state.js';
-import { appendLog, type PtyRepositoryService } from '../pty.repository.js';
+import { appendLog, type PtyRepositoryService } from '../repository.js';
 import {
   type BackendSessionRef,
   type LaunchPtyProcessInput,
@@ -19,7 +20,6 @@ import {
 import type { ActiveAttachment } from './attachments.js';
 import { backendMetadataForLaunch } from './backend-ref.js';
 import { recordForegroundCommandState, transitionProcessByIdAndPublish } from './events.js';
-import { backendLaunchCommand } from './launch-mode.js';
 import { handleExit, releaseLaunch, reserveLaunch, type PtyReservations } from './lifecycle.js';
 import type { PtyRetryScheduler } from './retry.js';
 import { spawnFailureMessage } from './runtime-namespace.js';

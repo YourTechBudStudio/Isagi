@@ -7,16 +7,16 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { Git, type GitService } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
+import { SurfaceService, SurfaceRepository } from '../../environment/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { Git, type GitService } from '../../platform/git/index.js';
+import { DataDirectory, StateFile } from '../../platform/persistence/index.js';
+import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
+import type { ProjectRow } from '../../projects/types.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
 import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
-import type { ProjectRow } from '../types.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
+import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../service.js';
+import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
 import {
   project,
   repositoryWith,

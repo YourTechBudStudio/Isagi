@@ -6,9 +6,9 @@ import { Effect, Fiber } from 'effect';
 import {
   defaultCommandLifecycle,
   type WorktreeCommandConfig,
-} from '../../project-config/project-config.schema.js';
-import { buildActivationPlan } from '../commands.lifecycle.js';
-import type { CommandStateRow } from '../commands.repository.js';
+} from '../../projects/config/config-schema.js';
+import { buildActivationPlan } from '../lifecycle.js';
+import type { CommandStateRow } from '../repository.js';
 import {
   commandPortProbe,
   commandRun,
