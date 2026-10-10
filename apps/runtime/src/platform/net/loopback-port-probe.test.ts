@@ -5,6 +5,8 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 
+import { makeLogCapture, runScoped } from '@isagi/testing';
+
 import { LoopbackPortUnavailable, makeLoopbackPortProbe } from './loopback-port-probe.js';
 
 /**
@@ -340,7 +342,7 @@ test('repeated probes do not accumulate server handles', async () => {
 
 test('a close failure is logged with the port and never with its cause', async () => {
   // The redaction boundary, stated as a resource claim: this module holds no
-  // classifier and must never hand foreign text to `console`, which stringifies
+  // classifier and must never hand foreign text to the logger, which renders
   // whatever it is given. The cause still reaches consumers on the tagged
   // failure; it just never reaches a log line from here.
   const SENTINEL = 'SUPERSECRETTOKEN12345';
@@ -348,40 +350,76 @@ test('a close failure is logged with the port and never with its cause', async (
   const port = occupied.port;
   await occupied.release();
 
-  const warnings: string[] = [];
-  const originalWarn = console.warn;
-  // Joined the way the runtime's own log capture does, so a cause passed as a
-  // second argument would be caught rather than silently ignored here.
-  console.warn = (...args: unknown[]) => {
-    warnings.push(args.map(String).join(' '));
-  };
-
+  const logs = makeLogCapture();
   let bound: number | null = null;
-  try {
-    const failing = makeLoopbackPortProbe({
-      afterListening: (listening) =>
-        Effect.sync(() => {
-          bound = listening;
-        }),
-      // The real close still runs, so the listener is released either way; only
-      // its reported outcome is substituted.
-      closeListener: ({ close }) =>
-        close.pipe(
-          Effect.andThen(Effect.fail(new LoopbackPortUnavailable({ cause: new Error(SENTINEL) }))),
-        ),
-    });
+  const failing = makeLoopbackPortProbe({
+    afterListening: (listening) =>
+      Effect.sync(() => {
+        bound = listening;
+      }),
+    // The real close still runs, so the listener is released either way; only
+    // its reported outcome is substituted.
+    closeListener: ({ close }) =>
+      close.pipe(
+        Effect.andThen(Effect.fail(new LoopbackPortUnavailable({ cause: new Error(SENTINEL) }))),
+      ),
+  });
 
-    // A close failure means the port may still be held, so it is not offered.
-    const inactive = await Effect.runPromise(failing.probeInactive(port));
-    assert.equal(inactive, false);
-  } finally {
-    console.warn = originalWarn;
-  }
+  // A close failure means the port may still be held, so it is not offered.
+  const inactive = await runScoped(failing.probeInactive(port).pipe(Effect.provide(logs.layer)));
+  assert.equal(inactive, false);
 
-  const logged = warnings.join('\n');
-  assert.ok(logged.includes('could not close its listener'), 'the warning branch must have run');
-  assert.ok(bound !== null && logged.includes(`port=${String(bound)}`));
-  assert.ok(!logged.includes(SENTINEL), 'a foreign cause must never reach a log line');
+  const warnings = logs.lines.filter((line) =>
+    line.message.includes('could not close its listener'),
+  );
+  assert.equal(warnings.length, 1, 'the warning branch must have run');
+  const [warning] = warnings;
+  assert.equal(warning?.level, 'Warn');
+  assert.ok(bound !== null && warning?.annotations.port === bound);
+  assert.equal(warning?.cause, undefined, 'no cause is attached to the warning');
+  assert.ok(
+    !JSON.stringify(logs.lines).includes(SENTINEL),
+    'a foreign cause must never reach a log line',
+  );
   // Release ran to completion despite the substituted failure.
   await assertImmediatelyRebindable(port);
+});
+
+test('interrupting the loopback port probe closes its listener', async () => {
+  // The probe's only OS resource is its listener (it starts no child process),
+  // so "nothing outlives the call" means the port is free again immediately.
+  const occupied = await occupy();
+  const port = occupied.port;
+  await occupied.release();
+
+  await runScoped(
+    Effect.gen(function* () {
+      const listening = yield* Deferred.make<void>();
+      const held = makeLoopbackPortProbe({
+        afterListening: () =>
+          Deferred.succeed(listening, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const fiber = yield* Effect.forkChild(held.probeInactive(port));
+      yield* Deferred.await(listening);
+      yield* Fiber.interrupt(fiber);
+      const exit = yield* Fiber.await(fiber);
+      assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+    }),
+  );
+  await assertImmediatelyRebindable(port);
+});
+
+test('loopback port probe timeout fails with the typed timeout error and closes the listener', async () => {
+  const assigned: number[] = [];
+  const stalled = makeLoopbackPortProbe({
+    afterListening: (bound) =>
+      Effect.sync(() => assigned.push(bound)).pipe(Effect.andThen(Effect.never)),
+  });
+
+  const error = await runScoped(
+    Effect.flip(stalled.obtainEphemeralPort.pipe(Effect.timeout('200 millis'))),
+  );
+  assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+  assert.equal(assigned.length, 1, 'the deadline must land on a bound listener');
+  await assertImmediatelyRebindable(assigned[0] ?? 0);
 });

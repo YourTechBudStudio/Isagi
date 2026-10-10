@@ -49,13 +49,13 @@ const CLASSIFICATION_ENV = { LC_ALL: 'C', LANG: 'C', LANGUAGE: 'C' } as const;
  * Canonicalizes and stats the path without consulting Git, so a duplicate
  * registration can be detected before any subprocess runs.
  */
-export function normalizeExistingDirectory(input: string) {
-  return Effect.gen(function* () {
-    const rootPath = normalizeProjectPath(input);
-    yield* validateDirectory(rootPath);
-    return { rootPath, name: basename(rootPath) || rootPath } satisfies ValidProjectRoot;
-  });
-}
+export const normalizeExistingDirectory = Effect.fn('git.normalizeExistingDirectory')(function* (
+  input: string,
+) {
+  const rootPath = normalizeProjectPath(input);
+  yield* validateDirectory(rootPath);
+  return { rootPath, name: basename(rootPath) || rootPath } satisfies ValidProjectRoot;
+});
 
 /**
  * Decides whether a path is a supported Git root or an ordinary folder.
@@ -67,84 +67,74 @@ export function normalizeExistingDirectory(input: string) {
  * stored, a wrong `folder` verdict cannot be repaired later; a wrong refusal
  * costs the user one actionable error message.
  */
-export function classifyProjectRoot(root: ValidProjectRoot) {
-  return Effect.gen(function* () {
-    const git = yield* Git;
-    const probe = (args: readonly string[]) =>
-      git.run(args, { env: CLASSIFICATION_ENV }).pipe(Effect.map(({ stdout }) => stdout.trim()));
+export const classifyProjectRoot = Effect.fn('git.classifyProjectRoot')(function* (
+  root: ValidProjectRoot,
+) {
+  const git = yield* Git;
+  const probe = (args: readonly string[]) =>
+    git.run(args, { env: CLASSIFICATION_ENV }).pipe(Effect.map(({ stdout }) => stdout.trim()));
 
-    // Step 1. `--is-bare-repository` succeeds inside every supported layout
-    // whenever git can read valid metadata, so "outside a repository" is one
-    // unambiguous branch rather than a second string match.
-    const bare = yield* probe(['-C', root.rootPath, 'rev-parse', '--is-bare-repository']).pipe(
-      Effect.map((stdout) => ({ ok: true, stdout }) as const),
-      Effect.catch((error) => Effect.succeed({ ok: false, error } as const)),
-    );
+  // Step 1. `--is-bare-repository` succeeds inside every supported layout
+  // whenever git can read valid metadata, so "outside a repository" is one
+  // unambiguous branch rather than a second string match.
+  const bare = yield* probe(['-C', root.rootPath, 'rev-parse', '--is-bare-repository']).pipe(
+    Effect.map((stdout) => ({ ok: true, stdout }) as const),
+    Effect.catch((error) => Effect.succeed({ ok: false, error } as const)),
+  );
 
-    if (!bare.ok) {
-      return yield* classifyAfterNegativeAnswer(bare.error, root);
-    }
-    if (bare.stdout === 'true') {
-      return yield* Effect.fail(
-        new ProjectPathValidationError({
-          code: 'bare_repository',
-          message: `That path is a bare Git repository, which has no working tree: ${root.rootPath}`,
-          path: root.rootPath,
-        }),
-      );
-    }
-    if (bare.stdout !== 'false') {
-      return yield* Effect.fail(
-        unexpectedProbeOutput(root.rootPath, 'rev-parse --is-bare-repository'),
-      );
-    }
+  if (!bare.ok) {
+    return yield* classifyAfterNegativeAnswer(bare.error, root);
+  }
+  if (bare.stdout === 'true') {
+    return yield* new ProjectPathValidationError({
+      code: 'bare_repository',
+      message: `That path is a bare Git repository, which has no working tree: ${root.rootPath}`,
+      path: root.rootPath,
+    });
+  }
+  if (bare.stdout !== 'false') {
+    return yield* unexpectedProbeOutput(root.rootPath, 'rev-parse --is-bare-repository');
+  }
 
-    // Step 2. Exact root equality. Validate the output before resolving it: an
-    // empty string would normalize to the home directory.
-    const topLevelRaw = yield* probe(['-C', root.rootPath, 'rev-parse', '--show-toplevel']).pipe(
-      Effect.mapError((error) => operationalGitFailure(error, root.rootPath)),
-    );
-    if (topLevelRaw.length === 0) {
-      return yield* Effect.fail(unexpectedProbeOutput(root.rootPath, 'rev-parse --show-toplevel'));
-    }
-    const topLevel = normalizeProjectPath(topLevelRaw);
-    if (topLevel !== root.rootPath) {
-      return yield* Effect.fail(
-        new ProjectPathValidationError({
-          code: 'not_repository_root',
-          message: `Expected the repository root exactly, but ${root.rootPath} resolves inside ${topLevel}.`,
-          path: root.rootPath,
-        }),
-      );
-    }
+  // Step 2. Exact root equality. Validate the output before resolving it: an
+  // empty string would normalize to the home directory.
+  const topLevelRaw = yield* probe(['-C', root.rootPath, 'rev-parse', '--show-toplevel']).pipe(
+    Effect.mapError((error) => operationalGitFailure(error, root.rootPath)),
+  );
+  if (topLevelRaw.length === 0) {
+    return yield* unexpectedProbeOutput(root.rootPath, 'rev-parse --show-toplevel');
+  }
+  const topLevel = normalizeProjectPath(topLevelRaw);
+  if (topLevel !== root.rootPath) {
+    return yield* new ProjectPathValidationError({
+      code: 'not_repository_root',
+      message: `Expected the repository root exactly, but ${root.rootPath} resolves inside ${topLevel}.`,
+      path: root.rootPath,
+    });
+  }
 
-    // Step 3. Unchanged linked-worktree and separate-git-dir restrictions.
-    yield* rejectLinkedWorktree(root.rootPath, probe);
+  // Step 3. Unchanged linked-worktree and separate-git-dir restrictions.
+  yield* rejectLinkedWorktree(root.rootPath, probe);
 
-    return {
-      kind: 'git',
-      rootPath: root.rootPath,
-      name: root.name,
-    } satisfies ProjectRootClassification;
-  });
-}
+  return {
+    kind: 'git',
+    rootPath: root.rootPath,
+    name: root.name,
+  } satisfies ProjectRootClassification;
+});
 
-export function validateProjectRoot(input: string) {
-  return Effect.gen(function* () {
-    const root = yield* normalizeExistingDirectory(input);
-    const classification = yield* classifyProjectRoot(root);
-    if (classification.kind === 'folder') {
-      return yield* Effect.fail(
-        new ProjectPathValidationError({
-          code: 'not_git_repository',
-          message: `Not a Git repository: ${root.rootPath}`,
-          path: root.rootPath,
-        }),
-      );
-    }
-    return { rootPath: root.rootPath, name: root.name } satisfies ValidProjectRoot;
-  });
-}
+export const validateProjectRoot = Effect.fn('git.validateProjectRoot')(function* (input: string) {
+  const root = yield* normalizeExistingDirectory(input);
+  const classification = yield* classifyProjectRoot(root);
+  if (classification.kind === 'folder') {
+    return yield* new ProjectPathValidationError({
+      code: 'not_git_repository',
+      message: `Not a Git repository: ${root.rootPath}`,
+      path: root.rootPath,
+    });
+  }
+  return { rootPath: root.rootPath, name: root.name } satisfies ValidProjectRoot;
+});
 
 /**
  * The single branch that can reach a `folder` verdict. A negative answer only
@@ -224,44 +214,38 @@ function unexpectedProbeOutput(path: string, probe: string) {
   });
 }
 
-function rejectLinkedWorktree(
+const rejectLinkedWorktree = Effect.fnUntraced(function* (
   rootPath: string,
   probe: (args: readonly string[]) => Effect.Effect<string, GitCommandError>,
 ) {
-  return Effect.gen(function* () {
-    const gitPath = join(rootPath, '.git');
-    const isGitDirectory = existsSync(gitPath) && statSync(gitPath).isDirectory();
-    if (!isGitDirectory) {
-      return yield* Effect.fail(
-        new ProjectPathValidationError({
-          code: 'linked_worktree_checkout',
-          message:
-            'That path looks like a linked Git worktree. Add the main/root checkout path instead.',
-          path: rootPath,
-        }),
-      );
-    }
+  const gitPath = join(rootPath, '.git');
+  const isGitDirectory = existsSync(gitPath) && statSync(gitPath).isDirectory();
+  if (!isGitDirectory) {
+    return yield* new ProjectPathValidationError({
+      code: 'linked_worktree_checkout',
+      message:
+        'That path looks like a linked Git worktree. Add the main/root checkout path instead.',
+      path: rootPath,
+    });
+  }
 
-    const commonDir = yield* probe(['-C', rootPath, 'rev-parse', '--git-common-dir']).pipe(
-      Effect.mapError((error) => operationalGitFailure(error, rootPath)),
-    );
-    if (commonDir.length === 0) {
-      return yield* Effect.fail(unexpectedProbeOutput(rootPath, 'rev-parse --git-common-dir'));
-    }
-    const normalizedCommonDir = normalizeProjectPath(resolve(rootPath, commonDir));
-    const expectedCommonDir = normalizeProjectPath(gitPath);
-    if (normalizedCommonDir !== expectedCommonDir) {
-      return yield* Effect.fail(
-        new ProjectPathValidationError({
-          code: 'linked_worktree_checkout',
-          message:
-            'That path resolves to a linked Git worktree. Add the main/root checkout path instead.',
-          path: rootPath,
-        }),
-      );
-    }
-  });
-}
+  const commonDir = yield* probe(['-C', rootPath, 'rev-parse', '--git-common-dir']).pipe(
+    Effect.mapError((error) => operationalGitFailure(error, rootPath)),
+  );
+  if (commonDir.length === 0) {
+    return yield* unexpectedProbeOutput(rootPath, 'rev-parse --git-common-dir');
+  }
+  const normalizedCommonDir = normalizeProjectPath(resolve(rootPath, commonDir));
+  const expectedCommonDir = normalizeProjectPath(gitPath);
+  if (normalizedCommonDir !== expectedCommonDir) {
+    return yield* new ProjectPathValidationError({
+      code: 'linked_worktree_checkout',
+      message:
+        'That path resolves to a linked Git worktree. Add the main/root checkout path instead.',
+      path: rootPath,
+    });
+  }
+});
 
 /**
  * `stat` alone decides, because it is the only call that can tell the three
@@ -271,45 +255,42 @@ function rejectLinkedWorktree(
  * unreachable. `ENOENT` and `ENOTDIR` keep the wording that guard produced, so
  * the only user-visible change is that a refused stat now says so.
  */
-function validateDirectory(path: string) {
-  return Effect.try({
-    try: () => {
-      const stat = statSync(path);
-      if (!stat.isDirectory()) {
-        throw new ProjectPathValidationError({
-          code: 'not_directory',
-          message: `Path is not a directory: ${path}`,
-          path,
-        });
-      }
-    },
-    catch: (error) => {
-      if (error instanceof ProjectPathValidationError) {
-        return error;
-      }
-      if (isPermissionError(error)) {
-        return new ProjectPathValidationError({
-          code: 'permission_denied',
-          cause: error,
-          message: `Permission denied while reading ${path}.`,
-          path,
-        });
-      }
-      if (isAbsentPathError(error)) {
-        return new ProjectPathValidationError({
-          code: 'path_not_found',
-          cause: error,
-          message: `Path not found: ${path}`,
-          path,
-        });
-      }
-      return new ProjectPathValidationError({
-        code: 'path_not_found',
-        cause: error,
-        message: `Could not inspect path ${path}.`,
-        path,
-      });
-    },
+const validateDirectory = Effect.fnUntraced(function* (path: string) {
+  const stat = yield* Effect.try({
+    try: () => statSync(path),
+    catch: (error) => statFailure(path, error),
+  });
+  if (!stat.isDirectory()) {
+    return yield* new ProjectPathValidationError({
+      code: 'not_directory',
+      message: `Path is not a directory: ${path}`,
+      path,
+    });
+  }
+});
+
+function statFailure(path: string, error: unknown) {
+  if (isPermissionError(error)) {
+    return new ProjectPathValidationError({
+      code: 'permission_denied',
+      cause: error,
+      message: `Permission denied while reading ${path}.`,
+      path,
+    });
+  }
+  if (isAbsentPathError(error)) {
+    return new ProjectPathValidationError({
+      code: 'path_not_found',
+      cause: error,
+      message: `Path not found: ${path}`,
+      path,
+    });
+  }
+  return new ProjectPathValidationError({
+    code: 'path_not_found',
+    cause: error,
+    message: `Could not inspect path ${path}.`,
+    path,
   });
 }
 

@@ -1,22 +1,21 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
 import { Context, Data, Effect, Layer } from 'effect';
 
-const execFileAsync = promisify(execFile);
+import { execCommand, type ExecFailure } from '../process/index.js';
 
 /**
- * Why a git command failed, derived once from the `execFile` rejection where the
- * evidence still exists. Callers that must not confuse "git said no" with "git
- * never ran" — project-root classification above all — branch on this rather
- * than on `stderr` text.
+ * Why a git command failed, derived once by `platform/process`'s `classifyExecFailure` from the `execFile` rejection
+ * where the evidence still exists. Callers that must not confuse "git said no" with "git never ran" — project-root
+ * classification above all — branch on this rather than on `stderr` text.
+ *
+ * `aborted` stays in the union for completeness but is unreachable as a failure: interrupting `Git.run` (a client
+ * disconnect, a timeout, shutdown) kills the child and interrupts the caller instead of failing it.
  */
-export type GitCommandFailure =
-  | { readonly kind: 'spawn_failed'; readonly systemErrorCode: string | null }
-  | { readonly kind: 'exited'; readonly exitCode: number }
-  | { readonly kind: 'signalled'; readonly signal: string }
-  | { readonly kind: 'aborted' };
+export type GitCommandFailure = ExecFailure;
 
+/**
+ * A git command that could not be started, exited non-zero, or was killed. `cause` is the raw `execFile` rejection and
+ * `stderr` whatever git wrote before it ended; both may echo user data.
+ */
 export class GitCommandError extends Data.TaggedError('GitCommandError')<{
   readonly args: readonly string[];
   readonly cause: unknown;
@@ -25,101 +24,51 @@ export class GitCommandError extends Data.TaggedError('GitCommandError')<{
   readonly stderr: string;
 }> {}
 
+export interface GitRunOptions {
+  readonly cwd?: string | undefined;
+  /** Merged over `process.env` for this child only. */
+  readonly env?: Readonly<Record<string, string>> | undefined;
+  /**
+   * Inherited variables removed before `env` is merged. For callers that must not be retargeted by
+   * the runtime's own environment — `-C <dir>` does not override an inherited `GIT_DIR`.
+   */
+  readonly unsetEnv?: readonly string[] | undefined;
+  /** Largest stdout or stderr accepted before the child is killed; defaults to 1 MiB. */
+  readonly maxBuffer?: number | undefined;
+}
+
+/**
+ * Runs `git` (no shell) through the shared `execCommand` adapter. Interrupting the effect kills the child, so a
+ * cancelled request or an `Effect.timeout` around a call never leaves git running.
+ */
+const run = Effect.fn('Git.run')(function* (args: readonly string[], options: GitRunOptions = {}) {
+  return yield* execCommand('git', args, {
+    cwd: options.cwd,
+    env: options.env,
+    unsetEnv: options.unsetEnv,
+    maxBuffer: options.maxBuffer,
+  }).pipe(
+    Effect.mapError(
+      (error) =>
+        new GitCommandError({
+          args,
+          cause: error.cause,
+          cwd: options.cwd,
+          failure: error.failure,
+          stderr: error.stderr,
+        }),
+    ),
+  );
+});
+
 export class Git extends Context.Service<
   Git,
   {
     readonly run: (
       args: readonly string[],
-      options?: {
-        readonly cwd?: string | undefined;
-        /** Merged over `process.env` for this child only. */
-        readonly env?: Readonly<Record<string, string>> | undefined;
-        /**
-         * Inherited variables removed before `env` is merged. For callers that must not be retargeted by
-         * the runtime's own environment — `-C <dir>` does not override an inherited `GIT_DIR`.
-         */
-        readonly unsetEnv?: readonly string[] | undefined;
-        /** Largest stdout or stderr accepted before the child is killed; defaults to 1 MiB. */
-        readonly maxBuffer?: number | undefined;
-      },
+      options?: GitRunOptions,
     ) => Effect.Effect<{ readonly stdout: string; readonly stderr: string }, GitCommandError>;
   }
 >()('isagi/runtime/platform/git/Git') {
-  static readonly layer = Layer.succeed(
-    Git,
-    Git.of({
-      run: (args, options = {}) =>
-        Effect.tryPromise({
-          try: async (signal) => {
-            const { stdout, stderr } = await execFileAsync('git', [...args], {
-              cwd: options.cwd,
-              encoding: 'utf8',
-              env: options.env || options.unsetEnv ? childEnvironment(options) : undefined,
-              maxBuffer: options.maxBuffer ?? 1024 * 1024,
-              signal,
-            });
-            return { stdout, stderr };
-          },
-          catch: (cause) =>
-            new GitCommandError({
-              args,
-              cause,
-              cwd: options.cwd,
-              failure: deriveGitCommandFailure(cause),
-              stderr: errorWithStderr(cause),
-            }),
-        }),
-    }),
-  );
-}
-
-function childEnvironment(options: {
-  readonly env?: Readonly<Record<string, string>> | undefined;
-  readonly unsetEnv?: readonly string[] | undefined;
-}) {
-  const inherited: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of options.unsetEnv ?? []) delete inherited[name];
-  return { ...inherited, ...options.env };
-}
-
-/**
- * Precedence is deliberate and load-bearing: an abort is reported by name, a
- * killed child by `signal`, an ordinary refusal by a numeric `code`, and a
- * launch failure by a string `code`. Anything unrecognized falls into
- * `spawn_failed` with a null code — the conservative bucket, because it is the
- * one classification never treats as evidence of anything.
- *
- * Exported for direct testing of that precedence; deliberately not re-exported
- * through `git/index.ts`, since no consumer outside this module needs it.
- */
-export function deriveGitCommandFailure(cause: unknown): GitCommandFailure {
-  if (!cause || typeof cause !== 'object') {
-    return { kind: 'spawn_failed', systemErrorCode: null };
-  }
-
-  const candidate = cause as { name?: unknown; signal?: unknown; code?: unknown };
-
-  if (candidate.name === 'AbortError') {
-    return { kind: 'aborted' };
-  }
-  if (typeof candidate.signal === 'string' && candidate.signal.length > 0) {
-    return { kind: 'signalled', signal: candidate.signal };
-  }
-  if (typeof candidate.code === 'number') {
-    return { kind: 'exited', exitCode: candidate.code };
-  }
-  if (typeof candidate.code === 'string' && candidate.code.length > 0) {
-    return { kind: 'spawn_failed', systemErrorCode: candidate.code };
-  }
-  return { kind: 'spawn_failed', systemErrorCode: null };
-}
-
-function errorWithStderr(error: unknown) {
-  if (error && typeof error === 'object' && 'stderr' in error) {
-    const stderr = (error as { stderr?: unknown }).stderr;
-    if (typeof stderr === 'string') {
-      return stderr;
-    }
-  }
-  return '';
+  static readonly layer = Layer.succeed(Git, Git.of({ run }));
 }

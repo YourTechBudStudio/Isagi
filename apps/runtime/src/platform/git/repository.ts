@@ -6,31 +6,21 @@ import { Git } from './command.js';
 import { normalizeProjectPath } from './project-root.js';
 import { parseGitWorktreeListPorcelain, type GitWorktreeRecord } from './worktree.list.js';
 
-export function listGitWorktrees(rootPath: string) {
-  return Effect.gen(function* () {
-    const git = yield* Git;
-    return yield* git
-      .run(['-C', rootPath, 'worktree', 'list', '--porcelain'])
-      .pipe(
-        Effect.map(({ stdout }) => normalizeWorktreeRecords(parseGitWorktreeListPorcelain(stdout))),
-      );
-  });
-}
+export const listGitWorktrees = Effect.fn('git.listGitWorktrees')(function* (rootPath: string) {
+  const git = yield* Git;
+  const { stdout } = yield* git.run(['-C', rootPath, 'worktree', 'list', '--porcelain']);
+  return normalizeWorktreeRecords(parseGitWorktreeListPorcelain(stdout));
+});
 
-export function listLocalBranches(rootPath: string) {
-  return Effect.gen(function* () {
-    const git = yield* Git;
-    return yield* git.run(['-C', rootPath, 'branch', '--format=%(refname:short)']).pipe(
-      Effect.map(({ stdout }) =>
-        stdout
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-          .sort((left, right) => left.localeCompare(right)),
-      ),
-    );
-  });
-}
+export const listLocalBranches = Effect.fn('git.listLocalBranches')(function* (rootPath: string) {
+  const git = yield* Git;
+  const { stdout } = yield* git.run(['-C', rootPath, 'branch', '--format=%(refname:short)']);
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .sort((left, right) => left.localeCompare(right));
+});
 
 export function branchPathHash(branch: string) {
   return createHash('sha256').update(branch).digest('hex').slice(0, 16);

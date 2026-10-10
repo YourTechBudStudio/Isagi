@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process';
+import { Context, Duration, Effect, Layer, Option } from 'effect';
 
-import { Context, Effect, Layer } from 'effect';
-
+import { spawnProcessGroup } from './process-group.js';
 import { userShellBaseEnv } from './shell-env.js';
 import { shellLaunchCommand } from './shell-launch.js';
 
@@ -15,11 +14,16 @@ export interface UserShellCommand {
   readonly maxOutputBytes: number;
 }
 
+/**
+ * Everything a user-shell command produced. Never a failure: a command that could not start, exited non-zero, ran
+ * past its deadline or wrote too much is described here, and the caller decides what that means.
+ */
 export interface UserShellCommandResult {
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly stdout: string;
   readonly stderr: string;
+  /** The command ran past `timeoutMs`; its whole process group was `SIGKILL`ed. */
   readonly timedOut: boolean;
   readonly outputTruncated: boolean;
   readonly spawnError?: string | undefined;
@@ -38,14 +42,27 @@ const make = Effect.gen(function* () {
   const environment = yield* resolveUserShellEnvironment(baseEnvironment);
   return UserShell.of({
     environment,
-    run: (input) => runUserShellCommand(input, environment.values),
+    run: Effect.fn('UserShell.run')(function* (input) {
+      return yield* runUserShellCommand(input, environment.values);
+    }),
   });
 });
 
+/**
+ * The user's login-shell environment, probed once at startup, and a runner for short commands in that shell.
+ *
+ * A platform layer service: its live layer spawns the user's shell while the runtime starts, so tests always replace
+ * it (`Layer.succeed(UserShell, UserShell.of({...}))`).
+ */
 export class UserShell extends Context.Service<
   UserShell,
   {
     readonly environment: UserShellEnvironmentResult;
+    /**
+     * Runs `command` through the user's shell as the leader of its own process group. The group is `SIGKILL`ed when
+     * the command passes `timeoutMs` (reported as `timedOut`) or when the caller is interrupted, so nothing it started
+     * outlives the call.
+     */
     readonly run: (command: UserShellCommand) => Effect.Effect<UserShellCommandResult>;
   }
 >()('isagi/runtime/platform/process/UserShell') {
@@ -82,89 +99,85 @@ export function resolveUserShellEnvironment(
   );
 }
 
-export function runUserShellCommand(
+/** Exported for tests; production code calls `UserShell.run`, which supplies the probed environment. */
+export const runUserShellCommand = Effect.fnUntraced(function* (
   input: UserShellCommand,
   environment: NodeJS.ProcessEnv,
-): Effect.Effect<UserShellCommandResult> {
-  return Effect.callback((resume) => {
-    const launch = shellLaunchCommand({
-      launch: {
-        command: input.command,
-        args: input.args,
-        launchMode: 'user_shell',
-      },
-      env: environment,
-    });
-    const child = spawn(launch.command, launch.args, {
-      cwd: process.cwd(),
-      detached: process.platform !== 'win32',
-      env: environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let outputTruncated = false;
-    let timedOut = false;
-    let completed = false;
+) {
+  const launch = shellLaunchCommand({
+    launch: {
+      command: input.command,
+      args: input.args,
+      launchMode: 'user_shell',
+    },
+    env: environment,
+  });
+  const output = boundedOutput(input.maxOutputBytes);
+  let timedOut = false;
 
-    const append = (chunks: Buffer[], chunk: Buffer, currentBytes: number) => {
-      const remaining = Math.max(0, input.maxOutputBytes - currentBytes);
-      if (chunk.length > remaining) outputTruncated = true;
-      if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
-      return currentBytes + Math.min(chunk.length, remaining);
-    };
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBytes = append(stdout, chunk, stdoutBytes);
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrBytes = append(stderr, chunk, stderrBytes);
-    });
-
-    const finish = (result: UserShellCommandResult) => {
-      if (completed) return;
-      completed = true;
-      clearTimeout(timeout);
-      resume(Effect.succeed(result));
-    };
-    const output = () => ({
-      stdout: Buffer.concat(stdout).toString('utf8'),
-      stderr: Buffer.concat(stderr).toString('utf8'),
-    });
-    child.once('error', (error) => {
-      finish({
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      // The scope owns the group: if this fiber is interrupted before the leader exits, the group is SIGKILLed.
+      const group = yield* spawnProcessGroup({
+        command: launch.command,
+        args: launch.args,
+        cwd: process.cwd(),
+        env: environment,
+        onOutput: output.append,
+      });
+      const settled = yield* Effect.timeoutOption(group.exit, Duration.millis(input.timeoutMs));
+      if (Option.isSome(settled)) return settled.value;
+      timedOut = true;
+      yield* group.signal('SIGKILL');
+      // Waits for `close`, so the result carries the kill signal and every chunk written before it.
+      return yield* group.exit;
+    }),
+  ).pipe(
+    Effect.map(
+      (exit): UserShellCommandResult => ({
+        exitCode: exit.exitCode,
+        signal: exit.signal,
+        ...output.text(),
+        timedOut,
+        outputTruncated: output.truncated(),
+      }),
+    ),
+    Effect.catchTag('ProcessSpawnFailed', (error) =>
+      Effect.succeed<UserShellCommandResult>({
         exitCode: null,
         signal: null,
-        ...output(),
+        ...output.text(),
         timedOut,
-        outputTruncated,
-        spawnError: error.message,
-      });
-    });
-    child.once('close', (exitCode, signal) => {
-      finish({ exitCode, signal, ...output(), timedOut, outputTruncated });
-    });
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      killProcessTree(child.pid);
-    }, input.timeoutMs);
-    timeout.unref();
+        outputTruncated: output.truncated(),
+        spawnError: spawnErrorMessage(error.cause),
+      }),
+    ),
+  );
+});
 
-    return Effect.sync(() => {
-      if (!completed) killProcessTree(child.pid);
-    });
-  });
+/** Keeps at most `limit` bytes per stream, remembering whether anything was dropped. */
+function boundedOutput(limit: number) {
+  const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+  const bytes = { stdout: 0, stderr: 0 };
+  let truncated = false;
+  return {
+    append: (chunk: Buffer, stream: 'stdout' | 'stderr') => {
+      const remaining = Math.max(0, limit - bytes[stream]);
+      if (chunk.length > remaining) truncated = true;
+      if (remaining > 0) chunks[stream].push(chunk.subarray(0, remaining));
+      bytes[stream] += Math.min(chunk.length, remaining);
+    },
+    text: () => ({
+      stdout: Buffer.concat(chunks.stdout).toString('utf8'),
+      stderr: Buffer.concat(chunks.stderr).toString('utf8'),
+    }),
+    truncated: () => truncated,
+  };
 }
 
-function killProcessTree(pid: number | undefined) {
-  if (!pid) return;
-  try {
-    if (process.platform !== 'win32') process.kill(-pid, 'SIGKILL');
-    else process.kill(pid, 'SIGKILL');
-  } catch {
-    // The process may have exited between the timeout/cancellation and cleanup.
-  }
+/** The spawn error's own message (`spawn /bin/zsh ENOENT`), as the probe diagnostic has always reported it. */
+function spawnErrorMessage(cause: unknown) {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function parseEnvironment(stdout: string): NodeJS.ProcessEnv {

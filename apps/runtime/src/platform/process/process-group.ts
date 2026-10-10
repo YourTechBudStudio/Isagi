@@ -78,32 +78,30 @@ export const terminateGroup = Effect.fn('process.terminateGroup')(function* (
   if (Option.isNone(settled)) yield* group.signal('SIGKILL');
 });
 
-function startGroupLeader(spec: ProcessGroupSpec) {
-  return Effect.gen(function* () {
-    const exited = yield* Deferred.make<ProcessExit, ProcessSpawnFailed>();
-    const child = yield* Effect.try({
-      try: () =>
-        spawn(spec.command, [...(spec.args ?? [])], {
-          cwd: spec.cwd,
-          env: spec.env,
-          shell: spec.shell ?? false,
-          detached: process.platform !== 'win32',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }),
-      catch: (cause) => spawnFailed(spec.command, cause),
-    });
-    child.stdout?.on('data', (chunk: Buffer) => spec.onOutput(chunk, 'stdout'));
-    child.stderr?.on('data', (chunk: Buffer) => spec.onOutput(chunk, 'stderr'));
-    // The first of `error` and `close` settles the exit; a later one is ignored.
-    child.once('error', (cause) =>
-      Deferred.doneUnsafe(exited, Exit.fail(spawnFailed(spec.command, cause))),
-    );
-    child.once('close', (exitCode, signal) =>
-      Deferred.doneUnsafe(exited, Exit.succeed({ exitCode, signal })),
-    );
-    return { child, exited };
+const startGroupLeader = Effect.fnUntraced(function* (spec: ProcessGroupSpec) {
+  const exited = yield* Deferred.make<ProcessExit, ProcessSpawnFailed>();
+  const child = yield* Effect.try({
+    try: () =>
+      spawn(spec.command, [...(spec.args ?? [])], {
+        cwd: spec.cwd,
+        env: spec.env,
+        shell: spec.shell ?? false,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    catch: (cause) => spawnFailed(spec.command, cause),
   });
-}
+  child.stdout?.on('data', (chunk: Buffer) => spec.onOutput(chunk, 'stdout'));
+  child.stderr?.on('data', (chunk: Buffer) => spec.onOutput(chunk, 'stderr'));
+  // The first of `error` and `close` settles the exit; a later one is ignored.
+  child.once('error', (cause) =>
+    Deferred.doneUnsafe(exited, Exit.fail(spawnFailed(spec.command, cause))),
+  );
+  child.once('close', (exitCode, signal) =>
+    Deferred.doneUnsafe(exited, Exit.succeed({ exitCode, signal })),
+  );
+  return { child, exited };
+});
 
 function spawnFailed(command: string, cause: unknown) {
   const code = (cause as { readonly code?: unknown } | null)?.code;

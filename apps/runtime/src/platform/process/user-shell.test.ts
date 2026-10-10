@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { execFileSync } from 'node:child_process';
+import test, { describe } from 'node:test';
 
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, Fiber } from 'effect';
+
+import { expectNoProcessMatching, runScoped } from '@isagi/testing';
 
 import {
   resolveUserShellEnvironment,
@@ -12,7 +15,7 @@ import {
 const environment = { SHELL: '/bin/zsh', PATH: '/bin:/usr/bin' };
 
 test('user-shell runner preserves arguments containing spaces', async () => {
-  const result = await Effect.runPromise(
+  const result = await runScoped(
     runUserShellCommand(
       {
         command: 'printf',
@@ -28,7 +31,7 @@ test('user-shell runner preserves arguments containing spaces', async () => {
 });
 
 test('user-shell runner bounds output and command duration', async () => {
-  const bounded = await Effect.runPromise(
+  const bounded = await runScoped(
     runUserShellCommand(
       { command: 'printf', args: ['%05000d', '1'], timeoutMs: 2_000, maxOutputBytes: 64 },
       environment,
@@ -37,7 +40,7 @@ test('user-shell runner bounds output and command duration', async () => {
   assert.equal(bounded.outputTruncated, true);
   assert.equal(Buffer.byteLength(bounded.stdout), 64);
 
-  const timed = await Effect.runPromise(
+  const timed = await runScoped(
     runUserShellCommand(
       { command: 'sleep', args: ['1'], timeoutMs: 10, maxOutputBytes: 64 },
       environment,
@@ -48,7 +51,7 @@ test('user-shell runner bounds output and command duration', async () => {
 
 test('login-shell environment resolution strips runtime controls and keeps discovered user paths', async () => {
   let calls = 0;
-  const result = await Effect.runPromise(
+  const result = await runScoped(
     resolveUserShellEnvironment(
       {
         HOME: '/home/developer',
@@ -88,7 +91,7 @@ test('login-shell environment resolution falls back to its sanitized base enviro
     HOME: '/home/developer',
     PATH: '/usr/bin:/bin',
   };
-  const result = await Effect.runPromise(
+  const result = await runScoped(
     resolveUserShellEnvironment(baseEnvironment, () =>
       Effect.succeed({
         ...success(''),
@@ -106,6 +109,104 @@ test('login-shell environment resolution falls back to its sanitized base enviro
       COLORTERM: 'truecolor',
     },
     diagnostic: 'shell startup failed',
+  });
+});
+
+/**
+ * The runner is the lifecycle guarantee behind the startup environment probe: a shell that hangs in its rc files must
+ * not outlive the call, and neither may anything it started in the background. Every test marks its processes with a
+ * `sleep` duration nothing else uses and asserts with `pgrep` that none survive.
+ */
+const posixOnly = process.platform === 'win32' ? 'process groups are POSIX-only' : false;
+const uniqueSleep = () => `30.${process.pid}${Math.floor(Math.random() * 1_000_000)}`;
+const shellEnvironment = { ...process.env, SHELL: '/bin/sh' };
+
+const processRunning = (marker: string) => {
+  try {
+    execFileSync('pgrep', ['-f', marker.replace(/\./g, '\\.')]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const waitForProcess = (marker: string) =>
+  Effect.promise(async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (processRunning(marker)) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`no process matching ${marker} started`);
+  });
+
+/** `sleep` in the background and the foreground, so the group has a child beside the shell. */
+const sleepingCommand = (marker: string) => ({
+  command: 'sh',
+  args: ['-c', `sleep ${marker} & sleep ${marker}`],
+  maxOutputBytes: 1024,
+});
+
+describe('user-shell child lifecycle', { skip: posixOnly }, () => {
+  test('interrupting user-shell kills its child process', async () => {
+    const marker = uniqueSleep();
+    await runScoped(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          runUserShellCommand({ ...sleepingCommand(marker), timeoutMs: 30_000 }, shellEnvironment),
+        );
+        yield* waitForProcess(marker);
+        yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+        assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+        yield* expectNoProcessMatching(marker);
+      }),
+    );
+  });
+
+  test('user-shell timeout fails with the typed timeout error and kills the child', async () => {
+    // A caller's own deadline (`Effect.timeout` around the run) interrupts it: the failure is the typed
+    // `TimeoutError`, and the scope that owns the process group kills the whole group.
+    const marker = uniqueSleep();
+    await runScoped(
+      Effect.gen(function* () {
+        const timed = yield* Effect.forkChild(
+          Effect.flip(
+            runUserShellCommand(
+              { ...sleepingCommand(marker), timeoutMs: 30_000 },
+              shellEnvironment,
+            ).pipe(Effect.timeout('1 second')),
+          ),
+        );
+        yield* waitForProcess(marker);
+        const error = yield* Fiber.join(timed);
+        assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+        yield* expectNoProcessMatching(marker);
+      }),
+    );
+  });
+
+  test('a command past its own deadline reports timedOut and leaves no process behind', async () => {
+    // `timeoutMs` is the runner's deadline: not a failure but a described outcome, with the group SIGKILLed.
+    const marker = uniqueSleep();
+    const result = await runScoped(
+      runUserShellCommand({ ...sleepingCommand(marker), timeoutMs: 300 }, shellEnvironment),
+    );
+    assert.equal(result.timedOut, true);
+    assert.equal(result.signal, 'SIGKILL');
+    assert.equal(result.spawnError, undefined);
+    await runScoped(expectNoProcessMatching(marker));
+  });
+
+  test('a shell that cannot start is described by spawnError, not a failure', async () => {
+    const result = await runScoped(
+      runUserShellCommand(
+        { command: 'true', args: [], timeoutMs: 2_000, maxOutputBytes: 64 },
+        { ...process.env, SHELL: '/definitely/not/a/shell' },
+      ),
+    );
+    assert.equal(result.exitCode, null);
+    assert.equal(result.timedOut, false);
+    assert.match(result.spawnError ?? '', /ENOENT/);
   });
 });
 
