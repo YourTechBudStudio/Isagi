@@ -28,9 +28,10 @@ export interface WorkspaceReconcileProjectWorktreesResult {
 }
 
 /**
- * Reorder outcomes are returned, never thrown: `database.transaction` turns any
- * throw into a `DatabaseError`, which would report an expected rejection as a
- * runtime fault. The service converts a rejection into its tagged domain error.
+ * Reorder outcomes are returned as values, never thrown: a plain throw inside
+ * `database.transaction` becomes a `DatabaseError`, which would report an
+ * expected rejection as a runtime fault. A rejection writes nothing, so it needs
+ * no rollback. The workspace service converts it into its tagged domain error.
  */
 export type ProjectOrderMoveResult =
   | { readonly status: 'moved' }
@@ -44,75 +45,98 @@ const make = Effect.gen(function* () {
   const database = yield* RuntimeDatabase;
 
   return ProjectRepository.of({
-    findProject: (projectId) =>
-      database.use<ProjectRow | null>('find_project', (db) => {
+    findProject: Effect.fn('ProjectRepository.findProject')(function* (projectId) {
+      return yield* database.use<ProjectRow | null>('find_project', (db) => {
         const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
         return row ? projectRow(row) : null;
-      }),
-    findProjectByRootPath: (rootPath) =>
-      database.use<ProjectRow | null>('find_project_by_root_path', (db) => {
-        const row = db.select().from(projects).where(eq(projects.rootPath, rootPath)).get();
-        return row ? projectRow(row) : null;
-      }),
-    findWorktree: (worktreeId) =>
-      database.use<WorktreeRow | null>('find_worktree', (db) => {
+      });
+    }),
+    findProjectByRootPath: Effect.fn('ProjectRepository.findProjectByRootPath')(
+      function* (rootPath) {
+        return yield* database.use<ProjectRow | null>('find_project_by_root_path', (db) => {
+          const row = db.select().from(projects).where(eq(projects.rootPath, rootPath)).get();
+          return row ? projectRow(row) : null;
+        });
+      },
+    ),
+    findWorktree: Effect.fn('ProjectRepository.findWorktree')(function* (worktreeId) {
+      return yield* database.use<WorktreeRow | null>('find_worktree', (db) => {
         const row = db.select().from(worktrees).where(eq(worktrees.id, worktreeId)).get();
         return row ? worktreeRow(row) : null;
-      }),
-    findProjectWorktree: (input) =>
-      database.use<WorktreeRow | null>('find_project_worktree', (db) => {
+      });
+    }),
+    findProjectWorktree: Effect.fn('ProjectRepository.findProjectWorktree')(function* (input) {
+      return yield* database.use<WorktreeRow | null>('find_project_worktree', (db) => {
         const row = db
           .select()
           .from(worktrees)
           .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.id, input.worktreeId)))
           .get();
         return row ? worktreeRow(row) : null;
-      }),
-    findProjectRootWorktree: (input) =>
-      database.use<WorktreeRow | null>('find_project_root_worktree', (db) => {
-        const row = db
-          .select()
-          .from(worktrees)
-          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.rootPath)))
-          .get();
-        return row ? worktreeRow(row) : null;
-      }),
-    findProjectWorktreeByBranch: (input) =>
-      database.use<WorktreeRow | null>('find_project_worktree_by_branch', (db) => {
-        const row = db
-          .select()
-          .from(worktrees)
-          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.branch, input.branch)))
-          .get();
-        return row ? worktreeRow(row) : null;
-      }),
-    findProjectWorktreeByPath: (input) =>
-      database.use<WorktreeRow | null>('find_project_worktree_by_path', (db) => {
-        const row = db
-          .select()
-          .from(worktrees)
-          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.path)))
-          .get();
-        return row ? worktreeRow(row) : null;
-      }),
-    deleteProject: (projectId, inTransaction) =>
-      database.transaction('delete_project', (db) => {
-        inTransaction(db);
-        const result = db.delete(projects).where(eq(projects.id, projectId)).run();
-        return result.changes > 0;
-      }),
-    deleteWorktree: (worktreeId) =>
-      database.use('delete_worktree', (db) => {
+      });
+    }),
+    findProjectRootWorktree: Effect.fn('ProjectRepository.findProjectRootWorktree')(
+      function* (input) {
+        return yield* database.use<WorktreeRow | null>('find_project_root_worktree', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(
+              and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.rootPath)),
+            )
+            .get();
+          return row ? worktreeRow(row) : null;
+        });
+      },
+    ),
+    findProjectWorktreeByBranch: Effect.fn('ProjectRepository.findProjectWorktreeByBranch')(
+      function* (input) {
+        return yield* database.use<WorktreeRow | null>('find_project_worktree_by_branch', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(
+              and(eq(worktrees.projectId, input.projectId), eq(worktrees.branch, input.branch)),
+            )
+            .get();
+          return row ? worktreeRow(row) : null;
+        });
+      },
+    ),
+    findProjectWorktreeByPath: Effect.fn('ProjectRepository.findProjectWorktreeByPath')(
+      function* (input) {
+        return yield* database.use<WorktreeRow | null>('find_project_worktree_by_path', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.path)))
+            .get();
+          return row ? worktreeRow(row) : null;
+        });
+      },
+    ),
+    deleteProject: Effect.fn('ProjectRepository.deleteProject')(
+      function* (projectId, inTransaction) {
+        return yield* database.transaction('delete_project', (db) => {
+          inTransaction(db);
+          const result = db.delete(projects).where(eq(projects.id, projectId)).run();
+          return result.changes > 0;
+        });
+      },
+    ),
+    deleteWorktree: Effect.fn('ProjectRepository.deleteWorktree')(function* (worktreeId) {
+      return yield* database.use('delete_worktree', (db) => {
         const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
         return result.changes > 0;
-      }),
-    createProject: (input) =>
+      });
+    }),
+    createProject: Effect.fn('ProjectRepository.createProject')(function* (input) {
       // One transaction for the whole registration unit: the appended rank is
       // read from the same present-project set the insert then joins, and a
       // folder project's sole environment is created with it. The transaction
       // is what makes this atomic — a successful registration can therefore
       // never expose a folder project with no environment.
-      database.transaction('create_project', (db) => {
+      return yield* database.transaction('create_project', (db) => {
         const now = timestamp();
         const row = db
           .insert(projects)
@@ -153,7 +177,8 @@ const make = Effect.gen(function* () {
         }
 
         return projectRow(row);
-      }),
+      });
+    }),
     listProjects: database.use<ProjectRow[]>('list_projects', (db) =>
       db
         .select()
@@ -170,34 +195,40 @@ const make = Effect.gen(function* () {
         .all()
         .map(worktreeRow),
     ),
-    reconcileProjectWorktrees: (input) =>
-      database.transaction('reconcile_project_worktrees', (db) =>
-        reconcileProjectWorktreesInTransaction(db, input),
-      ),
-    restoreProjectAtRootPath: (input) =>
-      database.transaction('restore_project_at_root_path', (db) => {
-        const now = timestamp();
-        db.update(projects)
-          .set({
-            rootPath: input.rootPath,
-            status: 'present',
-            // Read before the write below lands, so the transition is judged
-            // against the stored status rather than the caller's stale row.
-            ...presenceRankPatch(db, input.projectId),
-            updatedAt: now,
-            lastSeenAt: now,
-            missingReason: null,
-          })
-          .where(eq(projects.id, input.projectId))
-          .run();
+    reconcileProjectWorktrees: Effect.fn('ProjectRepository.reconcileProjectWorktrees')(
+      function* (input) {
+        return yield* database.transaction('reconcile_project_worktrees', (db) =>
+          reconcileProjectWorktreesInTransaction(db, input),
+        );
+      },
+    ),
+    restoreProjectAtRootPath: Effect.fn('ProjectRepository.restoreProjectAtRootPath')(
+      function* (input) {
+        return yield* database.transaction('restore_project_at_root_path', (db) => {
+          const now = timestamp();
+          db.update(projects)
+            .set({
+              rootPath: input.rootPath,
+              status: 'present',
+              // Read before the write below lands, so the transition is judged
+              // against the stored status rather than the caller's stale row.
+              ...presenceRankPatch(db, input.projectId),
+              updatedAt: now,
+              lastSeenAt: now,
+              missingReason: null,
+            })
+            .where(eq(projects.id, input.projectId))
+            .run();
 
-        return reconcileProjectWorktreesInTransaction(db, input);
-      }),
-    setProjectStatus: (input) =>
+          return reconcileProjectWorktreesInTransaction(db, input);
+        });
+      },
+    ),
+    setProjectStatus: Effect.fn('ProjectRepository.setProjectStatus')(function* (input) {
       // Reconciliation calls this for every project on every sweep, so the
       // rank patch must read the stored status and stay empty for a project
       // that is already present. Presence metadata still refreshes.
-      database.transaction('set_project_status', (db) => {
+      return yield* database.transaction('set_project_status', (db) => {
         const now = timestamp();
         db.update(projects)
           .set({
@@ -209,13 +240,20 @@ const make = Effect.gen(function* () {
           })
           .where(eq(projects.id, input.id))
           .run();
-      }),
-    moveProjectOrder: (input) =>
-      database.transaction('move_project_order', (db) => moveProjectOrderInTransaction(db, input)),
-    moveProjectWorktreeOrder: (input) =>
-      database.transaction('move_project_worktree_order', (db) =>
-        moveProjectWorktreeOrderInTransaction(db, input),
-      ),
+      });
+    }),
+    moveProjectOrder: Effect.fn('ProjectRepository.moveProjectOrder')(function* (input) {
+      return yield* database.transaction('move_project_order', (db) =>
+        moveProjectOrderInTransaction(db, input),
+      );
+    }),
+    moveProjectWorktreeOrder: Effect.fn('ProjectRepository.moveProjectWorktreeOrder')(
+      function* (input) {
+        return yield* database.transaction('move_project_worktree_order', (db) =>
+          moveProjectWorktreeOrderInTransaction(db, input),
+        );
+      },
+    ),
   });
 });
 

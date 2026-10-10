@@ -7,10 +7,26 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CliShimError, cliShimPath, makeCliAccess, renderCliShim, writeCliShim } from './index.js';
+import { runScoped } from '@isagi/testing';
+
+import { runtimePackageVersion } from '../platform/assets/index.js';
+import { DataDirectory } from '../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../platform/persistence/testing.js';
+import { CliAccess, CliShimError } from './index.js';
+import { cliShimPath, renderCliShim, writeCliShim } from './shim.js';
 
 function scratch() {
   return mkdtempSync(join(tmpdir(), 'isagi-cli-access-'));
+}
+
+/** Builds the production layer over a data root whose tools directory is `toolsPath`. */
+function cliAccessAt(toolsPath: string) {
+  return Effect.gen(function* () {
+    return yield* CliAccess;
+  }).pipe(
+    Effect.provide(CliAccess.layer),
+    Effect.provideService(DataDirectory, makeTestDataDirectory(scratch(), { toolsPath })),
+  );
 }
 
 test('the shim path is versioned under the tools directory', () => {
@@ -59,27 +75,26 @@ test('a shim that cannot be written fails construction with CliShimError', async
   const root = scratch();
   // A file where the version directory must go: mkdir fails with ENOTDIR.
   writeFileSync(join(root, 'isagi-cli'), 'not a directory');
-  const shimPath = cliShimPath(root, '1.0.0');
+  const shimPath = cliShimPath(root, runtimePackageVersion);
 
-  const failure = await Effect.runPromise(
-    Effect.flip(makeCliAccess({ shimPath, execPath: process.execPath, entryPath: '/x.mjs' })),
-  );
+  const failure = await runScoped(Effect.flip(cliAccessAt(root)));
   assert.ok(failure instanceof CliShimError);
   assert.equal(failure.path, shimPath);
   assert.match(failure.message, /Could not write the isagi CLI shim/);
 });
 
 test('the launch environment puts the shim first on PATH and adds the URL only once published', async () => {
-  const shimPath = join(scratch(), 'tools', 'isagi-cli', '1.0.0', 'bin', 'isagi');
-  const binDirectory = join(shimPath, '..');
+  const toolsPath = join(scratch(), 'tools');
+  const binDirectory = join(cliShimPath(toolsPath, runtimePackageVersion), '..');
 
-  await Effect.runPromise(
+  await runScoped(
     Effect.gen(function* () {
-      const access = yield* makeCliAccess({
-        shimPath,
-        execPath: process.execPath,
-        entryPath: '/x.mjs',
-      });
+      const access = yield* cliAccessAt(toolsPath);
+      assert.equal(
+        statSync(join(binDirectory, 'isagi')).mode & 0o777,
+        0o755,
+        "building the service writes this version's shim",
+      );
 
       const before = yield* access.launchEnvironment(`/usr/bin${delimiter}/bin`);
       assert.deepEqual(before, { PATH: `${binDirectory}${delimiter}/usr/bin${delimiter}/bin` });

@@ -24,49 +24,39 @@ export class CliShimError extends Data.TaggedError('CliShimError')<{
   }
 }
 
-/**
- * Writes the shim for this runtime version and returns the service over it.
- *
- * Exported for tests, which point it at a temporary tools directory; the runtime uses `CliAccess.layer`.
- */
-export function makeCliAccess(input: {
-  readonly shimPath: string;
-  readonly execPath: string;
-  readonly entryPath: string;
-}): Effect.Effect<CliAccess['Service'], CliShimError> {
-  return Effect.gen(function* () {
-    yield* Effect.tryPromise({
-      try: () =>
-        writeCliShim(
-          input.shimPath,
-          renderCliShim({ execPath: input.execPath, entryPath: input.entryPath }),
-        ),
-      catch: (cause) => new CliShimError({ path: input.shimPath, cause }),
-    });
-    const binDirectory = dirname(input.shimPath);
-    const runtimeUrl = yield* Ref.make(Option.none<string>());
-    return CliAccess.of({
-      publishRuntimeUrl: (url) => Ref.set(runtimeUrl, Option.some(url)),
-      launchEnvironment: (basePath) =>
-        Effect.map(Ref.get(runtimeUrl), (url) => ({
-          PATH: basePath ? `${binDirectory}${delimiter}${basePath}` : binDirectory,
-          // Before `listen` there is no URL to give; the CLI then reports `runtime_unconfigured`.
-          ...Option.match(url, {
-            onNone: () => ({}),
-            onSome: (value) => ({ ISAGI_RUNTIME_URL: value }),
-          }),
-        })),
-    });
+/** Writes the shim for this runtime version under the data root's tools directory, then serves the launch environment. */
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const shimPath = cliShimPath(directory.paths.toolsPath, runtimePackageVersion);
+  yield* Effect.tryPromise({
+    try: () =>
+      writeCliShim(
+        shimPath,
+        renderCliShim({ execPath: process.execPath, entryPath: cliEntryPath }),
+      ),
+    catch: (cause) => new CliShimError({ path: shimPath, cause }),
   });
-}
-
-const make = Effect.flatMap(DataDirectory, (directory) =>
-  makeCliAccess({
-    shimPath: cliShimPath(directory.paths.toolsPath, runtimePackageVersion),
-    execPath: process.execPath,
-    entryPath: cliEntryPath,
-  }),
-);
+  const binDirectory = dirname(shimPath);
+  const runtimeUrl = yield* Ref.make(Option.none<string>());
+  return CliAccess.of({
+    publishRuntimeUrl: Effect.fn('CliAccess.publishRuntimeUrl')(function* (url: string) {
+      yield* Ref.set(runtimeUrl, Option.some(url));
+    }),
+    launchEnvironment: Effect.fn('CliAccess.launchEnvironment')(function* (
+      basePath: string | undefined,
+    ) {
+      const url = yield* Ref.get(runtimeUrl);
+      return {
+        PATH: basePath ? `${binDirectory}${delimiter}${basePath}` : binDirectory,
+        // Before `listen` there is no URL to give; the CLI then reports `runtime_unconfigured`.
+        ...Option.match(url, {
+          onNone: () => ({}),
+          onSome: (value) => ({ ISAGI_RUNTIME_URL: value }),
+        }),
+      };
+    }),
+  });
+});
 
 /**
  * What makes the `isagi` CLI usable from every process the runtime launches: the shim's directory

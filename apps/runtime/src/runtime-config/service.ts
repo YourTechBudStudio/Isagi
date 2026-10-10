@@ -33,47 +33,42 @@ const make = Effect.gen(function* () {
   const semaphore = yield* Semaphore.make(1);
   return RuntimeConfig.of({
     get: Ref.get(state),
-    acceptHarnessPolicy: (input) =>
-      semaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const bytes = yield* readBytes(path);
-          const sourceIdentity = identity(bytes);
-          const document = yield* parseYamlDocument(path, bytes);
-          const current = yield* decodeRuntimeConfig(path, document.toJS());
-          if (current.harnesses.status === 'invalid')
-            return yield* Effect.fail(
-              new RuntimeHarnessConfigInvalid({
-                diagnostic: current.harnesses.diagnostic ?? 'Invalid harnesses configuration.',
-              }),
-            );
-          if (current.harnesses.revision !== input.expectedPolicyRevision)
-            return yield* Effect.fail(
-              new RuntimeConfigConflict({
-                expectedRevision: input.expectedPolicyRevision,
-                actualRevision: current.harnesses.revision,
-              }),
-            );
-          patchHarnessPolicy(document, input.policy);
-          const nextBytes = document.toString();
-          // Preserve edits made by an external YAML editor after this mutation read its source.
-          // This narrows the unavoidable check-to-rename race without exposing persistence tokens.
-          const latest = yield* readBytes(path);
-          if (identity(latest) !== sourceIdentity) {
-            const latestDoc = yield* parseYamlDocument(path, latest);
-            const latestConfig = yield* decodeRuntimeConfig(path, latestDoc.toJS());
-            return yield* Effect.fail(
-              new RuntimeConfigConflict({
-                expectedRevision: input.expectedPolicyRevision,
-                actualRevision: latestConfig.harnesses.revision,
-              }),
-            );
-          }
-          const next = yield* decodeRuntimeConfig(path, document.toJS());
-          yield* atomicWrite(path, nextBytes);
-          yield* Ref.set(state, next);
-          return next;
-        }),
-      ),
+    // One mutation at a time: each re-reads the file, so a second writer sees the first one's revision.
+    acceptHarnessPolicy: Effect.fn('RuntimeConfig.acceptHarnessPolicy')(function* (input: {
+      readonly expectedPolicyRevision: string;
+      readonly policy: RuntimeHarnessPolicy;
+    }) {
+      const bytes = yield* readBytes(path);
+      const sourceIdentity = identity(bytes);
+      const document = yield* parseYamlDocument(path, bytes);
+      const current = yield* decodeRuntimeConfig(path, document.toJS());
+      if (current.harnesses.status === 'invalid')
+        return yield* new RuntimeHarnessConfigInvalid({
+          diagnostic: current.harnesses.diagnostic ?? 'Invalid harnesses configuration.',
+        });
+      if (current.harnesses.revision !== input.expectedPolicyRevision)
+        return yield* new RuntimeConfigConflict({
+          expectedRevision: input.expectedPolicyRevision,
+          actualRevision: current.harnesses.revision,
+        });
+      patchHarnessPolicy(document, input.policy);
+      const nextBytes = document.toString();
+      // Preserve edits made by an external YAML editor after this mutation read its source.
+      // This narrows the unavoidable check-to-rename race without exposing persistence tokens.
+      const latest = yield* readBytes(path);
+      if (identity(latest) !== sourceIdentity) {
+        const latestDoc = yield* parseYamlDocument(path, latest);
+        const latestConfig = yield* decodeRuntimeConfig(path, latestDoc.toJS());
+        return yield* new RuntimeConfigConflict({
+          expectedRevision: input.expectedPolicyRevision,
+          actualRevision: latestConfig.harnesses.revision,
+        });
+      }
+      const next = yield* decodeRuntimeConfig(path, document.toJS());
+      yield* atomicWrite(path, nextBytes);
+      yield* Ref.set(state, next);
+      return next;
+    }, semaphore.withPermits(1)),
   });
 });
 
