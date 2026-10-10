@@ -28,9 +28,9 @@ import {
   workflowReasonLine,
   type WorkflowPresentationStatus,
 } from '../../lib/workspace/workflow/derive.js';
+import type { RuntimeConnectionPhase } from '../../lib/workspace/workflow/live.js';
 import type { WorkflowLogLine } from '../../lib/workspace/workflow/log.js';
 import type { WorkflowLogView } from '../../lib/workspace/workflow/queries.js';
-import type { RuntimeConnectionPhase } from '../../lib/workspace/workflow/signals.js';
 import { inspectorCopy } from './workflow/copy.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 

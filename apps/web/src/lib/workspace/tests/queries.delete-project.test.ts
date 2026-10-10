@@ -1,23 +1,29 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 
-import { QueryClient } from '@tanstack/react-query';
-import { Effect } from 'effect';
+import { Effect, Logger } from 'effect';
 
-import type { DeleteProjectOutput } from '@isagi/contracts';
+import type { DeleteProjectOutput, WorkspaceSnapshot } from '@isagi/contracts';
 
 import { toastCopy } from '../../../copy/index.js';
-import { clearToasts, useToastStore } from '../../toast/index.js';
+import { runApp } from '../../state/runtime.js';
+import { controllable, flush } from '../../state/testing.js';
+import { toastsAtom } from '../../toast/index.js';
+import { commitDeleteProjectSuccess, deleteProjectFromPalette } from '../commits.js';
 import { defaultSelection, reconcileSelection, type WorkspaceData } from '../model.js';
-import { commitDeleteProjectSuccess, deleteProjectFromPalette } from '../queries.js';
-import { workspaceQueryKey } from '../query-keys.js';
-import { emptyWorkspaceSelection, useWorkspaceStore } from '../store.js';
-import {
-  subscribeTerminalWorkspaceFacts,
-  type TerminalWorkspaceFact,
-} from '../terminal-presentation/coordinator-events.js';
+import { cachedWorkspaceData, workspaceAtom } from '../queries.js';
+import { selectionAtom, setSelection } from '../store.js';
 import type { WorkspaceSelection } from '../types.js';
-import { project, worktree } from './test-support.js';
+import {
+  heldProjectIds,
+  holdWorkspace,
+  project,
+  recordFacts,
+  refuse,
+  snapshotOf,
+  workspaceSession,
+  worktree,
+} from './test-support.js';
 
 /**
  * The project-delete data path: one runtime call, the existing failure toast,
@@ -33,20 +39,46 @@ const doomed = project({
 const missingSibling = project({ id: 2, name: 'gone-elsewhere', status: 'missing' });
 const healthy = project({ id: 3, name: 'healthy' });
 
-test.afterEach(() => {
-  clearToasts();
-  useWorkspaceStore.getState().setSelection(emptyWorkspaceSelection);
-});
+/** A session holding `before`, whose next read answers `after`. */
+async function seeded(
+  t: TestContext,
+  before: WorkspaceData['projects'],
+  after: WorkspaceData['projects'],
+  api: Parameters<typeof workspaceSession>[2] = {},
+) {
+  const session = workspaceSession(t, [{ projects: before }, { projects: after }], api);
+  await holdWorkspace(t, session.registry);
+  return session;
+}
 
-test('success announces the cached worktrees before the refetch replaces them', async () => {
-  const client = seededClient([doomed, healthy]);
+/** Collects the diagnostic log lines (their first message part) an effect writes. */
+function captureLogs(lines: unknown[]) {
+  return Logger.layer([
+    Logger.make(({ message }) => {
+      lines.push(Array.isArray(message) ? message[0] : message);
+    }),
+  ]);
+}
+
+test('success announces the cached worktrees before the refetch replaces them', async (t) => {
   const events: string[] = [];
-  const stop = recordFacts(events);
-
-  await commitDeleteProjectSuccess(client, 1, async () => {
-    events.push('fetch');
-    return { projects: [healthy] };
+  const { registry } = workspaceSession(t, [], {
+    api: {
+      fetchWorkspace: (() => {
+        let reads = 0;
+        return () =>
+          Effect.sync(() => {
+            if (reads++ === 0) return snapshotOf({ projects: [doomed, healthy] });
+            events.push('fetch');
+            return snapshotOf({ projects: [healthy] });
+          });
+      })(),
+    },
   });
+  await holdWorkspace(t, registry);
+  const stop = recordFacts(registry, events);
+
+  await runApp(registry, commitDeleteProjectSuccess(1));
   stop();
 
   assert.deepEqual(events, [
@@ -55,202 +87,158 @@ test('success announces the cached worktrees before the refetch replaces them', 
     'fetch',
     'durable_inventory_refresh_requested',
   ]);
-  assert.deepEqual(
-    client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects.map(({ id }) => id),
-    [3],
-  );
+  assert.deepEqual(heldProjectIds(registry), [3]);
 });
 
 for (const selection of [
   { kind: 'worktree', projectId: 1, worktreeId: 11 },
   { kind: 'missingProject', projectId: 1 },
 ] as const satisfies readonly WorkspaceSelection[]) {
-  test(`a ${selection.kind} selection on the deleted project moves to the default`, async () => {
+  test(`a ${selection.kind} selection on the deleted project moves to the default`, async (t) => {
     const fresh = [missingSibling, healthy];
-    useWorkspaceStore.getState().setSelection(selection);
+    const { registry } = await seeded(t, [doomed, ...fresh], fresh);
+    setSelection(registry, selection);
 
-    await commitDeleteProjectSuccess(seededClient([doomed, ...fresh]), 1, async () => ({
-      projects: fresh,
-    }));
+    await runApp(registry, commitDeleteProjectSuccess(1));
 
-    const next = useWorkspaceStore.getState().selection;
-    assert.deepEqual(next, defaultSelection(fresh));
+    const next = registry.get(selectionAtom);
+    assert.deepEqual(next, defaultSelection(heldProjects(registry)));
     assert.deepEqual(next, { kind: 'missingProject', projectId: 2 });
-    assertReconcileIsQuiet(fresh, next);
+    assertReconcileIsQuiet(heldProjects(registry), next);
   });
 }
 
-test('a worktree selection lands on the next healthy root with no recovery warning', async () => {
-  const fresh = [healthy];
-  useWorkspaceStore.getState().setSelection({ kind: 'worktree', projectId: 1, worktreeId: 10 });
+test('a worktree selection lands on the next healthy root with no recovery warning', async (t) => {
+  const { registry } = await seeded(t, [doomed, healthy], [healthy]);
+  setSelection(registry, { kind: 'worktree', projectId: 1, worktreeId: 10 });
 
-  await commitDeleteProjectSuccess(seededClient([doomed, healthy]), 1, async () => ({
-    projects: fresh,
-  }));
+  await runApp(registry, commitDeleteProjectSuccess(1));
 
-  const next = useWorkspaceStore.getState().selection;
+  const next = registry.get(selectionAtom);
   assert.deepEqual(next, { kind: 'worktree', projectId: 3, worktreeId: 30 });
-  // `useReconcileSelection` raises `active-worktree-recovered:*` only when it has
+  // `useWorkspaceSelectionSync` raises `active-worktree-recovered:*` only when it has
   // to change a worktree selection. Already reconciled, it has nothing to do.
-  assertReconcileIsQuiet(fresh, next);
+  assertReconcileIsQuiet(heldProjects(registry), next);
 });
 
-test('a selection on another project is left alone', async () => {
+test('a selection on another project is left alone', async (t) => {
   const elsewhere = { kind: 'worktree', projectId: 3, worktreeId: 30 } as const;
-  useWorkspaceStore.getState().setSelection(elsewhere);
+  const { registry } = await seeded(t, [doomed, healthy], [healthy]);
+  setSelection(registry, elsewhere);
 
-  await commitDeleteProjectSuccess(seededClient([doomed, healthy]), 1, async () => ({
-    projects: [healthy],
-  }));
+  await runApp(registry, commitDeleteProjectSuccess(1));
 
-  assert.deepEqual(useWorkspaceStore.getState().selection, elsewhere);
+  assert.deepEqual(registry.get(selectionAtom), elsewhere);
 });
 
-test('deleting the only project leaves the empty workspace', async () => {
-  useWorkspaceStore.getState().setSelection({ kind: 'worktree', projectId: 1, worktreeId: 10 });
+test('deleting the only project leaves the empty workspace', async (t) => {
+  const { registry } = await seeded(t, [doomed], []);
+  setSelection(registry, { kind: 'worktree', projectId: 1, worktreeId: 10 });
 
-  await commitDeleteProjectSuccess(seededClient([doomed]), 1, async () => ({ projects: [] }));
+  await runApp(registry, commitDeleteProjectSuccess(1));
 
-  assert.deepEqual(useWorkspaceStore.getState().selection, { kind: 'empty' });
+  assert.deepEqual(registry.get(selectionAtom), { kind: 'empty' });
 });
 
 /**
- * `fetchQuery` joins a read already in flight regardless of `staleTime`. One
- * that began before the delete still lists the project, so without the cancel
- * it would supply the commit's data and leave the deleted project selected.
+ * A workspace read that began before the delete still lists the project. It is
+ * cancelled, never supplies the commit's data, and cannot land afterwards to
+ * leave the deleted project selected.
  */
 test(
   'a workspace read already in flight before the delete cannot supply the commit',
   { timeout: 5_000 },
-  async () => {
-    const client = seededClient([doomed, healthy]);
-    useWorkspaceStore.getState().setSelection({ kind: 'worktree', projectId: 1, worktreeId: 11 });
-    let resolveStale: (data: WorkspaceData) => void = () => {};
+  async (t) => {
+    const stale = controllable<WorkspaceSnapshot>();
     const reads: string[] = [];
-
-    const staleRead = client
-      .fetchQuery({
-        queryKey: workspaceQueryKey,
-        queryFn: () => {
-          reads.push('stale');
-          return new Promise<WorkspaceData>((resolve) => {
-            resolveStale = resolve;
-          });
-        },
-        staleTime: 0,
-      })
-      .catch(() => 'cancelled');
-    await Promise.resolve();
-
-    // The pre-delete read answers shortly after the commit reaches its own fetch.
-    const staleLanded = new Promise<void>((resolve) =>
-      setTimeout(() => {
-        resolveStale({ projects: [doomed, healthy] });
-        resolve();
-      }, 20),
-    );
-
-    await commitDeleteProjectSuccess(client, 1, async () => {
-      reads.push('fresh');
-      return { projects: [healthy] };
+    let index = 0;
+    const { registry } = workspaceSession(t, [], {
+      api: {
+        fetchWorkspace: () =>
+          Effect.suspend(() => {
+            index += 1;
+            if (index === 1) return Effect.succeed(snapshotOf({ projects: [doomed, healthy] }));
+            if (index === 2) {
+              reads.push('stale');
+              return stale.effect;
+            }
+            reads.push('fresh');
+            return Effect.succeed(snapshotOf({ projects: [healthy] }));
+          }),
+      },
     });
+    const release = await holdWorkspace(t, registry);
+    setSelection(registry, { kind: 'worktree', projectId: 1, worktreeId: 11 });
+    // A focus refetch, say: in flight when the delete settles.
+    registry.refresh(workspaceAtom);
+    await flush();
+    assert.deepEqual(reads, ['stale']);
+
+    await runApp(registry, commitDeleteProjectSuccess(1));
 
     assert.deepEqual(reads, ['stale', 'fresh']);
-    assert.deepEqual(useWorkspaceStore.getState().selection, {
+    assert.equal(stale.last().aborted, true, 'the pre-delete read was cancelled');
+    assert.deepEqual(registry.get(selectionAtom), {
       kind: 'worktree',
       projectId: 3,
       worktreeId: 30,
     });
 
-    // The cancelled read landing late must not put the deleted project back.
-    await staleLanded;
-    await staleRead;
-    await Promise.resolve();
-    assert.deepEqual(
-      client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects.map(({ id }) => id),
-      [3],
-    );
+    // The cancelled read answering late must not put the deleted project back.
+    stale.last().resolve(snapshotOf({ projects: [doomed, healthy] }));
+    await flush();
+    assert.deepEqual(heldProjectIds(registry), [3]);
+    release();
   },
 );
 
-test('a refused delete shows the existing toast, refreshes, and resolves', async () => {
-  const client = seededClient([doomed]);
-  const originalError = console.error;
+test('a refused delete shows the existing toast, refreshes, and resolves', async (t) => {
+  const { registry, reads } = await seeded(t, [doomed], [doomed], {
+    api: { deleteProject: () => refuse('gate refused') },
+  });
   const logged: unknown[] = [];
-  console.error = (...args: unknown[]) => void logged.push(args[0]);
-  try {
-    await deleteProjectFromPalette(1, () => Effect.fail(new Error('gate refused')), client);
-  } finally {
-    console.error = originalError;
-  }
 
-  const toast = useToastStore.getState().toasts.find(({ id }) => id === 'delete-project-failed:1');
+  await runApp(registry, deleteProjectFromPalette(1).pipe(Effect.provide(captureLogs(logged))));
+
+  const toast = registry.get(toastsAtom).find(({ id }) => id === 'delete-project-failed:1');
   assert.equal(toast?.title, toastCopy.projectDeleteFailed.title);
   assert.equal(toast?.title, 'Could not delete the project.');
   assert.deepEqual(logged, ['[workspace] project deletion failed']);
-  assert.equal(client.getQueryState(workspaceQueryKey)?.isInvalidated, true);
+  assert.equal(reads(), 2, 'the held workspace was re-read');
 });
 
-test('a successful delete commits with a fresh read and shows no toast', async () => {
-  const client = seededClient([doomed, healthy]);
-  const originalFetch = globalThis.fetch;
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: { isagi: { getRuntimeUrl: () => Promise.resolve('http://runtime.test') } },
-  });
-  const urls: string[] = [];
-  globalThis.fetch = ((input) => {
-    urls.push(String(input));
-    return Promise.resolve(
-      new Response(JSON.stringify({ data: { projects: [] }, meta: { requestId: 'test' } }), {
-        status: 200,
-      }),
-    );
-  }) as typeof fetch;
-  useWorkspaceStore.getState().setSelection({ kind: 'worktree', projectId: 1, worktreeId: 11 });
-  const events: string[] = [];
-  const stop = recordFacts(events);
+test('a successful delete commits with a fresh read and shows no toast', async (t) => {
   const calls: number[] = [];
+  const { registry, reads } = await seeded(t, [doomed, healthy], [], {
+    api: {
+      deleteProject: (projectId) =>
+        Effect.sync(() => {
+          calls.push(projectId);
+          return { projectId, deleted: false } satisfies DeleteProjectOutput;
+        }),
+    },
+  });
+  setSelection(registry, { kind: 'worktree', projectId: 1, worktreeId: 11 });
+  const events: string[] = [];
+  const stop = recordFacts(registry, events);
 
-  try {
-    await deleteProjectFromPalette(
-      1,
-      (projectId) => {
-        calls.push(projectId);
-        return Effect.succeed({ projectId, deleted: false } satisfies DeleteProjectOutput);
-      },
-      client,
-    );
-  } finally {
-    stop();
-    globalThis.fetch = originalFetch;
-    Reflect.deleteProperty(globalThis, 'window');
-  }
+  await runApp(registry, deleteProjectFromPalette(1));
+  stop();
 
   // `{ deleted: false }` is still success: the project is not there either way.
   assert.deepEqual(calls, [1]);
-  assert.deepEqual(urls, ['http://runtime.test/api/v1/workspace']);
+  assert.equal(reads(), 2, 'exactly one fresh workspace read');
   assert.deepEqual(events, [
     'durable_worktree_deleted:10',
     'durable_worktree_deleted:11',
     'durable_inventory_refresh_requested',
   ]);
-  assert.deepEqual(useWorkspaceStore.getState().selection, { kind: 'empty' });
-  assert.equal(useToastStore.getState().toasts.length, 0);
+  assert.deepEqual(registry.get(selectionAtom), { kind: 'empty' });
+  assert.equal(registry.get(toastsAtom).length, 0);
 });
 
-function seededClient(projects: WorkspaceData['projects']) {
-  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
-  client.setQueryData<WorkspaceData>(workspaceQueryKey, { projects });
-  return client;
-}
-
-function recordFacts(events: string[]) {
-  return subscribeTerminalWorkspaceFacts((fact: TerminalWorkspaceFact) => {
-    events.push(
-      fact.type === 'durable_worktree_deleted' ? `${fact.type}:${fact.worktreeId}` : fact.type,
-    );
-  });
+function heldProjects(registry: Parameters<typeof heldProjectIds>[0]) {
+  return cachedWorkspaceData(registry)?.projects ?? [];
 }
 
 function assertReconcileIsQuiet(

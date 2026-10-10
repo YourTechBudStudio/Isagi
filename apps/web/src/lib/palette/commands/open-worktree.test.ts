@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { AtomRegistry } from 'effect/reactivity';
+
 import { paletteCopy } from '../../../copy/index.js';
-import { useWorkspaceStore } from '../../workspace/store.js';
+import { makeTestRegistry } from '../../state/testing.js';
+import { selectionAtom } from '../../workspace/store.js';
 import type { Project, Worktree } from '../../workspace/types.js';
+import { paletteTestSession } from '../test-support.js';
 import type { CommandOutcome, Option, PaletteContext } from '../types.js';
 import { openWorktreeCommand } from './open-worktree.js';
 
@@ -15,8 +19,14 @@ import { openWorktreeCommand } from './open-worktree.js';
  * never reach the runtime and so can never be refused by it.
  */
 
+let registry: AtomRegistry.AtomRegistry;
+
+test.beforeEach(() => {
+  registry = makeTestRegistry();
+});
+
 test.afterEach(() => {
-  useWorkspaceStore.setState({ selection: { kind: 'empty' } });
+  registry.dispose();
 });
 
 test('open-worktree offers present Git projects and no others', async () => {
@@ -62,7 +72,7 @@ test('an existing-worktree payload selects its target when the project is still 
   });
 
   assert.equal(outcome, undefined, 'the Git fast path stays a plain selection');
-  assert.deepEqual(useWorkspaceStore.getState().selection, {
+  assert.deepEqual(registry.get(selectionAtom), {
     kind: 'worktree',
     projectId: 1,
     worktreeId: 11,
@@ -77,7 +87,7 @@ test('an existing-worktree payload naming a deleted worktree refuses without sel
   });
 
   assertUnavailable(outcome);
-  assert.deepEqual(useWorkspaceStore.getState().selection, { kind: 'empty' });
+  assert.deepEqual(registry.get(selectionAtom), { kind: 'empty' });
 });
 
 test('an existing-worktree payload naming an ineligible project refuses without selecting', async () => {
@@ -92,7 +102,7 @@ test('an existing-worktree payload naming an ineligible project refuses without 
   );
 
   assertUnavailable(outcome);
-  assert.deepEqual(useWorkspaceStore.getState().selection, { kind: 'empty' });
+  assert.deepEqual(registry.get(selectionAtom), { kind: 'empty' });
 });
 
 test('the values path refuses an absent or ineligible project instead of completing silently', async () => {
@@ -108,7 +118,7 @@ test('the values path refuses an absent or ineligible project instead of complet
     ),
     'a project that cannot hold another checkout',
   );
-  assert.deepEqual(useWorkspaceStore.getState().selection, { kind: 'empty' });
+  assert.deepEqual(registry.get(selectionAtom), { kind: 'empty' });
 });
 
 test('an empty branch on an eligible project stays silent rather than blaming the workspace', async () => {
@@ -176,6 +186,7 @@ function folderProject(input: { readonly id: number; readonly name: string }): P
 
 function ctx(projects: readonly Project[]): PaletteContext {
   return {
+    ...paletteTestSession(registry),
     projects,
     activeProject: null,
     activeWorktree: null,

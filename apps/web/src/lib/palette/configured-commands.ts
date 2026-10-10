@@ -4,8 +4,8 @@ import type { CommandActionOutput, CommandSummary, WorktreeCommandsOutput } from
 
 import { paletteCopy } from '../../copy/index.js';
 import { pathlessCommandPortNumbers } from '../workspace/command-ports.js';
-import { runConfiguredCommandFromPalette } from '../workspace/queries.js';
-import { useWorkspaceStore } from '../workspace/store.js';
+import { runConfiguredCommandFromPalette } from '../workspace/commits.js';
+import { openDrawer as openWorkspaceDrawer } from '../workspace/store.js';
 import type { ConfiguredCommandsFailureKind, PaletteContext, PaletteEntry } from './types.js';
 
 /**
@@ -82,10 +82,12 @@ export function configuredCommandEntries(
     return [];
   }
 
-  const runCommand = deps.runCommand ?? runConfiguredCommandFromPalette;
+  const runCommand =
+    deps.runCommand ??
+    ((worktreeId: number, commandName: string) =>
+      ctx.app(runConfiguredCommandFromPalette(worktreeId, commandName)));
   const openDrawer =
-    deps.openDrawer ??
-    ((commandName?: string) => useWorkspaceStore.getState().openDrawer(commandName));
+    deps.openDrawer ?? ((commandName?: string) => openWorkspaceDrawer(ctx.registry, commandName));
 
   // Failure first, and before any row mapping: an unreadable or invalid catalog
   // means there is no trustworthy set of commands to offer, so the section is

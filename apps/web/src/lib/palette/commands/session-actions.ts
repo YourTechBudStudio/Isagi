@@ -6,7 +6,7 @@ import {
   startAgentSessionFromPalette,
   startPaneFromPalette,
   startTerminalSessionFromPalette,
-} from '../../workspace/queries.js';
+} from '../../workspace/commits.js';
 import type { ArgSpec, PaletteCommand } from '../types.js';
 import { emptySurfaceIdFromValues, worktreeIdFromValues } from './worktree-target.js';
 
@@ -38,14 +38,14 @@ export const startTerminalSessionCommand: PaletteCommand = {
   run: async (values, ctx) => {
     const intoSurfaceId = emptySurfaceIdFromValues(values, ctx);
     if (intoSurfaceId !== null) {
-      await startPaneFromPalette(intoSurfaceId, { kind: 'terminal_session' });
+      await ctx.app(startPaneFromPalette(intoSurfaceId, { kind: 'terminal_session' }));
       return;
     }
     const worktreeId = worktreeIdFromValues(values, ctx);
     if (worktreeId === null) {
       return;
     }
-    await startTerminalSessionFromPalette(worktreeId);
+    await ctx.app(startTerminalSessionFromPalette(worktreeId));
   },
 };
 
@@ -68,14 +68,14 @@ export const startAgentSessionCommand: PaletteCommand = {
     }
     const intoSurfaceId = emptySurfaceIdFromValues(values, ctx);
     if (intoSurfaceId !== null) {
-      await startPaneFromPalette(intoSurfaceId, { kind: 'agent_session', harness });
+      await ctx.app(startPaneFromPalette(intoSurfaceId, { kind: 'agent_session', harness }));
       return;
     }
     const worktreeId = worktreeIdFromValues(values, ctx);
     if (worktreeId === null) {
       return;
     }
-    await startAgentSessionFromPalette(worktreeId, harness);
+    await ctx.app(startAgentSessionFromPalette(worktreeId, harness));
   },
 };
 

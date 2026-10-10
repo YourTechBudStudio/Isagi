@@ -1,4 +1,7 @@
-import { Fragment } from 'react';
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+import { Fragment, useCallback } from 'react';
 
 import type { CommandStatus, CommandSummary } from '@isagi/contracts';
 
@@ -8,15 +11,17 @@ import { workbenchCopy } from '../../copy/index.js';
 import type { ClipboardCopyState } from '../../hooks/clipboard-copy.js';
 import { useSurfaceCopy } from '../../hooks/useSurfaceCopy.js';
 import { useRuntimeLocality, type RuntimeLocality } from '../../lib/runtime/locality.js';
+import { disabledQuery } from '../../lib/state/policy.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import {
   commandAttentionState,
   type CommandPresentation,
 } from '../../lib/workspace/command-attention.js';
 import { commandBadgeId, commandStripEndpoints } from '../../lib/workspace/command-ports.js';
 import { useActiveProjectKind, useActiveWorktree } from '../../lib/workspace/hooks.js';
-import { useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
+import { worktreeCommandsAtom } from '../../lib/workspace/queries.js';
 import { branchLabel } from '../../lib/workspace/selectors.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { openDrawer as openWorkspaceDrawer } from '../../lib/workspace/store.js';
 import { CommandUrlBadge } from './CommandUrlBadge.js';
 import { ResolvedPortBadge } from './ResolvedPortBadge.js';
 
@@ -39,15 +44,19 @@ type CommandChipItem = CommandSummary & {
 export function StatusStrip() {
   const worktree = useActiveWorktree();
   const projectKind = useActiveProjectKind();
-  const openDrawer = useWorkspaceStore((state) => state.openDrawer);
-  const commandsQuery = useWorktreeCommandsQuery(worktree?.id ?? null);
+  const registry = useRegistry();
+  const openDrawer = useCallback(
+    (commandName?: string) => openWorkspaceDrawer(registry, commandName),
+    [registry],
+  );
+  const commands = useAtomValue(worktree ? worktreeCommandsAtom(worktree.id) : disabledQuery);
   const locality = useRuntimeLocality();
   // One controller for the whole strip: every badge here writes to the same
   // clipboard and reports into the same live region, so which copy is the
   // current one is a strip-wide fact rather than a per-badge one.
   const { announcement, copyState, startCopy } = useSurfaceCopy();
 
-  const commandRead = commandsQuery.data;
+  const commandRead = Option.getOrUndefined(AsyncResult.value(commands));
   const visible =
     commandRead?.status === 'configured'
       ? [
@@ -57,7 +66,7 @@ export function StatusStrip() {
       : commandRead?.status === 'config_error'
         ? visibleCommandChips(commandRead.managedCommands, 'managed')
         : [];
-  const commandReadFailed = commandRead?.status === 'config_error' || Boolean(commandsQuery.error);
+  const commandReadFailed = commandRead?.status === 'config_error' || commands._tag === 'Failure';
 
   return (
     <div className="flex h-7.5 flex-none items-center gap-3 border-t border-line/15 bg-elevated/50 px-3.5 text-left transition-colors duration-micro ease-expo hover:bg-elevated/70">
@@ -108,7 +117,7 @@ export function StatusStrip() {
           onClick={() => openDrawer()}
           className="font-mono text-[11px] text-fg-subtle opacity-55 hover:text-fg hover:opacity-100"
         >
-          {commandsQuery.isPending && worktree
+          {commands._tag === 'Initial' && worktree
             ? workbenchCopy.commandsLoading
             : workbenchCopy.noCommandsRunning}
         </button>

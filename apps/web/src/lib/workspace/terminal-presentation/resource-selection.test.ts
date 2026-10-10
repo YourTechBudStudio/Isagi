@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { Effect } from 'effect';
-
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
@@ -34,7 +32,7 @@ describe('presentation resource selection', () => {
       onViewport: () => undefined,
       onEvent: () => undefined,
       paneFocusAllowed: () => true,
-      resolveUrl: () => Effect.succeed('ws://runtime.test/pty/7'),
+      resolveUrl: async () => 'ws://runtime.test/pty/7',
       isCancelled: () => false,
     });
 

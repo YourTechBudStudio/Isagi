@@ -1,3 +1,6 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult, type AtomRegistry } from 'effect/reactivity';
 import {
   useCallback,
   useEffect,
@@ -8,14 +11,15 @@ import {
   type ReactNode,
 } from 'react';
 
+import { useAppRun, useRegistry } from '../../lib/state/registry.js';
 import type { WorkspaceData } from '../../lib/workspace/model.js';
-import { useWorkspaceQuery } from '../../lib/workspace/queries.js';
+import { workspaceAtom } from '../../lib/workspace/queries.js';
 import { useRailDrag, type DragState } from '../../lib/workspace/rail-drag.js';
 import { commitRailMove } from '../../lib/workspace/rail-order-commit.js';
 import {
   clearRailOrderFailure,
   isRailOrderPending,
-  useRailOrderStore,
+  railOrderAtom,
 } from '../../lib/workspace/rail-order-state.js';
 import {
   moveBefore,
@@ -83,8 +87,9 @@ interface RailReflowPlan {
 
 export function RailDragProvider({ children }: { children: ReactNode }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const workspace = useWorkspaceQuery();
-  const data = workspace.data;
+  const registry = useRegistry();
+  const run = useAppRun();
+  const data = Option.getOrUndefined(AsyncResult.value(useAtomValue(workspaceAtom)));
 
   /**
    * The plan of a drop whose new order has not reached the cache yet.
@@ -106,7 +111,7 @@ export function RailDragProvider({ children }: { children: ReactNode }) {
     pinnedProps,
   } = useRailDrag<RailDragPayload>({
     scrollRef,
-    isBlocked: (key) => isRailOrderPending(key),
+    isBlocked: (key) => isRailOrderPending(registry, key),
     // `commitRailMove` resolves for every outcome, including refusal, and puts
     // its own feedback where the user is looking — so there is nothing to await
     // and nothing to catch at the drop site. The `finally` is not error
@@ -122,11 +127,11 @@ export function RailDragProvider({ children }: { children: ReactNode }) {
         planRef.current?.height ?? 0,
       );
       if (plan) setSettling(plan);
-      void commitRailMove({
-        intent: { scope: ref.payload.scope, movedId: ref.id, beforeId },
-      }).finally(() => {
-        setSettling((current) => (current === plan ? null : current));
-      });
+      void run(commitRailMove({ scope: ref.payload.scope, movedId: ref.id, beforeId })).finally(
+        () => {
+          setSettling((current) => (current === plan ? null : current));
+        },
+      );
     },
   });
 
@@ -195,7 +200,7 @@ export function RailDragProvider({ children }: { children: ReactNode }) {
     [plan],
   );
 
-  useRailOrderFailureCleanup(data);
+  useRailOrderFailureCleanup(registry, data);
 
   const value: RailDragValue = {
     dragging: holdingLayout,
@@ -310,7 +315,10 @@ function RailDragPreview({ drag }: { drag: DragState<RailDragPayload> }) {
  * The live scopes are enumerated from the snapshot and compared by key, so no
  * scope key is ever parsed back into a scope.
  */
-function useRailOrderFailureCleanup(data: WorkspaceData | undefined) {
+function useRailOrderFailureCleanup(
+  registry: AtomRegistry.AtomRegistry,
+  data: WorkspaceData | undefined,
+) {
   useEffect(() => {
     if (!data) return;
 
@@ -327,9 +335,9 @@ function useRailOrderFailureCleanup(data: WorkspaceData | undefined) {
       }
     }
 
-    for (const [key, entry] of Object.entries(useRailOrderStore.getState().entriesByScope)) {
+    for (const [key, entry] of Object.entries(registry.get(railOrderAtom).entries)) {
       if (entry.status !== 'failed') continue;
-      if (!live.get(key)?.has(entry.movedId)) clearRailOrderFailure(key);
+      if (!live.get(key)?.has(entry.movedId)) clearRailOrderFailure(registry, key);
     }
-  }, [data]);
+  }, [registry, data]);
 }

@@ -1,7 +1,10 @@
+import type { AtomRegistry } from 'effect/reactivity';
+
 import type { ReconciliationFinding, WorkspaceSnapshot } from '@isagi/contracts';
 
-import { queryClient } from '../../../src/lib/query/client.js';
-import { workspaceQueryKey } from '../../../src/lib/workspace/query-keys.js';
+import { revalidate } from '../../../src/lib/state/policy.js';
+import { runApp } from '../../../src/lib/state/runtime.js';
+import { workspaceReadAtom } from '../../../src/lib/workspace/queries.js';
 import { requestBodyText } from '../test-support/request-body.js';
 import {
   DEFAULT_SCENARIO,
@@ -64,7 +67,7 @@ const RUNTIME_ORIGIN = 'http://folder-project-fixture.invalid';
  * of it. Steering is through `window.folderProjectFixture`, so the on-screen
  * controls and a Playwright spec drive exactly the same switches.
  */
-export function installFakeRuntime() {
+export function installFakeRuntime(registry: AtomRegistry.AtomRegistry) {
   let scenarioId: ScenarioId = DEFAULT_SCENARIO;
   let snapshot: WorkspaceSnapshot = scenarioById(scenarioId).snapshot;
   let outcome: RecheckOutcome = 'restores';
@@ -95,7 +98,7 @@ export function installFakeRuntime() {
       reconcileCalls.length = 0;
       deleteCalls.length = 0;
       deleteFails = false;
-      await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      await runApp(registry, revalidate(workspaceReadAtom));
     },
     scenario: () => scenarioId,
     setRecheckOutcome: (next) => {

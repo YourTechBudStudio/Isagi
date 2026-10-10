@@ -1,3 +1,4 @@
+import { useAtom } from '@effect/atom-react';
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -5,16 +6,11 @@ import { workflowCopy } from '../../copy/index.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
 import {
-  useAdvanceWorkflowMutation,
   useAttachedWorkflowRun,
-  useCancelWorkflowMutation,
-  useDismissWorkflowMutation,
-  usePauseWorkflowMutation,
-  useResumeWorkflowMutation,
-  useRetryWorkflowMutation,
   useRuntimeConnectionPhase,
   useRuntimeIdentity,
   useWorkflowLog,
+  workflowControlAtoms,
 } from '../../lib/workspace/workflow/queries.js';
 import type { LayoutEngineFactory } from './workflow/useGraphLayout.js';
 import { WorkflowInspector } from './workflow/WorkflowInspector.js';
@@ -67,12 +63,15 @@ export function WorkflowBarContainer({
   const scope = `${runtimeIdentity ?? ''}:${runId ?? ''}`;
   const visible = feedback?.scope === scope ? feedback : null;
 
-  const pause = usePauseWorkflowMutation(runId);
-  const resume = useResumeWorkflowMutation(runId);
-  const retry = useRetryWorkflowMutation(runId);
-  const cancel = useCancelWorkflowMutation(runId);
-  const dismiss = useDismissWorkflowMutation(runId);
-  const advance = useAdvanceWorkflowMutation();
+  // The controls belong to the run they act on: a new run gets fresh pending/error state, while a
+  // control already sent for the previous run still completes (writes are uninterruptible).
+  const controls = useMemo(() => workflowControlAtoms(runId), [runId]);
+  const [pauseState, pause] = useAtom(controls.pause, { mode: 'promise' });
+  const [resumeState, resume] = useAtom(controls.resume, { mode: 'promise' });
+  const [retryState, retry] = useAtom(controls.retry, { mode: 'promise' });
+  const [cancelState, cancel] = useAtom(controls.cancel, { mode: 'promise' });
+  const [dismissState, dismiss] = useAtom(controls.dismiss, { mode: 'promise' });
+  const [advanceState, advance] = useAtom(controls.advance, { mode: 'promise' });
 
   /**
    * One control at a time.
@@ -83,30 +82,29 @@ export function WorkflowBarContainer({
    * asked", and it removes the overlap rather than trying to represent it.
    */
   const mutating =
-    pause.isPending ||
-    resume.isPending ||
-    retry.isPending ||
-    cancel.isPending ||
-    dismiss.isPending ||
-    advance.isPending;
+    pauseState.waiting ||
+    resumeState.waiting ||
+    retryState.waiting ||
+    cancelState.waiting ||
+    dismissState.waiting ||
+    advanceState.waiting;
 
   const actions = useMemo(
     () => ({
-      pause: () => runAction(workflowCopy.pauseActionFailed, () => pause.mutateAsync()),
-      resume: () => runAction(workflowCopy.resumeActionFailed, () => resume.mutateAsync()),
-      retry: () => runAction(workflowCopy.retryActionFailed, () => retry.mutateAsync()),
-      cancel: () => runAction(workflowCopy.cancelActionFailed, () => cancel.mutateAsync()),
+      pause: () => runAction(workflowCopy.pauseActionFailed, () => pause()),
+      resume: () => runAction(workflowCopy.resumeActionFailed, () => resume()),
+      retry: () => runAction(workflowCopy.retryActionFailed, () => retry()),
+      cancel: () => runAction(workflowCopy.cancelActionFailed, () => cancel()),
       // A separate control and a separate failure line. Cancel stops work; Dismiss lets go of the
       // surface. Sharing either would put one action's outcome under the other's name.
-      dismiss: () => runAction(workflowCopy.dismissActionFailed, () => dismiss.mutateAsync()),
+      dismiss: () => runAction(workflowCopy.dismissActionFailed, () => dismiss()),
       advance: (executionId: number, answers?: WorkflowInputAnswers) => {
         if (runId === null) return;
-        return runAction(workflowCopy.advanceActionFailed, () =>
-          advance.mutateAsync({ runId, executionId, answers }),
-        );
+        return runAction(workflowCopy.advanceActionFailed, () => advance({ executionId, answers }));
       },
     }),
-    [advance, cancel, dismiss, pause, resume, retry, runId],
+    // `runAction` reads `mutating` and `scope`; the setters themselves are stable per run.
+    [advance, cancel, dismiss, pause, resume, retry, runId, mutating, scope],
   );
 
   /**

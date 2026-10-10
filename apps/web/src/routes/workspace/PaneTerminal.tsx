@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
+import { useRegistry } from '../../lib/state/registry.js';
 import { restoreActivePaneFocus, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import type { TerminalPresentationController } from '../../lib/workspace/terminal-presentation/controller.js';
 import { TerminalRevealSlot } from './terminal-reveal/index.js';
@@ -17,6 +18,7 @@ export function PaneTerminal({
   readonly presentation: TerminalPresentationController;
 }) {
   const destinationRef = useRef<HTMLDivElement | null>(null);
+  const registry = useRegistry();
   const focusTerminal = useCallback(() => presentation.focus(), [presentation]);
   const snapshot = useSyncExternalStore(
     presentation.subscribe,
@@ -40,8 +42,8 @@ export function PaneTerminal({
 
   useEffect(() => {
     presentation.setFocused(focused);
-    if (focused) restoreActivePaneFocus();
-  }, [focused, presentation]);
+    if (focused) restoreActivePaneFocus(registry);
+  }, [focused, presentation, registry]);
 
   return (
     <TerminalRevealSlot

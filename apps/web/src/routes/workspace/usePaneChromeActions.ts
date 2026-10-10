@@ -1,17 +1,18 @@
 import { useCallback, useMemo } from 'react';
 
 import {
-  handleDispatchedCommandError,
   useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import { activatePane } from '../../lib/workspace/activation.js';
 import {
+  clearDelete,
   isDeletePending,
   paneDeleteKey,
   showsDeleteSweep,
   surfaceDeleteKey,
   useDeleteEntry,
-  usePendingDeleteStore,
   useRunDelete,
   type DeleteOrigin,
 } from '../../lib/workspace/pending-deletes.js';
@@ -50,17 +51,18 @@ export function usePaneChromeActions(input: {
   readonly paneId: number;
 }): PaneChromeActions {
   const { worktreeId, surfaceId, paneId } = input;
+  const registry = useRegistry();
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   const runDelete = useRunDelete();
-  const clearDelete = usePendingDeleteStore((state) => state.clearDelete);
   const paneKey = paneDeleteKey(paneId);
   const paneDelete = useDeleteEntry(paneKey);
   const surfaceDelete = useDeleteEntry(surfaceDeleteKey(surfaceId));
   const locked = isDeletePending(paneDelete) || isDeletePending(surfaceDelete);
 
   const focusPane = useCallback(() => {
-    activatePane({ worktreeId, surfaceId, paneId });
-  }, [paneId, surfaceId, worktreeId]);
+    activatePane(registry, { worktreeId, surfaceId, paneId });
+  }, [registry, paneId, surfaceId, worktreeId]);
 
   const paneValues = useMemo(
     () => ({
@@ -74,9 +76,9 @@ export function usePaneChromeActions(input: {
   const dispatchPaneCommand = useCallback(
     (commandId: 'split-pane-right' | 'split-pane-down') => {
       focusPane();
-      void dispatchCommand(commandId, paneValues).catch(handleDispatchedCommandError);
+      void dispatchCommand(commandId, paneValues).catch(onDispatchError);
     },
-    [dispatchCommand, focusPane, paneValues],
+    [dispatchCommand, focusPane, onDispatchError, paneValues],
   );
 
   const onSplitRight = useCallback(() => {
@@ -102,8 +104,8 @@ export function usePaneChromeActions(input: {
   );
 
   const onDeleteResultDismissed = useCallback(() => {
-    if (paneDelete?.error) clearDelete(paneKey);
-  }, [clearDelete, paneDelete, paneKey]);
+    if (paneDelete?.error) clearDelete(registry, paneKey);
+  }, [registry, paneDelete, paneKey]);
 
   return {
     focusPane,

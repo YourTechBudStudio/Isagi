@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Surface } from '../../workspace/types.js';
+import { paletteTestSession } from '../test-support.js';
 import type { PaletteContext } from '../types.js';
 import { emptySurfaceIdFromValues } from './worktree-target.js';
 
 function ctx(activeSurface: Surface | null): PaletteContext {
   return {
     projects: [],
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
     activeProject: null,

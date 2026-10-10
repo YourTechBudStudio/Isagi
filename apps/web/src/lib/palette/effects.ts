@@ -1,7 +1,6 @@
 import type { Dispatch } from 'react';
 
 import { paletteCopy } from '../../copy/index.js';
-import { runRuntimeEffect } from '../runtime/run.js';
 import { formatRuntimeErrorSummary, suggestProjectPaths } from '../workspace/runtime-data.js';
 import { workbenchActionCommands } from './commands/workbench-actions.js';
 import { resolveCommandPreflight } from './dispatcher.js';
@@ -150,7 +149,7 @@ function runPaletteEffect(
     }
     options.pathSuggestTimer.current = window.setTimeout(() => {
       options.pathSuggestTimer.current = null;
-      void runRuntimeEffect(suggestProjectPaths(effect.query)).then(
+      void options.ctx.app(suggestProjectPaths(effect.query)).then(
         (output) =>
           options.send({
             type: 'paths-loaded',

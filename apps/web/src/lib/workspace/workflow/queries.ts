@@ -1,28 +1,36 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+/**
+ * Workflow reads and controls.
+ *
+ * Every runtime-owned workflow fact is a query atom (`lib/state/policy.ts`) kept current by the live
+ * sync (`sync.ts`): pushed events are appended, and the run, execution and checkpoint list an event
+ * names are re-read. Reads are never stale on a timer and never retried; a reconnect re-reads the
+ * live ones. The runs attached to surfaces are a state atom the runtime-events connection writes;
+ * there is no route that lists them.
+ *
+ * Components read the atoms with `useAtomValue` (selecting `disabledQuery` when a read is not
+ * wanted), or through the two view hooks below that already return what their callers draw.
+ */
+import { useAtomValue } from '@effect/atom-react';
+import { Duration, Effect, Option } from 'effect';
+import { AsyncResult, Atom } from 'effect/reactivity';
+import { useMemo } from 'react';
 
 import type {
   AdvanceWorkflowInput,
   ListWorkflowCheckpointsOutput,
-  StartWorkflowInput,
+  ListWorkflowEventsOutput,
   WorkflowCheckpointSummaryDto,
+  WorkflowEventDto,
   WorkflowLaunchOrigin,
   WorkflowRunSummary,
 } from '@isagi/contracts';
 
-import { runRuntimeEffect } from '../../runtime/run.js';
-import {
-  runtimeIdentityQueryKey,
-  workflowAttachedRunsQueryKey,
-  workflowCheckpointFileQueryKey,
-  workflowCheckpointListQueryKey,
-  workflowCheckpointQueryKey,
-  workflowDescriptorsQueryKey,
-  workflowEventsQueryKey,
-  workflowExecutionQueryKey,
-  workflowRunQueryKey,
-  workflowStructureQueryKey,
-} from '../query-keys.js';
+import type { RuntimeApi } from '../../runtime/client.js';
+import { keys } from '../../state/keys.js';
+import { disabledQuery, query } from '../../state/policy.js';
+import { useRegistry } from '../../state/registry.js';
+import { queryError } from '../../state/result.js';
+import { appRuntime } from '../../state/runtime.js';
 import {
   advanceWorkflow,
   cancelWorkflow,
@@ -39,77 +47,60 @@ import {
   resolveRuntimeIdentity,
   resumeWorkflow,
   retryWorkflow,
-  startWorkflow,
 } from '../runtime-data.js';
-import { requestAttachedWorkflowRuns } from '../runtime-events.js';
 import { attachedRunForSurface, type AttachedRuns } from './attached.js';
-import { WorkflowLiveSync, loadWorkflowEvents } from './live.js';
+import {
+  mergeEvents,
+  runtimeConnectionPhaseAtom,
+  workflowLive,
+  workflowResyncAtom,
+  type RuntimeConnectionPhase,
+} from './live.js';
 import { workflowLogLines, type WorkflowLogLine } from './log.js';
 import { buildRunView, type WorkflowRunView } from './run-view.js';
-import {
-  currentConnectionPhase,
-  subscribeToWorkflowSignals,
-  type RuntimeConnectionPhase,
-} from './signals.js';
 
-/** The route's own maximum. The event log is read forward in pages this size. */
-const eventPageSize = 500;
+/** The route's own maximum. The event log and the checkpoint list are read forward in pages. */
+const pageSize = 500;
 
 /**
- * The runtime this session is talking to, as a cache namespace.
- *
- * Resolved once and never refetched — it is configuration, not state — and every workflow query is
- * disabled until it is known rather than being keyed on a placeholder that would later have to be
- * migrated.
+ * Workflow reads: never stale on a timer (the socket keeps them current), kept five minutes after
+ * the last reader, and not retried — a failed read is shown, with a retry the person chooses.
  */
+const workflowReadPolicy = { staleTime: Duration.infinity, retry: false } as const;
+
+// --- Session facts ------------------------------------------------------------------------------
+
+/**
+ * The runtime this session is talking to. Configuration, not state: resolved once and kept for the
+ * session. Used only to scope the bar's action feedback; workflow reads are not keyed on it.
+ */
+export const runtimeIdentityAtom = query(() => resolveRuntimeIdentity(), {
+  keys: [],
+  staleTime: Duration.infinity,
+  idleTTL: Duration.infinity,
+});
+
 export function useRuntimeIdentity(): string | null {
-  const { data } = useQuery({
-    queryKey: runtimeIdentityQueryKey,
-    queryFn: () => runRuntimeEffect(resolveRuntimeIdentity()),
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
-  });
-  return data ?? null;
+  return Option.getOrNull(AsyncResult.value(useAtomValue(runtimeIdentityAtom)));
 }
 
-/** Keeps every workflow cache live. Mounted once, beside the runtime event subscription. */
-export function useWorkflowRuntimeSync() {
-  const queryClient = useQueryClient();
-  const runtimeIdentity = useRuntimeIdentity();
+/**
+ * The runs occupying surfaces, as the workflow bar, the palette and attention read them. Written
+ * only by the live sync: the connection's snapshot replaces it and each changed summary is upserted
+ * (`attached.ts`). `undefined` until the first snapshot arrives.
+ */
+export const attachedRunsAtom = Atom.make<AttachedRuns | undefined>(undefined).pipe(Atom.keepAlive);
 
-  useEffect(() => {
-    if (runtimeIdentity === null) return;
-    const sync = new WorkflowLiveSync({ queryClient, runtimeIdentity });
-    sync.start();
-    return () => sync.stop();
-  }, [queryClient, runtimeIdentity]);
+export function useAttachedWorkflowRuns(): AttachedRuns | undefined {
+  return useAtomValue(attachedRunsAtom);
 }
 
-export function useAttachedWorkflowRunsQuery() {
-  const queryClient = useQueryClient();
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowAttachedRunsQueryKey(runtimeIdentity),
-    enabled: runtimeIdentity !== null,
-    // The connection's own snapshot is the read path; there is no route that lists every attached
-    // run. The live sync writes the snapshot into this cache when it arrives.
-    queryFn: async (): Promise<AttachedRuns> => {
-      await requestAttachedWorkflowRuns();
-      return (
-        queryClient.getQueryData<AttachedRuns>(workflowAttachedRunsQueryKey(runtimeIdentity)) ?? []
-      );
-    },
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: false,
-  });
-}
-
-/** The run occupying a surface, read from the same cache the palette and attention read. */
+/** The run occupying a surface, read from the same atom the palette and attention read. */
 export function useAttachedWorkflowRun(
   surfaceId: number | null | undefined,
 ): WorkflowRunSummary | undefined {
-  const { data } = useAttachedWorkflowRunsQuery();
-  return useMemo(() => attachedRunForSurface(data, surfaceId), [data, surfaceId]);
+  const runs = useAtomValue(attachedRunsAtom);
+  return useMemo(() => attachedRunForSurface(runs, surfaceId), [runs, surfaceId]);
 }
 
 /**
@@ -119,38 +110,165 @@ export function useAttachedWorkflowRun(
  * something different from an empty log on a live one.
  */
 export function useRuntimeConnectionPhase(): RuntimeConnectionPhase {
-  return useSyncExternalStore(subscribeToWorkflowSignals, currentConnectionPhase);
+  return useAtomValue(runtimeConnectionPhaseAtom);
 }
 
-function useWorkflowEventsQuery(runId: number | null, enabled: boolean) {
-  const queryClient = useQueryClient();
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowEventsQueryKey(runtimeIdentity, runId),
-    enabled: enabled && runId !== null && runtimeIdentity !== null,
-    // Kept current by the socket; refetched only when the live sync asks.
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60_000,
-    retry: false,
-    queryFn: ({ signal }) => {
-      if (runId === null) throw new Error('A workflow event read needs a run.');
-      return loadWorkflowEvents({
-        queryClient,
-        runtimeIdentity,
-        runId,
-        signal,
-        list: (cursor) =>
-          runRuntimeEffect(
-            listWorkflowEvents(runId, {
-              limit: eventPageSize,
-              ...(cursor === null ? {} : { cursor }),
-            }),
-            { signal },
+// --- Live reads (re-read on reconnect and when an event names them) ------------------------------
+
+/** One run's detail: its summary, inputs and execution tree. */
+export const workflowRunAtom = Atom.family((runId: number) =>
+  query(
+    (get) => {
+      get(workflowResyncAtom);
+      return getWorkflowRun(runId);
+    },
+    { keys: [keys.workflowRun(runId)], ...workflowReadPolicy },
+  ),
+);
+
+/**
+ * A run's whole event log, read forward from the beginning in pages.
+ *
+ * Whatever was already held, and whatever was pushed while the read was in flight, is merged in by
+ * id rather than overwritten: a reconnect re-reads from the beginning because event ids are global
+ * across runs, so a gap in one run's list cannot be detected.
+ */
+export const workflowEventsAtom = Atom.family((runId: number) =>
+  query(
+    (get) => {
+      get(workflowResyncAtom);
+      return Effect.gen(function* () {
+        const fetched: WorkflowEventDto[] = [];
+        let cursor: number | null = null;
+        for (;;) {
+          const page: ListWorkflowEventsOutput = yield* listWorkflowEvents(runId, {
+            limit: pageSize,
+            ...(cursor === null ? {} : { cursor }),
+          });
+          fetched.push(...page.items);
+          if (page.nextCursor === null) break;
+          cursor = page.nextCursor;
+        }
+        const live = yield* workflowLive;
+        const cached = Option.getOrElse(
+          Option.flatMap(
+            get.self<AsyncResult.AsyncResult<readonly WorkflowEventDto[], Error>>(),
+            AsyncResult.value,
           ),
+          (): readonly WorkflowEventDto[] => [],
+        );
+        return mergeEvents(mergeEvents(cached, fetched), live.takeHeld(runId));
       });
     },
-  });
-}
+    { keys: [keys.workflowEvents(runId)], ...workflowReadPolicy },
+  ),
+);
+
+/** One execution in full, with its operations. */
+export const workflowExecutionAtom = Atom.family((executionId: number) =>
+  query(
+    (get) => {
+      get(workflowResyncAtom);
+      return Effect.map(getWorkflowExecution(executionId), (output) => output.execution);
+    },
+    { keys: [keys.workflowExecution(executionId)], ...workflowReadPolicy },
+  ),
+);
+
+/** Every checkpoint a run saved, oldest first. Re-read when a `checkpoint_captured` event arrives. */
+export const workflowCheckpointListAtom = Atom.family((runId: number) =>
+  query(
+    (get) => {
+      get(workflowResyncAtom);
+      return Effect.gen(function* () {
+        const items: WorkflowCheckpointSummaryDto[] = [];
+        let cursor: number | null = null;
+        for (;;) {
+          const page: ListWorkflowCheckpointsOutput = yield* listWorkflowCheckpoints(runId, {
+            limit: pageSize,
+            ...(cursor === null ? {} : { cursor }),
+          });
+          items.push(...page.items);
+          if (page.nextCursor === null) break;
+          cursor = page.nextCursor;
+        }
+        return items as readonly WorkflowCheckpointSummaryDto[];
+      });
+    },
+    { keys: [keys.workflowCheckpoints(runId)], ...workflowReadPolicy },
+  ),
+);
+
+// --- Immutable reads ----------------------------------------------------------------------------
+
+/** The structure of one build the run has used. Immutable under its hash. */
+export const workflowStructureAtom = Atom.family(
+  ([runId, artifactHash]: readonly [runId: number, artifactHash: string]) =>
+    query(() => getWorkflowStructure(runId, artifactHash), { keys: [], ...workflowReadPolicy }),
+);
+
+/** One checkpoint with every file it saved. Immutable once saved. */
+export const workflowCheckpointAtom = Atom.family((checkpointId: number) =>
+  query(() => Effect.map(getWorkflowCheckpoint(checkpointId), (output) => output.checkpoint), {
+    keys: [],
+    ...workflowReadPolicy,
+  }),
+);
+
+/**
+ * The bytes of one saved file, read only when someone asks to see them (select `disabledQuery`
+ * otherwise).
+ *
+ * Kept as an error rather than retried or emptied: missing saved bytes are a fact about the
+ * checkpoint, shown beside its metadata. Immutable, with bounded retention because these are
+ * arbitrary bytes.
+ */
+export const workflowCheckpointFileAtom = Atom.family(
+  ([checkpointId, path]: readonly [checkpointId: number, path: string]) =>
+    query(() => fetchWorkflowCheckpointFile(checkpointId, path), {
+      keys: [],
+      ...workflowReadPolicy,
+    }),
+);
+
+/**
+ * The workflows that can be launched from an origin. A launch origin is a flat tuple so the family
+ * can key on it; an optional id the origin left out stays `undefined`, so the request carries the
+ * origin exactly as it was built. Default retry, 30 s stale.
+ */
+type DescriptorsOrigin = readonly [
+  worktreeId: number,
+  surfaceId: number | null,
+  paneId: number | null | undefined,
+  agentSessionId: number | null | undefined,
+];
+
+export const workflowDescriptorsAtom = Atom.family(
+  ([worktreeId, surfaceId, paneId, agentSessionId]: DescriptorsOrigin) =>
+    query(
+      () =>
+        listWorkflowDescriptors({
+          origin: {
+            worktreeId,
+            surfaceId,
+            ...(paneId === undefined ? {} : { paneId }),
+            ...(agentSessionId === undefined ? {} : { agentSessionId }),
+          },
+        }),
+      { keys: [], staleTime: Duration.seconds(30) },
+    ),
+);
+
+/** The descriptors read for one launch origin. */
+export const workflowDescriptorsFor = (origin: WorkflowLaunchOrigin) =>
+  workflowDescriptorsAtom([
+    origin.worktreeId,
+    origin.surfaceId,
+    origin.paneId,
+    origin.agentSessionId,
+  ]);
+
+// --- Views ----------------------------------------------------------------------------------------
 
 export interface WorkflowRunViewState {
   /** Null until the run detail has been read. */
@@ -169,7 +287,7 @@ export interface WorkflowRunViewState {
 /**
  * One run's tree and event log, live while mounted.
  *
- * Both are ordinary queries: the live sync appends pushed events and refetches the run detail when
+ * Both are ordinary queries: the live sync appends pushed events and re-reads the run detail when
  * an event names it, so this hook does no bookkeeping of its own. Their failures are reported
  * separately, because a run whose events could not be read is a partial record, not an empty one.
  */
@@ -177,34 +295,28 @@ export function useWorkflowRunView(
   runId: number | null,
   options: { readonly enabled?: boolean | undefined } = {},
 ): WorkflowRunViewState {
-  const runtimeIdentity = useRuntimeIdentity();
-  const enabled = (options.enabled ?? true) && runId !== null && runtimeIdentity !== null;
-  const detail = useQuery({
-    queryKey: workflowRunQueryKey(runtimeIdentity, runId),
-    enabled,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60_000,
-    retry: false,
-    queryFn: ({ signal }) => {
-      if (runId === null) throw new Error('A workflow run read needs a run.');
-      return runRuntimeEffect(getWorkflowRun(runId), { signal });
-    },
-  });
-  const events = useWorkflowEventsQuery(runId, enabled);
+  const registry = useRegistry();
+  const enabled = (options.enabled ?? true) && runId !== null;
+  const detailAtom = enabled ? workflowRunAtom(runId) : disabledQuery;
+  const eventsAtom = enabled ? workflowEventsAtom(runId) : disabledQuery;
+  const detail = useAtomValue(detailAtom);
+  const events = useAtomValue(eventsAtom);
+  const detailData = Option.getOrUndefined(AsyncResult.value(detail));
+  const eventsData = Option.getOrUndefined(AsyncResult.value(events));
 
   const view = useMemo(
-    () => (detail.data === undefined ? null : buildRunView(detail.data, events.data)),
-    [detail.data, events.data],
+    () => (detailData === undefined ? null : buildRunView(detailData, eventsData)),
+    [detailData, eventsData],
   );
 
   return {
     view: enabled ? view : null,
-    isLoading: enabled && (detail.isPending || events.isPending),
-    runError: enabled ? detail.error : null,
-    eventsError: enabled ? events.error : null,
+    isLoading: enabled && (detail._tag === 'Initial' || events._tag === 'Initial'),
+    runError: enabled ? queryError(detail) : null,
+    eventsError: enabled ? queryError(events) : null,
     retry: () => {
-      if (detail.error) void detail.refetch();
-      if (events.error) void events.refetch();
+      if (detail._tag === 'Failure') registry.refresh(detailAtom);
+      if (events._tag === 'Failure') registry.refresh(eventsAtom);
     },
   };
 }
@@ -223,242 +335,63 @@ export function useWorkflowLog(
   summary: WorkflowRunSummary | null,
   options: { readonly enabled?: boolean | undefined } = {},
 ): WorkflowLogView {
+  const registry = useRegistry();
   const runId = summary?.runId ?? null;
-  const events = useWorkflowEventsQuery(runId, options.enabled ?? true);
-  const lines = useMemo(() => workflowLogLines(events.data ?? []), [events.data]);
+  const eventsAtom =
+    (options.enabled ?? true) && runId !== null ? workflowEventsAtom(runId) : disabledQuery;
+  const events = useAtomValue(eventsAtom);
+  const eventsData = Option.getOrUndefined(AsyncResult.value(events));
+  const lines = useMemo(() => workflowLogLines(eventsData ?? []), [eventsData]);
   return {
     runId,
     lines,
-    isLoading: events.isLoading,
-    error: events.error,
-    retry: () => {
-      void events.refetch();
-    },
+    isLoading: events._tag === 'Initial' && events.waiting,
+    error: queryError(events),
+    retry: () => registry.refresh(eventsAtom),
   };
 }
 
-/** The structure of one build the run has used. Immutable under its hash. */
-export function useWorkflowStructureQuery(runId: number | null, artifactHash: string | null) {
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowStructureQueryKey(runtimeIdentity, runId, artifactHash),
-    enabled: runId !== null && artifactHash !== null && runtimeIdentity !== null,
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: false,
-    queryFn: ({ signal }) => {
-      if (runId === null || artifactHash === null) {
-        throw new Error('A workflow structure read needs a run and a build.');
-      }
-      return runRuntimeEffect(getWorkflowStructure(runId, artifactHash), { signal });
-    },
-  });
-}
-
-/** One execution in full, with its operations. Refetched by the live sync when an event names it. */
-export function useWorkflowExecutionQuery(executionId: number | null) {
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowExecutionQueryKey(runtimeIdentity, executionId),
-    enabled: executionId !== null && runtimeIdentity !== null,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60_000,
-    retry: false,
-    queryFn: async ({ signal }) => {
-      if (executionId === null) throw new Error('A workflow execution read needs an execution.');
-      const output = await runRuntimeEffect(getWorkflowExecution(executionId), { signal });
-      return output.execution;
-    },
-  });
-}
-
-/** Every checkpoint a run saved, oldest first. Refetched when a `checkpoint_captured` event arrives. */
-export function useWorkflowCheckpointList(runId: number | null) {
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowCheckpointListQueryKey(runtimeIdentity, runId),
-    enabled: runId !== null && runtimeIdentity !== null,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60_000,
-    retry: false,
-    queryFn: async ({ signal }): Promise<readonly WorkflowCheckpointSummaryDto[]> => {
-      if (runId === null) throw new Error('A checkpoint listing needs a run.');
-      const items: WorkflowCheckpointSummaryDto[] = [];
-      let cursor: number | null = null;
-      for (;;) {
-        const page: ListWorkflowCheckpointsOutput = await runRuntimeEffect(
-          listWorkflowCheckpoints(runId, {
-            limit: eventPageSize,
-            ...(cursor === null ? {} : { cursor }),
-          }),
-          { signal },
-        );
-        items.push(...page.items);
-        signal.throwIfAborted();
-        if (page.nextCursor === null) break;
-        cursor = page.nextCursor;
-      }
-      return items;
-    },
-  });
-}
-
-/** One checkpoint with every file it saved. Immutable once saved, so it never goes stale. */
-export function useWorkflowCheckpoint(checkpointId: number | null) {
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowCheckpointQueryKey(runtimeIdentity, checkpointId),
-    enabled: checkpointId !== null && runtimeIdentity !== null,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60_000,
-    retry: false,
-    queryFn: async ({ signal }) => {
-      if (checkpointId === null) throw new Error('A checkpoint read needs a checkpoint.');
-      const output = await runRuntimeEffect(getWorkflowCheckpoint(checkpointId), { signal });
-      return output.checkpoint;
-    },
-  });
-}
+// --- Controls -----------------------------------------------------------------------------------
 
 /**
- * The bytes of one saved file, fetched only when someone asks to see them.
+ * The bar's six controls for one run, as fn atoms owned by the component that builds them
+ * (`useMemo` on `runId`): each reports its own pending/error state, and a new run gets fresh state.
  *
- * Kept as an error rather than retried or emptied: missing saved bytes are a fact about the
- * checkpoint, shown beside its metadata. Immutable, with bounded retention because these are
- * arbitrary bytes.
- */
-export function useWorkflowCheckpointFileContent(
-  checkpointId: number | null,
-  path: string | null,
-  options: { readonly enabled?: boolean | undefined } = {},
-) {
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowCheckpointFileQueryKey(runtimeIdentity, checkpointId, path),
-    enabled: (options.enabled ?? false) && checkpointId !== null && path !== null,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60_000,
-    retry: false,
-    queryFn: ({ signal }) => {
-      if (checkpointId === null || path === null) {
-        throw new Error('A checkpoint file read needs a checkpoint and a path.');
-      }
-      return runRuntimeEffect(fetchWorkflowCheckpointFile(checkpointId, path), { signal });
-    },
-  });
-}
-
-// Controls. Each names its run explicitly and returns the runtime's own small result; none of them
-// writes an outcome into the cache, because the runtime pushes what actually happened.
-export function usePauseWorkflowMutation(runId: number | null) {
-  return useMutation({ mutationFn: () => runControl(runId, pauseWorkflow, 'pause') });
-}
-
-export function useResumeWorkflowMutation(runId: number | null) {
-  return useMutation({ mutationFn: () => runControl(runId, resumeWorkflow, 'resume') });
-}
-
-/**
- * Retry for a run this component already names — the bar's control.
+ * Each names its run explicitly and returns the runtime's own small result; none writes an outcome
+ * into a read, because the runtime pushes what actually happened. Writes are uninterruptible: an
+ * unmount or a second click must not abort a control that has reached the runtime.
  *
- * The palette's `useWorkflowRetryByIdMutation` is the same control bound the other way round, for a
- * caller that does not know the run until it has started one.
- */
-export function useRetryWorkflowMutation(runId: number | null) {
-  return useMutation({ mutationFn: () => runControl(runId, retryWorkflow, 'retry') });
-}
-
-export function useCancelWorkflowMutation(runId: number | null) {
-  return useMutation({ mutationFn: () => runControl(runId, cancelWorkflow, 'cancel') });
-}
-
-export function useDismissWorkflowMutation(runId: number | null) {
-  return useMutation({ mutationFn: () => runControl(runId, dismissWorkflow, 'dismiss') });
-}
-
-/**
  * Advance names the waiting execution it answers, so a form filled in against a wait the run has
  * already left cannot silently answer the next one.
  */
-export function useAdvanceWorkflowMutation() {
-  return useMutation({
-    mutationFn: (input: {
-      readonly runId: number;
-      readonly executionId: number;
-      readonly answers?: AdvanceWorkflowInput['answers'];
-    }) =>
-      runRuntimeEffect(
-        advanceWorkflow(input.runId, {
-          executionId: input.executionId,
-          ...(input.answers === undefined ? {} : { answers: input.answers }),
-        }),
-      ),
-  });
-}
-
-export function useWorkflowDescriptorsQuery(
-  origin: WorkflowLaunchOrigin | null,
-  options: { readonly enabled?: boolean | undefined } = {},
-) {
-  const runtimeIdentity = useRuntimeIdentity();
-  return useQuery({
-    queryKey: workflowDescriptorsQueryKey(
-      runtimeIdentity,
-      origin?.worktreeId ?? null,
-      origin?.surfaceId ?? null,
-      origin?.paneId ?? null,
-      origin?.agentSessionId ?? null,
+export const workflowControlAtoms = (runId: number | null) => {
+  const control = <A>(name: string, call: (runId: number) => Effect.Effect<A, Error, RuntimeApi>) =>
+    appRuntime.fn(() =>
+      runId === null
+        ? Effect.die(new Error(`Workflow ${name} requires a run.`))
+        : Effect.uninterruptible(call(runId)),
+    );
+  return {
+    pause: control('pause', pauseWorkflow),
+    resume: control('resume', resumeWorkflow),
+    retry: control('retry', retryWorkflow),
+    cancel: control('cancel', cancelWorkflow),
+    dismiss: control('dismiss', dismissWorkflow),
+    advance: appRuntime.fn(
+      (input: {
+        readonly executionId: number;
+        readonly answers?: AdvanceWorkflowInput['answers'] | undefined;
+      }) =>
+        runId === null
+          ? Effect.die(new Error('Workflow advance requires a run.'))
+          : Effect.uninterruptible(
+              advanceWorkflow(runId, {
+                executionId: input.executionId,
+                ...(input.answers === undefined ? {} : { answers: input.answers }),
+              }),
+            ),
     ),
-    enabled: (options.enabled ?? true) && origin !== null && runtimeIdentity !== null,
-    staleTime: 30_000,
-    queryFn: ({ signal }) => {
-      if (origin === null) {
-        throw new Error('Workflow descriptor query requires a launch origin.');
-      }
-      return runRuntimeEffect(listWorkflowDescriptors({ origin }), { signal });
-    },
-  });
-}
+  };
+};
 
-/**
- * Start a workflow.
- *
- * The request blocks until preparing the environment has committed or failed, so it takes real time
- * and answers only one question: which run this is. What actually happened to it is a separate read,
- * deliberately — a caller that composed the two could not tell a rejected launch from a run it
- * merely failed to read back.
- */
-export function useStartWorkflowMutation() {
-  return useMutation({
-    mutationFn: (input: StartWorkflowInput) => runRuntimeEffect(startWorkflow(input)),
-  });
-}
-
-/**
- * Retry a run the caller only knows by id — the palette's, after a launch whose preparation failed.
- *
- * Separate from `useRetryWorkflowMutation`, which binds its run when the component mounts.
- */
-export function useWorkflowRetryByIdMutation() {
-  return useMutation({ mutationFn: (runId: number) => runRuntimeEffect(retryWorkflow(runId)) });
-}
-
-/**
- * The run's own account of itself, read once, on demand: "what happened to the launch I just made".
- */
-export function useWorkflowRunSummaryMutation() {
-  return useMutation({
-    mutationFn: async (runId: number): Promise<WorkflowRunSummary> => {
-      const output = await runRuntimeEffect(getWorkflowRun(runId));
-      return output.run;
-    },
-  });
-}
-
-function runControl<Output>(
-  runId: number | null,
-  control: (runId: number) => Parameters<typeof runRuntimeEffect<Output, Error>>[0],
-  name: string,
-) {
-  if (runId === null) throw new Error(`Workflow ${name} requires a run.`);
-  return runRuntimeEffect(control(runId));
-}
+export type WorkflowControlAtoms = ReturnType<typeof workflowControlAtoms>;

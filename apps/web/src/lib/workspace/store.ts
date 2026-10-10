@@ -1,99 +1,115 @@
-import { create } from 'zustand';
+/**
+ * Workbench interaction state the client owns: which environment is selected, which surface and
+ * pane are active, the commands drawer and zen mode. One set per app session (registry).
+ *
+ * React reads the atoms with `useAtomValue`; every write goes through the `(registry, ...)` actions
+ * below, so the transitions stay in one place.
+ */
+import { Atom, type AtomRegistry } from 'effect/reactivity';
 
 import type { WorkspaceSelection } from './types.js';
 
-interface DrawerState {
+export interface DrawerState {
   readonly open: boolean;
   readonly selectedCommandId: string | null;
 }
 
-interface WorkspaceStore {
-  selection: WorkspaceSelection;
-  activeSurfaceByWorktreeId: Readonly<Record<number, number>>;
-  activePaneBySurfaceId: Readonly<Record<number, number>>;
-  drawer: DrawerState;
-  zen: boolean;
-
-  setSelection: (selection: WorkspaceSelection) => void;
-  selectWorktree: (projectId: number, worktreeId: number) => void;
-  selectMissingProject: (projectId: number) => void;
-  setActiveSurface: (worktreeId: number, surfaceId: number) => void;
-  setActivePane: (surfaceId: number, paneId: number) => void;
-  forgetSurface: (worktreeId: number, surfaceId: number) => void;
-  forgetPane: (surfaceId: number, paneId?: number) => void;
-  setZen: (zen: boolean) => void;
-  toggleZen: () => void;
-  openDrawer: (commandId?: string) => void;
-  closeDrawer: () => void;
-  selectCommand: (commandId: string) => void;
-}
-
 export const emptyWorkspaceSelection: WorkspaceSelection = { kind: 'empty' };
 
-export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
-  selection: emptyWorkspaceSelection,
-  activeSurfaceByWorktreeId: {},
-  activePaneBySurfaceId: {},
-  drawer: { open: false, selectedCommandId: null },
-  zen: false,
+export const selectionAtom = Atom.make<WorkspaceSelection>(emptyWorkspaceSelection).pipe(
+  Atom.keepAlive,
+);
 
-  setSelection: (selection) => set({ selection }),
-  selectWorktree: (projectId, worktreeId) =>
-    set({
-      selection: { kind: 'worktree', projectId, worktreeId },
-    }),
-  selectMissingProject: (projectId) =>
-    set({
-      selection: { kind: 'missingProject', projectId },
-      drawer: { open: false, selectedCommandId: null },
-    }),
-  setActiveSurface: (worktreeId, surfaceId) =>
-    set((state) => ({
-      activeSurfaceByWorktreeId: {
-        ...state.activeSurfaceByWorktreeId,
-        [worktreeId]: surfaceId,
-      },
-    })),
-  setActivePane: (surfaceId, paneId) =>
-    set((state) => ({
-      activePaneBySurfaceId: {
-        ...state.activePaneBySurfaceId,
-        [surfaceId]: paneId,
-      },
-    })),
-  forgetSurface: (worktreeId, surfaceId) =>
-    set((state) => {
-      if (state.activeSurfaceByWorktreeId[worktreeId] !== surfaceId) {
-        return {};
-      }
-      const next = { ...state.activeSurfaceByWorktreeId };
-      delete next[worktreeId];
-      return { activeSurfaceByWorktreeId: next };
-    }),
-  forgetPane: (surfaceId, paneId) =>
-    set((state) => {
-      const storedPaneId = state.activePaneBySurfaceId[surfaceId];
-      if (storedPaneId === undefined || (paneId !== undefined && storedPaneId !== paneId)) {
-        return {};
-      }
-      const next = { ...state.activePaneBySurfaceId };
-      delete next[surfaceId];
-      return { activePaneBySurfaceId: next };
-    }),
+/** Surface id the user last activated per worktree id. */
+export const activeSurfaceByWorktreeAtom = Atom.make<Readonly<Record<number, number>>>({}).pipe(
+  Atom.keepAlive,
+);
 
-  setZen: (zen) => set({ zen }),
-  toggleZen: () => set((state) => ({ zen: !state.zen })),
+/** Pane id the user last activated per surface id. */
+export const activePaneBySurfaceAtom = Atom.make<Readonly<Record<number, number>>>({}).pipe(
+  Atom.keepAlive,
+);
 
-  openDrawer: (commandId) =>
-    set((state) => ({
-      drawer: {
-        open: true,
-        selectedCommandId: commandId ?? state.drawer.selectedCommandId,
-      },
-    })),
+export const drawerAtom = Atom.make<DrawerState>({ open: false, selectedCommandId: null }).pipe(
+  Atom.keepAlive,
+);
 
-  closeDrawer: () => set((state) => ({ drawer: { ...state.drawer, open: false } })),
+export const zenAtom = Atom.make(false).pipe(Atom.keepAlive);
 
-  selectCommand: (commandId) =>
-    set((state) => ({ drawer: { ...state.drawer, selectedCommandId: commandId } })),
-}));
+type Registry = AtomRegistry.AtomRegistry;
+
+export function setSelection(registry: Registry, selection: WorkspaceSelection): void {
+  registry.set(selectionAtom, selection);
+}
+
+export function selectWorktree(registry: Registry, projectId: number, worktreeId: number): void {
+  registry.set(selectionAtom, { kind: 'worktree', projectId, worktreeId });
+}
+
+/** Selects a missing project and closes the drawer, as one transition. */
+export function selectMissingProject(registry: Registry, projectId: number): void {
+  Atom.batch(() => {
+    registry.set(selectionAtom, { kind: 'missingProject', projectId });
+    registry.set(drawerAtom, { open: false, selectedCommandId: null });
+  });
+}
+
+export function setActiveSurface(registry: Registry, worktreeId: number, surfaceId: number): void {
+  registry.update(activeSurfaceByWorktreeAtom, (current) => ({
+    ...current,
+    [worktreeId]: surfaceId,
+  }));
+}
+
+export function setActivePane(registry: Registry, surfaceId: number, paneId: number): void {
+  registry.update(activePaneBySurfaceAtom, (current) => ({ ...current, [surfaceId]: paneId }));
+}
+
+/** Forgets the worktree's active surface, but only while it is still `surfaceId`. */
+export function forgetSurface(registry: Registry, worktreeId: number, surfaceId: number): void {
+  registry.update(activeSurfaceByWorktreeAtom, (current) => {
+    if (current[worktreeId] !== surfaceId) {
+      return current;
+    }
+    const next = { ...current };
+    delete next[worktreeId];
+    return next;
+  });
+}
+
+/** Forgets the surface's active pane; with `paneId`, only while it is still that pane. */
+export function forgetPane(registry: Registry, surfaceId: number, paneId?: number): void {
+  registry.update(activePaneBySurfaceAtom, (current) => {
+    const storedPaneId = current[surfaceId];
+    if (storedPaneId === undefined || (paneId !== undefined && storedPaneId !== paneId)) {
+      return current;
+    }
+    const next = { ...current };
+    delete next[surfaceId];
+    return next;
+  });
+}
+
+export function setZen(registry: Registry, zen: boolean): void {
+  registry.set(zenAtom, zen);
+}
+
+export function toggleZen(registry: Registry): void {
+  registry.update(zenAtom, (zen) => !zen);
+}
+
+/** Opens the drawer, selecting `commandId` when given and keeping the selection otherwise. */
+export function openDrawer(registry: Registry, commandId?: string): void {
+  registry.update(drawerAtom, (drawer) => ({
+    open: true,
+    selectedCommandId: commandId ?? drawer.selectedCommandId,
+  }));
+}
+
+export function closeDrawer(registry: Registry): void {
+  registry.update(drawerAtom, (drawer) => ({ ...drawer, open: false }));
+}
+
+export function selectCommand(registry: Registry, commandId: string): void {
+  registry.update(drawerAtom, (drawer) => ({ ...drawer, selectedCommandId: commandId }));
+}

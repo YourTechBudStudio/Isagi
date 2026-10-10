@@ -262,6 +262,12 @@ export function useRailDrag<Payload>({
       // must not also select the row. True for a refused pinned row too: having
       // tried to drag the root, the user did not also ask to select it.
       window.addEventListener('click', swallow, { capture: true, once: true });
+      // That click, when there is one, is dispatched in this same input task. There
+      // is not always one: a drop whose projection renders synchronously moves the
+      // pressed row before `mouseup`, and the browser then synthesises no click. A
+      // swallower left armed would eat whatever the user clicks next — the refusal
+      // notice's Dismiss, say — so it is disarmed once this task is over.
+      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
       if (ref && target && !latest.current.isBlocked?.(ref.key)) {
         latest.current.onDrop(ref, target.beforeId);
       }

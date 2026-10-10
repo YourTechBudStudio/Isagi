@@ -1,7 +1,8 @@
-import { Effect } from 'effect';
+import type { Effect } from 'effect';
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
-import { runRuntimeEffect } from '../../runtime/run.js';
+import { useRegistry } from '../../state/registry.js';
+import { runApp } from '../../state/runtime.js';
 import {
   initialPtyStreamConnectionState,
   ptyStreamConnectionEventForMessage,
@@ -62,6 +63,7 @@ export function usePtyStream<Message extends PtyStreamMessage>({
   onResolveError,
   onSocketError,
 }: UsePtyStreamInput<Message>): UsePtyStreamResult {
+  const registry = useRegistry();
   const transportRef = useRef<PtyStreamTransportController | null>(null);
   if (transportRef.current === null) {
     transportRef.current = createPtyStreamTransport();
@@ -142,7 +144,8 @@ export function usePtyStream<Message extends PtyStreamMessage>({
         return;
       }
 
-      void runRuntimeEffect(resolveUrlRef.current()).then(
+      // Resolved against this app session's services; `runApp` is the web's one run site.
+      void runApp(registry, resolveUrlRef.current()).then(
         (url) => {
           if (attempt.disposed || !isCurrentAttempt()) {
             return;
@@ -244,7 +247,7 @@ export function usePtyStream<Message extends PtyStreamMessage>({
         transport.closeSocket();
       }
     };
-  }, [connectKey, enabled, failTransport, transport]);
+  }, [connectKey, enabled, failTransport, registry, transport]);
 
   return { transport, connection };
 }

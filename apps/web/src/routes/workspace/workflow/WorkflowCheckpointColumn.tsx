@@ -1,4 +1,9 @@
-import { useWorkflowCheckpoint } from '../../../lib/workspace/workflow/queries.js';
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
+
+import { queryError } from '../../../lib/state/result.js';
+import { workflowCheckpointAtom } from '../../../lib/workspace/workflow/queries.js';
 import { checkpointCommitLabel, checkpointScopeNames } from './checkpoint-view.js';
 import { inspectorCopy } from './copy.js';
 import { checkpointFilesTabKey, labelRow, type DockCheckpoint, type DockRow } from './dock.js';
@@ -43,8 +48,8 @@ function SavedCheckpoint({
   readonly checkpointId: number;
   readonly onOpenTab: (tab: string) => void;
 }) {
-  const detail = useWorkflowCheckpoint(checkpointId);
-  const checkpoint = detail.data;
+  const detail = useAtomValue(workflowCheckpointAtom(checkpointId));
+  const checkpoint = Option.getOrUndefined(AsyncResult.value(detail));
   const files = checkpoint?.scopes.reduce((total, scope) => total + scope.files.length, 0);
   const rows: DockRow[] = [{ label: 'checkpoint', value: `#${checkpointId}` }];
   if (checkpoint) {
@@ -64,7 +69,7 @@ function SavedCheckpoint({
   return (
     <div data-checkpoint-state="saved">
       <Fields rows={rows} onOpenTab={onOpenTab} />
-      {detail.error !== null ? (
+      {queryError(detail) !== null ? (
         <p className="mt-2 font-mono text-[11.5px] text-amber">
           {inspectorCopy.checkpointDetailFailed}
         </p>

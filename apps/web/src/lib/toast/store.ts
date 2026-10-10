@@ -1,14 +1,16 @@
-import { create } from 'zustand';
+/**
+ * Visible toasts: frontend interaction state, one list per app session (registry).
+ *
+ * `toastsAtom` is what `ToastViewport` renders; the actions below are the only writers. React code
+ * gets the registry from `useRegistry()`, non-React code takes it as its first parameter.
+ */
+import { Atom, type AtomRegistry } from 'effect/reactivity';
 
 import { DEFAULT_TOAST_DURATION_MS, MAX_VISIBLE_TOASTS } from './constants.js';
 import type { Toast, ToastInput } from './types.js';
 
-interface ToastStore {
-  readonly toasts: readonly Toast[];
-  readonly show: (input: ToastInput) => string;
-  readonly dismiss: (id: string) => void;
-  readonly clear: () => void;
-}
+/** Newest first, at most `MAX_VISIBLE_TOASTS` unless the extra ones never auto-dismiss. */
+export const toastsAtom = Atom.make<readonly Toast[]>([]).pipe(Atom.keepAlive);
 
 function toastId() {
   return `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -39,28 +41,17 @@ function insertToast(toasts: readonly Toast[], toast: Toast): readonly Toast[] {
   return nextToasts.filter((_, index) => index !== removableIndex);
 }
 
-export const useToastStore = create<ToastStore>((set) => ({
-  toasts: [],
-  show: (input) => {
-    const toast = normalizeToast(input);
-    set((state) => ({ toasts: insertToast(state.toasts, toast) }));
-    return toast.id;
-  },
-  dismiss: (id) =>
-    set((state) => ({
-      toasts: state.toasts.filter((toast) => toast.id !== id),
-    })),
-  clear: () => set({ toasts: [] }),
-}));
-
-export function showToast(input: ToastInput): string {
-  return useToastStore.getState().show(input);
+/** Shows a toast (replacing one with the same id) and returns its id. */
+export function showToast(registry: AtomRegistry.AtomRegistry, input: ToastInput): string {
+  const toast = normalizeToast(input);
+  registry.update(toastsAtom, (toasts) => insertToast(toasts, toast));
+  return toast.id;
 }
 
-export function dismissToast(id: string): void {
-  useToastStore.getState().dismiss(id);
+export function dismissToast(registry: AtomRegistry.AtomRegistry, id: string): void {
+  registry.update(toastsAtom, (toasts) => toasts.filter((toast) => toast.id !== id));
 }
 
-export function clearToasts(): void {
-  useToastStore.getState().clear();
+export function clearToasts(registry: AtomRegistry.AtomRegistry): void {
+  registry.set(toastsAtom, []);
 }

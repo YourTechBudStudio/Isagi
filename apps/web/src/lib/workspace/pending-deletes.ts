@@ -1,8 +1,10 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Atom, type AtomRegistry } from 'effect/reactivity';
 import { useCallback } from 'react';
-import { create } from 'zustand';
 
 import { handleDispatchedCommandError, useCommandDispatcher } from '../palette/dispatcher.js';
 import type { ArgValues } from '../palette/types.js';
+import { useRegistry } from '../state/registry.js';
 import { formatRuntimeError } from './runtime-data.js';
 
 /**
@@ -49,31 +51,39 @@ export interface DeleteEntry {
   readonly error: string | null;
 }
 
-interface PendingDeleteStore {
-  readonly entriesByKey: Readonly<Record<string, DeleteEntry>>;
-  readonly beginDelete: (key: string, origin: DeleteOrigin) => void;
-  readonly failDelete: (key: string, error: string) => void;
-  readonly clearDelete: (key: string) => void;
+/** In-flight and failed deletes by target key, one map per app session (registry). */
+export const pendingDeletesAtom = Atom.make<Readonly<Record<string, DeleteEntry>>>({}).pipe(
+  Atom.keepAlive,
+);
+
+export function beginDelete(
+  registry: AtomRegistry.AtomRegistry,
+  key: string,
+  origin: DeleteOrigin,
+): void {
+  registry.update(pendingDeletesAtom, (entriesByKey) => ({
+    ...entriesByKey,
+    [key]: { origin, error: null },
+  }));
 }
 
-export const usePendingDeleteStore = create<PendingDeleteStore>((set) => ({
-  entriesByKey: {},
-  beginDelete: (key, origin) =>
-    set((state) => ({ entriesByKey: { ...state.entriesByKey, [key]: { origin, error: null } } })),
-  failDelete: (key, error) =>
-    set((state) => {
-      const entry = state.entriesByKey[key];
-      if (!entry) return {};
-      return { entriesByKey: { ...state.entriesByKey, [key]: { ...entry, error } } };
-    }),
-  clearDelete: (key) =>
-    set((state) => {
-      if (!(key in state.entriesByKey)) return {};
-      const next = { ...state.entriesByKey };
-      delete next[key];
-      return { entriesByKey: next };
-    }),
-}));
+/** Records the failure on a delete still in flight; a target no longer tracked is ignored. */
+export function failDelete(registry: AtomRegistry.AtomRegistry, key: string, error: string): void {
+  registry.update(pendingDeletesAtom, (entriesByKey) => {
+    const entry = entriesByKey[key];
+    if (!entry) return entriesByKey;
+    return { ...entriesByKey, [key]: { ...entry, error } };
+  });
+}
+
+export function clearDelete(registry: AtomRegistry.AtomRegistry, key: string): void {
+  registry.update(pendingDeletesAtom, (entriesByKey) => {
+    if (!(key in entriesByKey)) return entriesByKey;
+    const next = { ...entriesByKey };
+    delete next[key];
+    return next;
+  });
+}
 
 export function paneDeleteKey(paneId: number) {
   return `pane:${paneId}`;
@@ -85,7 +95,11 @@ export function surfaceDeleteKey(surfaceId: number) {
 
 /** The entry for one target, or `null` when nothing is in flight against it. */
 export function useDeleteEntry(key: string): DeleteEntry | null {
-  return usePendingDeleteStore((state) => state.entriesByKey[key] ?? null);
+  const select = useCallback(
+    (entriesByKey: Readonly<Record<string, DeleteEntry>>) => entriesByKey[key] ?? null,
+    [key],
+  );
+  return useAtomValue(pendingDeletesAtom, select);
 }
 
 /**
@@ -137,32 +151,30 @@ export function isRunDeleteBlocked(
  */
 export function useRunDelete() {
   const dispatchCommand = useCommandDispatcher();
-  const beginDelete = usePendingDeleteStore((state) => state.beginDelete);
-  const failDelete = usePendingDeleteStore((state) => state.failDelete);
-  const clearDelete = usePendingDeleteStore((state) => state.clearDelete);
+  const registry = useRegistry();
 
   return useCallback(
     (request: RunDeleteRequest) => {
       const { key, origin, commandId, values } = request;
       // A second trigger for the same target is a double-click, not a new intent.
       // A pane delete is also blocked by a delete against its owning surface.
-      if (isRunDeleteBlocked(request, usePendingDeleteStore.getState().entriesByKey)) {
+      if (isRunDeleteBlocked(request, registry.get(pendingDeletesAtom))) {
         return;
       }
-      beginDelete(key, origin);
+      beginDelete(registry, key, origin);
       void dispatchCommand(commandId, values).then(
-        () => clearDelete(key),
+        () => clearDelete(registry, key),
         (error: unknown) => {
           if (origin === 'menu') {
-            failDelete(key, formatRuntimeError(error));
-            handleDispatchedCommandError(error, { toast: false });
+            failDelete(registry, key, formatRuntimeError(error));
+            handleDispatchedCommandError(registry, error, { toast: false });
             return;
           }
-          clearDelete(key);
-          handleDispatchedCommandError(error);
+          clearDelete(registry, key);
+          handleDispatchedCommandError(registry, error);
         },
       );
     },
-    [beginDelete, clearDelete, dispatchCommand, failDelete],
+    [dispatchCommand, registry],
   );
 }

@@ -1,5 +1,6 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useAtom } from '@effect/atom-react';
+import { Effect } from 'effect';
+import { useMemo, useState } from 'react';
 
 import type { ControlPlaneSnapshot, DocsReconciliationResult } from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
@@ -11,18 +12,15 @@ import {
   onboardingDraft,
   type PolicyDraft,
 } from '../../lib/control-plane/policy-form.js';
-import {
-  controlPlaneQueryKey,
-  useAcceptHarnessPolicyMutation,
-} from '../../lib/control-plane/queries.js';
+import { acceptHarnessPolicy, controlPlaneQuery } from '../../lib/control-plane/queries.js';
 import { editorProvisioningManifestLine } from '../../lib/editor/provisioning.js';
-import { useRetryEditorProvisioningMutation } from '../../lib/editor/queries.js';
-import { runRuntimeEffect } from '../../lib/runtime/run.js';
-import {
-  fetchControlPlane,
-  formatRuntimeError,
-  refreshInventory,
-} from '../../lib/workspace/runtime-data.js';
+import { makeRetryEditorProvisioningAtom } from '../../lib/editor/queries.js';
+import { keys } from '../../lib/state/keys.js';
+import { refreshAndRead } from '../../lib/state/policy.js';
+import { useAppRun, useRegistry } from '../../lib/state/registry.js';
+import { mutationError } from '../../lib/state/result.js';
+import { invalidateKeys } from '../../lib/state/runtime.js';
+import { formatRuntimeError, refreshInventory } from '../../lib/workspace/runtime-data.js';
 import { PolicyForm } from './PolicyForm.js';
 import { BootBody, BootSurface, BootTitle } from './StartupSurfaces.js';
 
@@ -60,19 +58,23 @@ export function OnboardingFlow({
   const [superseded, setSuperseded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
-  const retryProvisioning = useRetryEditorProvisioningMutation();
+  const retryProvisioningAtom = useMemo(makeRetryEditorProvisioningAtom, []);
+  const [retryProvisioning, runRetryProvisioning] = useAtom(retryProvisioningAtom);
+  const retryProvisioningError = mutationError(retryProvisioning);
 
-  const acceptPolicy = useAcceptHarnessPolicyMutation();
-  const queryClient = useQueryClient();
+  const registry = useRegistry();
+  const app = useAppRun();
 
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      const output = await acceptPolicy.mutateAsync({
-        expectedPolicyRevision: snapshot.policyRevision,
-        policy: buildHarnessPolicy(draft),
-      });
+      const output = await app(
+        acceptHarnessPolicy({
+          expectedPolicyRevision: snapshot.policyRevision,
+          policy: buildHarnessPolicy(draft),
+        }),
+      );
       onCommitted();
       if (output.reconciliation.outcome === 'succeeded') {
         // Nothing needs the user's attention — the boot continues on its own.
@@ -86,7 +88,7 @@ export function OnboardingFlow({
       // committed. A stale-revision conflict additionally refetches so the next
       // attempt carries the current revision.
       if (caught instanceof RuntimeApiError && caught.apiError.code === 'harness_policy_conflict')
-        void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+        invalidateKeys(registry, [keys.controlPlane]);
       setError(formatRuntimeError(caught));
     } finally {
       setSaving(false);
@@ -100,9 +102,11 @@ export function OnboardingFlow({
     try {
       // The policy is already committed; a retry re-runs reconciliation through a
       // fresh inventory refresh and reads the new result. It never rewrites policy.
-      await runRuntimeEffect(refreshInventory());
-      const fresh = await runRuntimeEffect(fetchControlPlane());
-      await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+      // The read begins after the refresh, so it reflects that reconciliation, and it is
+      // the cached snapshot's own re-read, so the gate sees the same result.
+      const fresh = await app(
+        Effect.andThen(refreshInventory(), refreshAndRead(controlPlaneQuery)),
+      );
       const latest = fresh.reconciliation.lastResult;
       if (latest?.outcome === 'succeeded') {
         onComplete();
@@ -138,12 +142,13 @@ export function OnboardingFlow({
       ? {
           line: provisioningLine,
           retryable: editorProvisioningCopy.retryable[snapshot.editorProvisioning.reason],
-          retrying: retryProvisioning.isPending,
+          retrying: retryProvisioning.waiting,
           // A retry that never reached the runtime leaves the projection exactly
-          // as it was, so the button would look inert. The mutation's own error
+          // as it was, so the button would look inert. The fn atom's own error
           // is the only record of it.
-          retryError: retryProvisioning.error ? formatRuntimeError(retryProvisioning.error) : null,
-          onRetry: () => retryProvisioning.mutate(),
+          retryError:
+            retryProvisioningError === null ? null : formatRuntimeError(retryProvisioningError),
+          onRetry: () => runRetryProvisioning(),
         }
       : null;
 

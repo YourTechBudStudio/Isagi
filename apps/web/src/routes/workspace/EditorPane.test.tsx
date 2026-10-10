@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { EditorContextFacts } from '@isagi/contracts';
 
 import { editorAttemptBanner, editorPaneView } from '../../lib/editor/view.js';
+import { AppStateProvider } from '../../lib/state/AppStateProvider.js';
+import { makeTestRegistry } from '../../lib/state/testing.js';
 import { EditorPane, type EditorDiagnosticsState, type EditorPaneActions } from './EditorPane.js';
 
 const base: EditorContextFacts = {
@@ -39,24 +41,32 @@ function render(
   } = {},
 ): string {
   const context = { ...base, ...overrides };
-  return renderToStaticMarkup(
-    <EditorPane
-      title="isagi · feat/embedded-editor"
-      view={editorPaneView(context)}
-      banner={editorAttemptBanner(context)}
-      notice={options.notice ?? null}
-      activePtyProcessId={context.activePtyProcessId}
-      hasDiagnostics={context.hasDiagnostics}
-      focused={false}
-      onFocus={() => undefined}
-      starting={false}
-      onStart={() => undefined}
-      diagnostics={options.diagnostics ?? { kind: 'closed' }}
-      onToggleDiagnostics={() => undefined}
-      onRetryDiagnostics={() => undefined}
-      actions={options.actions ?? null}
-    />,
-  );
+  // The pane registers its focus target with the app session, so it renders inside one.
+  const registry = makeTestRegistry();
+  try {
+    return renderToStaticMarkup(
+      <AppStateProvider registry={registry}>
+        <EditorPane
+          title="isagi · feat/embedded-editor"
+          view={editorPaneView(context)}
+          banner={editorAttemptBanner(context)}
+          notice={options.notice ?? null}
+          activePtyProcessId={context.activePtyProcessId}
+          hasDiagnostics={context.hasDiagnostics}
+          focused={false}
+          onFocus={() => undefined}
+          starting={false}
+          onStart={() => undefined}
+          diagnostics={options.diagnostics ?? { kind: 'closed' }}
+          onToggleDiagnostics={() => undefined}
+          onRetryDiagnostics={() => undefined}
+          actions={options.actions ?? null}
+        />
+      </AppStateProvider>,
+    );
+  } finally {
+    registry.dispose();
+  }
 }
 
 describe('EditorPane state rendering', () => {

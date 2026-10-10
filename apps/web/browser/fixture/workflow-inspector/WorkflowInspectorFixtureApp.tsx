@@ -1,19 +1,32 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { Effect } from 'effect';
 import { useEffect, useState } from 'react';
 
 import type { WorkflowEventDto } from '@isagi/contracts';
 
-import { queryClient } from '../../../src/lib/query/client.js';
-import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
-import {
-  useRuntimeIdentity,
-  useWorkflowRuntimeSync,
-} from '../../../src/lib/workspace/workflow/queries.js';
-import { publishWorkflowSignal } from '../../../src/lib/workspace/workflow/signals.js';
+import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
+import { runApp } from '../../../src/lib/state/runtime.js';
+import { selectWorktree, setActiveSurface } from '../../../src/lib/workspace/store.js';
+import type { WorkflowSignal } from '../../../src/lib/workspace/workflow/live.js';
+import { useRuntimeIdentity } from '../../../src/lib/workspace/workflow/queries.js';
+import { receiveWorkflowSignal } from '../../../src/lib/workspace/workflow/sync.js';
 import { WorkflowBarContainer } from '../../../src/routes/workspace/WorkflowBarContainer.js';
+import { createFixtureRegistry } from '../test-support/registry.js';
 import { FIXTURE_PLACEMENT, type InspectorRuntimeControls } from './fake-runtime.js';
 import type { ScriptedEngineControls } from './scripted-engine.js';
 import { scenarioKeys, type ScenarioKey } from './world.js';
+
+const fixtureRegistry = createFixtureRegistry();
+
+/**
+ * Deliver runtime signals the way the runtime-events connection does: in order, through the
+ * production live sync of this page's app session.
+ */
+function publishWorkflowSignals(...signals: readonly WorkflowSignal[]) {
+  void runApp(
+    fixtureRegistry,
+    Effect.forEach(signals, (signal) => receiveWorkflowSignal(signal), { discard: true }),
+  );
+}
 
 /**
  * The **production** bar and inspector over a fake runtime boundary.
@@ -34,15 +47,14 @@ export function WorkflowInspectorFixtureApp({
   readonly engine: ScriptedEngineControls;
 }) {
   useEffect(() => {
-    const store = useWorkspaceStore.getState();
-    store.setActiveSurface(FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
-    store.selectWorktree(FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
+    setActiveSurface(fixtureRegistry, FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
+    selectWorktree(fixtureRegistry, FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
   }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       <FixtureShell runtime={runtime} engine={engine} />
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 
@@ -53,16 +65,17 @@ function FixtureShell({
   readonly runtime: InspectorRuntimeControls;
   readonly engine: ScriptedEngineControls;
 }) {
-  useWorkflowRuntimeSync();
   const runtimeIdentity = useRuntimeIdentity();
   const [scenario, setScenario] = useState<ScenarioKey>('waiting_questions');
 
   // Published rather than written into the cache: a real client learns which run occupies a surface
-  // from the connection's snapshot, and it can only hear it once the live sync has subscribed.
+  // from the connection's snapshot. Sent once the runtime answers, as a connection would.
   useEffect(() => {
     if (runtimeIdentity === null) return;
-    publishWorkflowSignal({ type: 'connected' });
-    publishWorkflowSignal({ type: 'snapshot', summaries: [runtime.world().summary] });
+    publishWorkflowSignals(
+      { type: 'connected' },
+      { type: 'snapshot', summaries: [runtime.world().summary] },
+    );
   }, [runtime, runtimeIdentity]);
 
   /**
@@ -73,14 +86,18 @@ function FixtureShell({
   const replaceRun = (change: () => void) => {
     const previous = runtime.world().summary;
     change();
-    publishWorkflowSignal({ type: 'run_changed', summary: { ...previous, surfaceId: null } });
-    publishWorkflowSignal({ type: 'run_changed', summary: runtime.world().summary });
+    publishWorkflowSignals(
+      { type: 'run_changed', summary: { ...previous, surfaceId: null } },
+      { type: 'run_changed', summary: runtime.world().summary },
+    );
   };
 
   /** A runtime event, pushed as the runtime pushes one: the event, then the run's new summary. */
   const push = (event: WorkflowEventDto) => {
-    publishWorkflowSignal({ type: 'run_event', event });
-    publishWorkflowSignal({ type: 'run_changed', summary: runtime.world().summary });
+    publishWorkflowSignals(
+      { type: 'run_event', event },
+      { type: 'run_changed', summary: runtime.world().summary },
+    );
   };
 
   return (
@@ -157,7 +174,7 @@ function FixtureShell({
           onClick={() => {
             // An event the client already holds, delivered again. It is appended once.
             const last = runtime.world().events.at(-1);
-            if (last) publishWorkflowSignal({ type: 'run_event', event: last });
+            if (last) publishWorkflowSignals({ type: 'run_event', event: last });
           }}
         >
           Duplicate event
@@ -199,8 +216,7 @@ function FixtureShell({
           data-action="reconnect"
           className="rounded border border-line/40 px-1.5 py-0.5 font-mono text-fg-subtle"
           onClick={() => {
-            publishWorkflowSignal({ type: 'disconnected' });
-            publishWorkflowSignal({ type: 'connected' });
+            publishWorkflowSignals({ type: 'disconnected' }, { type: 'connected' });
           }}
         >
           Reconnect

@@ -1,7 +1,7 @@
 import { Trash2 } from 'lucide-react';
 
 import { projectActionsCopy } from '../../../copy/index.js';
-import { deleteProjectFromPalette } from '../../workspace/queries.js';
+import { deleteProjectFromPalette } from '../../workspace/commits.js';
 import type { ArgValues, PaletteCommand, PaletteContext, ReviewContent } from '../types.js';
 
 /**
@@ -34,7 +34,7 @@ export const deleteProjectCommand: PaletteCommand = {
     if (projectId === null) {
       return;
     }
-    await deleteProjectFromPalette(projectId);
+    await ctx.app(deleteProjectFromPalette(projectId));
     return { kind: 'close' };
   },
 };

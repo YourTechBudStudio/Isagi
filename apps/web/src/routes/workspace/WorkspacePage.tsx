@@ -1,28 +1,32 @@
+import { useAtomMount, useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { MotionConfig } from 'motion/react';
 import { useEffect } from 'react';
 
 import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { workspaceBootCopy } from '../../copy/index.js';
-import { useClientSettingsQuery } from '../../lib/client-settings/queries.js';
+import { clientSettingsAtom } from '../../lib/client-settings/queries.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
 import {
-  handleDispatchedCommandError,
   useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
+import { paletteAtom, paletteSelectors } from '../../lib/palette/store.js';
 import { isPlatformModifierShortcut } from '../../lib/platform.js';
+import { useRegistry } from '../../lib/state/registry.js';
+import { queryError } from '../../lib/state/result.js';
 import {
   useWorkspace,
   usePersistActiveContextSelection,
   useWorkspaceSelectionSync,
 } from '../../lib/workspace/hooks.js';
 import { paneDeleteKey, useRunDelete } from '../../lib/workspace/pending-deletes.js';
-import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
-import { useRuntimeEventSubscription } from '../../lib/workspace/runtime-events.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { formatRuntimeError, useWorkspaceResult } from '../../lib/workspace/queries.js';
+import { runtimeConnectionAtom } from '../../lib/workspace/runtime-events.js';
+import { activePaneBySurfaceAtom, setZen, zenAtom } from '../../lib/workspace/store.js';
 import { TerminalPresentationProvider } from '../../lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
-import { useWorkflowRuntimeSync } from '../../lib/workspace/workflow/queries.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
 import { WorkArea } from './WorkArea.js';
@@ -73,26 +77,25 @@ function WorkspaceRuntimeError({ error }: { error: string }) {
 }
 
 export function WorkspacePage() {
-  const zen = useWorkspaceStore((state) => state.zen);
-  const setZen = useWorkspaceStore((state) => state.setZen);
-  const workspace = useWorkspaceQuery();
-  const clientSettings = useClientSettingsQuery();
+  const registry = useRegistry();
+  const zen = useAtomValue(zenAtom);
+  const workspace = useWorkspaceResult();
+  const clientSettings = useClientSettings();
   const { activeSurface, activeWorktreeId } = useWorkspace();
   const dispatchCommand = useCommandDispatcher();
-  const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
+  const onDispatchError = useDispatchedCommandErrorHandler();
+  const activePaneBySurfaceId = useAtomValue(activePaneBySurfaceAtom);
   const runDelete = useRunDelete();
-  const workspaceErrorIsFatal = Boolean(workspace.error && !workspace.data);
+  const workspaceErrorIsFatal = workspace.error !== null && workspace.data === undefined;
   const settingsErrorIsFatal = Boolean(clientSettings.error && !clientSettings.data);
   const hasConfiguredProjects =
     !workspaceErrorIsFatal && (workspace.data?.projects.length ?? 0) > 0;
-  const paletteOpen = usePaletteStore((state) => state.open);
+  const paletteOpen = useAtomValue(paletteAtom, paletteSelectors.open);
 
   useWorkspaceSelectionSync();
   usePersistActiveContextSelection();
-  useRuntimeEventSubscription();
-  // Owns the attached-run cache for the session: one place applies the runtime's snapshot, changed
-  // and detached facts, and every reader selects from it.
-  useWorkflowRuntimeSync();
+  // The runtime-events connection lives while the workspace is shown; unmounting closes it.
+  useAtomMount(runtimeConnectionAtom);
 
   // Ask the optional host shell to quiet native chrome in zen. Browser-hosted
   // web builds simply do not provide this bridge.
@@ -105,17 +108,17 @@ export function WorkspacePage() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && zen && !paletteOpen) {
         event.preventDefault();
-        setZen(false);
+        setZen(registry, false);
         return;
       }
       if (isPlatformModifierShortcut(event) && event.key === '.') {
         event.preventDefault();
-        setZen(!zen);
+        setZen(registry, !zen);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zen, paletteOpen, setZen]);
+  }, [zen, paletteOpen, registry]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -138,7 +141,7 @@ export function WorkspacePage() {
       // still resolves its own target, it just runs without the local indicator.
       const activePaneId = activePaneBySurfaceId[activeSurface.id];
       if (activePaneId === undefined || activeWorktreeId === null) {
-        void dispatchCommand('delete-active-pane').catch(handleDispatchedCommandError);
+        void dispatchCommand('delete-active-pane').catch(onDispatchError);
         return;
       }
       runDelete({
@@ -161,6 +164,7 @@ export function WorkspacePage() {
     activeSurface,
     activeWorktreeId,
     dispatchCommand,
+    onDispatchError,
     paletteOpen,
     runDelete,
   ]);
@@ -196,6 +200,16 @@ export function WorkspacePage() {
       </TooltipDelayProvider>
     </MotionConfig>
   );
+}
+
+/** The client settings read, with the old query-result shape this page branches on. */
+function useClientSettings() {
+  const result = useAtomValue(clientSettingsAtom);
+  return {
+    data: Option.getOrUndefined(AsyncResult.value(result)),
+    isPending: result._tag === 'Initial',
+    error: queryError(result),
+  };
 }
 
 function isEditableEventTarget(target: EventTarget | null) {

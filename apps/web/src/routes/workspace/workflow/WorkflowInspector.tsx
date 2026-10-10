@@ -1,13 +1,19 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowCheckpointSummaryDto, WorkflowRunSummary } from '@isagi/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
+import { disabledQuery } from '../../../lib/state/policy.js';
+import { useRegistry } from '../../../lib/state/registry.js';
+import { queryError } from '../../../lib/state/result.js';
 import {
-  useWorkflowExecutionQuery,
   useWorkflowRunView,
-  useWorkflowStructureQuery,
+  workflowExecutionAtom,
+  workflowStructureAtom,
 } from '../../../lib/workspace/workflow/queries.js';
 import { aggregateVisits, emptyAggregation } from './aggregate.js';
 import { executionAddressKey } from './ancestry.js';
@@ -58,6 +64,7 @@ export function WorkflowInspector({
   /** Swappable so a test can drive the layout protocol without a real engine. */
   readonly engineFactory?: LayoutEngineFactory | undefined;
 }) {
+  const registry = useRegistry();
   const runId = summary.runId;
   const runRead = useWorkflowRunView(runId);
   const view = runRead.view;
@@ -81,10 +88,12 @@ export function WorkflowInspector({
   const live = runSummary.endedAt === null;
   const now = useRunClock(live);
 
-  const structure = useWorkflowStructureQuery(runId, runSummary.artifactHash);
+  const structureAtom = workflowStructureAtom([runId, runSummary.artifactHash]);
+  const structure = useAtomValue(structureAtom);
+  const structureData = Option.getOrUndefined(AsyncResult.value(structure));
   const topology = useMemo(
-    () => (structure.data ? buildTopology(structure.data.descriptor) : null),
-    [structure.data],
+    () => (structureData ? buildTopology(structureData.descriptor) : null),
+    [structureData],
   );
 
   const aggregation = useMemo(
@@ -137,8 +146,10 @@ export function WorkflowInspector({
     setChosenCheckpointId(null);
   }, [runId]);
 
-  const execution = useWorkflowExecutionQuery(selectedExecutionId(selection, view));
-  const detail = execution.data ?? null;
+  const selectedId = selectedExecutionId(selection, view);
+  const executionAtom = selectedId === null ? disabledQuery : workflowExecutionAtom(selectedId);
+  const execution = useAtomValue(executionAtom);
+  const detail = Option.getOrNull(AsyncResult.value(execution));
 
   const dockView = useMemo(
     () => (view === null ? null : buildDockView({ selection, view, topology, detail, now })),
@@ -268,19 +279,19 @@ export function WorkflowInspector({
                 onRetry={runRead.retry}
               />
               {tab === 'declared' ? (
-                structure.isPending ? (
+                structure._tag === 'Initial' ? (
                   <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
                     <p className="font-mono text-[12px] text-fg-subtle">
                       {inspectorCopy.readingStructure}
                     </p>
                   </div>
-                ) : structure.error ? (
+                ) : structure._tag === 'Failure' ? (
                   <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
                     <div className="max-w-sm rounded-lg border border-error/40 bg-error/5 px-3 py-2.5 text-center">
                       <p className="text-[12.5px] text-fg-muted">{inspectorCopy.structureFailed}</p>
                       <button
                         type="button"
-                        onClick={() => void structure.refetch()}
+                        onClick={() => registry.refresh(structureAtom)}
                         className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
                       >
                         {inspectorCopy.structureRetry}
@@ -290,7 +301,7 @@ export function WorkflowInspector({
                 ) : topology ? (
                   <WorkflowDeclaredCanvas
                     topology={topology}
-                    artifactHash={structure.data.artifactHash}
+                    artifactHash={structure.value.artifactHash}
                     aggregation={aggregation}
                     liveKey={liveKey}
                     selection={selection}
@@ -324,9 +335,9 @@ export function WorkflowInspector({
                 view={dockView}
                 execution={{
                   detail,
-                  isLoading: execution.isLoading,
-                  error: execution.error,
-                  retry: () => void execution.refetch(),
+                  isLoading: execution._tag === 'Initial' && execution.waiting,
+                  error: queryError(execution),
+                  retry: () => registry.refresh(executionAtom),
                 }}
                 height={dockHeight}
                 onHeightChange={clampDock}

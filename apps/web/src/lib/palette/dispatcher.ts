@@ -1,17 +1,20 @@
+import { useAtomValue } from '@effect/atom-react';
+import type { AtomRegistry } from 'effect/reactivity';
 import { useCallback, useMemo } from 'react';
 
 import { toastCopy } from '../../copy/index.js';
 import { useEditorAvailable, useLaunchableHarnesses } from '../control-plane/queries.js';
-import { queryClient } from '../query/client.js';
+import { keys } from '../state/keys.js';
+import { useAppRun, useRegistry } from '../state/registry.js';
+import { invalidateKeys } from '../state/runtime.js';
 import { showToast } from '../toast/index.js';
 import { useWorkspace } from '../workspace/hooks.js';
 import { formatRuntimeError } from '../workspace/queries.js';
-import { workspaceQueryKey } from '../workspace/query-keys.js';
-import { useWorkspaceStore } from '../workspace/store.js';
+import { activePaneBySurfaceAtom } from '../workspace/store.js';
 import { workbenchActionCommands } from './commands/workbench-actions.js';
 import { buildPaletteContext } from './context.js';
 import { assembleEntries } from './entries.js';
-import { usePaletteStore } from './store.js';
+import { openPalette, pushRecent } from './store.js';
 import type {
   ArgValues,
   CommandPreflightResult,
@@ -32,10 +35,15 @@ export async function dispatchCommandEntry(
   values: ArgValues = {},
   options: DispatchCommandOptions,
 ): Promise<void> {
+  const { ctx } = options;
+  if (!ctx) {
+    return;
+  }
   const entries = options.entries ?? [];
   const entry =
-    entries.find((candidate) => candidate.id === entryId) ?? explicitDispatchEntry(entryId, values);
-  if (!entry || !options.ctx) {
+    entries.find((candidate) => candidate.id === entryId) ??
+    explicitDispatchEntry(entryId, values, ctx);
+  if (!entry) {
     return;
   }
 
@@ -51,7 +59,7 @@ export async function dispatchCommandEntry(
     return;
   }
 
-  const preflight = await resolveCommandPreflight(entry.command, options.ctx, commandValues);
+  const preflight = await resolveCommandPreflight(entry.command, ctx, commandValues);
 
   if (preflight.mode === 'unavailable') {
     return;
@@ -62,11 +70,15 @@ export async function dispatchCommandEntry(
     return;
   }
 
-  await entry.command.run(preflight.values ?? commandValues, options.ctx, preflight.payloads);
+  await entry.command.run(preflight.values ?? commandValues, ctx, preflight.payloads);
   options.pushRecent?.(entry.id);
 }
 
-function explicitDispatchEntry(entryId: string, values: ArgValues): PaletteEntry | null {
+function explicitDispatchEntry(
+  entryId: string,
+  values: ArgValues,
+  ctx: PaletteContext,
+): PaletteEntry | null {
   if (Object.keys(values).length === 0) {
     return null;
   }
@@ -83,21 +95,25 @@ function explicitDispatchEntry(entryId: string, values: ArgValues): PaletteEntry
     group: command.group,
     command,
     values,
-    run: () => command.run(values, emptyPaletteContext),
+    run: () => command.run(values, emptyPaletteContext(ctx)),
   };
 }
 
-const emptyPaletteContext: PaletteContext = {
+/**
+ * An explicit chrome dispatch names its own target and never asks about availability; this
+ * fallback context exists only to satisfy `run`, in the caller's app session.
+ */
+const emptyPaletteContext = (ctx: PaletteContext): PaletteContext => ({
+  registry: ctx.registry,
+  app: ctx.app,
   projects: [],
   activeProject: null,
   activeWorktree: null,
   activeSurface: null,
   activePaneId: null,
   launchableHarnesses: [],
-  // An explicit chrome dispatch names its own target and never asks about
-  // availability; this fallback context exists only to satisfy `run`.
   editorAvailable: false,
-};
+});
 
 export async function resolveCommandPreflight(
   command: PaletteCommand,
@@ -112,20 +128,24 @@ export async function resolveCommandPreflight(
 
 export function useCommandDispatcher() {
   const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
-  const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
+  const registry = useRegistry();
+  const app = useAppRun();
+  const activePaneBySurfaceId = useAtomValue(activePaneBySurfaceAtom);
   const launchableHarnesses = useLaunchableHarnesses();
   const editorAvailable = useEditorAvailable();
-  const openPalette = usePaletteStore((state) => state.openPalette);
-  const pushRecent = usePaletteStore((state) => state.pushRecent);
   const ctx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
+        registry,
+        app,
         launchableHarnesses,
         editorAvailable,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
       }),
     [
+      registry,
+      app,
       projects,
       activeWorktreeId,
       launchableHarnesses,
@@ -138,8 +158,14 @@ export function useCommandDispatcher() {
 
   return useCallback(
     (entryId: string, values: ArgValues = {}) =>
-      dispatchCommandEntry(entryId, values, { entries, ctx, openPalette, pushRecent }),
-    [ctx, entries, openPalette, pushRecent],
+      dispatchCommandEntry(entryId, values, {
+        entries,
+        ctx,
+        openPalette: (paletteEntryId, paletteValues) =>
+          openPalette(registry, paletteEntryId, paletteValues),
+        pushRecent: (recentEntryId) => pushRecent(registry, recentEntryId),
+      }),
+    [ctx, entries, registry],
   );
 }
 
@@ -152,16 +178,26 @@ export function useCommandDispatcher() {
  * 0004).
  */
 export function handleDispatchedCommandError(
+  registry: AtomRegistry.AtomRegistry,
   error: unknown,
   options: { readonly toast?: boolean } = {},
 ) {
-  void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+  invalidateKeys(registry, [keys.workspace]);
   if (options.toast ?? true) {
-    showToast({
+    showToast(registry, {
       kind: 'warning',
       title: toastCopy.workbenchCommandFailed.title,
       subtitle: formatRuntimeError(error),
     });
   }
   console.error('[palette] dispatched command failed', error);
+}
+
+/**
+ * `handleDispatchedCommandError` bound to this app session, for `.catch(...)` at a chrome
+ * dispatch site that has no inline failure surface of its own. Stable per registry.
+ */
+export function useDispatchedCommandErrorHandler(): (error: unknown) => void {
+  const registry = useRegistry();
+  return useCallback((error: unknown) => handleDispatchedCommandError(registry, error), [registry]);
 }

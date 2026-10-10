@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Project } from '../../workspace/types.js';
+import { paletteTestSession } from '../test-support.js';
 import type { Option, PaletteContext } from '../types.js';
 import { relocateProjectCommand } from './relocate-project.js';
 
@@ -75,6 +76,7 @@ function ctx(projects: readonly Project[]): PaletteContext {
     activeWorktree: null,
     activeSurface: null,
     activePaneId: null,
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
   };

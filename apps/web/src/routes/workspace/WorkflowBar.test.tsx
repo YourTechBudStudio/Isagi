@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { WorkflowRunSummary } from '@isagi/contracts';
 
 import { workflowCopy } from '../../copy/index.js';
+import { AppStateProvider } from '../../lib/state/AppStateProvider.js';
+import { makeTestRegistry } from '../../lib/state/testing.js';
 import type { WorkflowLogView } from '../../lib/workspace/workflow/queries.js';
 import { workflowSummaryFixture } from '../../lib/workspace/workflow/test-support.js';
 import { WorkflowBar, type WorkflowBarProps } from './WorkflowBar.js';
@@ -233,11 +234,16 @@ function render(overrides: Partial<WorkflowBarProps> = {}): string {
     ...overrides,
   };
   // The provider is the component's real environment, not a concession to the test.
-  return renderToStaticMarkup(
-    <QueryClientProvider client={new QueryClient()}>
-      <WorkflowBar {...props} />
-    </QueryClientProvider>,
-  );
+  const registry = makeTestRegistry();
+  try {
+    return renderToStaticMarkup(
+      <AppStateProvider registry={registry}>
+        <WorkflowBar {...props} />
+      </AppStateProvider>,
+    );
+  } finally {
+    registry.dispose();
+  }
 }
 
 function parked(

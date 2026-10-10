@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Effect } from 'effect';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import {
-  runtimeIdentityQueryKey,
-  workflowCheckpointListQueryKey,
-  workflowCheckpointQueryKey,
-} from '../../../lib/workspace/query-keys.js';
+import type { WorkflowCheckpointDto } from '@isagi/contracts';
+
+import type { RuntimeApiShape } from '../../../lib/runtime/client.js';
+import { AppStateProvider } from '../../../lib/state/AppStateProvider.js';
+import { makeTestRegistry } from '../../../lib/state/testing.js';
 import {
   workflowCheckpointFixture,
   workflowCheckpointSummaryFixture,
@@ -20,19 +20,20 @@ import { WorkflowCheckpointsPanel } from './WorkflowCheckpointsPanel.js';
 
 /** The dock's checkpoint column and the files tree, rendered from a seeded checkpoint read. */
 
-const identity = 'http://runtime.test';
-
-function render(node: React.ReactNode, seed: (client: QueryClient) => void = () => undefined) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  client.setQueryData(runtimeIdentityQueryKey, identity);
-  seed(client);
-  const markup = renderToStaticMarkup(
-    <QueryClientProvider client={client}>{node}</QueryClientProvider>,
-  );
-  // Queries with their own `gcTime` arm a timer that would hold the test process open.
-  client.clear();
-  return markup;
+/** A synchronous fake answers on the first read, so the static render shows the seeded read. */
+function render(node: React.ReactNode, api: Partial<RuntimeApiShape> = {}) {
+  const registry = makeTestRegistry({ retry: false, api });
+  try {
+    return renderToStaticMarkup(<AppStateProvider registry={registry}>{node}</AppStateProvider>);
+  } finally {
+    // Retained reads arm idle timers that would hold the test process open.
+    registry.dispose();
+  }
 }
+
+const checkpointRead = (checkpoint: WorkflowCheckpointDto): Partial<RuntimeApiShape> => ({
+  getWorkflowCheckpoint: () => Effect.succeed({ checkpoint }),
+});
 
 const checkpoint = workflowCheckpointFixture({
   checkpointId: 7,
@@ -48,8 +49,7 @@ const checkpoint = workflowCheckpointFixture({
     { scope: 'notes', kind: 'directory', path: 'notes', exclude: [], missing: true, files: [] },
   ],
 });
-const seed = (client: QueryClient) =>
-  client.setQueryData(workflowCheckpointQueryKey(identity, 7), checkpoint);
+const seed = checkpointRead(checkpoint);
 
 test('without a saved checkpoint the column says capturing, or that nothing was saved', () => {
   assert.match(
@@ -99,12 +99,7 @@ test('the column shows the checkpoint title and its label, or a dim dash without
         checkpoint={{ state: 'saved', checkpointId: 7 }}
         onOpenTab={() => {}}
       />,
-      (client) =>
-        client.setQueryData(workflowCheckpointQueryKey(identity, 7), {
-          ...checkpoint,
-          title: 'Save completed phase',
-          label,
-        }),
+      checkpointRead({ ...checkpoint, title: 'Save completed phase', label }),
     );
 
   const labelled = column('Phase 2');
@@ -137,7 +132,7 @@ test('the Checkpoints tab lists each checkpoint as its title with the label afte
       onSeed={() => {}}
       onSelect={() => {}}
     />,
-    (client) => client.setQueryData(workflowCheckpointListQueryKey(identity, 1), items),
+    { listWorkflowCheckpoints: () => Effect.succeed({ items, nextCursor: null }) },
   );
   const [, first = '', second = ''] = markup.split('data-checkpoint-item=');
 

@@ -5,6 +5,7 @@ import type { SurfaceDetail } from '@isagi/contracts';
 
 import type { Project, Surface } from '../workspace/types.js';
 import { buildPaletteContext, workflowOriginFromSurfaceDetail } from './context.js';
+import { paletteTestSession } from './test-support.js';
 
 test('palette context carries active surface and frontend active pane target', () => {
   const surfaceA = surface({ id: 101, title: 'Agent', paneKinds: ['agent_session'] });
@@ -12,6 +13,7 @@ test('palette context carries active surface and frontend active pane target', (
   const projects = [project({ surfaces: [surfaceA, surfaceB], activeSurfaceId: surfaceA.id })];
 
   const ctx = buildPaletteContext(projects, 10, {
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
     activeSurfaceByWorktreeId: { 10: surfaceB.id },
@@ -29,6 +31,7 @@ test('palette context ignores stale active surface overrides', () => {
   const projects = [project({ surfaces: [surfaceA], activeSurfaceId: surfaceA.id })];
 
   const ctx = buildPaletteContext(projects, 10, {
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
     activeSurfaceByWorktreeId: { 10: 999 },
@@ -44,6 +47,7 @@ test('configured command fields thread through buildPaletteContext', () => {
   const commands = [{ name: 'dev', status: 'idle', ports: [] }] as const;
 
   const ctx = buildPaletteContext(projects, 10, {
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
     configuredCommands: commands,
@@ -56,6 +60,7 @@ test('configured command fields thread through buildPaletteContext', () => {
 
 test('omitted configured command options leave both context fields undefined', () => {
   const ctx = buildPaletteContext([project({ surfaces: [], activeSurfaceId: null })], 10, {
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
   });

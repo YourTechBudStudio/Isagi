@@ -1,15 +1,20 @@
+import { useAtom, useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { motion } from 'motion/react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
-import { useControlPlaneQuery } from '../../lib/control-plane/queries.js';
-import { useRetryEditorProvisioningMutation } from '../../lib/editor/queries.js';
+import { controlPlaneAtom } from '../../lib/control-plane/queries.js';
+import { makeRetryEditorProvisioningAtom } from '../../lib/editor/queries.js';
 import { DURATION, EASE_EXPO } from '../../lib/motion.js';
 import { RuntimeLocalityContext, deriveRuntimeLocality } from '../../lib/runtime/locality.js';
-import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
+import { disabledQuery } from '../../lib/state/policy.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import { WorkspacePage } from '../workspace/WorkspacePage.js';
 import { hostRuntimeAllowsQueries, useHostRuntimeGate } from './HostRuntimeGate.js';
 import { OnboardingFlow } from './OnboardingFlow.js';
+import { startupBootView } from './startup-view.js';
 import { BootSurface, type BootView } from './StartupSurfaces.js';
 
 /**
@@ -37,12 +42,17 @@ import { BootSurface, type BootView } from './StartupSurfaces.js';
  */
 export function StartupGate() {
   const host = useHostRuntimeGate();
-  const query = useControlPlaneQuery({ enabled: hostRuntimeAllowsQueries(host.decision) });
-  const retryProvisioning = useRetryEditorProvisioningMutation();
+  const registry = useRegistry();
+  // While the host disallows queries the gate reads nothing (the old `enabled: false`).
+  const controlPlane = useAtomValue(
+    hostRuntimeAllowsQueries(host.decision) ? controlPlaneAtom : disabledQuery,
+  );
+  const retryProvisioningAtom = useMemo(makeRetryEditorProvisioningAtom, []);
+  const [retryProvisioning, runRetryProvisioning] = useAtom(retryProvisioningAtom);
   const [onboardingHeld, setOnboardingHeld] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
-  const snapshot = query.data;
+  const snapshot = Option.getOrUndefined(AsyncResult.value(controlPlane));
   const gate = snapshot ? deriveStartupGate(snapshot) : null;
   const hostView: BootView | null =
     host.decision === 'connecting'
@@ -68,34 +78,13 @@ export function StartupGate() {
     );
   }
 
-  const view: BootView | null = !snapshot
-    ? query.isPending
-      ? { kind: 'connecting' }
-      : {
-          kind: 'runtime_unreachable',
-          error: formatRuntimeError(query.error),
-          retrying: query.isFetching,
-          onRetry: () => void query.refetch(),
-        }
-    : gate?.kind === 'inventory_pending'
-      ? { kind: 'environment_pending' }
-      : gate?.kind === 'config_invalid'
-        ? { kind: 'config_invalid', diagnostic: gate.diagnostic }
-        : gate?.kind === 'editor_provisioning'
-          ? {
-              kind: 'editor_provisioning',
-              state: gate.state,
-              retrying: retryProvisioning.isPending,
-              // The retry request can fail on its own — dropped connection, or a
-              // runtime refusal such as `editor_provisioning_busy`. Nothing in
-              // the projection records that, so the mutation carries it back to
-              // the button that started it.
-              retryError: retryProvisioning.error
-                ? formatRuntimeError(retryProvisioning.error)
-                : null,
-              onRetry: () => retryProvisioning.mutate(),
-            }
-          : null; // 'ready' — onboarding is handled above.
+  const view = startupBootView({
+    controlPlane,
+    retryProvisioning,
+    // Not `useAtomRefresh`: that would mount the read while the host still disallows it.
+    onRetry: () => registry.refresh(controlPlaneAtom),
+    onRetryProvisioning: () => runRetryProvisioning(),
+  });
 
   if (view) {
     return <BootSurface view={view} />;
