@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import websocket from '@fastify/websocket';
-import { Effect, Layer } from 'effect';
+import { Cause, Effect, Layer, Logger, References } from 'effect';
 import type { FastifyInstance } from 'fastify';
+
+import { runScoped } from '@isagi/testing';
 
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { withApiServer } from '../../platform/http/testing.js';
@@ -26,6 +28,7 @@ import {
   type CommandStateRow,
 } from '../repository.js';
 import { CommandService } from '../service.js';
+import { CommandSettings, type CommandTimings } from '../settings.js';
 
 // ---------------------------------------------------------------------------
 // API / websocket test support
@@ -47,12 +50,12 @@ export const idleLogMetadata = {
 export function withCommandsApi<A>(
   service: CommandService['Service'],
   run: (fastify: FastifyInstance) => Promise<A>,
-  options: { readonly pty?: PtyService['Service'] | undefined } = {},
+  options: { readonly pty?: Partial<PtyService['Service']> | undefined } = {},
 ) {
   return withApiServer(
     Layer.mergeAll(
       Layer.succeed(CommandService, service),
-      Layer.succeed(PtyService, options.pty ?? fakeCommandLogPtyService()),
+      Layer.mock(PtyService)(options.pty ?? fakeCommandLogPtyService()),
     ),
     async (fastify, runtime) => {
       await fastify.register(websocket);
@@ -83,13 +86,11 @@ export function delayedSucceed<A>(value: A) {
   return Effect.sleep(1).pipe(Effect.as(value));
 }
 
+/** The PTY members a command log stream reads; anything else is unimplemented (`Layer.mock`). */
 export function fakeCommandLogPtyService(
   overrides: Partial<PtyService['Service']> = {},
-): PtyService['Service'] {
+): Partial<PtyService['Service']> {
   return {
-    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
-    readLogTail: () => Effect.die('readLogTail is not used'),
-    launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({
         session: fakePtyProcess(),
@@ -97,16 +98,7 @@ export function fakeCommandLogPtyService(
         live: true,
         replaySource: 'file_log',
       }),
-    attach: () => Effect.die('attach is not used'),
     replay: () => Effect.void,
-    write: () => Effect.die('write is not used'),
-    writeInput: () => Effect.die('writeInput is not used'),
-    resize: () => Effect.die('resize is not used'),
-    kill: () => Effect.die('kill is not used'),
-    terminate: () => Effect.die('terminate is not used'),
-    terminateMany: () => Effect.die('terminateMany is not used'),
-    findProcess: () => Effect.die('findProcess is not used'),
-    cleanupProcess: () => Effect.die('cleanupProcess is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     isPinned: () => Effect.succeed(false),
@@ -262,6 +254,11 @@ export interface CommandRepositoryOptions {
         readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
       }) => void)
     | undefined;
+  // Replaces the loggers for the whole run — layer construction included, so boot
+  // convergence and the event-driven passes log into it too.
+  readonly logger?: Layer.Layer<never> | undefined;
+  // The commands module's tunables; the production defaults when omitted.
+  readonly settings?: CommandTimings | undefined;
   // The loopback probe the command service runs endpoint resolution on.
   // Defaults to a stub that dies on contact, so every launch test whose command
   // declares no allocated ports proves — globally, without its own assertion —
@@ -285,14 +282,14 @@ export async function runCommandServiceEffect<A>(
   >,
   options: CommandRepositoryOptions = {},
 ) {
-  return Effect.runPromise(
+  return runScoped(
     CommandService.pipe(
       Effect.flatMap(effect),
       Effect.provide(CommandService.layerNoDeps),
-      Effect.provide(Layer.succeed(ProjectRepository, repository(rootPath))),
-      Effect.provide(Layer.succeed(CommandRepository, commandRepository(options))),
+      Effect.provide(Layer.mock(ProjectRepository)(repository(rootPath))),
+      Effect.provide(Layer.mock(CommandRepository)(commandRepository(options))),
       Effect.provide(
-        Layer.succeed(PtyService, {
+        Layer.mock(PtyService)({
           ...ptyService(options.pty),
           ...ptyProcessReads(
             options.ptyProcess ?? null,
@@ -307,13 +304,18 @@ export async function runCommandServiceEffect<A>(
       Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
       Effect.provide(options.eventBus ?? RuntimeEvents.layer),
       Effect.provide(InternalEvents.layer),
+      Effect.provide(
+        options.settings ? Layer.succeed(CommandSettings, options.settings) : Layer.empty,
+      ),
+      Effect.provide(options.logger ?? Layer.empty),
     ),
   );
 }
 
+/** An in-memory `CommandRepository` (provided with `Layer.mock`; `ensureState` is unimplemented). */
 export function commandRepository(
   options: CommandRepositoryOptions = {},
-): CommandRepository['Service'] {
+): Omit<CommandRepository['Service'], 'ensureState'> {
   const states = [...(options.states ?? [])];
   const runs = options.runs ?? [];
 
@@ -460,7 +462,6 @@ export function commandRepository(
     listLinklessRunningRuns: Effect.sync(() =>
       runs.filter((run) => run.status === 'running' && run.ptyProcessId === null),
     ),
-    ensureState: () => Effect.die('ensureState is not used'),
     transitionState: (input) => writeState({ ...input, resolvedPorts: undefined }),
     markLaunchInProgress: (input) =>
       writeState({
@@ -780,16 +781,18 @@ export function ptyProcessReads(
   };
 }
 
-export function ptyService(overrides: Partial<PtyService['Service']> = {}): PtyService['Service'] {
+/**
+ * The PTY members the command service uses, with neutral defaults. Provided with `Layer.mock`, so a member left
+ * out (`allocateLaunch` and `launch` unless overridden, the attach/log members always) is unimplemented.
+ */
+export function ptyService(
+  overrides: Partial<PtyService['Service']> = {},
+): Partial<PtyService['Service']> {
   const terminate: PtyService['Service']['terminate'] =
     overrides.terminate ?? (() => Effect.succeed('terminated_live' as const));
   return {
-    allocateLaunch:
-      overrides.allocateLaunch ?? (() => Effect.die('pty allocateLaunch is not used')),
-    readLogTail: () => Effect.die('readLogTail is not used'),
-    launch: overrides.launch ?? (() => Effect.die('launch is not used')),
-    getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
-    attach: () => Effect.die('attach is not used'),
+    ...(overrides.allocateLaunch ? { allocateLaunch: overrides.allocateLaunch } : {}),
+    ...(overrides.launch ? { launch: overrides.launch } : {}),
     replay: () => Effect.void,
     write: () => Effect.void,
     writeInput: () => Effect.void,
@@ -810,7 +813,13 @@ export function ptyService(overrides: Partial<PtyService['Service']> = {}): PtyS
   };
 }
 
-export function repository(rootPath: string): ProjectRepository['Service'] {
+/** A `ProjectRepository` knowing one worktree (id 10) at `rootPath`; provided with `Layer.mock`. */
+export function repository(
+  rootPath: string,
+): Omit<
+  ProjectRepository['Service'],
+  'createProject' | 'moveProjectOrder' | 'moveProjectWorktreeOrder'
+> {
   return {
     findProject: () => Effect.succeed(null),
     findProjectByRootPath: () => Effect.succeed(null),
@@ -836,14 +845,11 @@ export function repository(rootPath: string): ProjectRepository['Service'] {
     findProjectWorktreeByPath: () => Effect.succeed(null),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
-    createProject: () => Effect.die('workspace createProject is not used by command tests'),
     listProjects: Effect.succeed([]),
     listWorktrees: Effect.succeed([]),
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
     restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
     setProjectStatus: () => Effect.void,
-    moveProjectOrder: () => Effect.die('project reorder is not used by command tests'),
-    moveProjectWorktreeOrder: () => Effect.die('worktree reorder is not used by command tests'),
   };
 }
 
@@ -874,6 +880,7 @@ export interface CommandScenarioRecorder {
     readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
   }>;
   readonly published: Array<{ readonly commandName: string; readonly status: string }>;
+  // The runtime's Effect log lines, rendered `<level> <message> <key>=<value>…`.
   readonly logs: string[];
   readonly terminated: number[];
   // Generic cleanup attempts, in order, with the flags the caller chose. Boot
@@ -906,8 +913,8 @@ export interface CommandScenarioRecorder {
  * events, the runtime's own log lines (which are also how a pass signals it
  * finished), terminate calls, and re-adoptions.
  *
- * Console output is captured rather than printed, so the log lines a scenario
- * asserts on are the same ones a user would see in support.
+ * Effect log output is captured rather than printed, so the log lines a scenario
+ * asserts on carry the same message and annotations a user would see in support.
  */
 export async function runCommandScenario<A>(
   rootPath: string,
@@ -937,61 +944,57 @@ export async function runCommandScenario<A>(
       recorder.launched.length = 0;
     },
   };
-  const restore = captureConsole(recorder.logs);
-  try {
-    const result = await runCommandServiceEffect(
-      rootPath,
-      (service) =>
-        Effect.gen(function* () {
-          const internalEvents = yield* InternalEvents;
-          return yield* body({ service, internalEvents, recorder });
-        }),
-      {
-        ...options,
-        eventBus: recordingEventBus(recorder.published),
-        runs: recorder.runs,
-        onTransition: (input) => {
-          recorder.transitions.push(input);
-          options.onTransition?.(input);
-        },
-        onReadopt: (input) => {
-          recorder.readopted.push(input);
-          options.onReadopt?.(input);
-        },
-        pty: {
-          ...options.pty,
-          terminate: (input) =>
-            Effect.suspend(() => {
-              recorder.terminated.push(input.ptyProcessId);
-              return options.pty?.terminate
-                ? options.pty.terminate(input)
-                : Effect.succeed('terminated_live' as const);
-            }),
-          cleanupProcess: (input) =>
-            Effect.suspend(() => {
-              recorder.cleaned.push({
-                ptyProcessId: input.ptyProcessId,
-                reason: input.reason,
-                ensureBackendAbsence: input.ensureBackendAbsence ?? false,
-              });
-              return options.pty?.cleanupProcess
-                ? options.pty.cleanupProcess(input)
-                : Effect.succeed('already_terminal' as const);
-            }),
-          allocateLaunch: (input) =>
-            Effect.suspend(() => {
-              recorder.launched.push(input.args.at(-1) ?? input.command);
-              return options.pty?.allocateLaunch
-                ? options.pty.allocateLaunch(input)
-                : Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: input.cwd }));
-            }),
-        },
+  const result = await runCommandServiceEffect(
+    rootPath,
+    (service) =>
+      Effect.gen(function* () {
+        const internalEvents = yield* InternalEvents;
+        return yield* body({ service, internalEvents, recorder });
+      }),
+    {
+      ...options,
+      logger: recordingLogger(recorder.logs),
+      eventBus: recordingEventBus(recorder.published),
+      runs: recorder.runs,
+      onTransition: (input) => {
+        recorder.transitions.push(input);
+        options.onTransition?.(input);
       },
-    );
-    return { result, recorder };
-  } finally {
-    restore();
-  }
+      onReadopt: (input) => {
+        recorder.readopted.push(input);
+        options.onReadopt?.(input);
+      },
+      pty: {
+        ...options.pty,
+        terminate: (input) =>
+          Effect.suspend(() => {
+            recorder.terminated.push(input.ptyProcessId);
+            return options.pty?.terminate
+              ? options.pty.terminate(input)
+              : Effect.succeed('terminated_live' as const);
+          }),
+        cleanupProcess: (input) =>
+          Effect.suspend(() => {
+            recorder.cleaned.push({
+              ptyProcessId: input.ptyProcessId,
+              reason: input.reason,
+              ensureBackendAbsence: input.ensureBackendAbsence ?? false,
+            });
+            return options.pty?.cleanupProcess
+              ? options.pty.cleanupProcess(input)
+              : Effect.succeed('already_terminal' as const);
+          }),
+        allocateLaunch: (input) =>
+          Effect.suspend(() => {
+            recorder.launched.push(input.args.at(-1) ?? input.command);
+            return options.pty?.allocateLaunch
+              ? options.pty.allocateLaunch(input)
+              : Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: input.cwd }));
+          }),
+      },
+    },
+  );
+  return { result, recorder };
 }
 
 /**
@@ -1027,7 +1030,8 @@ const scenarioPollLimit = 1_000;
 export function recordingEventBus(
   published: Array<{ readonly commandName: string; readonly status: string }>,
 ) {
-  return Layer.succeed(RuntimeEvents, {
+  // `subscribe` is unimplemented: the recording bus has no subscribers.
+  return Layer.mock(RuntimeEvents)({
     publish: (event) =>
       Effect.sync(() => {
         if (event.type === 'command_changed') {
@@ -1037,29 +1041,30 @@ export function recordingEventBus(
           });
         }
       }),
-    subscribe: Effect.die('the recording event bus has no subscribers'),
-  } satisfies RuntimeEvents['Service']);
+  });
 }
 
 function scenarioTick() {
   return Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
 }
 
-function captureConsole(lines: string[]) {
-  const original = { info: console.info, warn: console.warn, error: console.error };
-  const record =
-    (level: 'info' | 'warn' | 'error') =>
-    (...args: unknown[]) => {
-      lines.push(`${level} ${args.map((arg) => String(arg)).join(' ')}`);
-    };
-  console.info = record('info');
-  console.warn = record('warn');
-  console.error = record('error');
-  return () => {
-    console.info = original.info;
-    console.warn = original.warn;
-    console.error = original.error;
-  };
+/**
+ * A logger that renders each Effect log line as `<level> <message> <key>=<value>…`
+ * (annotations in the order they were added, then a cause if one was attached)
+ * into `lines`. It replaces the default loggers, so nothing is printed.
+ */
+export function recordingLogger(lines: string[]) {
+  return Logger.layer([
+    Logger.make(({ logLevel, message, cause, fiber }) => {
+      const text = (Array.isArray(message) ? message : [message]).map(String).join(' ');
+      const annotations = Object.entries(fiber.getRef(References.CurrentLogAnnotations)).map(
+        ([key, value]) => `${key}=${String(value)}`,
+      );
+      const parts = [logLevel.toLowerCase(), text, ...annotations];
+      if (cause.reasons.length > 0) parts.push(Cause.pretty(cause));
+      lines.push(parts.join(' '));
+    }),
+  ]);
 }
 
 // Mirrors `distinctCommandPtyLinks` in the real repository: the distinct union

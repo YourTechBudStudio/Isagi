@@ -85,81 +85,77 @@ function allocationFailure(envVar: string, error: LoopbackPortUnavailable) {
  * Pure policy over an injected probe: the only IO is the probe's, which is what
  * lets this be tested without sockets.
  */
-export function resolveCommandPorts(input: {
+export const resolveCommandPorts = Effect.fnUntraced(function* (input: {
   readonly declared: readonly WorktreeCommandPortConfig[];
   readonly remembered: readonly ResolvedPortEntry[] | null;
   readonly probe: LoopbackPortProbe['Service'];
-}): Effect.Effect<ResolvedPortEntry[], CommandPortAllocationError> {
-  return Effect.gen(function* () {
-    const { declared, remembered, probe } = input;
+}): Effect.fn.Return<ResolvedPortEntry[], CommandPortAllocationError> {
+  const { declared, remembered, probe } = input;
 
-    const excluded = new Set<number>();
-    for (const entry of declared) {
-      if (entry.kind === 'fixed') excluded.add(entry.port);
+  const excluded = new Set<number>();
+  for (const entry of declared) {
+    if (entry.kind === 'fixed') excluded.add(entry.port);
+  }
+
+  // Declaration order is preserved in the output: it is the order the
+  // persisted snapshot keeps and the order the UI presents.
+  const resolved: ResolvedPortEntry[] = [];
+  for (const entry of declared) {
+    if (entry.kind === 'fixed') {
+      // Never probed. The user fixed this port, so its availability is
+      // theirs to own; a probe here could only produce an opinion the
+      // resolver is not allowed to act on.
+      resolved.push({ envVar: null, port: entry.port, paths: entry.paths });
+      continue;
     }
+    const port = yield* resolveAllocatedPort({
+      envVar: entry.envVar,
+      remembered,
+      excluded,
+      probe,
+    });
+    excluded.add(port);
+    resolved.push({ envVar: entry.envVar, port, paths: entry.paths });
+  }
+  return resolved;
+});
 
-    // Declaration order is preserved in the output: it is the order the
-    // persisted snapshot keeps and the order the UI presents.
-    const resolved: ResolvedPortEntry[] = [];
-    for (const entry of declared) {
-      if (entry.kind === 'fixed') {
-        // Never probed. The user fixed this port, so its availability is
-        // theirs to own; a probe here could only produce an opinion the
-        // resolver is not allowed to act on.
-        resolved.push({ envVar: null, port: entry.port, paths: entry.paths });
-        continue;
-      }
-      const port = yield* resolveAllocatedPort({
-        envVar: entry.envVar,
-        remembered,
-        excluded,
-        probe,
-      });
-      excluded.add(port);
-      resolved.push({ envVar: entry.envVar, port, paths: entry.paths });
-    }
-    return resolved;
-  });
-}
-
-function resolveAllocatedPort(input: {
+const resolveAllocatedPort = Effect.fnUntraced(function* (input: {
   readonly envVar: string;
   readonly remembered: readonly ResolvedPortEntry[] | null;
   readonly excluded: ReadonlySet<number>;
   readonly probe: LoopbackPortProbe['Service'];
 }) {
-  return Effect.gen(function* () {
-    const { envVar, remembered, excluded, probe } = input;
+  const { envVar, remembered, excluded, probe } = input;
 
-    // First match by `envVar`. Config validation makes duplicate declarations
-    // impossible, and a malformed persisted snapshot has already degraded to
-    // `null` before reaching here, so there is no ambiguity for this function
-    // to resolve. A fixed remembered entry carries `envVar: null` and can never
-    // match a declaration's non-empty variable name.
-    const previous = remembered?.find((candidate) => candidate.envVar === envVar) ?? null;
-    if (previous && !excluded.has(previous.port) && (yield* probe.probeInactive(previous.port))) {
-      return previous.port;
-    }
+  // First match by `envVar`. Config validation makes duplicate declarations
+  // impossible, and a malformed persisted snapshot has already degraded to
+  // `null` before reaching here, so there is no ambiguity for this function
+  // to resolve. A fixed remembered entry carries `envVar: null` and can never
+  // match a declaration's non-empty variable name.
+  const previous = remembered?.find((candidate) => candidate.envVar === envVar) ?? null;
+  if (previous && !excluded.has(previous.port) && (yield* probe.probeInactive(previous.port))) {
+    return previous.port;
+  }
 
-    for (let attempt = 0; attempt < maxOsAssignReasks; attempt += 1) {
-      const candidate = yield* probe.obtainEphemeralPort.pipe(
-        // The adapter knows the operational cause but not which endpoint asked;
-        // this is the layer that knows the endpoint, so it composes the text a
-        // user will read.
-        Effect.mapError((error) => allocationFailure(envVar, error)),
-      );
-      if (!excluded.has(candidate)) return candidate;
-    }
-
-    // Policy failure, not adapter failure: the operating system answered every
-    // time, and each answer was a port this same command had already taken.
-    return yield* Effect.fail(
-      new CommandPortAllocationError({
-        detail: `Could not allocate a port for ${envVar}: the operating system kept returning ports already assigned to this command.`,
-      }),
+  for (let attempt = 0; attempt < maxOsAssignReasks; attempt += 1) {
+    const candidate = yield* probe.obtainEphemeralPort.pipe(
+      // The adapter knows the operational cause but not which endpoint asked;
+      // this is the layer that knows the endpoint, so it composes the text a
+      // user will read.
+      Effect.mapError((error) => allocationFailure(envVar, error)),
     );
-  });
-}
+    if (!excluded.has(candidate)) return candidate;
+  }
+
+  // Policy failure, not adapter failure: the operating system answered every
+  // time, and each answer was a port this same command had already taken.
+  return yield* Effect.fail(
+    new CommandPortAllocationError({
+      detail: `Could not allocate a port for ${envVar}: the operating system kept returning ports already assigned to this command.`,
+    }),
+  );
+});
 
 /**
  * The environment variables a resolved snapshot injects into its command.

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Result, Semaphore, Stream } from 'effect';
+import { Context, Duration, Effect, FiberSet, Layer, Result, Semaphore, Stream } from 'effect';
 
 import type {
   CommandActionOutput,
@@ -39,6 +39,7 @@ import {
   type CommandFinalizeResult,
   type CommandStateRow,
 } from './repository.js';
+import { CommandSettings } from './settings.js';
 import { buildCommandSummary } from './summary.js';
 import {
   commandActionOutput,
@@ -46,8 +47,6 @@ import {
   resolveReadableCommand,
   resolveStoppableCommand,
 } from './targets.js';
-
-const commandStopGracefulTimeoutMs = 2_000;
 
 type PtyCommandEvent =
   | {
@@ -74,6 +73,7 @@ const make = Effect.gen(function* () {
   const portProbe = yield* LoopbackPortProbe;
   const publicEvents = yield* RuntimeEvents;
   const internalEvents = yield* InternalEvents;
+  const settings = yield* CommandSettings;
   const locks: CommandLocks = new Map();
 
   const publishCommandChanged = (worktreeId: number, commandName: string, status: CommandStatus) =>
@@ -98,7 +98,7 @@ const make = Effect.gen(function* () {
   //
   // Callers hold the command lock for the (worktreeId, commandName) being
   // finalized.
-  const finalizeCommandRunByPty = (input: {
+  const finalizeCommandRunByPty = Effect.fnUntraced(function* (input: {
     readonly worktreeId: number;
     readonly commandName: string;
     readonly ptyProcessId: number;
@@ -106,51 +106,49 @@ const make = Effect.gen(function* () {
     readonly stateStatus: CommandStatus;
     readonly runDiagnostic?: CommandRunDiagnosticInput | null | undefined;
     readonly publishChange?: boolean | undefined;
-  }) =>
-    Effect.gen(function* () {
-      const result = yield* commandRepository.finalizeRunAndStateByPty({
-        worktreeId: input.worktreeId,
-        commandName: input.commandName,
-        ptyProcessId: input.ptyProcessId,
-        runStatus: input.runStatus,
-        stateStatus: input.stateStatus,
-        diagnosticReason: input.runDiagnostic?.reason ?? null,
-        diagnosticDetail: input.runDiagnostic?.detail ?? null,
-      });
-      if (result.stateTransitioned && (input.publishChange ?? true)) {
-        yield* publishCommandChanged(input.worktreeId, input.commandName, input.stateStatus);
-      }
-      return result;
+  }) {
+    const result = yield* commandRepository.finalizeRunAndStateByPty({
+      worktreeId: input.worktreeId,
+      commandName: input.commandName,
+      ptyProcessId: input.ptyProcessId,
+      runStatus: input.runStatus,
+      stateStatus: input.stateStatus,
+      diagnosticReason: input.runDiagnostic?.reason ?? null,
+      diagnosticDetail: input.runDiagnostic?.detail ?? null,
     });
+    if (result.stateTransitioned && (input.publishChange ?? true)) {
+      yield* publishCommandChanged(input.worktreeId, input.commandName, input.stateStatus);
+    }
+    return result;
+  });
 
   // The run-keyed sibling of the finalizer above, for the two flows whose
   // state has no pointer to guard on: a launch converging its own
   // launch-in-progress marker, and pointerless recovery converging a state
   // whose incarnation already ended. Same publish rule — only a real
   // transition is announced.
-  const finalizeCommandRunByRun = (input: {
+  const finalizeCommandRunByRun = Effect.fnUntraced(function* (input: {
     readonly runId: number;
     readonly worktreeId: number;
     readonly commandName: string;
     readonly runStatus: TerminalRunStatus;
     readonly stateStatus: CommandStatus;
     readonly runDiagnostic?: CommandRunDiagnosticInput | null | undefined;
-  }): Effect.Effect<CommandFinalizeResult, DatabaseError> =>
-    Effect.gen(function* () {
-      const result = yield* commandRepository.finalizeRunAndStateByRun({
-        runId: input.runId,
-        worktreeId: input.worktreeId,
-        commandName: input.commandName,
-        runStatus: input.runStatus,
-        stateStatus: input.stateStatus,
-        diagnosticReason: input.runDiagnostic?.reason ?? null,
-        diagnosticDetail: input.runDiagnostic?.detail ?? null,
-      });
-      if (result.stateTransitioned) {
-        yield* publishCommandChanged(input.worktreeId, input.commandName, input.stateStatus);
-      }
-      return result;
+  }): Effect.fn.Return<CommandFinalizeResult, DatabaseError> {
+    const result = yield* commandRepository.finalizeRunAndStateByRun({
+      runId: input.runId,
+      worktreeId: input.worktreeId,
+      commandName: input.commandName,
+      runStatus: input.runStatus,
+      stateStatus: input.stateStatus,
+      diagnosticReason: input.runDiagnostic?.reason ?? null,
+      diagnosticDetail: input.runDiagnostic?.detail ?? null,
     });
+    if (result.stateTransitioned) {
+      yield* publishCommandChanged(input.worktreeId, input.commandName, input.stateStatus);
+    }
+    return result;
+  });
 
   // The launch flow lives in `commands.launch.ts`; the layer keeps ownership of
   // the lock, the event bus, and every path that ends a live incarnation.
@@ -171,26 +169,25 @@ const make = Effect.gen(function* () {
   // observed. The publish carries the *unchanged* `running` status because the
   // web's log-metadata invalidation rides `command_changed`; without it a
   // background diagnostic write would stay invisible.
-  const recordProcessControlFailure = (input: {
+  const recordProcessControlFailure = Effect.fnUntraced(function* (input: {
     readonly worktreeId: number;
     readonly commandName: string;
     readonly ptyProcessId: number;
     readonly detail: string;
-  }) =>
-    Effect.gen(function* () {
-      // The repair is authoritative, not best-effort: if it cannot be written
-      // there is no diagnostic to find, and swallowing the fault would tell
-      // the caller "the stop failed, look at the diagnostic" while nothing was
-      // stored. Its `DatabaseError` propagates, and nothing is published,
-      // because there is no new metadata to invalidate.
-      const readopted = yield* commandRepository.readoptCommandIncarnation({
-        worktreeId: input.worktreeId,
-        commandName: input.commandName,
-        ptyProcessId: input.ptyProcessId,
-        diagnostic: { reason: 'process_control_failed', detail: input.detail },
-      });
-      yield* publishCommandChanged(input.worktreeId, input.commandName, readopted.state.status);
+  }) {
+    // The repair is authoritative, not best-effort: if it cannot be written
+    // there is no diagnostic to find, and swallowing the fault would tell
+    // the caller "the stop failed, look at the diagnostic" while nothing was
+    // stored. Its `DatabaseError` propagates, and nothing is published,
+    // because there is no new metadata to invalidate.
+    const readopted = yield* commandRepository.readoptCommandIncarnation({
+      worktreeId: input.worktreeId,
+      commandName: input.commandName,
+      ptyProcessId: input.ptyProcessId,
+      diagnostic: { reason: 'process_control_failed', detail: input.detail },
     });
+    yield* publishCommandChanged(input.worktreeId, input.commandName, readopted.state.status);
+  });
 
   // A `running` state with no pointer owns a process nothing can currently
   // reach. It is resolved — for every stop origin, explicit Stop and Restart
@@ -203,73 +200,71 @@ const make = Effect.gen(function* () {
   // `suspended`; `converged` records the incarnation's own terminal fact; and
   // only a genuine dead end — no run, no link, or no such row — becomes
   // `failed`, which is a manufactured status and is reported as such.
-  const resolvePointerlessRunningState = (state: CommandStateRow) =>
-    Effect.gen(function* () {
-      const run = yield* commandRepository.findLatestRun(state);
-      const unassociated = (runId: number | null) =>
-        Effect.gen(function* () {
-          const detail = 'No process could be associated with this command; it was marked failed.';
-          if (runId === null) {
-            yield* commandRepository.transitionState({
-              worktreeId: state.worktreeId,
-              commandName: state.commandName,
-              status: 'failed',
-              activePtyProcessId: null,
-            });
-            yield* publishCommandChanged(state.worktreeId, state.commandName, 'failed');
-          } else {
-            yield* finalizeCommandRunByRun({
-              runId,
-              worktreeId: state.worktreeId,
-              commandName: state.commandName,
-              runStatus: 'failed',
-              stateStatus: 'failed',
-              runDiagnostic: { reason: 'process_control_failed', detail },
-            });
-          }
-          return { resolution: 'unassociated' } as const;
-        });
-
-      if (!run) return yield* unassociated(null);
-      if (run.ptyProcessId === null) return yield* unassociated(run.id);
-
-      // A read failure is not evidence of absence: propagate it rather than
-      // manufacture a dead end for a process that may well be alive.
-      const row = yield* pty.findProcess(run.ptyProcessId);
-      if (!row) return yield* unassociated(run.id);
-
-      // Observed after the fact, never during a launch — a persisted `failed`
-      // row found here is a failure, not a failed launch.
-      const terminal = terminalPtyFactsForRow(row);
-      if (terminal) {
-        const outcome = terminalCommandOutcomeForPtyRow(terminal, 'event');
-        yield* finalizeCommandRunByRun({
-          runId: run.id,
+  const resolvePointerlessRunningState = Effect.fnUntraced(function* (state: CommandStateRow) {
+    const run = yield* commandRepository.findLatestRun(state);
+    const unassociated = Effect.fnUntraced(function* (runId: number | null) {
+      const detail = 'No process could be associated with this command; it was marked failed.';
+      if (runId === null) {
+        yield* commandRepository.transitionState({
           worktreeId: state.worktreeId,
           commandName: state.commandName,
-          runStatus: outcome.runStatus,
-          stateStatus: outcome.runStatus,
-          runDiagnostic: outcome.diagnostic,
+          status: 'failed',
+          activePtyProcessId: null,
         });
-        return { resolution: 'converged', status: outcome.runStatus } as const;
+        yield* publishCommandChanged(state.worktreeId, state.commandName, 'failed');
+      } else {
+        yield* finalizeCommandRunByRun({
+          runId,
+          worktreeId: state.worktreeId,
+          commandName: state.commandName,
+          runStatus: 'failed',
+          stateStatus: 'failed',
+          runDiagnostic: { reason: 'process_control_failed', detail },
+        });
       }
+      return { resolution: 'unassociated' } as const;
+    });
 
-      // Nonterminal: re-adopt the incarnation the run itself names. This is
-      // the atomic primitive rather than a bare pointer write because
-      // ownership has two halves — repairing only the pointer would leave a
-      // terminal run under a live process, and the caller's stop would then
-      // land its state status over a run that can no longer be completed.
-      //
-      // No diagnostic: nothing has failed, this is ordinary repair. Nothing
-      // published either — the status did not change, and no diagnostic was
-      // written for the client to refetch.
-      yield* commandRepository.readoptCommandIncarnation({
+    if (!run) return yield* unassociated(null);
+    if (run.ptyProcessId === null) return yield* unassociated(run.id);
+
+    // A read failure is not evidence of absence: propagate it rather than
+    // manufacture a dead end for a process that may well be alive.
+    const row = yield* pty.findProcess(run.ptyProcessId);
+    if (!row) return yield* unassociated(run.id);
+
+    // Observed after the fact, never during a launch — a persisted `failed`
+    // row found here is a failure, not a failed launch.
+    const terminal = terminalPtyFactsForRow(row);
+    if (terminal) {
+      const outcome = terminalCommandOutcomeForPtyRow(terminal, 'event');
+      yield* finalizeCommandRunByRun({
+        runId: run.id,
         worktreeId: state.worktreeId,
         commandName: state.commandName,
-        ptyProcessId: run.ptyProcessId,
+        runStatus: outcome.runStatus,
+        stateStatus: outcome.runStatus,
+        runDiagnostic: outcome.diagnostic,
       });
-      return { resolution: 'readopted', ptyProcessId: run.ptyProcessId } as const;
+      return { resolution: 'converged', status: outcome.runStatus } as const;
+    }
+
+    // Nonterminal: re-adopt the incarnation the run itself names. This is
+    // the atomic primitive rather than a bare pointer write because
+    // ownership has two halves — repairing only the pointer would leave a
+    // terminal run under a live process, and the caller's stop would then
+    // land its state status over a run that can no longer be completed.
+    //
+    // No diagnostic: nothing has failed, this is ordinary repair. Nothing
+    // published either — the status did not change, and no diagnostic was
+    // written for the client to refetch.
+    yield* commandRepository.readoptCommandIncarnation({
+      worktreeId: state.worktreeId,
+      commandName: state.commandName,
+      ptyProcessId: run.ptyProcessId,
     });
+    return { resolution: 'readopted', ptyProcessId: run.ptyProcessId } as const;
+  });
 
   // The one implementation of the stop matrix. Every stop origin — the API,
   // Restart, the deactivation pass, preDelete, and the delete/prune sweeps —
@@ -281,153 +276,153 @@ const make = Effect.gen(function* () {
   // `terminated_live` under cause `deactivation`.
   //
   // The caller holds the command lock.
-  const stopResolvedCommand = (
+  const stopResolvedCommand = Effect.fnUntraced(function* (
     input: { readonly worktreeId: number; readonly commandName: string },
     state: CommandStateRow | null,
     options: {
       readonly cause: CommandStopCause;
       readonly suppressChangedEvent?: boolean | undefined;
     },
-  ): Effect.Effect<CommandStopResult, CommandServiceError> =>
-    Effect.gen(function* () {
-      if (!state) return { status: 'idle', resolution: 'unchanged' } as const;
+  ): Effect.fn.Return<CommandStopResult, CommandServiceError> {
+    if (!state) return { status: 'idle', resolution: 'unchanged' } as const;
 
-      if (state.status === 'suspended') {
-        // A repeated deactivation must preserve the intent it created; only a
-        // person clears it. No run and no PTY are touched — a suspended
-        // command has no live incarnation by construction.
-        if (options.cause === 'deactivation') {
-          return { status: 'suspended', resolution: 'unchanged' } as const;
-        }
-        yield* commandRepository.transitionState({
-          worktreeId: input.worktreeId,
-          commandName: input.commandName,
-          status: 'stopped',
-          activePtyProcessId: null,
-        });
-        if (!options.suppressChangedEvent) {
-          yield* publishCommandChanged(input.worktreeId, input.commandName, 'stopped');
-        }
-        return { status: 'stopped', resolution: 'stopped' } as const;
+    if (state.status === 'suspended') {
+      // A repeated deactivation must preserve the intent it created; only a
+      // person clears it. No run and no PTY are touched — a suspended
+      // command has no live incarnation by construction.
+      if (options.cause === 'deactivation') {
+        return { status: 'suspended', resolution: 'unchanged' } as const;
       }
-
-      if (state.status !== 'running') {
-        return { status: state.status, resolution: 'unchanged' } as const;
+      yield* commandRepository.transitionState({
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+        status: 'stopped',
+        activePtyProcessId: null,
+      });
+      if (!options.suppressChangedEvent) {
+        yield* publishCommandChanged(input.worktreeId, input.commandName, 'stopped');
       }
+      return { status: 'stopped', resolution: 'stopped' } as const;
+    }
 
-      let ptyProcessId = state.activePtyProcessId;
-      if (ptyProcessId === null) {
-        const resolved = yield* resolvePointerlessRunningState(state);
-        if (resolved.resolution === 'converged') {
-          return { status: resolved.status, resolution: 'converged' } as const;
-        }
-        if (resolved.resolution === 'unassociated') {
-          return { status: 'failed', resolution: 'unassociated' } as const;
-        }
-        ptyProcessId = resolved.ptyProcessId;
+    if (state.status !== 'running') {
+      return { status: state.status, resolution: 'unchanged' } as const;
+    }
+
+    let ptyProcessId = state.activePtyProcessId;
+    if (ptyProcessId === null) {
+      const resolved = yield* resolvePointerlessRunningState(state);
+      if (resolved.resolution === 'converged') {
+        return { status: resolved.status, resolution: 'converged' } as const;
       }
-
-      const terminate = yield* pty
-        .terminate({ ptyProcessId, gracefulTimeoutMs: commandStopGracefulTimeoutMs })
-        .pipe(Effect.result);
-      if (Result.isFailure(terminate)) {
-        // No terminal evidence at all: the command stays truthfully
-        // `running`, carrying a diagnostic that says so, and the failure
-        // still reaches the caller — explicit Stop reports it, worktree
-        // teardown fails closed, and the deactivation pass logs and continues.
-        yield* recordProcessControlFailure({
-          worktreeId: input.worktreeId,
-          commandName: input.commandName,
-          ptyProcessId,
-          detail: processControlFailureDetail(
-            options.cause,
-            describeOperationalCause(terminate.failure),
-          ),
-        }).pipe(
-          // The repair failing is the error the caller will see, so the
-          // termination failure would otherwise be lost here. It is the only
-          // path where that happens.
-          Effect.tapError(() =>
-            Effect.sync(() => {
-              console.warn(
-                `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure: ${describeOperationalCause(terminate.failure)}`,
-              );
-            }),
-          ),
-        );
-        return yield* Effect.fail(
-          new CommandError({
-            code: 'command_action_failed',
-            message: `Could not stop command ${input.commandName}.`,
-            worktreeId: input.worktreeId,
-            commandName: input.commandName,
-            cause: terminate.failure,
-          }),
-        );
+      if (resolved.resolution === 'unassociated') {
+        return { status: 'failed', resolution: 'unassociated' } as const;
       }
+      ptyProcessId = resolved.ptyProcessId;
+    }
 
-      // Nothing was there to stop, so this call caused nothing and binds no
-      // cause: an independent exit is not a suspension, and a `stopped` that
-      // never happened would be a lie. The incarnation's real terminal fact —
-      // a captured exit, or the poller's verdict — owns the outcome and
-      // reconciles the command when it durably lands.
-      if (terminate.success === 'already_absent') {
-        return { status: state.status, resolution: 'unchanged' } as const;
-      }
-
-      const stateStatus = options.cause === 'deactivation' ? 'suspended' : 'stopped';
-      const result = yield* finalizeCommandRunByPty({
+    const terminate = yield* pty
+      .terminate({
+        ptyProcessId,
+        gracefulTimeoutMs: Duration.toMillis(settings.stopGracefulTimeout),
+      })
+      .pipe(Effect.result);
+    if (Result.isFailure(terminate)) {
+      // No terminal evidence at all: the command stays truthfully
+      // `running`, carrying a diagnostic that says so, and the failure
+      // still reaches the caller — explicit Stop reports it, worktree
+      // teardown fails closed, and the deactivation pass logs and continues.
+      yield* recordProcessControlFailure({
         worktreeId: input.worktreeId,
         commandName: input.commandName,
         ptyProcessId,
-        runStatus: 'stopped',
-        stateStatus,
-        publishChange: !options.suppressChangedEvent,
+        detail: processControlFailureDetail(
+          options.cause,
+          describeOperationalCause(terminate.failure),
+        ),
+      }).pipe(
+        // The repair failing is the error the caller will see, so the
+        // termination failure would otherwise be lost here. It is the only
+        // path where that happens.
+        Effect.tapError(() =>
+          Effect.logWarning('Command stop could not record its process-control failure').pipe(
+            Effect.annotateLogs({
+              worktreeId: input.worktreeId,
+              commandName: input.commandName,
+              terminationFailure: describeOperationalCause(terminate.failure),
+            }),
+          ),
+        ),
+      );
+      return yield* new CommandError({
+        code: 'command_action_failed',
+        message: `Could not stop command ${input.commandName}.`,
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+        cause: terminate.failure,
       });
-      // The guard rejected the transition (the pointer moved on under a lock
-      // we hold — out-of-model), so this attempt changed no entity status and
-      // must not be counted as one.
-      if (!result.stateTransitioned) {
-        return {
-          status: result.state?.status ?? state.status,
-          resolution: 'unchanged',
-        } as const;
-      }
-      return {
-        status: stateStatus,
-        resolution: stateStatus === 'suspended' ? 'suspended' : 'stopped',
-      } as const;
+    }
+
+    // Nothing was there to stop, so this call caused nothing and binds no
+    // cause: an independent exit is not a suspension, and a `stopped` that
+    // never happened would be a lie. The incarnation's real terminal fact —
+    // a captured exit, or the poller's verdict — owns the outcome and
+    // reconciles the command when it durably lands.
+    if (terminate.success === 'already_absent') {
+      return { status: state.status, resolution: 'unchanged' } as const;
+    }
+
+    const stateStatus = options.cause === 'deactivation' ? 'suspended' : 'stopped';
+    const result = yield* finalizeCommandRunByPty({
+      worktreeId: input.worktreeId,
+      commandName: input.commandName,
+      ptyProcessId,
+      runStatus: 'stopped',
+      stateStatus,
+      publishChange: !options.suppressChangedEvent,
     });
+    // The guard rejected the transition (the pointer moved on under a lock
+    // we hold — out-of-model), so this attempt changed no entity status and
+    // must not be counted as one.
+    if (!result.stateTransitioned) {
+      return {
+        status: result.state?.status ?? state.status,
+        resolution: 'unchanged',
+      } as const;
+    }
+    return {
+      status: stateStatus,
+      resolution: stateStatus === 'suspended' ? 'suspended' : 'stopped',
+    } as const;
+  });
 
   // Stop a command the user named: the target is resolved first so an unknown
   // name still fails as `command_not_found`, and the result is shaped as an
   // action output.
-  const stopCommand = (
+  const stopCommand = Effect.fnUntraced(function* (
     input: { readonly worktreeId: number; readonly commandName: string },
     options: {
       readonly cause: CommandStopCause;
       readonly suppressChangedEvent?: boolean | undefined;
     },
-  ) =>
-    Effect.gen(function* () {
-      const target = yield* resolveStoppableCommand(projectRepository, commandRepository, input);
-      const state = yield* commandRepository.findState(input);
-      const result = yield* stopResolvedCommand(input, state, options);
-      return commandActionOutput(target, result.status, state?.resolvedPorts ?? null);
-    });
+  ) {
+    const target = yield* resolveStoppableCommand(projectRepository, commandRepository, input);
+    const state = yield* commandRepository.findState(input);
+    const result = yield* stopResolvedCommand(input, state, options);
+    return commandActionOutput(target, result.status, state?.resolvedPorts ?? null);
+  });
 
   // Stop a command by its durable state alone — no config lookup, no action
   // output. This is the primitive the worktree passes use: the command may
   // have been removed from config, or its config may no longer parse, and the
   // runtime still has to be able to stop the process it owns.
-  const stopManagedCommand = (
+  const stopManagedCommand = Effect.fnUntraced(function* (
     input: { readonly worktreeId: number; readonly commandName: string },
     options: { readonly cause: CommandStopCause },
-  ) =>
-    Effect.gen(function* () {
-      const state = yield* commandRepository.findState(input);
-      return yield* stopResolvedCommand(input, state, options);
-    });
+  ) {
+    const state = yield* commandRepository.findState(input);
+    return yield* stopResolvedCommand(input, state, options);
+  });
 
   // Boot convergence and the deletion audit share one process-accounting
   // module; the layer keeps ownership of the lock, the bus, and the finalizer
@@ -454,35 +449,34 @@ const make = Effect.gen(function* () {
     withLock: (target, effect) => withCommandLock(locks, target, effect),
   });
 
-  const reconcilePtyProcessEvent = (event: PtyCommandEvent) =>
-    Effect.gen(function* () {
-      const outcome = terminalCommandOutcomeForPtyRow(
-        event.type === 'pty_process_exited'
-          ? { status: 'exited', exitCode: event.exitCode }
-          : {
-              status: event.type === 'pty_process_killed' ? 'killed' : 'failed',
-              statusReason: event.statusReason,
-            },
-        'event',
-      );
-      // Find the owning command without the lock to derive the lock key, then
-      // finalize under the lock so we serialize against in-flight run/stop. A
-      // superseded (already-pruned) run resolves to null and we skip.
-      const run = yield* commandRepository.findRunByPtyProcess(event.ptyProcessId);
-      if (!run) return;
-      yield* withCommandLock(
-        locks,
-        { worktreeId: run.worktreeId, commandName: run.commandName },
-        finalizeCommandRunByPty({
-          worktreeId: run.worktreeId,
-          commandName: run.commandName,
-          ptyProcessId: event.ptyProcessId,
-          runStatus: outcome.runStatus,
-          stateStatus: outcome.runStatus,
-          runDiagnostic: outcome.diagnostic,
-        }),
-      );
-    });
+  const reconcilePtyProcessEvent = Effect.fnUntraced(function* (event: PtyCommandEvent) {
+    const outcome = terminalCommandOutcomeForPtyRow(
+      event.type === 'pty_process_exited'
+        ? { status: 'exited', exitCode: event.exitCode }
+        : {
+            status: event.type === 'pty_process_killed' ? 'killed' : 'failed',
+            statusReason: event.statusReason,
+          },
+      'event',
+    );
+    // Find the owning command without the lock to derive the lock key, then
+    // finalize under the lock so we serialize against in-flight run/stop. A
+    // superseded (already-pruned) run resolves to null and we skip.
+    const run = yield* commandRepository.findRunByPtyProcess(event.ptyProcessId);
+    if (!run) return;
+    yield* withCommandLock(
+      locks,
+      { worktreeId: run.worktreeId, commandName: run.commandName },
+      finalizeCommandRunByPty({
+        worktreeId: run.worktreeId,
+        commandName: run.commandName,
+        ptyProcessId: event.ptyProcessId,
+        runStatus: outcome.runStatus,
+        stateStatus: outcome.runStatus,
+        runDiagnostic: outcome.diagnostic,
+      }),
+    );
+  });
 
   // Startup process accounting. Runs here — after the PTY layer's own startup
   // reconciliation, before the event subscriber and startup activation exist —
@@ -491,11 +485,9 @@ const make = Effect.gen(function* () {
   // construction-time internal with no production caller outside this block.
   yield* reconcileCommandsAtBoot(convergenceDependencies).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        console.warn(
-          `[runtime] Command boot convergence failed cause=${describeOperationalCause(error)}`,
-        );
-      }),
+      Effect.logWarning('Command boot convergence failed').pipe(
+        Effect.annotateLogs({ cause: describeOperationalCause(error) }),
+      ),
     ),
   );
 
@@ -505,12 +497,12 @@ const make = Effect.gen(function* () {
     'pty_process_killed',
     'worktree_activation_change',
   ]);
-  const logEventError = (error: unknown) =>
-    Effect.sync(() => {
-      console.warn(
-        `[runtime] Command process event reconciliation failed cause=${describeOperationalCause(error)}`,
-      );
-    });
+  const logEventError = (error: CommandServiceError) =>
+    Effect.logWarning('Command process event reconciliation failed').pipe(
+      Effect.annotateLogs({ cause: describeOperationalCause(error) }),
+    );
+  // PTY-exit reconciliations outlive the event that started them; the set is interrupted when the layer closes.
+  const reconciliations = yield* FiberSet.make<void, never>();
   yield* processEvents.pipe(
     Stream.runForEach((event) => {
       // Activation changes stay inline so consecutive worktree switches keep
@@ -528,103 +520,111 @@ const make = Effect.gen(function* () {
       // held (e.g. by an in-flight restart's graceful terminate) cannot
       // stall reconciliation of other commands' events behind it in the
       // queue. The per-command lock still serializes same-command work.
-      return Effect.forkScoped(reconcilePtyProcessEvent(event).pipe(Effect.catch(logEventError)));
+      return FiberSet.run(
+        reconciliations,
+        reconcilePtyProcessEvent(event).pipe(Effect.catch(logEventError)),
+      ).pipe(Effect.asVoid);
     }),
     Effect.forkScoped,
   );
 
-  const service = CommandService.of({
-    listForWorktree: (worktreeId) =>
-      Effect.gen(function* () {
-        const target = yield* loadCommandTarget(projectRepository, worktreeId);
-        const catalog = yield* loadWorktreeCommandCatalog({
-          worktreeRootPath: target.worktree.path,
-        });
+  return CommandService.of({
+    listForWorktree: Effect.fn('CommandService.listForWorktree')(function* (worktreeId) {
+      const target = yield* loadCommandTarget(projectRepository, worktreeId);
+      const catalog = yield* loadWorktreeCommandCatalog({
+        worktreeRootPath: target.worktree.path,
+      });
 
-        if (catalog.status === 'config_error') {
-          const states = yield* commandRepository.listStatesForWorktree(worktreeId);
-          return {
-            status: 'config_error',
-            worktreeId,
-            diagnostic: catalog.diagnostic,
-            managedCommands: commandStatesNeedingAttention(states),
-          } satisfies WorktreeCommandsOutput;
-        }
-
+      if (catalog.status === 'config_error') {
         const states = yield* commandRepository.listStatesForWorktree(worktreeId);
-        const stateByName = new Map(states.map((state) => [state.commandName, state]));
-        const configuredNames = new Set(catalog.config.commands.map((command) => command.name));
         return {
-          status: 'configured',
+          status: 'config_error',
           worktreeId,
-          commands: catalog.config.commands.map((command) => {
-            const state = stateByName.get(command.name);
-            return buildCommandSummary({
-              name: command.name,
-              status: state?.status ?? 'idle',
-              resolvedPorts: state?.resolvedPorts ?? null,
-            });
-          }),
-          removedCommands: commandStatesNeedingAttention(
-            states.filter((state) => !configuredNames.has(state.commandName)),
-          ),
+          diagnostic: catalog.diagnostic,
+          managedCommands: commandStatesNeedingAttention(states),
         } satisfies WorktreeCommandsOutput;
-      }),
-    readLogMetadata: (input) =>
-      Effect.gen(function* () {
-        yield* resolveReadableCommand(projectRepository, commandRepository, input);
-        const state = yield* commandRepository.findState(input);
-        const run = yield* commandRepository.findLatestRun(input);
-        return {
-          worktreeId: input.worktreeId,
-          commandName: input.commandName,
-          status: state?.status ?? 'idle',
-          latestRun: run
-            ? {
-                id: run.id,
-                startedAt: run.startedAt,
-                completedAt: run.completedAt,
-                status: run.status,
-                ptyProcessId: run.ptyProcessId,
-                hasPtyProcess: run.ptyProcessId !== null,
-                diagnostic: run.diagnosticReason
-                  ? {
-                      reason: run.diagnosticReason,
-                      detail: run.diagnosticDetail,
-                    }
-                  : null,
-              }
-            : null,
-        } satisfies CommandLogMetadataOutput;
-      }),
-    run: (input) => withCommandLock(locks, input, runCommand(input)),
-    stop: (input) => withCommandLock(locks, input, stopCommand(input, { cause: 'user' })),
-    restart: (input) =>
-      withCommandLock(
+      }
+
+      const states = yield* commandRepository.listStatesForWorktree(worktreeId);
+      const stateByName = new Map(states.map((state) => [state.commandName, state]));
+      const configuredNames = new Set(catalog.config.commands.map((command) => command.name));
+      return {
+        status: 'configured',
+        worktreeId,
+        commands: catalog.config.commands.map((command) => {
+          const state = stateByName.get(command.name);
+          return buildCommandSummary({
+            name: command.name,
+            status: state?.status ?? 'idle',
+            resolvedPorts: state?.resolvedPorts ?? null,
+          });
+        }),
+        removedCommands: commandStatesNeedingAttention(
+          states.filter((state) => !configuredNames.has(state.commandName)),
+        ),
+      } satisfies WorktreeCommandsOutput;
+    }),
+    readLogMetadata: Effect.fn('CommandService.readLogMetadata')(function* (input) {
+      yield* resolveReadableCommand(projectRepository, commandRepository, input);
+      const state = yield* commandRepository.findState(input);
+      const run = yield* commandRepository.findLatestRun(input);
+      return {
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+        status: state?.status ?? 'idle',
+        latestRun: run
+          ? {
+              id: run.id,
+              startedAt: run.startedAt,
+              completedAt: run.completedAt,
+              status: run.status,
+              ptyProcessId: run.ptyProcessId,
+              hasPtyProcess: run.ptyProcessId !== null,
+              diagnostic: run.diagnosticReason
+                ? {
+                    reason: run.diagnosticReason,
+                    detail: run.diagnosticDetail,
+                  }
+                : null,
+            }
+          : null,
+      } satisfies CommandLogMetadataOutput;
+    }),
+    run: Effect.fn('CommandService.run')(function* (input) {
+      return yield* withCommandLock(locks, input, runCommand(input));
+    }),
+    stop: Effect.fn('CommandService.stop')(function* (input) {
+      return yield* withCommandLock(locks, input, stopCommand(input, { cause: 'user' }));
+    }),
+    restart: Effect.fn('CommandService.restart')(function* (input) {
+      return yield* withCommandLock(
         locks,
         input,
         stopCommand(input, { cause: 'user', suppressChangedEvent: true }).pipe(
           Effect.andThen(runCommand(input)),
         ),
-      ),
-    runPostCreateLifecycle: (input) => lifecycle.runPostCreateLifecycle(input.worktreeId),
-    cleanupBeforeWorktreeDelete: (input) =>
-      Effect.gen(function* () {
+      );
+    }),
+    runPostCreateLifecycle: Effect.fn('CommandService.runPostCreateLifecycle')(function* (input) {
+      yield* lifecycle.runPostCreateLifecycle(input.worktreeId);
+    }),
+    cleanupBeforeWorktreeDelete: Effect.fn('CommandService.cleanupBeforeWorktreeDelete')(
+      function* (input) {
         yield* lifecycle.stopPreDeleteCommands(input.worktreeId);
         yield* lifecycle.stopAllManagedCommands(input.worktreeId);
         // Stops act on what the runtime believes; the audit acts on what the
         // database still points at. Only the second can conclude that no
         // observable process survives the cascade.
         yield* lifecycle.auditWorktreeCommandIncarnations(input.worktreeId);
-      }),
-    cleanupBeforeWorktreePrune: (input) =>
-      Effect.gen(function* () {
+      },
+    ),
+    cleanupBeforeWorktreePrune: Effect.fn('CommandService.cleanupBeforeWorktreePrune')(
+      function* (input) {
         yield* lifecycle.stopAllManagedCommands(input.worktreeId);
         yield* lifecycle.auditWorktreeCommandIncarnations(input.worktreeId);
-      }),
+      },
+    ),
   });
-
-  return service;
 });
 
 export class CommandService extends Context.Service<
@@ -689,13 +689,14 @@ function withCommandLock<A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) {
   const key = `${input.worktreeId}\0${input.commandName}`;
-  return Effect.gen(function* () {
+  // The lookup-or-create is one synchronous step, so two fibers can never create two locks for one command.
+  return Effect.suspend(() => {
     let semaphore = locks.get(key);
     if (!semaphore) {
-      semaphore = yield* Semaphore.make(1);
+      semaphore = Semaphore.makeUnsafe(1);
       locks.set(key, semaphore);
     }
-    return yield* semaphore.withPermits(1)(effect);
+    return semaphore.withPermits(1)(effect);
   });
 }
 

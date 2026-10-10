@@ -83,8 +83,8 @@ async function switchWorktrees(
           yield* waitForLog(
             progress,
             nextWorktreeId === null
-              ? '[runtime] Deactivation suspended'
-              : '[runtime] Activation completed',
+              ? 'Command deactivation pass completed'
+              : 'Command activation pass completed',
           );
         }),
       {
@@ -144,7 +144,9 @@ test('the sweep suspends a running command the config no longer names', async ()
   assert.deepEqual(suspendedNames(recorder), ['old dev']);
   assert.ok(
     recorder.logs.some((line) =>
-      line.includes('Deactivation suspended 1 command(s), considered 1 unconfigured'),
+      line.includes(
+        'Command deactivation pass completed worktreeId=10 suspended=1 consideredUnconfigured=1',
+      ),
     ),
   );
 });
@@ -163,7 +165,10 @@ test('an unreadable config skips the whole deactivation pass rather than risk a 
             nextWorktreeId: null,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(progress, 'Command deactivate lifecycle skipped');
+          yield* waitForLog(
+            progress,
+            'Command lifecycle skipped for an unreadable config pass=deactivate',
+          );
         }),
       {
         states: [running('dev', 123)],
@@ -191,7 +196,9 @@ test('a user-driven return resumes only suspended commands', async () => {
 
   assert.deepEqual(recorder.launched, ['pnpm dev']);
   assert.ok(
-    recorder.logs.some((line) => line.includes('Activation launch command=dev reason=resume')),
+    recorder.logs.some((line) =>
+      line.includes('Command activation launch commandName=dev reason=resume'),
+    ),
   );
 });
 
@@ -205,7 +212,9 @@ test('a runtime restart never resumes a suspended command', async () => {
   assert.deepEqual(recorder.launched, []);
   assert.deepEqual(recorder.transitions, []);
   assert.ok(
-    recorder.logs.some((line) => line.includes('Activation completed: executed 0 resume(s)')),
+    recorder.logs.some(
+      (line) => line.includes('Command activation pass completed') && line.includes('resumed=0 '),
+    ),
   );
 });
 
@@ -214,7 +223,9 @@ test('activation first-starts an opt-in command that has never run', async () =>
 
   assert.deepEqual(recorder.launched, ['pnpm auto']);
   assert.ok(
-    recorder.logs.some((line) => line.includes('Activation launch command=auto reason=automation')),
+    recorder.logs.some((line) =>
+      line.includes('Command activation launch commandName=auto reason=automation'),
+    ),
   );
 });
 
@@ -236,8 +247,10 @@ for (const status of ['exited', 'failed', 'stopped'] as const) {
 
     assert.deepEqual(recorder.launched, []);
     assert.ok(
-      recorder.logs.some((line) =>
-        line.includes('Activation completed: executed 0 resume(s) and 0'),
+      recorder.logs.some(
+        (line) =>
+          line.includes('Command activation pass completed') &&
+          line.includes('resumed=0 automated=0 '),
       ),
     );
   });
@@ -257,7 +270,9 @@ test('an explicit stop between the snapshot and the launch discards the resume',
   assert.deepEqual(recorder.launched, []);
   assert.ok(
     recorder.logs.some((line) =>
-      line.includes('Activation discarded command=dev reason=resume because=state_changed'),
+      line.includes(
+        'Command activation entry discarded commandName=dev reason=resume because=state_changed',
+      ),
     ),
   );
 });
@@ -276,7 +291,7 @@ test('an activate.start flipped off after planning discards the automation entry
             nextWorktreeId: 10,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(progress, '[runtime] Activation completed');
+          yield* waitForLog(progress, 'Command activation pass completed');
         }),
       {
         states: [],
@@ -296,7 +311,9 @@ commands:
     assert.deepEqual(recorder.launched, []);
     assert.ok(
       recorder.logs.some((line) =>
-        line.includes('Activation discarded command=auto reason=automation because=config_changed'),
+        line.includes(
+          'Command activation entry discarded commandName=auto reason=automation because=config_changed',
+        ),
       ),
     );
   } finally {
@@ -318,7 +335,7 @@ test('a command removed from config after planning discards its resume', async (
             nextWorktreeId: 10,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(progress, '[runtime] Activation completed');
+          yield* waitForLog(progress, 'Command activation pass completed');
         }),
       {
         states: [commandState({ commandName: 'dev', status: 'suspended' })],
@@ -331,7 +348,9 @@ test('a command removed from config after planning discards its resume', async (
     assert.deepEqual(recorder.launched, []);
     assert.ok(
       recorder.logs.some((line) =>
-        line.includes('Activation discarded command=dev reason=resume because=config_removed'),
+        line.includes(
+          'Command activation entry discarded commandName=dev reason=resume because=config_removed',
+        ),
       ),
     );
   } finally {
@@ -353,7 +372,7 @@ test('a suspended command missing from the config stays suspended and resumes wh
             nextWorktreeId: 10,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(progress, 'Activation completed: executed 0 resume(s)');
+          yield* waitForLog(progress, 'resumed=0 ');
           // The command comes back to the config; the intent was still there.
           writeConfig(fixture.rootPath, configuredCommands);
           yield* internalEvents.publish({
@@ -362,7 +381,7 @@ test('a suspended command missing from the config stays suspended and resumes wh
             nextWorktreeId: 10,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(progress, 'Activation completed: executed 1 resume(s)');
+          yield* waitForLog(progress, 'resumed=1 ');
         }),
       {
         states: [commandState({ commandName: 'dev', status: 'suspended' })],
@@ -391,12 +410,16 @@ test('an activation event for a deleted worktree is logged without failing the p
             cause: 'active_context_changed',
           });
           // The pass survives the missing worktree and still activates the next.
-          yield* waitForLog(progress, '[runtime] Activation completed');
+          yield* waitForLog(progress, 'Command activation pass completed');
         }),
       { states: [] },
     );
 
-    assert.ok(recorder.logs.some((line) => line.includes('Command lifecycle deactivate failed')));
+    assert.ok(
+      recorder.logs.some((line) =>
+        line.includes('Command lifecycle step failed operation=deactivate'),
+      ),
+    );
   } finally {
     fixture.cleanup();
   }
@@ -434,7 +457,7 @@ commands:
             cause: 'active_context_changed',
           });
           yield* Fiber.await(launching);
-          yield* waitForLog(progress, '[runtime] Deactivation suspended');
+          yield* waitForLog(progress, 'Command deactivation pass completed');
         }),
       {
         // A prior outcome, so the command has a state row before the pass runs.
@@ -443,15 +466,15 @@ commands:
         // The pass has snapshotted; let the launch complete and take its lock
         // back, so the sweep's own read happens after the marker is durable.
         afterListStates: () => releaseLaunch?.(),
-        pruneOutcome: () => {
-          console.info('launch-gate-entered');
-          return Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                releaseLaunch = resolve;
-              }),
-          );
-        },
+        pruneOutcome: () =>
+          Effect.suspend(() => {
+            const gate = new Promise<void>((resolve) => {
+              releaseLaunch = resolve;
+            });
+            return Effect.logInfo('launch-gate-entered').pipe(
+              Effect.andThen(Effect.promise(() => gate)),
+            );
+          }),
       },
     );
 
@@ -490,7 +513,7 @@ commands:
             nextWorktreeId: null,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(progress, '[runtime] Deactivation suspended');
+          yield* waitForLog(progress, 'Command deactivation pass completed');
           releaseLaunch?.();
           yield* Fiber.await(launching);
         }),
@@ -501,20 +524,24 @@ commands:
         // the next switch (which will find its state row) suspends it.
         states: [],
         ptyProcess: fakePtyProcessRow({ id: 902, status: 'running' }),
-        pruneOutcome: () => {
-          console.info('launch-gate-entered');
-          return Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                releaseLaunch = resolve;
-              }),
-          );
-        },
+        pruneOutcome: () =>
+          Effect.suspend(() => {
+            const gate = new Promise<void>((resolve) => {
+              releaseLaunch = resolve;
+            });
+            return Effect.logInfo('launch-gate-entered').pipe(
+              Effect.andThen(Effect.promise(() => gate)),
+            );
+          }),
       },
     );
 
     assert.deepEqual(suspendedNames(recorder), []);
-    assert.ok(recorder.logs.some((line) => line.includes('Deactivation suspended 0 command(s)')));
+    assert.ok(
+      recorder.logs.some((line) =>
+        line.includes('Command deactivation pass completed worktreeId=10 suspended=0 '),
+      ),
+    );
     assert.deepEqual(recorder.published.at(-1), { commandName: 'sweeper', status: 'running' });
   } finally {
     fixture.cleanup();
@@ -662,8 +689,8 @@ commands:
 
   assert.deepEqual(second.recorder.launched, []);
   assert.ok(
-    second.recorder.logs.some((line) =>
-      line.includes('Activation completed: executed 0 resume(s)'),
+    second.recorder.logs.some(
+      (line) => line.includes('Command activation pass completed') && line.includes('resumed=0 '),
     ),
   );
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Duration, Effect, Exit } from 'effect';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyKillError } from '../../pty-processes/index.js';
@@ -12,6 +12,7 @@ import {
   createFixture,
   fakePtyProcessRow,
   runCommandScenario,
+  runCommandServiceEffect,
   waitForLog,
   writeConfig,
   type CommandRepositoryOptions,
@@ -87,7 +88,7 @@ async function deactivate(
             nextWorktreeId: null,
             cause: 'active_context_changed',
           });
-          yield* waitForLog(recorder, '[runtime] Deactivation suspended');
+          yield* waitForLog(recorder, 'Command deactivation pass completed');
         }),
       repositoryOptions(input),
     );
@@ -168,7 +169,9 @@ test('a deactivation stop of a verified live command suspends it', async () => {
   assert.equal(recorder.runs[0]?.status, 'stopped');
   assert.ok(
     recorder.logs.some((line) =>
-      line.includes('Deactivation suspended 1 command(s), considered 0 unconfigured, failed 0'),
+      line.includes(
+        'Command deactivation pass completed worktreeId=10 suspended=1 consideredUnconfigured=0 failed=0',
+      ),
     ),
   );
 });
@@ -209,7 +212,11 @@ test('a repeated deactivation preserves an existing suspension', async () => {
   assert.deepEqual(recorder.terminated, []);
   assert.deepEqual(recorder.transitions, []);
   assert.deepEqual(recorder.published, []);
-  assert.ok(recorder.logs.some((line) => line.includes('Deactivation suspended 0 command(s)')));
+  assert.ok(
+    recorder.logs.some((line) =>
+      line.includes('Command deactivation pass completed worktreeId=10 suspended=0 '),
+    ),
+  );
 });
 
 test('a restart of a suspended command consumes the intent and announces only the launch', async () => {
@@ -259,7 +266,11 @@ test('a deactivation that finds no process never suspends it', async () => {
 
   assert.deepEqual(recorder.transitions, []);
   assert.deepEqual(recorder.published, []);
-  assert.ok(recorder.logs.some((line) => line.includes('Deactivation suspended 0 command(s)')));
+  assert.ok(
+    recorder.logs.some((line) =>
+      line.includes('Command deactivation pass completed worktreeId=10 suspended=0 '),
+    ),
+  );
 });
 
 test('a failed stop keeps the command running and records why', async () => {
@@ -310,7 +321,9 @@ test('a failed deactivation stop is logged and leaves the command running', asyn
   );
   assert.ok(
     recorder.logs.some((line) =>
-      line.includes('Deactivation suspended 0 command(s), considered 0 unconfigured, failed 1'),
+      line.includes(
+        'Command deactivation pass completed worktreeId=10 suspended=0 consideredUnconfigured=0 failed=1',
+      ),
     ),
   );
 });
@@ -397,7 +410,11 @@ test('a deactivation of a pointerless running state never manufactures a suspens
     recorder.transitions.map((entry) => entry.status),
     ['failed'],
   );
-  assert.ok(recorder.logs.some((line) => line.includes('Deactivation suspended 0 command(s)')));
+  assert.ok(
+    recorder.logs.some((line) =>
+      line.includes('Command deactivation pass completed worktreeId=10 suspended=0 '),
+    ),
+  );
 });
 
 test('an unreadable PTY row during recovery propagates instead of manufacturing a dead end', async () => {
@@ -495,5 +512,42 @@ test('a stop whose diagnostic repair also fails propagates the database failure'
   assert.equal(recorder.runs[0]?.status, 'running');
   assert.equal(recorder.runs[0]?.diagnosticReason, null);
   // The termination failure would otherwise be lost behind the database error.
-  assert.ok(recorder.logs.some((line) => line.includes('original termination failure:')));
+  assert.ok(recorder.logs.some((line) => line.includes('terminationFailure=')));
+});
+
+test('a stop gives the process the graceful timeout from CommandSettings', async () => {
+  const fixture = createFixture();
+  writeConfig(fixture.rootPath, config);
+  const requested: number[] = [];
+  const pty: CommandRepositoryOptions['pty'] = {
+    terminate: (input) =>
+      Effect.sync(() => {
+        requested.push(input.gracefulTimeoutMs ?? -1);
+        return 'terminated_live' as const;
+      }),
+  };
+  const states = () => [commandState({ commandName: 'dev', status: 'running' })];
+  const runs = () => [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
+  try {
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.stop({ worktreeId: 10, commandName: 'dev' }),
+      { states: states(), runs: runs(), pty },
+    );
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.stop({ worktreeId: 10, commandName: 'dev' }),
+      {
+        states: states(),
+        runs: runs(),
+        pty,
+        settings: { stopGracefulTimeout: Duration.millis(250) },
+      },
+    );
+  } finally {
+    fixture.cleanup();
+  }
+
+  // The production default, then the provided override.
+  assert.deepEqual(requested, [2_000, 250]);
 });
