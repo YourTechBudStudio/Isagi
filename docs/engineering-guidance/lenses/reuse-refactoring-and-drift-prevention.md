@@ -27,6 +27,7 @@ Reuse is not automatic. Reuse should prevent drift without weakening boundaries,
 - Test support code drifts too. Duplicated service stubs, fixtures, and environment setup across suites should usually be consolidated into shared builders, so an interface change updates one place instead of many.
 - Pre-MVP refactors should prefer clean internal interfaces and migrated callers over compatibility shims.
 - Similarity alone is not enough. Reuse must still preserve local reasoning and package boundaries.
+- `platform/` is not a miscellaneous destination; shared code enters a named area only when it has no product semantics and two or more consumers.
 
 ## Severity Mapping
 

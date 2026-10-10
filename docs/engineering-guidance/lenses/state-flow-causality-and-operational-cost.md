@@ -32,6 +32,11 @@ Use this lens alongside the neighboring lenses:
 - High-frequency interaction state may justify optimistic updates, but optimistic behavior should not obscure ownership or allow stale persistence to win over newer selection.
 - Background work should have a named lifecycle owner. Periodic reconciliation, polling, and repair loops should not appear as incidental side effects of ordinary UI actions.
 - Cache invalidation is a coordination tool, not a substitute for a clear state-flow model.
+- In the web app, runtime-owned facts enter the UI through one path: a `query(read, policy)` atom from `lib/state/policy.ts`. Its freshness is the policy (10 s stale, revalidate on focus and reconnect, retry 3 times, 5 min retention) plus explicit per-query overrides; a different freshness need is a policy override or an `observe(...)` view, not a second fetch path or a hand-written timer.
+- Invalidation names exact flat keys from `lib/state/keys.ts`. A key that refreshes more than the action changed (a prefix, a broad catch-all) is hidden coupling: refreshing the workspace does not refresh the active context.
+- Read-after-write uses `refreshAndRead` (the in-flight read is cancelled, the answer comes from a read that began after the write); `patch` touches only a held success. Runtime writes run `Effect.uninterruptible`, so an unmount or a second click cannot cut a request that already reached the runtime.
+- Optimistic projections stay out of the cache: `workspaceAtom` is the latest workspace read with the rail's pending reorders (`railOrderAtom`) projected on top, so an older read cannot overwrite a newer move and a failure rolls back only its own list. Other stale-write guards (revisions, latest-wins, per-key sequences) belong to the flow that needs them and should say which write wins.
+- Long-lived client work (the runtime-events socket, workflow live sync, background active-context persistence) is a resource atom owned by the app registry, with a named lifecycle, not module-level state or a fire-and-forget promise.
 
 ## Severity Mapping
 

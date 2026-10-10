@@ -28,6 +28,7 @@ Strict mutation ownership keeps service boundaries explainable and failures diag
 - Derived product state should be centralized where practical instead of scattered across handlers and UI adapters.
 - Durable entities may point at replaceable resources without requiring those resources to point back.
 - Public runtime events should expose client-facing projections, not arbitrary internal facts.
+- Table write ownership is enforced by `scripts/architecture/module-boundaries.mjs` (R7).
 
 ## Current Application
 

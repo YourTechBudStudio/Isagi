@@ -9,6 +9,7 @@ Use it during implementation and review. It is a review aid, not a style manual.
 1. [`principles.md`](./principles.md) - the durable engineering principles.
 2. [`how-to-use.md`](./how-to-use.md) - how coding and review agents should apply the guidance.
 3. The relevant lens docs under [`lenses/`](./lenses/).
+4. [`effect-conventions.md`](./effect-conventions.md) when writing or reviewing Effect code: services and layers, errors, run sites, lifecycle, logging, tests, and reactive web state. Its decisions are recorded in ADR 0012.
 
 ## Lenses
 

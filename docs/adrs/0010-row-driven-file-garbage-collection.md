@@ -42,4 +42,4 @@ A longer grace period was not enough on its own. Checkpoint capture can reuse a 
 - Deletion actions stay row-only and transactional; a failed or repeated action never strands or double-deletes files.
 - A new area that writes files under the data directory adds its own collector following these rules, or records why it needs none.
 - A writer that creates a file before its referencing row must keep the file young (for example, by refreshing its timestamp when reusing it) or hold it in memory until the row commits.
-- Collectors are plain functions on their area's timers with one shared helper (`persistence/orphan-files.ts`). There is no central garbage-collection service or framework.
+- Collectors are plain Effect functions run on their area's periodic loop (`runPeriodically` from `platform/fibers`) with one shared helper (`platform/persistence/orphan-files.ts`). There is no central garbage-collection service or framework.

@@ -1,7 +1,7 @@
 # 0011-runtime-vertical-modules
 
-status: proposed
-date: 2026-10-09
+status: accepted
+date: 2026-10-10
 
 ## Decision
 
@@ -125,32 +125,32 @@ The public `RuntimeEvents` bus is published by environment (projection), command
 
 `app/` is the only composition root and contains no capability behavior: no SQL, no domain rules, and no endpoint handlers except health (the runtime describing itself).
 
-- Each service's `static layer` wires its own downward module dependencies by reference and leaves platform services and ports open. Each module's `index.ts` exports one `<Module>Layer`, a plain merge of the services its routes and dependents use plus its background layers (`runtime-config` has none).
-- `app/layer.ts` merges the module layers, provides the platform layer and the two ports, and asserts at compile time that the resulting app layer has no open requirements.
-- `app/http-server.ts` owns Fastify as a scoped layer and gives route registrars a `RouteRuntime<R>`; registrars are typed by their own module's services, so no module imports `app/`.
-- `app/routes.ts` registers every module's routes; `app/startup.ts` runs cross-module startup in one explicit order using only public service methods.
+- Each service's `static layer` wires its own downward module dependencies by reference and leaves platform services and ports open. Each module's `index.ts` exports one `<Module>Layer` (defined in the module's `layer.ts`), a plain merge of the services its routes and dependents use plus its background layers. `runtime-config` and `runtime-events` have none.
+- `app/layer.ts` merges the module layers (`ModulesLayer`, which also holds the platform event buses and the event-loop watchdog), provides the two ports (`PortsLayer`) and the services every module leaves open (`PlatformLayer`: `RuntimeDatabase`, `DataDirectory`, `StateFile`, `RuntimeConfig`, `UserShell`), and proves with `satisfies` that the resulting `AppLayer` has no open requirements.
+- `app/http-server.ts` owns Fastify as a scoped layer (`HttpServerLayer`, launched as `MainLayer` by `src/index.ts` through `app/run-main.ts`) and gives route registrars a `RouteRuntime<R>` from `platform/http`; registrars are typed by their own module's services, so no module imports `app/`.
+- `app/routes.ts` registers the health route and then every module's routes; `app/startup.ts` runs cross-module startup in one explicit order using only public service methods; `app/logger.ts` holds the process settings and the runtime logger.
 - Cross-module integration tests live in `app/tests/`.
 
 ### Enforcement
 
 `scripts/architecture/module-boundaries.mjs`, run by `scripts/architecture/index.mjs` from `pnpm lint`, checks the manifest. Test files are `*.test.ts`, `**/tests/**`, `**/testing.ts` and `*test-support.ts`.
 
-| id  | rule                                                                                                                                                                                   |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R1  | every source file under `apps/runtime/src` is inside a declared module or the composition root                                                                                         |
-| R2  | a cross-module import targets a declared public file; test files may also target the module's `testing` file                                                                           |
-| R3  | the target module is in the importer's declared dependencies (type-only imports included); test files may target the transitive closure                                                |
-| R4  | production files never import a test file                                                                                                                                              |
-| R5  | declared dependency names exist and the graph is acyclic                                                                                                                               |
-| R6  | nothing outside the composition root imports it                                                                                                                                        |
-| R7  | a production file never passes another module's table to `.insert(`, `.update(` or `.delete(`                                                                                          |
-| R8  | a `tables.ts` imports only `drizzle-orm`, `drizzle-orm/*`, `@isagi/contracts` and other modules' `tables.ts`                                                                           |
-| R9  | listed external packages (`node-pty`, `better-sqlite3`, `fastify`, `@fastify/websocket`, `@fastify/cors`, `node:child_process`) are imported only from listed paths; test files exempt |
-| R10 | no `index.ts` below a module root and no `export *` in a module or area `index.ts` (production files)                                                                                  |
-| R11 | no file basename starts with `<parent-directory-name>.`                                                                                                                                |
-| R12 | every declared module path exists and contains `index.ts`                                                                                                                              |
+| id  | rule                                                                                                                                                                                                    |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | every source file under `apps/runtime/src` is inside a declared module or the composition root                                                                                                          |
+| R2  | a cross-module import targets a declared public file; test files may also target the module's `testing` file                                                                                            |
+| R3  | the target module is in the importer's declared dependencies (type-only imports included); test files may target the transitive closure                                                                 |
+| R4  | production files never import a test file                                                                                                                                                               |
+| R5  | declared dependency names exist and the graph is acyclic                                                                                                                                                |
+| R6  | nothing outside the composition root imports it                                                                                                                                                         |
+| R7  | a production file never passes another module's table to `.insert(`, `.update(` or `.delete(`                                                                                                           |
+| R8  | a `tables.ts` imports only `drizzle-orm`, `drizzle-orm/*`, `@isagi/contracts` and other modules' `tables.ts`                                                                                            |
+| R9  | listed external packages (`node-pty`, `better-sqlite3`, `fastify`, `@fastify/websocket`, `@fastify/cors`, `node:child_process`, `child_process`) are imported only from listed paths; test files exempt |
+| R10 | no `index.ts` below a module root and no `export *` in a module or area `index.ts` (production files)                                                                                                   |
+| R11 | no file basename starts with `<parent-directory-name>.`                                                                                                                                                 |
+| R12 | every declared module path exists and contains `index.ts`                                                                                                                                               |
 
-oxlint's `import/no-cycle` catches file-level cycles inside a module. R9 is report-only until the remaining direct `node:child_process` users move onto `platform/process`; it is then enforced like the other rules.
+Every rule is enforced. Under R9, `node:child_process` (and bare `child_process`) is imported only by `platform/process`, and `better-sqlite3` only under `platform/persistence` and `harnesses/` (two harness adapters, `harnesses/codex/native-artifacts.ts` and `harnesses/opencode/conversation.ts`, read a harness's own SQLite file). oxlint's `import/no-cycle`, configured for `src/**` in `apps/runtime/.oxlintrc.json`, catches file-level cycles inside a module. `pnpm -C apps/runtime lint:modules` runs the checker alone; its self-tests (`scripts/architecture/module-boundaries.test.mjs`) run in `pnpm test:scripts`.
 
 ## Motivation
 
@@ -163,7 +163,7 @@ Ports are limited to two because each one is an inversion that readers must chas
 ## Consequences
 
 - Common changes stay inside one module: add a harness (`harnesses/<name>/` + `harnesses/definitions.ts`), add a PTY backend (`pty-processes/adapters/`), change attention rules (`environment/agent-sessions/attention.ts`), add a command option (`commands/` + `projects/config/config-schema.ts`), add a workflow operation (`workflows/operations/`), add a data-directory file area (owning module + `platform/persistence` helper, ADR 0010).
-- Adding a module, a dependency edge, a port or a table owner is an explicit edit to `module-boundaries.json` (and, for a port, to this ADR).
+- Adding a module, a dependency edge or a table owner is an explicit edit to `module-boundaries.json`; adding a port is an amendment row in this ADR.
 - `platform/` stays small; a helper with one consumer stays in that module.
 - Table write ownership (ADR 0008) is machine-checked by R7.
 - An owner of a PTY process must declare a foreign key to `pty_processes.id`, or the PTY GC will collect the process (ADR 0005).

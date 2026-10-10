@@ -1,6 +1,6 @@
 # 0012-effect-v4-native-execution
 
-status: proposed
+status: accepted
 date: 2026-10-09
 
 ## Decision
@@ -11,7 +11,7 @@ Every Isagi package that uses Effect (runtime, desktop, CLI, web, contracts, run
 
 - `effect` and every `@effect/*` package are pinned to one version through the pnpm `catalog:` in `pnpm-workspace.yaml`, at `~4.0.2`. The lockfile resolves exactly one `effect`.
 - Core modules (`Effect`, `Layer`, `Context`, `Schema`, `Stream`, `PubSub`, `Fiber*`, `Logger`, `Runtime`, …) are `@stability stable`. `effect/reactivity`, `effect/http`, `effect/process`, `effect/sql`, `FileSystem`, `Path` and similar are `@stability unstable` and may break in a minor release. The `~` range accepts only patch releases; moving to a new minor is a deliberate catalog change verified by the full gate.
-- Isagi uses only two non-core surfaces: `effect/reactivity` with `@effect/atom-react` (web state) and `effect/http` `HttpClient` (inside `@isagi/runtime-client`). `@effect/platform-node` is not a dependency.
+- Isagi uses only two non-core surfaces in production: `effect/reactivity` with `@effect/atom-react` (web state) and `effect/http` `HttpClient` (inside `@isagi/runtime-client`, and in desktop main for its health checks and dev web-server wait, always provided through `RuntimeHttpClient`). Tests also use `effect/testing`. `@effect/platform-node` is not a dependency.
 - `@effect/schema`, `@effect/platform`, `@effect/experimental`, `@effect/rx*` and `effect/unstable/*` are banned.
 
 ### Services and layers
@@ -30,14 +30,14 @@ Every Isagi package that uses Effect (runtime, desktop, CLI, web, contracts, run
 
 ### Where effects run
 
-`Effect.run*`, `ManagedRuntime.make`, `runtime.run*` and `AtomRegistry.make` appear only at these boundaries, listed with a reason each in `scripts/architecture/effect-run-sites.json`:
+`Effect.run*`, `ManagedRuntime.make`, `runtime.run*`, `FiberSet` runners (`.runtime`/`.runtimePromise`), `AtomRegistry.make` and `runMain` appear only at these boundaries, listed with a reason each in `scripts/architecture/effect-run-sites.json`:
 
 - **Runtime process entry**: `apps/runtime/src/index.ts` runs `runMain(Layer.launch(MainLayer))`. `runMain` is built in `app/run-main.ts` on the stable core `Runtime.makeRunMain` (SIGINT/SIGTERM interrupt the main fiber; a requested shutdown exits 0, a startup failure prints the startup-failure line and exits 1). There is no production `ManagedRuntime` in the runtime.
-- **Runtime HTTP and WebSocket boundary**: Fastify lives in a scoped `HttpServerLayer`; requests and sockets run as fibers in a server-scoped `FiberSet` through `RouteRuntime<R>`, so shutdown interrupts and answers in-flight requests, then closes Fastify, then releases services in reverse order. The endpoint helpers, the PTY stream route and the runtime-events socket are the only route-level run sites.
-- **Workflow SDK bridge**: one file, `workflows/engine/author-bridge.ts`, holds both Effect → Promise (author-facing contexts) and Promise → Effect (calling author code), using a runner captured from the engine scope.
-- **Desktop**: one `ManagedRuntime` over the desktop layer, used from Electron lifecycle hooks and IPC handlers in `src/main/index.ts` (plus the one updater callback site the allowlist names).
+- **Runtime HTTP and WebSocket boundary**: Fastify lives in a scoped `HttpServerLayer` (`app/http-server.ts`); requests and sockets run as fibers in a server-scoped `FiberSet` through `RouteRuntime<R>`, so shutdown interrupts and answers in-flight requests, then closes Fastify, then releases services in reverse order. `platform/http/route-runtime.ts` is the one place a Fastify request becomes a fiber (the endpoint helpers call it); the PTY stream route and the runtime-events socket fork one connection fiber per socket on the same runtime.
+- **Workflow engine**: one bridge file, `workflows/engine/author-bridge.ts`, holds both Effect → Promise (author-facing contexts) and Promise → Effect (calling author code), using a runner captured from the engine scope. The engine (`workflows/engine/service.ts`) runs its run drivers and forked steps on an engine-scoped `FiberSet` runner, because they are started from synchronous code.
+- **Desktop**: one `ManagedRuntime` over the desktop layer (`src/main/desktop-layer.ts`: `RuntimeProcess`, `DesktopUpdater`, `UpdaterDiagnostics`), used only from Electron lifecycle hooks and IPC handlers in `src/main/index.ts`.
 - **CLI**: `apps/cli/src/main.ts` runs `Effect.runPromiseExit`; `bin.ts` calls it. The CLI does not use `runMain`, whose `process.exit` would truncate streamed stdout.
-- **Web**: `lib/state/runtime.ts` (`runApp`, `forkApp`) and `lib/state/registry.tsx` (`AtomRegistry.make`). Non-Effect web subsystems receive Promise-returning functions built with `runApp`.
+- **Web**: `lib/state/runtime.ts` (`runApp`, `forkApp`) and `lib/state/registry.ts` (`AtomRegistry.make`). Non-Effect web subsystems receive Promise-returning functions built with `runApp`.
 - **Scripts** at their top-level entry, and **tests** through the shared test helpers.
 
 Everything else composes effects. Callbacks, sockets and timers are adapted once at the edge module that owns the integration.
@@ -65,7 +65,7 @@ Everything else composes effects. Callbacks, sockets and timers are adapted once
 
 ### Web state
 
-Web server state and UI state move to `effect/reactivity` atoms with `@effect/atom-react`. One `AtomRegistry` per app session is created explicitly and provided through `AppStateProvider` (never `RegistryProvider`). Server reads use one `query(read, policy)` constructor whose defaults reproduce today's freshness behavior (10 s stale, revalidate on focus/reconnect, retry 3 times at 1/2/4 s, 5 min retention); invalidation uses `Reactivity` with flat string keys; stores become keepAlive atoms with `(registry, …)` action functions. `@tanstack/react-query` and `zustand` are removed. Once the web migration lands, this decision supersedes the frontend tooling clause of ADR 0001 (React Query for server state, Zustand for UI state); ADR 0001's ownership rules are unchanged.
+Web server state and UI state live in `effect/reactivity` atoms with `@effect/atom-react`. One `AtomRegistry` per app session is created explicitly (`makeAppRegistry` in `lib/state/registry.ts`) and provided through `AppStateProvider` (never `RegistryProvider`); every web effect runs against that registry's `appRuntime` over the `RuntimeApi` service. Server reads use one `query(read, policy)` constructor (`lib/state/policy.ts`) whose defaults reproduce the previous freshness behavior (10 s stale, revalidate on focus/reconnect, retry 3 times at 1/2/4 s, 5 min retention); invalidation uses `Reactivity` with flat string keys (`lib/state/keys.ts`); client state is keepAlive atoms with `(registry, …)` action functions. `@tanstack/react-query` and `zustand` are removed. This decision supersedes the frontend tooling clause of ADR 0001 (React Query for server state, Zustand for UI state); ADR 0001's ownership rules are unchanged.
 
 ## Motivation
 

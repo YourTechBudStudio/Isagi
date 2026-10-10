@@ -27,6 +27,7 @@ Isagi's product model is stronger if worktree environments are durable and proce
 - Tmux and node-pty should be treated as backend implementations with the same product status: process transports, not restoration semantics.
 - Startup reconciliation should mark stale process records honestly instead of pretending child processes survived.
 - Tests and logs should describe PTY lifecycle in process terms: launch, attach, output, resize, exit, kill, cleanup, and garbage collection.
+- The PTY GC discovers owners from foreign keys to `pty_processes.id`; an owner must declare that FK.
 
 ## Notes
 

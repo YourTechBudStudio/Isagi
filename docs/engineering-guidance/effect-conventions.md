@@ -2,7 +2,7 @@
 
 How Isagi code uses Effect v4. These rules apply to every package that uses Effect: `apps/runtime`, `apps/desktop`, `apps/cli`, `apps/web` operational and state code, `packages/contracts`, `packages/runtime-client`, `packages/testing`, and the `.mjs` scripts under `scripts/` and `apps/desktop/scripts/`. Implementers follow them literally; reviewers cite section numbers.
 
-The decisions behind these rules are recorded in ADR 0012 (Effect v4 native execution). The runtime's directory and module layout is ADR 0011; where this guide says "module", it means an ADR 0011 module. Both ADRs and this guide are `proposed` until the migration lands and they are reconciled with the code.
+The decisions behind these rules are recorded in ADR 0012 (Effect v4 native execution). The runtime's directory and module layout is ADR 0011; where this guide says "module", it means an ADR 0011 module. The rules that can be checked mechanically are enforced (§16); the rest are review responsibilities.
 
 Isagi's principles win over generic Effect style: Effect is the substrate for operational work, not a universal style for pure code (`principles.md`, `how-to-use.md`).
 
@@ -17,7 +17,7 @@ The tiers in `how-to-use.md` stay the review frame:
 
 ## 2. Imports and versions
 
-- Import modules from the package root: `import { Context, Effect, Layer, Schema } from "effect"`. Subpaths only for non-core areas: `effect/testing` (`TestClock`), `effect/reactivity` (web state), `effect/http` (inside `@isagi/runtime-client` only). Never `effect/unstable/*` and never deep paths such as `effect/Effect`.
+- Import modules from the package root: `import { Context, Effect, Layer, Schema } from "effect"`. Subpaths only for non-core areas: `effect/testing` (`TestClock`, `TestConsole`; tests and `@isagi/testing`), `effect/reactivity` (web state), `effect/http` (`HttpClient`: `@isagi/runtime-client`, plus desktop main's dev web-server wait and health checks, always provided through `RuntimeHttpClient`). Never `effect/unstable/*` and never deep paths such as `effect/Effect`.
 - Use `import type` for type-only imports.
 - `effect` and every `@effect/*` dependency use `"catalog:"`; the catalog in `pnpm-workspace.yaml` pins them to one version (`~4.0.2`) and the lockfile resolves exactly one `effect`. Moving to a new minor is a deliberate catalog change, because `effect/reactivity`, `effect/http` and other `@stability unstable` modules may break in minors.
 - `@effect/atom-react` is used only by `apps/web`. `@effect/platform-node`, `@effect/schema`, `@effect/platform`, `@effect/experimental` and `@effect/rx*` are not used.
@@ -30,13 +30,23 @@ The tiers in `how-to-use.md` stay the review frame:
 export class CommandService extends Context.Service<
   CommandService,
   {
-    readonly run: (input: CommandTarget) => Effect.Effect<CommandActionOutput, CommandServiceError>;
-    readonly stop: (
-      input: CommandTarget,
-    ) => Effect.Effect<CommandActionOutput, CommandServiceError>;
+    readonly run: (input: {
+      readonly worktreeId: number;
+      readonly commandName: string;
+    }) => Effect.Effect<CommandActionOutput, CommandServiceError>;
+    readonly stop: (input: {
+      readonly worktreeId: number;
+      readonly commandName: string;
+    }) => Effect.Effect<CommandActionOutput, CommandServiceError>;
+    /* ... */
   }
 >()('isagi/runtime/commands/CommandService') {
-  static readonly layer = Layer.effect(CommandService, make);
+  static readonly layerNoDeps = Layer.effect(CommandService, make);
+  static readonly layer = CommandService.layerNoDeps.pipe(
+    Layer.provide([
+      /* §3.3 */
+    ]),
+  );
 }
 ```
 
@@ -77,11 +87,11 @@ export class PtyService extends Context.Service<
   /** Module dependencies wired by reference to their own `layer`; platform services and ports left open. */
   static readonly layer = PtyService.layerNoDeps.pipe(
     Layer.provide([
-      PtyRepository.layer,
-      PtyBackendCatalog.layer,
-      PtyForegroundState.layer,
       CliAccess.layer,
       InternalEvents.layer,
+      PtyBackendCatalog.layer,
+      PtyForegroundState.layer,
+      PtyRepository.layer,
     ]),
   );
 }
@@ -89,12 +99,12 @@ export class PtyService extends Context.Service<
 
 - `static readonly layer` provides the service's **module** dependencies by referencing each dependency's own `static layer`, and leaves the **platform layer** services (§3.4) and the ADR 0011 ports open. `layerNoDeps` exists only on services that have module dependencies.
 - A `static layer` may reference only layers of its own module, of modules it declares as dependencies, or of `platform/` areas. Each reference is an import, so the module-boundary checker enforces this.
-- Every layer is memoized by object reference for the whole build, so a service referenced from several layers is constructed once and released after all its dependents. Never use `Layer.fresh` in production wiring and never create a second layer value for a stateful service. Parameterized layer factories (`DataDirectory.layerAt(path)`) are allowed only for platform layer services, which are provided exactly once at the root.
-- Each module's `index.ts` exports one `<Module>Layer`, a plain `Layer.mergeAll` of the services its routes and dependents use plus its background layers. `app/layer.ts` merges the module layers, provides the two ports and the platform layer, and asserts at compile time that the result has no open requirements. `RuntimeServices` is `Layer.Success<typeof AppLayer>`, never a hand-written union.
-- Variant implementations get descriptive suffixes (`layerNodePty`, `layerTmux`, `layerInMemory`). Choose between variants at the composition root; use `Layer.unwrap` when the choice depends on config.
+- Every layer is memoized by object reference for the whole build, so a service referenced from several layers is constructed once and released after all its dependents. Never use `Layer.fresh` in production wiring and never create a second layer value for a stateful service. Parameterized layer factories are allowed only for platform layer services, which are provided exactly once at the root.
+- Each module's `index.ts` exports one `<Module>Layer` (`CommandsLayer`, `WorkspaceLayer`, ...), a plain `Layer.mergeAll` of the services its routes and dependents use plus its background layers. `app/layer.ts` merges the module layers into `ModulesLayer`, provides the two ports (`PortsLayer`) and the platform layer (`PlatformLayer`), and asserts with `satisfies Layer.Layer<never, unknown, never>` that `AppLayer` has no open requirements. `RuntimeServices` is `Layer.Success<typeof AppLayer>`, never a hand-written union. `app/http-server.ts` builds `MainLayer` (the HTTP server over `AppLayer`), which `src/index.ts` launches.
+- Variant implementations of one service get descriptive suffixes (`layer<Variant>`); independent backends may instead be separate services (`NodePtyBackend`, `TmuxBackend` behind `PtyBackendCatalog`). Choose between variants at the composition root; use `Layer.unwrap` when the choice depends on config.
 - `static readonly layerTest` is allowed only for a deterministic in-memory implementation reused by tests in two or more modules. One-off fakes are written inline in the test (§14).
 - `Layer.effect` is the constructor for effectful layers: it gives the constructor a `Scope` and removes it from `R` (`Layer.scoped` is gone). Use `Layer.succeed(X, X.of({...}))` for constant implementations and `Layer.effectDiscard` for background work that provides no service.
-- Construction-time convergence a module owns (startup reconciliation, first GC, recovery) stays in that module's layer constructor. Background work a module owns (projections, GC loops, watchdogs) is a layer exported from its `index.ts` and merged into its `<Module>Layer`. Cross-module startup order lives in one function, `app/startup.ts`, which calls public service methods only.
+- Construction-time convergence a module owns (startup reconciliation, first GC, recovery) stays in that module's layer constructor. Background work a module owns (projections, GC loops, watchdogs) is a layer exported from its `index.ts` and merged into its `<Module>Layer`. Cross-module startup order lives in the composition root and calls public service methods only: `startup(url)` in `app/startup.ts` runs the steps that need the listening URL and ends with the ready line, and `HttpServerLayer` (`app/http-server.ts`) publishes the restored activation once every service is built and before any route runs.
 - A module-level `const make = Effect.gen(function* () { ... return X.of({...}) })` above the class is fine: the generator body only runs when the layer builds.
 - Desktop composes its services in `src/main/desktop-layer.ts`; the CLI and web provide their few services at their single boundary (§9).
 
@@ -113,7 +123,7 @@ export class PtyService extends Context.Service<
 
 ### 3.6 Objects that are really services
 
-Classes with private mutable fields whose methods return Effects (desktop's runtime-process lifecycle and update coordinator) become `Context.Service`s whose state lives in the layer constructor and whose resources are registered with `Effect.acquireRelease`/`Effect.addFinalizer`. The Electron app lifecycle owns one `ManagedRuntime` for those layers (§9).
+A class with private mutable fields whose methods return Effects is a `Context.Service` in disguise: its state lives in the layer constructor and its resources are registered with `Effect.acquireRelease`/`Effect.addFinalizer`. Desktop's `RuntimeProcess` and `DesktopUpdater` are built this way (status as a `SubscriptionRef`, timers as scoped fibers); the Electron app lifecycle owns one `ManagedRuntime` for their layers (§9).
 
 ## 4. Writing effectful functions
 
@@ -130,8 +140,9 @@ Classes with private mutable fields whose methods return Effects (desktop's runt
 
 - Expected operational and domain failures are `Data.TaggedError` classes:
   ```ts
-  export class WorktreeGcFailed extends Data.TaggedError('WorktreeGcFailed')<{
-    readonly reason: 'git_failed' | 'database_failed';
+  export class HarnessSourceUnreadable extends Data.TaggedError('HarnessSourceUnreadable')<{
+    readonly path: string;
+    readonly reason: 'not_regular_file' | 'not_directory' | 'io' | 'disappeared';
     readonly cause: unknown;
   }> {}
   ```
@@ -155,24 +166,15 @@ Classes with private mutable fields whose methods return Effects (desktop's runt
 - `Effect.catch` only where every failure deliberately collapses to one fallback (best-effort probes, version lookup).
 - `Effect.catchCause` only at supervision points: loop guards (the periodic-loop helper, per-event handlers), the HTTP/WebSocket boundary, the workflow engine's defect handler and startup reporting. Never wrap an effect that can self-interrupt inside a `forever`/`repeat` loop with `catchCause`: it catches the self-interruption (for example `Queue.take` on a shut-down queue) and the loop spins. In loops use `Effect.catch` (plus `Effect.catchDefect` if defects must be survived), or re-raise when `Cause.hasInterruptsOnly(cause)`.
 - `Effect.ignore` only for best-effort cleanup that is already logged or explicitly irrelevant, with a comment.
-- Replace `instanceof` chains with `catchTag` or `switch (error._tag)`. Mappers are total functions over a closed union, so adding a tag or reason breaks compilation:
+- Replace `instanceof` chains with `catchTag` or `switch (error._tag)`. Mappers are total functions over a closed union, so adding a tag or reason breaks compilation: either an exhaustive `switch` with a declared return type and no `default` (a missing case fails with "function lacks ending return statement"), or a complete lookup table typed over every value, as `ReasonTable` in `workspace/api-reasons.ts` does:
   ```ts
-  const gcFailureReason = (error: WorktreeGcFailed): 'git_command_failed' | 'database_failed' => {
-    switch (error.reason) {
-      case 'git_failed':
-        return 'git_command_failed';
-      case 'database_failed':
-        return 'database_failed';
-      default:
-        return absurd(error.reason);
-    }
-  };
+  type ReasonTable<Reason> = { readonly [Code in WorkspaceError['code']]: Reason | null };
   ```
 
 ### 5.4 No `unknown` error channels; the API boundary
 
 - Operational code never declares `Effect.Effect<A, unknown, R>`. Service members, module functions and endpoint handlers declare the closed union they can fail with. The only allowed `unknown` error channel is the input of the workflow SDK author bridge (`workflows/engine/author-bridge.ts`), classified in that file.
-- Runtime endpoints are registered with `registerApiEndpoint(fastify, runtime, endpoint, handle)` from `platform/http/endpoint.ts`. The handler's type is `(request: ApiRequest<E>) => Effect.Effect<ApiEndpointOutput<E>, HandlerError<E>, R>`, where `HandlerError<E>` is `ApiRejected<Rejection<E>>` (a rejection whose code, status and reason the endpoint's contract declares) plus the platform infrastructure errors whose code the endpoint declares. Three mistakes are compile errors at the handler: an unmapped module error, an infrastructure error the endpoint does not declare, and a rejection outside the contract.
+- Runtime endpoints are registered with `registerApiEndpoint(fastify, runtime, endpoint, handle)` from `platform/http` (`endpoint.ts`; content routes use `registerContentEndpoint` from `content-endpoint.ts`). The handler's type is `(request: ApiRequest<E>) => Effect.Effect<ApiEndpointOutput<E>, HandlerError<E>, R>`, where `HandlerError<E>` is `ApiRejected<Rejection<E>>` (a rejection whose code, status and reason the endpoint's contract declares) plus the platform infrastructure errors whose code the endpoint declares. Three mistakes are compile errors at the handler: an unmapped module error, an infrastructure error the endpoint does not declare, and a rejection outside the contract.
 - Each endpoint maps its own module errors next to its registration with `Effect.catchTags` and `request.reject(...)`. Endpoint-dependent mappings are simply different `catchTags` at different endpoints; there is no shared `mapError(error, ctx)` keyed by endpoint id:
   ```ts
   registerApiEndpoint(fastify, runtime, apiEndpoints.projects.relocate, (request) =>
@@ -181,22 +183,25 @@ Classes with private mutable fields whose methods return Effects (desktop's runt
     ).pipe(
       Effect.catchTags({
         WorkspaceError: (error) =>
-          request.reject({
-            code: 'project_relocation_rejected',
-            status: error.code === 'project_path_already_registered' ? 409 : 400,
-            message: error.message,
-            data: { reason: relocationReason(error.code), projectId: request.params.projectId },
-          }),
+          withReason(relocationReasons, error, (reason) =>
+            request.reject({
+              code: 'project_relocation_rejected',
+              status: error.code === 'project_path_already_registered' ? 409 : 400,
+              message: error.message,
+              data: { reason, projectId: request.params.projectId /* ... */ },
+            }),
+          ),
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
       }),
-      // DatabaseError and GitCommandError pass through: the contract declares them.
+      // Platform errors (DatabaseError, GitCommandError, ...) pass through: the contract declares them.
     ),
   );
   ```
-- A mapper over a `code`/`reason` field is an exhaustive `switch` with no `default` fall-through to an arbitrary code. If a service method can produce a reason the endpoint's contract lacks, narrow the method's error type (preferred) or `Effect.die` with an invariant error.
+- A mapper over a `code`/`reason` field is an exhaustive `switch` or complete table with no fall-through to an arbitrary code. If a service method can produce a reason the endpoint's contract lacks, narrow the method's error type (preferred) or mark it not produced and `Effect.die` (the table's `null`, `withReason`, `notProduced` in `workspace/api.ts`), which the helper answers `api_unhandled_error`.
 - `platform/http` maps only platform errors (`DatabaseError`, `DataDirectoryError`, `GitCommandError`, `ProjectPathValidationError`) with today's codes, statuses, messages and data. Module-specific rejections are built by the owning module (for example `workspaceRejections` in `workspace/api-errors.ts` for project config, setup and state-file failures) and applied with `catchTags` at each endpoint.
 - Defects and interruptions are handled by the helper, never by module code: a defect is logged with `Effect.logError` and answered `api_unhandled_error` 500; a client abort interrupts the handler and sends nothing; shutdown interrupts in-flight handlers and answers them 500.
-- Handlers stay thin: `X.use((x) => x.method(...))` plus `catchTags`. No business logic in API files.
-- Transitional: until a module's routes move to `registerApiEndpoint`, they use `registerLegacyApiEndpoint`/`registerLegacyContentEndpoint` from `platform/http/legacy-endpoint.ts`. New routes never use the legacy helpers, and the file is deleted when the last route moves.
+- Handlers stay thin: `X.use((x) => x.method(...))` plus `catchTags`. No business logic in API files; reason tables and rejection builders live beside the API file (`workspace/api-reasons.ts`, `workspace/api-errors.ts`).
 
 ## 6. Resources, lifecycle, interruption
 
@@ -204,17 +209,18 @@ Classes with private mutable fields whose methods return Effects (desktop's runt
 
 - A layer's scope is its service's lifetime. Anything a service starts that outlives a single call (subscriptions, timers, child processes, PubSubs, fibers) is attached to that scope: `Effect.acquireRelease`, `Effect.addFinalizer`, `Effect.forkScoped`, or a `FiberSet`/`FiberMap`/`FiberHandle` created in the layer constructor. Acquisition order is release order reversed; order acquisitions so that what must shut down last is acquired first.
 - Per-call resources use `Effect.acquireRelease` inside the method, with `Scope.Scope` in the method's `R` when the caller owns the lifetime (for example a PTY attachment held for the life of a WebSocket: the attachment detaches when the connection's scope closes). Otherwise close it inside the method with `Effect.scoped`.
-- No hand-built `Scope.make()` + `Scope.close()` in production code; that pattern stays only in test harnesses that must simulate a restart (use `Scope.provide(scope)`).
+- No hand-built root `Scope.make()` + `Scope.close()` in production code; that pattern stays only in test harnesses that must simulate a restart (use `Scope.provide(scope)`). A resource that must be releasable before its owner's scope closes lives in a child scope, `Scope.fork(yield* Effect.scope)`, closed early by its own release (PTY attachments in `pty-processes/service.ts` do this).
 
 ### 6.2 Forking rules
 
-| Need                                                                                                               | Use                                                                                                                  | Lifetime                                |
-| ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| Concurrent sub-step that must finish or be interrupted with the current operation                                  | `Effect.forkChild`, or `Effect.all(..., { concurrency })`                                                            | Interrupted when the parent fiber ends  |
-| Background loop owned by a service                                                                                 | `Effect.forkScoped` in the `Layer.effect` constructor, or the periodic-loop helper (§8)                              | Layer scope                             |
-| Work started by a request or callback that must outlive it (retries, probes, run drivers, per-process supervisors) | `FiberSet.run(set, effect)` / `FiberMap.run(map, key, effect)` with the set or map made in the layer                 | Layer scope                             |
-| "Latest wins" single job                                                                                           | `FiberHandle.run(handle, effect)` (replaces the previous fiber)                                                      | Layer scope                             |
-| Callback from third-party code must start Effect work                                                              | `const runFork = yield* FiberSet.makeRuntime<R, void, never>()` in the layer; call `runFork(effect)` in the callback | Layer scope; inherits the layer context |
+| Need                                                                                                               | Use                                                                                                              | Lifetime                                |
+| ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Concurrent sub-step that must finish or be interrupted with the current operation                                  | `Effect.forkChild`, or `Effect.all(..., { concurrency })`                                                        | Interrupted when the parent fiber ends  |
+| Background loop owned by a service                                                                                 | `Effect.forkScoped` in the `Layer.effect` constructor, or the periodic-loop helper (§8)                          | Layer scope                             |
+| Work started by a request or callback that must outlive it (retries, probes, run drivers, per-process supervisors) | `FiberSet.run(set, effect)` / `FiberMap.run(map, key, effect)` with the set or map made in the layer             | Layer scope                             |
+| "Latest wins" single job                                                                                           | `FiberHandle.run(handle, effect)` (replaces the previous fiber)                                                  | Layer scope                             |
+| Callback from third-party code must start Effect work                                                              | Deliver the fact into a `Queue` consumed by a fiber the layer owns (`Queue.offerUnsafe` in the callback, §7)     | Layer scope                             |
+| Non-Effect caller must start Effect work (Fastify handlers, synchronous engine callbacks, author promises)         | `FiberSet.runtime(set)<R>()` / `FiberSet.runtimePromise(set)<R>()` over a set made in the layer; a run site (§9) | Layer scope; inherits the layer context |
 
 - `Effect.forkDetach` is banned: nothing outlives the scope that owns it.
 - Forked effects have `E = never`: handle and log failures inside the forked effect, because a failure in an un-joined fiber is otherwise invisible.
@@ -235,7 +241,7 @@ Adapt once, at the edge module that owns the integration (for example `pty-proce
 - **One-shot callback** (child exit, socket connect, port probe): `Effect.callback<A, E>((resume, signal) => { ...; return Effect.sync(cleanup) })`. The returned effect is the interruption finalizer (kill the child, clear the timer, remove listeners). Prefer `Effect.timeout`/`timeoutOrElse` outside the callback over a `setTimeout` inside it.
 - **Promise APIs**: `Effect.tryPromise({ try: (signal) => fetch(url, { signal }), catch: (cause) => new XFailed({ cause }) })`; pass the provided `AbortSignal` through so interruption cancels the work.
 - **Multi-shot sources** (PTY data, process output lines, filesystem watchers, WebSocket messages): either push into a `Queue` the consumer owns (`Queue.offerUnsafe`, `Queue.endUnsafe` when the source ends) from synchronous callbacks, or build a `Stream.callback<A, E>((queue) => Effect.acquireRelease(register, unregister))` that pushes with `Queue.offerUnsafe`, completes with `Queue.endUnsafe` and fails with `Queue.failCauseUnsafe`. For DOM-style targets use `Stream.fromEventListener`.
-- **Callback that must start Effect work** (node-pty exit, foreground-command changes): the `FiberSet.makeRuntime` runner from §6.2, or deliver the fact into a queue consumed by a supervisor fiber in a `FiberMap`. Never `void Effect.runPromise(...)` inside a callback.
+- **Callback that must start Effect work** (node-pty exit, foreground-command changes): deliver the fact into a queue consumed by a supervisor fiber (the node-pty and tmux adapters push `Exited`/output/foreground events with `Queue.offerUnsafe`). A `FiberSet` runner (§6.2) only at a listed run site. Never `void Effect.runPromise(...)` inside a callback.
 - **WebSockets**: `acquireWsConnection(socket)` in `platform/http/websocket.ts` adapts a socket into a scoped connection (`incoming` stream, `send`, `close`, `closed`). Route code never registers socket listeners itself.
 - **Child processes**: only `platform/process` imports `node:child_process`. `execCommand` runs exec-style commands with the interruption signal wired to the child; `spawnProcessGroup`/`terminateGroup` spawn a detached process group whose scope finalizer kills the group if the leader is still running. Timeouts are Effect-native (`Effect.timeoutOption(group.exit, timeout)` then `terminateGroup`). `effect/process` is not used. `node-pty` is imported only by the `pty-processes` adapters.
 - **Effect → Promise for a public contract** (workflow SDK operations) and **Promise → Effect for author code**: only in `workflows/engine/author-bridge.ts`, using a runner captured from the engine's scope (`FiberSet.runtimePromise`), so bridged work inherits services and is interrupted on shutdown. Author code is called with `Effect.tryPromise` into a tagged `AuthorCodeFailed`.
@@ -249,19 +255,19 @@ Adapt once, at the edge module that owns the integration (for example `pty-proce
 - **Periodic loops**: services use `runPeriodically(name, every, tick)` from `platform/fibers`. The first tick runs one interval in (`setInterval` parity), ticks never overlap, failures and defects are logged at `Warning` and the loop continues, and the fiber is forked into the caller's scope. Elsewhere use `Schedule`: `Effect.schedule(work, Schedule.spaced(d))` for "first run after the interval", `Effect.repeat(work, Schedule.spaced(d))` for "run now, then every interval", `Effect.delay(d)` for a delayed single attempt, `Effect.retry({ schedule, times, while })` for retries. `repeat` and `schedule` stop on the first failure, so loops catch per-iteration failures before the schedule.
 - **Delays that shutdown must cut short** (for example persistence retries that drain at shutdown) race `Effect.sleep` against a `Deferred` completed by the owning scope's finalizer; a `Schedule`-driven `Effect.retry` cannot be cut short that way.
 - **Stream** for sequences over time (PTY output, events, line-oriented child output) instead of callback arrays and manual buffers. A queue that receives live output while a replay is sent is the buffer; do not add buffering flags around it.
-- No `setTimeout`/`setInterval` in operational code.
+- No `setTimeout`/`setInterval` in operational code (enforced for `apps/runtime/src` by E5, §16). The web app's DOM and terminal subsystems and its atom transforms (`pollWhile` in `lib/state/policy.ts`) may use DOM timers when a finalizer or cleanup clears them.
 
 ## 9. Where `Effect.run*` is allowed
 
-Running an effect is a boundary act. A run site is any `Effect.run{Promise,Sync,Fork,Callback}{,Exit,With}`, `ManagedRuntime.make`, `runtime.run*` or `AtomRegistry.make`. (`FiberSet` runners created inside a layer for third-party callbacks, §6.2, are not run sites: they run in the layer's scope.) Allowed sites, exhaustively:
+Running an effect is a boundary act. A run site is any `Effect.run{Promise,Sync,Fork,Callback}{,Exit,With}`, `ManagedRuntime.make`, `runtime.run*`, `FiberSet`/`FiberMap`/`FiberHandle` `.runtime`/`.runtimePromise` (they hand plain run functions to non-Effect callers), `AtomRegistry.make`, `Runtime.makeRunMain` or a `runMain(...)` call. Allowed sites, exhaustively:
 
 1. **Runtime process entry**: `apps/runtime/src/index.ts` runs `runMain(Layer.launch(MainLayer).pipe(Effect.provide(RuntimeLogger.layer), ...))`. `runMain` lives in `app/run-main.ts`, built on the stable core `Runtime.makeRunMain`: SIGINT/SIGTERM interrupt the main fiber, a requested shutdown exits 0, a failure exits 1 after the startup-failure line. There is no production `ManagedRuntime` in the runtime, and `@effect/platform-node` is not used.
-2. **Runtime HTTP and WebSocket boundary**: `app/http-server.ts` creates the request `FiberSet` and its runtimes and hands them to routes as `RouteRuntime<R>`; the endpoint helpers (`platform/http/endpoint.ts`, `platform/http/content-endpoint.ts`), the PTY stream route (`pty-processes/stream-route.ts`) and the runtime-events socket (`runtime-events/api.ts`) call it. Module `api.ts` files hand effects to the helpers and never call `run*` themselves.
-3. **Workflow SDK bridge**: `workflows/engine/author-bridge.ts` only (§7).
-4. **Desktop main process**: Electron lifecycle hooks and IPC handlers in `apps/desktop/src/main/index.ts`, through one desktop `ManagedRuntime` built from `desktop-layer.ts`, plus the one updater callback site listed in the allowlist.
+2. **Runtime HTTP and WebSocket boundary**: `app/http-server.ts` creates the request `FiberSet` and its runners and hands them to routes as `RouteRuntime<R>`. `platform/http/route-runtime.ts` is the one place a Fastify request becomes a fiber: the endpoint helpers (`registerApiEndpoint`, `registerContentEndpoint`) call its `runRouteRequest` and `watchContentStream`. The PTY stream route (`pty-processes/stream-route.ts`) and the runtime-events socket (`runtime-events/api.ts`) fork one scoped connection fiber per socket with `runtime.runFork`. Module `api.ts` files hand effects to the helpers and never call `run*` themselves.
+3. **Workflow engine**: `workflows/engine/author-bridge.ts` (the SDK Promise bridge, §7) and `workflows/engine/service.ts`, whose run drivers and forked steps keep synchronous `kick`/`fork` signatures and run on an engine-scoped `FiberSet.runtime`.
+4. **Desktop main process**: Electron lifecycle hooks and IPC handlers in `apps/desktop/src/main/index.ts`, through the one desktop `ManagedRuntime` built from `desktop-layer.ts`. No other desktop file runs effects.
 5. **CLI**: `apps/cli/src/main.ts` (`runCli`, `Effect.runPromiseExit`) only; `bin.ts` calls `runCli`. The CLI does not use `runMain`, whose `process.exit` can truncate streamed stdout.
-6. **Web**: `lib/state/runtime.ts` (`runApp`, `forkApp`) and `lib/state/registry.tsx` (`AtomRegistry.make`). Components and helpers never call `Effect.run*`. Non-Effect subsystems (terminal presentation, PTY streams) receive Promise-returning functions built with `runApp(registry, effect, { signal })`, for example `resolveUrl: (signal) => runApp(registry, resolveSessionPtyWebSocketUrl(...), { signal })`.
-7. **Scripts** (`scripts/**/*.mjs`, `apps/desktop/scripts/**/*.mjs`): the script's top-level entry.
+6. **Web**: `lib/state/runtime.ts` (`runApp`, `forkApp`) and `lib/state/registry.ts` (`AtomRegistry.make`). Components and helpers never call `Effect.run*`. Non-Effect subsystems (terminal presentation, PTY streams) receive Promise-returning functions built with `runApp(registry, effect, { signal })`, for example `fetchInventory: (signal) => runApp(registry, fetchDurableSessions(), { signal })`.
+7. **Scripts** (`scripts/**/*.mjs`, `apps/desktop/scripts/**/*.mjs`): the script's top-level entry. The run-site check scans `scripts/` only; desktop scripts are a review responsibility.
 8. **Tests**: through the test helpers (§14).
 
 Everything else composes Effects: deep re-entries are rewritten with the §6.2, §7 and §8 primitives. `Effect.runSync` is allowed only on effects that are synchronous by construction, at the same boundaries (it throws otherwise).
@@ -272,26 +278,26 @@ Notes: v4 `runPromise` rejects with the squashed failure itself (there is no `Fi
 
 ## 10. Logging and tracing
 
-- Operational code logs with `Effect.logDebug`, `logInfo`, `logWarning` and `logError`. No `console.*` in operational code. Exceptions: the runtime's `ISAGI_RUNTIME_READY` line (stdout) and `ISAGI_RUNTIME_STARTUP_FAILED` line (stderr), which are protocol lines written directly with `process.stdout.write`/`process.stderr.write`; desktop's forwarding of the runtime child's output, which is also a protocol; CLI command output, which is the product and goes through the `CliContext` IO; desktop `index.ts` glue that runs outside any Effect; and the web app's browser-only diagnostics.
+- Operational code logs with `Effect.logDebug`, `logInfo`, `logWarning` and `logError`. No `console.*` in operational code. Exceptions: the runtime's `ISAGI_RUNTIME_READY` line (stdout) and `ISAGI_RUNTIME_STARTUP_FAILED` line (stderr), which are protocol lines written directly with `process.stdout.write`/`process.stderr.write`; desktop's forwarding of the runtime child's output, which is also a protocol; CLI command output, which is the product and goes through the `CliContext` IO; desktop main glue that runs outside any Effect (Electron callbacks in `index.ts`, `development.ts`); and the web app's browser-only diagnostics.
 - Levels: `Debug` is what `ISAGI_RUNTIME_DEBUG` used to gate (diagnostic events, phase traces, slow-request diagnostics); `Info` is lifecycle milestones (startup, restore summary, migration); `Warning` is degraded but handled (a GC tick failed, a retry was abandoned, event-loop lag); `Error` is unhandled defects at boundaries. Do not log and also return the same expected failure; the boundary logs once.
 - Messages are static; data goes in annotations: `Effect.logInfo("PTY launch starting").pipe(Effect.annotateLogs({ ptyProcessId, command }))`, or `Effect.annotateLogs` as an `Effect.fn` combinator for a whole operation. Pass a `Cause` as an argument when there is one. Use `Effect.withLogSpan("label")` for durations. Standard annotations: `endpointId` and `requestId` (request pipeline), `ptyProcessId` (PTY supervisors), `loop` (periodic loops), `runId` (workflow engine), `component` (instead of `[runtime][x]` prefixes).
 - Redaction: never log secrets, env values, prompt or agent output, or file contents. Anything that may echo user data (backend refs, env, command lines, process output, schema errors of refs) is logged through the safe-diagnostic description of its cause, as an annotation, not as a raw cause. Raw causes are fine for defects and runtime-authored errors.
-- The runtime's logger is provided outermost, around the launched program, never inside a module layer:
+- The runtime's logger (`app/logger.ts`) is provided outermost in `src/index.ts`, around the launched program, never inside a module layer:
   ```ts
-  export class RuntimeLogger {
-    static readonly layer = Layer.unwrap(
-      Effect.map(RuntimeSettings, (settings) =>
+  export const RuntimeLogger: { readonly layer: Layer.Layer<never, Config.ConfigError> } = {
+    layer: Layer.unwrap(
+      Effect.map(runtimeDebug, (debug) =>
         Layer.mergeAll(
           Logger.layer([Logger.withLeveledConsole(Logger.formatLogFmt), Logger.tracerLogger]),
-          Layer.succeed(References.MinimumLogLevel, settings.debug ? 'Debug' : 'Info'),
+          Layer.succeed(References.MinimumLogLevel, debug ? 'Debug' : 'Info'),
         ),
       ),
-    );
-  }
+    ),
+  };
   ```
   `Debug` and `Info` go to stdout, `Warning` and `Error` to stderr (the split `console.info`/`console.warn` had), one logfmt line per entry with newlines escaped, so a multi-line cause stays one forwarded record. `Logger.layer([...])` replaces the whole logger set, so `Logger.tracerLogger` must be listed or span log events disappear. The default minimum level is `Info`, so `logDebug` is silent unless `ISAGI_RUNTIME_DEBUG` lowers it.
-- Desktop uses its own logger layer (`[desktop] <message>` lines with annotations, `Logger.tracerLogger` included) provided in its `ManagedRuntime`.
-- Spans: `Effect.fn("Name")` creates the span; `Effect.withSpan` only for inline effects at boundaries (`api.<endpointId>`). No exporter is configured; span names appear as frames in defect logs.
+- Desktop uses its own logger layer, `DesktopLogger` in `src/main/desktop-logger.ts` (`[desktop] <message>` lines with annotations, Debug/Info on stdout and Warning/Error on stderr), merged into the desktop layer so it reaches every effect the `ManagedRuntime` runs. The runtime child's output is forwarded by `runtime-process/logging.ts`, not through this logger.
+- Spans: `Effect.fn("Name")` creates the span; `Effect.withSpan("<Class>.<member>")` names inline effect values that are not functions (zero-argument members such as `WorkspaceService.get`). No exporter is configured; span names appear as frames in defect logs.
 - The event-loop watchdog and phase markers in `platform/diagnostics` keep their behavior; their output goes through `Effect.log*`. The watchdog uses the live clock.
 
 ## 11. Config and References
@@ -300,12 +306,18 @@ Notes: v4 `runPromise` rejects with the squashed failure itself (there is no `Fi
 - Isagi's own config files (`config.yaml`, per-project `.isagi` config) stay in their `runtime-config` and `projects` services; do not move them into `ConfigProvider`.
 - Tunables with defaults that tests override (probe timings, GC intervals, retry delays, deadlines) are `Context.Reference`s owned by the module:
   ```ts
-  export const PtyGcSettings = Context.Reference<{ readonly interval: Duration.Duration }>(
-    'isagi/runtime/pty-processes/PtyGcSettings',
-    { defaultValue: () => ({ interval: Duration.minutes(5) }) },
+  export const PtyProcessSettings = Context.Reference<PtyProcessTimings>(
+    'isagi/runtime/pty-processes/PtyProcessSettings',
+    {
+      defaultValue: () => ({
+        statusPollInterval: Duration.seconds(10),
+        garbageCollectionInterval: Duration.minutes(5),
+        persistenceRetryDelay: Duration.seconds(1),
+      }),
+    },
   );
   ```
-  Tests provide `Layer.succeed(PtyGcSettings, {...})`. This replaces `options?: { delayMs?, timing? }` bags threaded through factories.
+  Tests provide `Layer.succeed(PtyProcessSettings, {...})`. This replaces `options?: { delayMs?, timing? }` bags threaded through factories.
 - Built-in references used: `References.MinimumLogLevel`; nothing else by default.
 
 ## 12. Schema
@@ -322,7 +334,7 @@ Notes: v4 `runPromise` rejects with the squashed failure itself (there is no `Fi
 Brands are for operational targeting values that cross a boundary and sit next to sibling ids of the same primitive type (worktree, surface, pane, session and PTY process ids, refs, data-root-relative paths).
 
 - Define them in contracts as schema brands: `export const WorktreeId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("WorktreeId"))`, `export type WorktreeId = typeof WorktreeId.Type`; values come from decoding or `WorktreeId.make(n)` (which validates).
-- Not adopted wholesale: branding every id DTO would ripple through every contract, web atom key, CLI table entry and Drizzle row mapping. New code that takes two or more id parameters of the same primitive type in one signature should brand them; existing ids are a separate story.
+- Not adopted wholesale, and no contract defines a brand yet: branding every id DTO would ripple through every contract, web atom key, CLI table entry and Drizzle row mapping. New code that takes two or more id parameters of the same primitive type in one signature should brand them; existing ids are a separate story.
 
 ## 14. Testing
 
@@ -335,7 +347,7 @@ The runner is `node:test` with `node:assert/strict`, run through `tsx`.
 5. **Assertions on failures** use `Effect.flip`, `Effect.result` or `Exit` + `Cause.findErrorOption`, not `try/catch` around a run.
 6. **Log capture** with `makeLogCapture()` (a `Logger.layer([...])` collector) instead of mocking `console`.
 7. **Lifecycle-sensitive tests** (PTYs, commands, the workflow engine, GC, restore, sockets) close the scope and assert finalizers ran: child killed, listeners removed, fibers empty (`makeFiberProbe`), no new handles, no leftover processes.
-8. **Web** tests build one isolated registry per test with `makeTestRegistry({ client, retry, initialValues })` and always `t.after(() => registry.dispose())` (retained queries hold timers that keep the process alive). Time is driven with node's `mock.timers` (`setTimeout` and `Date`), not `TestClock`, which cannot drive reactivity timers; run `flush()` before `mock.timers.tick` so scheduled node removals run first.
+8. **Web** tests build one isolated registry per test with `makeTestRegistry({ api, retry, initialValues })` (`api` is a partial fake `RuntimeApi`; unspecified members die with "`RuntimeApi.<member>` is not used") and always `t.after(() => registry.dispose())` (retained queries hold timers that keep the process alive). Time is driven with node's `mock.timers` (`setTimeout` and `Date`), not `TestClock`, which cannot drive reactivity timers; run `flush()` before `mock.timers.tick` so scheduled node removals run first.
 9. **Scope of the rule.** Tests a change creates or substantially edits follow this section. Untouched existing tests may keep their direct `Effect.runPromise` calls.
 
 ## 15. Do not
@@ -359,12 +371,12 @@ The runner is `node:test` with `node:assert/strict`, run through `tsx`.
 
 Mechanical rules are enforced by one runner, `node scripts/architecture/index.mjs`, which is part of `pnpm lint` and has per-check `enforce`/`report` modes in a table at its top. Read the scripts for the exact rules:
 
-- `module-boundaries.mjs` with `apps/runtime/module-boundaries.json`: the ADR 0011 rules R1–R12. R9 (external-package confinement, for example `node:child_process` only in `platform/process`) is report-only until the last direct child-process users move onto `platform/process`.
+- `module-boundaries.mjs` with `apps/runtime/module-boundaries.json`: the ADR 0011 rules R1–R12, all enforced, including R9 (external-package confinement, for example `node:child_process` only in `platform/process`).
 - `effect-run-sites.mjs` with the `effect-run-sites.json` allowlist (§9).
 - `effect-v3-apis.mjs`: v3-only Effect names and banned imports in untyped `.mjs` files (`tsc` guards `.ts`).
-- `dependency-policy.mjs`: banned packages, `catalog:` for every Effect dependency, one resolved `effect` version.
-- `effect-conventions.mjs`: grep rules no other check covers (no function-form services, service ids per §3.2 and unique, no `Effect.forkDetach`, no `unknown` error channels outside the author bridge, no `setTimeout`/`setInterval` in runtime source, `extends Error` only for the allowed invariant and pure-validator classes, contracts import only `Schema`/`SchemaTransformation` from `effect`).
+- `dependency-policy.mjs`: banned packages (React Query, Zustand and the v3-era Effect packages), `catalog:` for every Effect dependency, one resolved `effect` version.
+- `effect-conventions.mjs`: rules E1–E7 on production files: E1 no function-form services; E2 service and reference ids per §3.2 and unique; E3 no `Effect.forkDetach`; E4 no `unknown` error channels outside the author bridge; E5 no `setTimeout`/`setInterval` in runtime source; E6 runtime `extends Error` only for the allowlisted invariant and pure-validator classes; E7 contracts import only `Schema`/`SchemaTransformation` from `effect`.
 
-oxlint adds `import/no-cycle` and `no-console` for `apps/runtime/src/**` (tests excluded) and `no-restricted-imports` for `effect/unstable/*`, `@effect/schema`, `@effect/platform`, `zustand`, `@tanstack/react-query` and `RegistryProvider`. Each script has self-tests under `scripts/architecture/*.test.mjs`.
+oxlint adds `import/no-cycle` and `no-console` for `apps/runtime/src/**` (`*.test.ts` files excluded) in the nested `apps/runtime/.oxlintrc.json`, and `no-restricted-imports` for `effect/unstable/*`, `@effect/schema`, `@effect/platform`, `zustand`, `@tanstack/react-query` and `RegistryProvider` in the root `.oxlintrc.json`. Each script has self-tests under `scripts/architecture/*.test.mjs`.
 
 Everything else in this guide (`Effect.fn` naming, scope ownership, error granularity, log levels) is a review responsibility.

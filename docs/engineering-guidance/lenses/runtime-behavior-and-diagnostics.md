@@ -21,6 +21,11 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 - Is the code at the right Effect maturity tier for its complexity: local Effect, service/layer, or scoped concurrent system?
 - Do operational domains with IO, config, persistence, Git, process, runtime-client, or adapter dependencies expose those dependencies through services/layers once the domain needs replacement, testing, or lifecycle clarity?
 - Are scoped resources, interruption, shutdown, and cleanup explicit for long-lived processes, streams, queues, sessions, and supervisors?
+- Is every fiber, subscription, child process, or periodic loop a runtime service starts attached to that service's layer scope, so shutdown releases it?
+- Does a new run site sit at one of the allowed boundaries, and do third-party callbacks reach Effects through a queue, stream, or layer-owned `FiberSet` runner instead of `Effect.runPromise`?
+- Does an event-bus consumer subscribe in its own scope before it forks, and before any startup work that may publish?
+- Does each API handler map its module's tagged failures next to the endpoint, to a code that endpoint's contract declares?
+- Is each log entry at the right level, with a static message, identifiers as annotations, and user data only through its safe description?
 - Are expected domain and operational failures represented as tagged, structured data/errors rather than generic `Error` values or stringly status messages?
 - Are expected messages, findings, events, and state variants tagged where callers need to distinguish them deliberately?
 - Are branded, opaque, or otherwise narrow domain types used where plain strings/numbers would make important project, worktree, session, path, ref, or token mixups likely?
@@ -47,12 +52,25 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 - Waiting-for-user detection is product-critical, but the detection method may vary by harness.
 - Restoration means recreating or reopening the environment when runtime process state is gone, not pretending child processes survived.
 
+### Runtime Effect decisions
+
+The mechanics are in ADR 0012 and [`effect-conventions.md`](../effect-conventions.md); these are the runtime decisions reviewers check most often.
+
+- **Scope ownership.** A layer's scope is its service's lifetime. Anything a service starts that outlives one call (fibers, bus subscriptions, child processes, PubSubs, periodic loops) is attached to that scope with `Effect.acquireRelease`, `Effect.addFinalizer`, `Effect.forkScoped` or a `FiberSet`/`FiberMap`/`FiberHandle` made in the layer. `Effect.forkDetach` and `setTimeout`/`setInterval` are banned in the runtime; periodic work uses `runPeriodically` from `platform/fibers`. Shutdown releases in reverse acquisition order: request and socket fibers, then Fastify, then module services, then the platform (`app/http-server.ts`).
+- **Run sites.** The runtime runs Effects only at its process entry (`src/index.ts` through `runMain` in `app/run-main.ts`), its HTTP/WebSocket boundary (`app/http-server.ts` builds the server-scoped `RouteRuntime<R>`; `platform/http/route-runtime.ts` is where a request becomes a fiber; the PTY stream route and the runtime-events socket fork their connection fibers on it), and the workflow engine (`workflows/engine/author-bridge.ts` for the SDK Promise bridge, `workflows/engine/service.ts` for its work set). `scripts/architecture/effect-run-sites.json` is the allowlist; a run site anywhere else fails `pnpm lint`.
+- **Logging levels.** Runtime code logs with `Effect.log*`; `no-console` is an error in runtime source (`apps/runtime/.oxlintrc.json`). `Debug` is what `ISAGI_RUNTIME_DEBUG` shows (phase traces, slow requests); `Info` is lifecycle milestones; `Warning` is degraded but handled (a loop tick failed, event-loop lag); `Error` is an unhandled defect at a boundary. `Debug`/`Info` go to stdout and `Warning`/`Error` to stderr through the one logger in `app/logger.ts`, provided outermost. Anything that may echo user data is logged through `describeOperationalCause` (`platform/diagnostics`), never raw. The `ISAGI_RUNTIME_READY` and `ISAGI_RUNTIME_STARTUP_FAILED` protocol lines are written directly, not logged.
+- **Eager subscription.** `InternalEvents` and `RuntimeEvents` (`platform/events`) are PubSub buses whose `subscribe` returns a stream in the caller's scope: every event published after it returns is delivered. Consumers subscribe first, then fork the consumer. `Stream.fromPubSub` inside a forked fiber subscribes too late and loses events.
+- **Typed API boundary.** Routes register with `registerApiEndpoint`/`registerContentEndpoint` from `platform/http`. A handler's error channel is `HandlerError<E>`: rejections built with `request.reject` from codes the endpoint declares, plus the platform infrastructure errors (`DatabaseError`, `DataDirectoryError`, `GitCommandError`, `ProjectPathValidationError`) the endpoint declares. Module failures are mapped with `catchTags` next to the endpoint, so an unmapped tag is a compile error. Defects are logged and answered `api_unhandled_error` by the helper, never by module code. No `unknown` error channels outside the author bridge.
+
 ## Severity Mapping
 
 ### Blocker
 
 - Process, PTY, command, agent-session, background fiber, or resource lifecycle can silently orphan, leak, mis-associate, or misrepresent state.
 - Long-lived resources or concurrent runtime systems lack explicit ownership, interruption, cleanup, or shutdown behavior.
+- A fiber, subscription, child process, or loop outlives the scope that should own it: a detached fork, a timer outside Effect, or a hand-built scope in production code.
+- An event-bus consumer subscribes lazily, so events published before it starts are lost.
+- Logs echo secrets, environment values, prompt or agent output, or file contents.
 - Internal operational code runs Effects so early that cancellation, retry, resource ownership, or composition is materially broken.
 - A cross-boundary or user-impacting expected failure is modeled generically enough that clients cannot distinguish, recover from, or accurately present it.
 - Description-only contracts or schemas expose implementation-layer Effect concepts.
@@ -74,6 +92,8 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 - Failure handling exists but does not expose enough context for support.
 - Runtime API errors are explicit but too coarse for clients to handle important failure categories deliberately.
 - Logs are present but too vague, noisy, or disconnected from user-visible errors.
+- A log entry uses the wrong level, interpolates data into its message instead of annotating it, or logs an expected failure that the boundary also logs.
+- A run site is added to the allowlist without a boundary reason, or a callback re-enters the runtime with `Effect.runPromise`.
 - Lifecycle cleanup is plausible but not easy to verify.
 - Runtime behavior handles the happy path but not likely degraded paths.
 - A command or agent integration works for one harness while obscuring unsupported behavior elsewhere.

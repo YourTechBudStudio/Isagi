@@ -8,12 +8,16 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 
 - `apps/desktop` is the Electron shell.
 - `apps/web` is the React frontend.
-- `apps/runtime` is the local-or-remote runtime server.
+- `apps/runtime` is the local-or-remote runtime server. Its `src` is organized as vertical modules over a shared `platform/` and one composition root, `app/` (ADR 0011).
+- `apps/cli` is the `isagi` CLI.
 - `packages/contracts` contains shared versioned API contracts and schemas.
+- `packages/runtime-client` is the HTTP requester the web app and the CLI use to call the runtime API.
+- `packages/testing` holds the test-only Effect helpers the runtime, desktop and CLI tests use.
 - `packages/workflow-sdk` is the independently versioned public workflow authoring contract.
 - `packages/workflow-verifier` owns workflow verification, build receipts, and the canonical scaffold.
 - `apps/runtime/src/workflows` discovers, loads, and executes verified workflows.
 - `apps/runtime/src/harnesses/skill-content` is the source of the shipped `isagi-docs` skill for configuring Isagi and authoring workflows.
+- `scripts/architecture` holds the architecture checks `pnpm lint` runs: runtime module boundaries, Effect run sites, Effect conventions, the dependency policy and banned Effect v3 APIs.
 - `docs/issue-tracking-guidance.md` defines how epics and stories are represented in GitHub issues, including how to label, relate, maintain, and close them.
 
 ## Rules

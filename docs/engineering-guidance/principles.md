@@ -34,6 +34,8 @@ Use branded, opaque, or otherwise narrow domain types when plain strings or numb
 
 Concentrate complexity behind clear interfaces. A deep module may contain multiple focused internal files; depth means callers see a small, stable surface, not that everything lives in one huge file.
 
+In the runtime, a capability's behavior, tables, file areas, adapters, routes and tests live under its module directory; other modules see only its `index.ts`, `tables.ts` and test-only `testing.ts`, and depend on it only in the declared direction (ADR 0011).
+
 ## Organize Internals For Human Navigation
 
 Code should be easy for a human to trace. Group related files by concept, responsibility, platform, lifecycle, or flow. Large files are acceptable only when they remain single-purpose and reviewable.

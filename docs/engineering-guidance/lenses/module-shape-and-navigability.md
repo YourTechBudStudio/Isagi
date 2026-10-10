@@ -17,6 +17,9 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 - Are platform-specific variants discoverable through lowercase suffixes such as `.darwin.ts`, `.linux.ts`, or `.windows.ts` where needed?
 - Are platform-neutral selectors or adapters separated from platform-specific implementation details?
 - Do types, helpers, and implementation details live close to the behavior they support?
+- Does this runtime file live in the module that owns the behavior?
+- Does a cross-module import go through `index.ts` and a declared dependency?
+- Is a lower module learning about a higher one (types, tables, events)? Use a port or move the rule up.
 
 ## Isagi-Specific Notes
 
@@ -26,6 +29,7 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 - Deep modules are not huge files. They are modules with small public surfaces and well-organized internals.
 - A deep Effect service can stay single-purpose yet grow a large inline `Layer` body that is hard to trace. Prefer extracting cohesive internal clusters (resolution, reconciliation, row mapping) into sibling files while keeping the public surface narrow.
 - Avoid creating abstract interfaces merely to make code look architectural.
+- The runtime's module list, dependency graph and public-surface rule are ADR 0011; `apps/runtime/module-boundaries.json` declares the graph and `pnpm lint` enforces it.
 
 ## Severity Mapping
 
@@ -36,6 +40,7 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 - Platform-specific behavior is mixed into shared logic in a way that risks incorrect behavior on other supported platforms.
 - A public module surface exposes internals that callers start depending on.
 - A refactor fragments lifecycle or state flow so much that correctness can no longer be followed.
+- A new upward dependency, a write to another module's table, a domain rule in `platform/`, or an edit to `module-boundaries.json` without a stated reason.
 
 ### Concern
 
@@ -45,6 +50,7 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 - A new abstraction is shallow ceremony rather than a useful boundary.
 - Naming or grouping makes the intended code path hard to discover.
 - A module lacks a clear public entry point even though callers treat it as a module.
+- A deep import silenced by widening `index.ts` with internals, or a sub-folder barrel.
 
 ### Nit
 

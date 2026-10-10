@@ -12,9 +12,13 @@ The Electron desktop shell for Isagi. It owns native app lifecycle, runtime boot
 
 ## Effect scope
 
-- Use Effect for native lifecycle orchestration: app boot, runtime process management, IPC handlers that perform work, retries, timeouts, and shutdown.
-- Treat Electron callbacks, IPC handlers, and app lifecycle hooks as acceptable Effect boundaries.
-- Keep reusable desktop operational internals Effect-shaped where cancellation, cleanup, retries, or failure context matter.
+- Use Effect for native lifecycle orchestration: app boot, runtime process management, IPC handlers that perform work, retries, timeouts, and shutdown. General rules: `docs/engineering-guidance/effect-conventions.md`.
+- One `ManagedRuntime` in `src/main/index.ts`, built from `makeDesktopLayer` in `src/main/desktop-layer.ts`. Nothing builds before its first use (after `whenReady`); disposing it is shutdown's service teardown, in reverse build order.
+- The services are `RuntimeProcess` (`runtime-process/`), `DesktopUpdater` and `UpdaterDiagnostics` (`updater/`), plus `DesktopShell` (what they need from Electron's `app` and window, implemented in `index.ts`). Their state lives in the layer constructor; status is a `SubscriptionRef` the renderer bridge streams.
+- Electron lifecycle callbacks and IPC handlers in `src/main/index.ts` are the only run sites. Everything else composes effects.
+- Timers are fibers (`Effect.sleep`, `Schedule`, `FiberHandle`/`FiberSet` owned by a layer scope), never `setTimeout`/`setInterval`.
+- Logs go through `Effect.log*` and `DesktopLogger` (`[desktop] <message>` lines); the runtime child's output is a protocol forwarded by `runtime-process/logging.ts`.
+- HTTP goes through `effect/http` `HttpClient`, provided once as `RuntimeHttpClient` from `@isagi/runtime-client`.
 
 ## Rules
 

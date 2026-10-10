@@ -43,6 +43,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - Distinguish the voiced message (the line a person reads — always web-owned, chosen by code/reason) from diagnostic detail (a raw runtime message, command or process output, or `code`/`requestId`). The web may surface diagnostic detail when it aids debugging, but only clearly framed as diagnostic, never as the voiced line.
 - The requirement that user-facing failures carry a mappable code applies to every runtime/client surface that reaches the user, including streaming and socket protocols, not only HTTP request/response envelopes. A failure channel that can only describe itself with a human-readable string forces product voice behind the boundary.
 - Internal runtime/domain failures may use Effect tagged data/errors; API contracts should expose stable serializable concepts, not those implementation types.
+- Lower runtime modules learn about higher ones through ports or `InternalEvent`s, never imports. A module writes only its own tables (R7). New `InternalEvent` variants declare publishers and subscribers.
 - Branded or opaque internal domain types are encouraged where they protect operational targeting, but DTOs remain ordinary serializable contract shapes.
 - Pre-MVP internal interfaces should evolve cleanly. Avoid internal compatibility theater when callers can be migrated safely.
 
