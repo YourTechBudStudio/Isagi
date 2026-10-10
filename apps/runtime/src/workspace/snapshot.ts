@@ -2,12 +2,8 @@ import { basename } from 'node:path';
 
 import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/contracts';
 
-import type {
-  EnvironmentFocusRow,
-  ProjectRow,
-  SurfaceMetadataRow,
-  WorktreeRow,
-} from '../projects/types.js';
+import type { EnvironmentFocusRow, SurfaceMetadataRow } from '../environment/index.js';
+import type { ProjectRow, WorktreeRow } from '../projects/index.js';
 
 /**
  * The name of the single environment a folder project owns. Fixed by the

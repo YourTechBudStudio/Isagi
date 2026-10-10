@@ -6,68 +6,52 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
 import { CliAccessNone } from '../cli-access/index.js';
-import { editorContexts, ptyProcesses, worktrees } from '../persistence/schema.js';
-import type {
-  InternalRuntimeEvent,
-  InternalRuntimeEventBusService,
-} from '../platform/events/index.js';
+import type { InternalRuntimeEvent, InternalRuntimeEventBus } from '../platform/events/index.js';
 import { recordingInternalEventBusLayer } from '../platform/events/testing.js';
-import { EntityLockLive, type EntityLockService } from '../platform/locks/entity-lock.js';
-import {
-  LoopbackPortProbe,
-  LoopbackPortProbeLive,
-  type LoopbackPortProbeService,
-} from '../platform/net/loopback-port-probe.js';
-import {
-  DatabaseError,
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../platform/persistence/index.js';
+import { EntityLock } from '../platform/locks/index.js';
+import { LoopbackPortProbe } from '../platform/net/index.js';
+import { DatabaseError, DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { UserShell, type UserShellService } from '../platform/process/user-shell.js';
-import type { WorktreeRow } from '../projects/types.js';
-import { PtyBackendCatalog } from '../pty-processes/backend.js';
-import { PtyForegroundStateLive } from '../pty-processes/foreground-state.js';
-import { PtyRepositoryLive, type PtyRepositoryService } from '../pty-processes/repository.js';
-import { PtyServiceLive, type PtyService as PtyServiceShape } from '../pty-processes/service.js';
-import { fakeBackendCatalog } from '../pty-processes/testing.js';
-import type { PtyBackend, PtyBackendName } from '../pty-processes/types.js';
+import { UserShell } from '../platform/process/index.js';
+import { ProjectRepository } from '../projects/index.js';
+import type { WorktreeRow } from '../projects/index.js';
+import { worktrees } from '../projects/tables.js';
 import {
-  WorkspaceRepository,
-  WorkspaceRepositoryLive,
-  type WorkspaceRepositoryService,
-} from '../workspace/index.js';
-import type { EditorContextRepositoryService } from './contexts/repository.js';
-import { EditorContextRepositoryLive } from './contexts/repository.js';
+  PtyBackendCatalog,
+  PtyForegroundState,
+  PtyRepository,
+  PtyService,
+} from '../pty-processes/index.js';
+import type { PtyBackendShape as PtyBackend } from '../pty-processes/index.js';
+import { ptyProcesses } from '../pty-processes/tables.js';
+import { fakeBackendCatalog } from '../pty-processes/testing.js';
+import type { PtyBackendName } from '../pty-processes/testing.js';
+import { EditorContextRepository } from './contexts/repository.js';
 import {
   EditorContextService,
   makeEditorContextService,
-  type EditorContextServiceShape,
   type EditorContextServiceOptions,
   type EditorProbeRunner,
 } from './contexts/service.js';
 import type { EditorReadinessObservation } from './contexts/types.js';
-import type {
-  EditorProvisioningService,
-  ResolvedEditorInstallation,
-} from './provisioning/index.js';
+import type { ResolvedEditorInstallation } from './provisioning/install.js';
+import type { EditorProvisioning } from './provisioning/service.js';
 import { readyEditorProvisioningLayer } from './provisioning/tests/shared-support.js';
+import { editorContexts } from './tables.js';
 
 export function testLayer(dataRoot: string) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
   return Layer.mergeAll(
     database,
-    WorkspaceRepositoryLive.pipe(Layer.provide(database)),
-    EditorContextRepositoryLive.pipe(Layer.provide(database)),
+    ProjectRepository.layer.pipe(Layer.provide(database)),
+    EditorContextRepository.layer.pipe(Layer.provide(database)),
   );
 }
 
 export function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
-    const workspace = yield* WorkspaceRepository;
+    const workspace = yield* ProjectRepository;
     const { id: projectId } = yield* workspace.createProject({
       name: 'isagi',
       rootPath,
@@ -183,7 +167,7 @@ export function testSessionSocketDirectory(root: string) {
   return join('/tmp', basename(root));
 }
 
-function testUserShell(): UserShellService {
+function testUserShell(): UserShell['Service'] {
   return {
     environment: {
       _tag: 'Available' as const,
@@ -249,7 +233,7 @@ export interface EditorServiceHarnessInput {
   readonly tmux?: PtyBackend | undefined;
   readonly events: InternalRuntimeEvent[];
   readonly options?: EditorContextServiceOptions | undefined;
-  readonly portProbe?: LoopbackPortProbeService | undefined;
+  readonly portProbe?: LoopbackPortProbe['Service'] | undefined;
 }
 
 /**
@@ -262,13 +246,13 @@ export interface EditorServiceHarnessInput {
  * second of each and leave the two services observing different worlds.
  */
 export function editorContextServiceLayer<E>(input: {
-  readonly database: Layer.Layer<EditorContextRepositoryService, E>;
-  readonly workspace: Layer.Layer<WorkspaceRepositoryService, E>;
-  readonly pty: Layer.Layer<PtyServiceShape, E>;
-  readonly provisioning: Layer.Layer<EditorProvisioningService, E>;
-  readonly portProbe: Layer.Layer<LoopbackPortProbeService, E>;
-  readonly entityLock: Layer.Layer<EntityLockService, E>;
-  readonly bus: Layer.Layer<InternalRuntimeEventBusService, E>;
+  readonly database: Layer.Layer<EditorContextRepository, E>;
+  readonly workspace: Layer.Layer<ProjectRepository, E>;
+  readonly pty: Layer.Layer<PtyService, E>;
+  readonly provisioning: Layer.Layer<EditorProvisioning, E>;
+  readonly portProbe: Layer.Layer<LoopbackPortProbe, E>;
+  readonly entityLock: Layer.Layer<EntityLock, E>;
+  readonly bus: Layer.Layer<InternalRuntimeEventBus, E>;
   readonly options?: EditorContextServiceOptions | undefined;
 }) {
   return Layer.effect(EditorContextService, makeEditorContextService(input.options ?? {})).pipe(
@@ -290,16 +274,16 @@ export function editorContextServiceLayer<E>(input: {
 export function editorServiceLayer(input: EditorServiceHarnessInput) {
   mkdirSync(testSessionSocketDirectory(input.dataRoot), { recursive: true });
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(input.dataRoot));
-  const liveDatabase = RuntimeDatabaseLive.pipe(Layer.provide(directory));
+  const liveDatabase = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const database = input.failDatabaseOperation
     ? failingDatabaseLayer(input.failDatabaseOperation).pipe(Layer.provideMerge(liveDatabase))
     : liveDatabase;
-  const liveWorkspace = WorkspaceRepositoryLive.pipe(Layer.provide(database));
+  const liveWorkspace = ProjectRepository.layer.pipe(Layer.provide(database));
   const workspace = input.findWorktree
     ? overriddenWorktreeLookupLayer(input.findWorktree).pipe(Layer.provide(liveWorkspace))
     : liveWorkspace;
-  const editorRepository = EditorContextRepositoryLive.pipe(Layer.provide(database));
-  const ptyRepository = PtyRepositoryLive.pipe(Layer.provide(database));
+  const editorRepository = EditorContextRepository.layer.pipe(Layer.provide(database));
+  const ptyRepository = PtyRepository.layer.pipe(Layer.provide(database));
   const bus = recordingInternalEventBusLayer(input.events);
   const catalog = Layer.succeed(
     PtyBackendCatalog,
@@ -309,11 +293,11 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
       tmux: input.tmux ?? editorBackendStub('tmux'),
     }),
   );
-  const pty = PtyServiceLive.pipe(
+  const pty = PtyService.layer.pipe(
     Layer.provide(CliAccessNone),
     Layer.provide(ptyRepository),
     Layer.provide(catalog),
-    Layer.provide(PtyForegroundStateLive),
+    Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
     Layer.provide(bus),
     Layer.provide(Layer.succeed(UserShell, testUserShell())),
@@ -323,10 +307,10 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
   );
   const portProbe = input.portProbe
     ? Layer.succeed(LoopbackPortProbe, input.portProbe)
-    : LoopbackPortProbeLive;
+    : LoopbackPortProbe.layer;
   // The same lock value the service is built on, so a test can take the lock the
   // way the placement path will and hand the service a genuine witness.
-  const entityLock = EntityLockLive;
+  const entityLock = EntityLock.layer;
   const service = editorContextServiceLayer({
     database: editorRepository,
     workspace,
@@ -385,14 +369,14 @@ export function awaitProbeSettled(ptyProcessId: number) {
 }
 
 export type EditorHarnessContext =
-  | EditorContextServiceShape
-  | EditorContextRepositoryService
-  | RuntimeDatabaseService
-  | WorkspaceRepositoryService
-  | PtyRepositoryService
-  | PtyServiceShape
-  | EntityLockService
-  | InternalRuntimeEventBusService;
+  | EditorContextService
+  | EditorContextRepository
+  | RuntimeDatabase
+  | ProjectRepository
+  | PtyRepository
+  | PtyService
+  | EntityLock
+  | InternalRuntimeEventBus;
 
 /**
  * One editor stack over one throwaway data directory, torn down afterwards.
@@ -438,7 +422,7 @@ function failingDatabaseLayer(operation: string) {
       return {
         use: (name, run) => refuse(name, () => database.use(name, run)),
         transaction: (name, run) => refuse(name, () => database.transaction(name, run)),
-      } satisfies RuntimeDatabaseService;
+      } satisfies RuntimeDatabase['Service'];
     }),
   );
 }
@@ -447,10 +431,18 @@ function overriddenWorktreeLookupLayer(
   findWorktree: (worktreeId: number) => Effect.Effect<WorktreeRow | null, DatabaseError>,
 ) {
   return Layer.effect(
-    WorkspaceRepository,
+    ProjectRepository,
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
-      return { ...repository, findWorktree } satisfies WorkspaceRepositoryService;
+      const repository = yield* ProjectRepository;
+      return { ...repository, findWorktree } satisfies ProjectRepository['Service'];
     }),
   );
 }
+
+// Internals and builders other modules' tests use; never imported by production code.
+export { EditorContextRepository } from './contexts/repository.js';
+export {
+  NotApplicableEditorProvisioningLayer,
+  editorProvisioningStateLayer,
+  readyEditorProvisioningLayer,
+} from './provisioning/tests/shared-support.js';

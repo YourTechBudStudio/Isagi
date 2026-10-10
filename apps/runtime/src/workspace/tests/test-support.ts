@@ -7,22 +7,21 @@ import { Effect } from 'effect';
 
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
-import type { CommandServiceShape } from '../../commands/index.js';
-import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../environment/index.js';
-import type {
-  InternalRuntimeEvent,
-  InternalRuntimeEventBusService,
-} from '../../platform/events/index.js';
-import type { GitService } from '../../platform/git/index.js';
-import { stateFromActiveContext, type StateFileService } from '../../platform/persistence/index.js';
+import type { CommandService } from '../../commands/index.js';
+import type { SurfaceService } from '../../environment/index.js';
+import type { InternalRuntimeEvent, InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { Git } from '../../platform/git/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import type { WorkspaceRepositoryService } from '../../projects/repository.js';
-import type { ProjectRow, WorktreeRow } from '../../projects/types.js';
-import type { PtyServiceShape } from '../../pty-processes/index.js';
-import type {
-  WorktreeSetupRepositoryService,
-  WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../setup/index.js';
+import type { ProjectRow, WorktreeRow, ProjectRepository } from '../../projects/index.js';
+import type { PtyService } from '../../pty-processes/index.js';
+import { fakeTerminateMany } from '../../pty-processes/testing.js';
+import {
+  WorktreeDeleteDiagnosticsReader,
+  type WorktreeDeleteDiagnostics,
+} from '../delete-diagnostics.js';
+import type { WorktreeSetupRepository } from '../setup/repository.js';
+import type { WorktreeSetupService } from '../setup/service.js';
+import { stateFromActiveContext, type StateFile } from '../state-file.js';
 
 export const project: ProjectRow = {
   id: 1,
@@ -57,7 +56,7 @@ export const featureWorktree: WorktreeRow = {
 
 export const git = {
   run: () => Effect.die(new Error('git should not be called by active context persistence')),
-} satisfies GitService;
+} satisfies Git['Service'];
 
 export const testDataDirectory = makeTestDataDirectory('/tmp/isagi-test');
 
@@ -71,7 +70,7 @@ export const testWorktreeSetup = {
       ...(input.request.action === 'disable_hooks' ? {} : { hash: input.request.hash }),
     }),
   validateTrustForOpen: () => Effect.succeed({ status: 'not_configured' as const }),
-} satisfies WorktreeSetupServiceShape;
+} satisfies WorktreeSetupService['Service'];
 
 export const testWorktreeSetupRepository = {
   findTrust: () => Effect.succeed(null),
@@ -79,39 +78,14 @@ export const testWorktreeSetupRepository = {
   disableHooks: () => Effect.void,
   createRunWithSteps: () => Effect.succeed(1),
   listRunSteps: () => Effect.succeed([]),
-} satisfies WorktreeSetupRepositoryService;
-
-export const testSurfaceRepository = {
-  worktreeExists: () => Effect.succeed(false),
-  findSurface: () => Effect.succeed(null),
-  findPane: () => Effect.succeed(null),
-  findWorktreePath: () => Effect.succeed(null),
-  findEnvironmentFocus: () => Effect.succeed(null),
-  listWorkspaceSurfaceMetadata: Effect.succeed([]),
-  listEnvironmentFocusStates: Effect.succeed([]),
-  listPanesForSurface: () => Effect.succeed([]),
-  listAgentSessionsForPanes: () => Effect.succeed([]),
-  listTerminalSessionsForPanes: () => Effect.succeed([]),
-  listEditorContextsForPanes: () => Effect.succeed([]),
-  listPaneSessionBindings: Effect.succeed([]),
-  findPaneForSession: () => Effect.succeed(null),
-  findSurfaceDeleteTarget: () => Effect.succeed(null),
-  renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
-  deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
-  deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
-  createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
-  createEmptySurface: () => Effect.die('surface creation is not used by workspace tests'),
-  startSurfacePane: () => Effect.die('surface pane start is not used by workspace tests'),
-  listSessionsBoundTo: () => Effect.succeed({ agents: [], terminals: [] }),
-  splitSurfacePane: () => Effect.die('surface split is not used by workspace tests'),
-  setSurfaceLayout: () => Effect.die('surface layout update is not used by workspace tests'),
-  setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
-  claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
-  setEnvironmentFocus: (input) => Effect.succeed(input),
-  moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
-} satisfies SurfaceRepositoryService;
+} satisfies WorktreeSetupRepository['Service'];
 
 export const testSurfaceService = {
+  findSurface: () => Effect.succeed(null),
+  listWorkspaceSurfaceMetadata: Effect.succeed([]),
+  listEnvironmentFocusStates: Effect.succeed([]),
+  listDurableSessions: Effect.succeed({ sessions: [] }),
+  restorePaneBoundSessions: Effect.die('session restore is not used by workspace tests'),
   getSurfaceDetail: () => Effect.die('surface detail is not used by workspace tests'),
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
@@ -127,7 +101,42 @@ export const testSurfaceService = {
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
   moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
   openEditor: () => Effect.die('openEditor is not used by workspace tests'),
-} satisfies SurfaceServiceShape;
+} satisfies SurfaceService['Service'];
+
+/** The surface fake, answering the durable session inventory with `durableSessions`. */
+export function surfaceServiceWith(input: {
+  readonly durableSessions: readonly DurableSessionIdentity[];
+}): SurfaceService['Service'] {
+  return {
+    ...testSurfaceService,
+    listDurableSessions: Effect.succeed({ sessions: [...input.durableSessions] }),
+  };
+}
+
+export const noWorktreeDeleteDiagnostics: WorktreeDeleteDiagnostics = {
+  agentSessionCount: 0,
+  agentSessionActivePtyProcessIds: [],
+  commandRunCount: 0,
+  commandRunPtyProcessIds: [],
+  commandStateCount: 0,
+  commandStateActivePtyProcessIds: [],
+  paneCount: 0,
+  surfaceCount: 0,
+  terminalSessionCount: 0,
+  terminalSessionActivePtyProcessIds: [],
+};
+
+/** The delete-diagnostics read, answering every worktree with `diagnostics`. */
+export function worktreeDeleteDiagnosticsWith(
+  diagnostics: WorktreeDeleteDiagnostics,
+): WorktreeDeleteDiagnosticsReader['Service'] {
+  return WorktreeDeleteDiagnosticsReader.of({ read: () => Effect.succeed(diagnostics) });
+}
+
+/** A worktree whose delete would cascade through nothing. */
+export const testWorktreeDeleteDiagnostics = worktreeDeleteDiagnosticsWith(
+  noWorktreeDeleteDiagnostics,
+);
 
 export const testCommandService = {
   listForWorktree: () => Effect.die('command list is not used by workspace tests'),
@@ -138,7 +147,7 @@ export const testCommandService = {
   runPostCreateLifecycle: () => Effect.void,
   cleanupBeforeWorktreeDelete: () => Effect.void,
   cleanupBeforeWorktreePrune: () => Effect.void,
-} satisfies CommandServiceShape;
+} satisfies CommandService['Service'];
 
 export const testPtyService = {
   allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
@@ -152,11 +161,13 @@ export const testPtyService = {
   resize: () => Effect.die('pty resize is not used by workspace tests'),
   kill: () => Effect.succeed('terminated_live' as const),
   terminate: () => Effect.succeed('terminated_live' as const),
+  terminateMany: fakeTerminateMany(() => Effect.succeed('terminated_live' as const)),
+  findProcess: () => Effect.die('pty findProcess is not used by workspace tests'),
   cleanupProcess: () => Effect.die('pty cleanupProcess is not used by workspace tests'),
   pin: () => Effect.void,
   unpin: () => Effect.void,
   isPinned: () => Effect.succeed(false),
-} satisfies PtyServiceShape;
+} satisfies PtyService['Service'];
 
 export const testInternalEvents = {
   publish: () => Effect.void,
@@ -165,7 +176,7 @@ export const testInternalEvents = {
       take: Effect.never,
       unsubscribe: Effect.void,
     }),
-} satisfies InternalRuntimeEventBusService;
+} satisfies InternalRuntimeEventBus['Service'];
 
 /** An event bus that keeps what was published, so ordering against the DB cascade is assertable. */
 export function recordingInternalEvents() {
@@ -182,16 +193,15 @@ export function recordingInternalEvents() {
           take: Effect.never,
           unsubscribe: Effect.void,
         }),
-    } satisfies InternalRuntimeEventBusService,
+    } satisfies InternalRuntimeEventBus['Service'],
   };
 }
 
 export function repositoryWith(input: {
   readonly project: ProjectRow | null;
   readonly worktree: WorktreeRow | null;
-}): WorkspaceRepositoryService {
+}): ProjectRepository['Service'] {
   return {
-    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: (projectId) =>
       Effect.succeed(input.project && input.project.id === projectId ? input.project : null),
     findProjectByRootPath: () => Effect.succeed(input.project),
@@ -231,19 +241,6 @@ export function repositoryWith(input: {
       ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
-    readWorktreeDeleteDiagnostics: () =>
-      Effect.succeed({
-        agentSessionCount: 0,
-        agentSessionActivePtyProcessIds: [],
-        commandRunCount: 0,
-        commandRunPtyProcessIds: [],
-        commandStateCount: 0,
-        commandStateActivePtyProcessIds: [],
-        paneCount: 0,
-        surfaceCount: 0,
-        terminalSessionCount: 0,
-        terminalSessionActivePtyProcessIds: [],
-      }),
     createProject: () => Effect.succeed(project),
     listProjects: Effect.succeed(input.project ? [input.project] : []),
     listWorktrees: Effect.succeed(input.worktree ? [input.worktree] : []),
@@ -258,10 +255,8 @@ export function repositoryWith(input: {
 export function repositoryWithWorktrees(input: {
   readonly project: ProjectRow;
   readonly worktrees: readonly WorktreeRow[];
-  readonly durableSessions?: readonly DurableSessionIdentity[] | undefined;
-}): WorkspaceRepositoryService {
+}): ProjectRepository['Service'] {
   return {
-    listDurableSessions: Effect.succeed({ sessions: input.durableSessions ?? [] }),
     findProject: (projectId) =>
       Effect.succeed(input.project.id === projectId ? input.project : null),
     findProjectByRootPath: (rootPath) =>
@@ -297,19 +292,6 @@ export function repositoryWithWorktrees(input: {
       ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(true),
-    readWorktreeDeleteDiagnostics: () =>
-      Effect.succeed({
-        agentSessionCount: 0,
-        agentSessionActivePtyProcessIds: [],
-        commandRunCount: 0,
-        commandRunPtyProcessIds: [],
-        commandStateCount: 0,
-        commandStateActivePtyProcessIds: [],
-        paneCount: 0,
-        surfaceCount: 0,
-        terminalSessionCount: 0,
-        terminalSessionActivePtyProcessIds: [],
-      }),
     createProject: () => Effect.succeed(input.project),
     listProjects: Effect.succeed([input.project]),
     listWorktrees: Effect.succeed([...input.worktrees]),
@@ -340,7 +322,7 @@ export function deleteFixtures() {
 export function stateFileWithWriteCounter(
   onWrite: () => void,
   initialState = stateFromActiveContext(null, null, 0),
-): StateFileService {
+): StateFile['Service'] {
   let state = initialState;
 
   return {

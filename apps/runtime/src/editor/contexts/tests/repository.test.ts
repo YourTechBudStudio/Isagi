@@ -14,7 +14,7 @@ import {
   insertWorktree,
   testLayer,
 } from '../../testing.js';
-import { EditorContextRepository, EditorContextTransitionRejected } from '../index.js';
+import { EditorContextRepository, EditorContextTransitionRejected } from '../repository.js';
 import { EditorContextRowInvariantViolation } from '../row-mapper.js';
 
 type TestServices = Layer.Success<ReturnType<typeof testLayer>>;

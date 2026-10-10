@@ -1,4 +1,4 @@
-import { stripAnsi } from '../platform/process/ansi.js';
+import { stripAnsi } from '../platform/process/index.js';
 
 export function extractClaudeHeadlessOutput(raw: string) {
   const clean = stripAnsi(raw).trim();

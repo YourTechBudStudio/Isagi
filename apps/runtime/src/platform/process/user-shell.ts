@@ -2,8 +2,8 @@ import { spawn } from 'node:child_process';
 
 import { Context, Effect, Layer } from 'effect';
 
-import { userShellBaseEnv } from '../../pty-processes/service/runtime-namespace.js';
-import { backendLaunchCommand } from './shell-launch.js';
+import { userShellBaseEnv } from './shell-env.js';
+import { shellLaunchCommand } from './shell-launch.js';
 
 const environmentProbeTimeoutMs = 5_000;
 const environmentOutputLimitBytes = 128 * 1024;
@@ -25,11 +25,6 @@ export interface UserShellCommandResult {
   readonly spawnError?: string | undefined;
 }
 
-export interface UserShellService {
-  readonly environment: UserShellEnvironmentResult;
-  readonly run: (command: UserShellCommand) => Effect.Effect<UserShellCommandResult>;
-}
-
 export type UserShellEnvironmentResult =
   | { readonly _tag: 'Available'; readonly values: NodeJS.ProcessEnv }
   | {
@@ -38,19 +33,24 @@ export type UserShellEnvironmentResult =
       readonly diagnostic: string;
     };
 
-export const UserShell = Context.Service<UserShellService>('isagi/UserShell');
+const make = Effect.gen(function* () {
+  const baseEnvironment = userShellBaseEnv();
+  const environment = yield* resolveUserShellEnvironment(baseEnvironment);
+  return UserShell.of({
+    environment,
+    run: (input) => runUserShellCommand(input, environment.values),
+  });
+});
 
-export const UserShellLive = Layer.effect(
+export class UserShell extends Context.Service<
   UserShell,
-  Effect.gen(function* () {
-    const baseEnvironment = userShellBaseEnv();
-    const environment = yield* resolveUserShellEnvironment(baseEnvironment);
-    return {
-      environment,
-      run: (input) => runUserShellCommand(input, environment.values),
-    } satisfies UserShellService;
-  }),
-);
+  {
+    readonly environment: UserShellEnvironmentResult;
+    readonly run: (command: UserShellCommand) => Effect.Effect<UserShellCommandResult>;
+  }
+>()('isagi/runtime/platform/process/UserShell') {
+  static readonly layer = Layer.effect(UserShell, make);
+}
 
 export function resolveUserShellEnvironment(
   baseEnvironment: NodeJS.ProcessEnv,
@@ -87,11 +87,10 @@ export function runUserShellCommand(
   environment: NodeJS.ProcessEnv,
 ): Effect.Effect<UserShellCommandResult> {
   return Effect.callback((resume) => {
-    const launch = backendLaunchCommand({
+    const launch = shellLaunchCommand({
       launch: {
         command: input.command,
         args: input.args,
-        cwd: process.cwd(),
         launchMode: 'user_shell',
       },
       env: environment,

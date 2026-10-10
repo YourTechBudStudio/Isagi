@@ -9,7 +9,7 @@ import type {
   HarnessPolicy,
 } from '@isagi/contracts';
 
-import { EditorProvisioning } from '../../editor/provisioning/index.js';
+import { EditorProvisioning } from '../../editor/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import {
   RuntimeConfig,
@@ -20,7 +20,7 @@ import {
   type RuntimeHarnessPolicyState,
 } from '../../runtime-config/index.js';
 import { supportedHarnesses } from '../definitions.js';
-import { HostInventory } from '../inventory/index.js';
+import { HostInventory } from '../inventory/service.js';
 import { executableAvailability, type HostInventoryState } from '../inventory/types.js';
 import { docsReconciliationFingerprint, reconcileDocs } from './docs-reconciler.js';
 import { harnessLaunchDecision } from './launch-decision.js';
@@ -52,159 +52,160 @@ const initialReconciliation: ReconciliationState = {
   lastResult: null,
   bootReconciled: false,
 };
-export interface HarnessControlPlaneService {
-  readonly start: Effect.Effect<void>;
-  readonly snapshot: Effect.Effect<ControlPlaneSnapshot>;
-  readonly refreshInventory: Effect.Effect<{ readonly generation: number }>;
-  readonly acceptPolicy: (input: {
-    readonly expectedPolicyRevision: string;
-    readonly policy: HarnessPolicy;
-  }) => Effect.Effect<
-    {
-      readonly acceptedPolicyRevision: string;
-      readonly reconciledPolicyRevision: string;
-      readonly inventoryGeneration: number;
-      readonly disposition: 'applied' | 'superseded';
-      readonly reconciliation: DocsReconciliationResult;
-    },
-    RuntimeConfigError | RuntimeConfigConflict | RuntimeHarnessConfigInvalid | ControlPlaneNotReady
-  >;
-  readonly assertCanCreateProcess: (
-    harness: AgentHarness,
-  ) => Effect.Effect<void, HarnessLaunchBlocked>;
-}
-export const HarnessControlPlane = Context.Service<HarnessControlPlaneService>(
-  'isagi/HarnessControlPlane',
-);
-export const HarnessControlPlaneLive = Layer.effect(
-  HarnessControlPlane,
-  Effect.gen(function* () {
-    const inventory = yield* HostInventory;
-    const config = yield* RuntimeConfig;
-    const directory = yield* DataDirectory;
-    // Composed here because D2 requires one projection of provisioning state, and
-    // the control-plane snapshot is the projection every startup surface already
-    // reads. The edge is one-way: provisioning knows nothing about harnesses,
-    // and nothing about harness launchability depends on it.
-    const editorProvisioning = yield* EditorProvisioning;
-    const scope = yield* Effect.scope;
-    const reconciliation = yield* Ref.make(initialReconciliation);
-    const lock = yield* Semaphore.make(1);
-    const reconcileCurrent = (forceBoot: boolean) =>
-      lock.withPermits(1)(
-        Effect.gen(function* () {
-          const inventoryState = yield* inventory.getCached;
-          if (inventoryState._tag === 'Pending') return null;
-          const current = yield* config.get;
-          if (current.harnesses.status === 'invalid') return null;
-          const input = {
-            dataRoot: directory.paths.root,
-            policy: current.harnesses.policy,
-            policyRevision: current.harnesses.revision,
-            inventoryGeneration: inventoryState.generation,
-            inventory: inventoryState.inventory,
-          };
-          const fingerprint = docsReconciliationFingerprint(input);
-          const state = yield* Ref.get(reconciliation);
-          yield* Ref.set(reconciliation, { ...state, desiredFingerprint: fingerprint });
-          if (!forceBoot && state.bootReconciled && state.lastAppliedFingerprint === fingerprint)
-            return state.lastResult;
-          yield* Ref.update(reconciliation, (value) => ({
-            ...value,
-            runningFingerprint: fingerprint,
-          }));
-          const result = yield* reconcileDocs(input);
-          yield* Ref.update(reconciliation, (value) => ({
-            ...value,
-            runningFingerprint: null,
-            lastCompletedFingerprint: fingerprint,
-            lastAppliedFingerprint:
-              result.outcome === 'succeeded' ? fingerprint : value.lastAppliedFingerprint,
-            lastResult: result,
-            bootReconciled: true,
-          }));
-          return result;
-        }),
-      );
-    const refresh = Effect.gen(function* () {
-      yield* inventory.refresh;
-      const cached = yield* inventory.getCached;
-      if (cached._tag === 'Pending')
-        return yield* Effect.die('Inventory remained pending after refresh.');
-      yield* reconcileCurrent(false);
-      return { generation: cached.generation };
-    });
-    return {
-      start: Effect.gen(function* () {
-        yield* inventory.refresh;
-        yield* Effect.forkIn(reconcileCurrent(true), scope);
+const make = Effect.gen(function* () {
+  const inventory = yield* HostInventory;
+  const config = yield* RuntimeConfig;
+  const directory = yield* DataDirectory;
+  // Composed here because D2 requires one projection of provisioning state, and
+  // the control-plane snapshot is the projection every startup surface already
+  // reads. The edge is one-way: provisioning knows nothing about harnesses,
+  // and nothing about harness launchability depends on it.
+  const editorProvisioning = yield* EditorProvisioning;
+  const scope = yield* Effect.scope;
+  const reconciliation = yield* Ref.make(initialReconciliation);
+  const lock = yield* Semaphore.make(1);
+  const reconcileCurrent = (forceBoot: boolean) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        const inventoryState = yield* inventory.getCached;
+        if (inventoryState._tag === 'Pending') return null;
+        const current = yield* config.get;
+        if (current.harnesses.status === 'invalid') return null;
+        const input = {
+          dataRoot: directory.paths.root,
+          policy: current.harnesses.policy,
+          policyRevision: current.harnesses.revision,
+          inventoryGeneration: inventoryState.generation,
+          inventory: inventoryState.inventory,
+        };
+        const fingerprint = docsReconciliationFingerprint(input);
+        const state = yield* Ref.get(reconciliation);
+        yield* Ref.set(reconciliation, { ...state, desiredFingerprint: fingerprint });
+        if (!forceBoot && state.bootReconciled && state.lastAppliedFingerprint === fingerprint)
+          return state.lastResult;
+        yield* Ref.update(reconciliation, (value) => ({
+          ...value,
+          runningFingerprint: fingerprint,
+        }));
+        const result = yield* reconcileDocs(input);
+        yield* Ref.update(reconciliation, (value) => ({
+          ...value,
+          runningFingerprint: null,
+          lastCompletedFingerprint: fingerprint,
+          lastAppliedFingerprint:
+            result.outcome === 'succeeded' ? fingerprint : value.lastAppliedFingerprint,
+          lastResult: result,
+          bootReconciled: true,
+        }));
+        return result;
       }),
-      snapshot: Effect.gen(function* () {
+    );
+  const refresh = Effect.gen(function* () {
+    yield* inventory.refresh;
+    const cached = yield* inventory.getCached;
+    if (cached._tag === 'Pending')
+      return yield* Effect.die('Inventory remained pending after refresh.');
+    yield* reconcileCurrent(false);
+    return { generation: cached.generation };
+  });
+  return HarnessControlPlane.of({
+    start: Effect.gen(function* () {
+      yield* inventory.refresh;
+      yield* Effect.forkIn(reconcileCurrent(true), scope);
+    }),
+    snapshot: Effect.gen(function* () {
+      const current = yield* config.get;
+      const cached = yield* inventory.getCached;
+      const rec = yield* Ref.get(reconciliation);
+      const editor = yield* editorProvisioning.state;
+      return snapshotOf(current.harnesses, cached, rec, editor);
+    }),
+    refreshInventory: refresh,
+    acceptPolicy: (input) =>
+      Effect.gen(function* () {
+        // Prove reconciliation can run before committing: ensure inventory is
+        // Ready, refreshing once if it is still pending. If it cannot become
+        // Ready, fail BEFORE any config write so policy and revision stay
+        // untouched. This keeps the endpoint honest under ADR 0002 — a request
+        // failure never leaves a committed policy the caller cannot see.
+        let cached = yield* inventory.getCached;
+        if (cached._tag === 'Pending') {
+          yield* inventory.refresh;
+          cached = yield* inventory.getCached;
+        }
+        if (cached._tag === 'Pending')
+          return yield* Effect.fail(new ControlPlaneNotReady({ reason: 'inventory_unavailable' }));
+
+        const accepted = yield* config.acceptHarnessPolicy({
+          expectedPolicyRevision: input.expectedPolicyRevision,
+          policy: input.policy as RuntimeHarnessPolicy,
+        });
+        // Inventory is Ready and the committed policy is valid, so reconciliation
+        // always yields a result. A null here would be a defect, never a
+        // post-commit ControlPlaneNotReady that could strand the caller's
+        // revision.
+        const result = yield* reconcileCurrent(false);
+        if (!result)
+          return yield* Effect.die(
+            new Error(
+              'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
+            ),
+          );
+        return {
+          acceptedPolicyRevision: accepted.harnesses.revision,
+          reconciledPolicyRevision: result.policyRevision,
+          inventoryGeneration: result.inventoryGeneration,
+          disposition:
+            accepted.harnesses.revision === result.policyRevision ? 'applied' : 'superseded',
+          reconciliation: result,
+        };
+      }),
+    assertCanCreateProcess: (harness) =>
+      Effect.gen(function* () {
         const current = yield* config.get;
         const cached = yield* inventory.getCached;
-        const rec = yield* Ref.get(reconciliation);
-        const editor = yield* editorProvisioning.state;
-        return snapshotOf(current.harnesses, cached, rec, editor);
+        const decision = harnessLaunchDecision(current.harnesses, cached, harness);
+        if (decision.status === 'blocked')
+          return yield* Effect.fail(
+            new HarnessLaunchBlocked({
+              harness,
+              reason: decision.reason,
+              diagnostic: decision.diagnostic,
+            }),
+          );
       }),
-      refreshInventory: refresh,
-      acceptPolicy: (input) =>
-        Effect.gen(function* () {
-          // Prove reconciliation can run before committing: ensure inventory is
-          // Ready, refreshing once if it is still pending. If it cannot become
-          // Ready, fail BEFORE any config write so policy and revision stay
-          // untouched. This keeps the endpoint honest under ADR 0002 — a request
-          // failure never leaves a committed policy the caller cannot see.
-          let cached = yield* inventory.getCached;
-          if (cached._tag === 'Pending') {
-            yield* inventory.refresh;
-            cached = yield* inventory.getCached;
-          }
-          if (cached._tag === 'Pending')
-            return yield* Effect.fail(
-              new ControlPlaneNotReady({ reason: 'inventory_unavailable' }),
-            );
+  });
+});
 
-          const accepted = yield* config.acceptHarnessPolicy({
-            expectedPolicyRevision: input.expectedPolicyRevision,
-            policy: input.policy as RuntimeHarnessPolicy,
-          });
-          // Inventory is Ready and the committed policy is valid, so reconciliation
-          // always yields a result. A null here would be a defect, never a
-          // post-commit ControlPlaneNotReady that could strand the caller's
-          // revision.
-          const result = yield* reconcileCurrent(false);
-          if (!result)
-            return yield* Effect.die(
-              new Error(
-                'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
-              ),
-            );
-          return {
-            acceptedPolicyRevision: accepted.harnesses.revision,
-            reconciledPolicyRevision: result.policyRevision,
-            inventoryGeneration: result.inventoryGeneration,
-            disposition:
-              accepted.harnesses.revision === result.policyRevision ? 'applied' : 'superseded',
-            reconciliation: result,
-          };
-        }),
-      assertCanCreateProcess: (harness) =>
-        Effect.gen(function* () {
-          const current = yield* config.get;
-          const cached = yield* inventory.getCached;
-          const decision = harnessLaunchDecision(current.harnesses, cached, harness);
-          if (decision.status === 'blocked')
-            return yield* Effect.fail(
-              new HarnessLaunchBlocked({
-                harness,
-                reason: decision.reason,
-                diagnostic: decision.diagnostic,
-              }),
-            );
-        }),
-    } satisfies HarnessControlPlaneService;
-  }),
-);
+export class HarnessControlPlane extends Context.Service<
+  HarnessControlPlane,
+  {
+    readonly start: Effect.Effect<void>;
+    readonly snapshot: Effect.Effect<ControlPlaneSnapshot>;
+    readonly refreshInventory: Effect.Effect<{ readonly generation: number }>;
+    readonly acceptPolicy: (input: {
+      readonly expectedPolicyRevision: string;
+      readonly policy: HarnessPolicy;
+    }) => Effect.Effect<
+      {
+        readonly acceptedPolicyRevision: string;
+        readonly reconciledPolicyRevision: string;
+        readonly inventoryGeneration: number;
+        readonly disposition: 'applied' | 'superseded';
+        readonly reconciliation: DocsReconciliationResult;
+      },
+      | RuntimeConfigError
+      | RuntimeConfigConflict
+      | RuntimeHarnessConfigInvalid
+      | ControlPlaneNotReady
+    >;
+    readonly assertCanCreateProcess: (
+      harness: AgentHarness,
+    ) => Effect.Effect<void, HarnessLaunchBlocked>;
+  }
+>()('isagi/runtime/harnesses/HarnessControlPlane') {
+  static readonly layer = Layer.effect(HarnessControlPlane, make);
+}
 function snapshotOf(
   policyState: RuntimeHarnessPolicyState,
   inventory: HostInventoryState,

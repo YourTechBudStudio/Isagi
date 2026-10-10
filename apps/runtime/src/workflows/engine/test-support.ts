@@ -14,28 +14,21 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
-import * as schema from '../../persistence/schema.js';
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-  type InternalRuntimeEventBusService,
-  type RuntimeEventBusService,
-} from '../../platform/events/index.js';
-import { Git, GitLive } from '../../platform/git/index.js';
+import { InternalRuntimeEventBus, type RuntimeEventBus } from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
 import {
   DatabaseError,
-  type RuntimeDatabaseService,
   type RuntimeDrizzleDatabase,
-} from '../../platform/persistence/database.js';
-import { migrationsDirectory } from '../../platform/persistence/migrations.js';
-import { DetachedWorktreeError } from '../../workspace/detached-worktree.js';
-import { checkNewDirectory } from '../../workspace/new-directory.js';
-import { WorkspaceError } from '../../workspace/service.js';
+  migrationsDirectory,
+  type RuntimeDatabase,
+} from '../../platform/persistence/index.js';
+import { DetachedWorktreeError, WorkspaceError } from '../../workspace/index.js';
+import { checkNewDirectory } from '../../workspace/testing.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
 import {
   makeWorkflowContentStore,
   type WorkflowContentStoreInstance,
-  type WorkflowContentStoreService,
+  type WorkflowContentStore,
 } from '../store/content-store.js';
 import type { Db } from '../store/rows.js';
 import {
@@ -45,7 +38,7 @@ import {
   type LoadedWorkflowArtifact,
   type PublishedWorkflowArtifact,
 } from '../structure/loader.js';
-import type { DiscoveredWorkflowEntry, WorkflowRegistryService } from '../structure/registry.js';
+import type { DiscoveredWorkflowEntry, WorkflowRegistry } from '../structure/registry.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import type { TurnEdge } from '../waits/latest-turn.js';
 import type {
@@ -78,7 +71,7 @@ export interface EngineHarness {
   readonly headless: FakeHeadless;
   /** The seeded worktree's checkout, where operation and checkpoint nodes work. */
   readonly worktreePath: string;
-  readonly internalEvents: InternalRuntimeEventBusService;
+  readonly internalEvents: InternalRuntimeEventBus['Service'];
   /** Makes the next write with this operation name fail and roll back, as a full disk would. */
   readonly failNextWrite: (operation: string) => void;
   /**
@@ -110,17 +103,17 @@ export interface EngineHarness {
  * `harness.registry` is then unused.
  */
 export async function makeEngineHarness(
-  options: { readonly registry?: WorkflowRegistryService } = {},
+  options: { readonly registry?: WorkflowRegistry['Service'] } = {},
 ): Promise<EngineHarness> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-workflow-engine-')));
   const client = new BetterSqlite(join(root, 'isagi.db'));
   client.pragma('journal_mode = WAL');
   client.pragma('foreign_keys = ON');
-  const drizzled = drizzle(client, { schema }) as RuntimeDrizzleDatabase;
+  const drizzled: RuntimeDrizzleDatabase = drizzle(client);
   migrate(drizzled, { migrationsFolder: migrationsDirectory() });
   const failingWrites = new Set<string>();
   const beforeWrites = new Map<string, () => Promise<void>>();
-  const database: RuntimeDatabaseService = {
+  const database: RuntimeDatabase['Service'] = {
     use: (operation, run) =>
       Effect.try({
         try: () => run(drizzled),
@@ -149,15 +142,15 @@ export async function makeEngineHarness(
   mkdirSync(worktreePath, { recursive: true });
   const busScope = Effect.runSync(Scope.make());
   const busContext = await Effect.runPromise(
-    Layer.buildWithScope(InternalRuntimeEventBusLive, busScope),
+    Layer.buildWithScope(InternalRuntimeEventBus.layer, busScope),
   );
-  const internalEvents: InternalRuntimeEventBusService = Context.get(
+  const internalEvents: InternalRuntimeEventBus['Service'] = Context.get(
     busContext,
     InternalRuntimeEventBus,
   );
 
   const events: RuntimeEvent[] = [];
-  const publicEvents: RuntimeEventBusService = {
+  const publicEvents: RuntimeEventBus['Service'] = {
     publish: (event) => Effect.sync(() => void events.push(event)),
     subscribe: Effect.die('Tests read published events from the array.'),
   };
@@ -267,11 +260,13 @@ export class FakeClock {
   }
 }
 
+type WorkflowRegistryShape = WorkflowRegistry['Service'];
+
 /**
  * Discovery in memory. `publish` registers a new build of a workflow and makes it the latest one,
  * which is what Resume and Retry reload; earlier builds stay loadable by hash.
  */
-export class FakeRegistry implements WorkflowRegistryService {
+export class FakeRegistry implements WorkflowRegistryShape {
   private readonly latest = new Map<string, PublishedWorkflowArtifact>();
   private readonly byHash = new Map<string, LoadedWorkflowArtifact>();
   private builds = 0;
@@ -290,7 +285,7 @@ export class FakeRegistry implements WorkflowRegistryService {
     return hash;
   }
 
-  discover: WorkflowRegistryService['discover'] = () =>
+  discover: WorkflowRegistry['Service']['discover'] = () =>
     Effect.sync(() => {
       const entries: DiscoveredWorkflowEntry[] = [...this.latest.entries()].map(
         ([workflowKey, build]) => ({
@@ -313,7 +308,7 @@ export class FakeRegistry implements WorkflowRegistryService {
       return { entries, find: (key) => entries.find((entry) => entry.workflowKey === key) };
     });
 
-  loadPinned: WorkflowRegistryService['loadPinned'] = (artifactHash, workflowKey) => {
+  loadPinned: WorkflowRegistry['Service']['loadPinned'] = (artifactHash, workflowKey) => {
     const artifact = this.byHash.get(artifactHash);
     return artifact
       ? Effect.succeed(artifact)
@@ -435,12 +430,12 @@ export class FakePlaces {
    * over these rows; a detached worktree is a real `git worktree add --detach` from the seeded
    * worktree, registered here instead of by reconciliation.
    */
-  checkpointsPort(content: WorkflowContentStoreService): CheckpointsPort {
+  checkpointsPort(content: WorkflowContentStore['Service']): CheckpointsPort {
     const repository = {
       listProjects: Effect.sync(() => [{ rootPath: this.root }] as never),
       listWorktrees: Effect.sync(() => [...this.worktrees.values()] as never),
     };
-    const git = Effect.runSync(Effect.provide(Git, GitLive));
+    const git = Effect.runSync(Effect.provide(Git, Git.layer));
     const checkNew = (path: string) => checkNewDirectory(repository, path);
     return makeCheckpointsPort({
       git,
@@ -573,7 +568,7 @@ export class FakePlaces {
             return this.setup();
           }),
       } as PlacesPort['workspaceService'],
-      surfaceRepository: {
+      surfaceReads: {
         findSurface: (id) => Effect.sync(() => (this.surfaces.get(id) ?? null) as never),
         listWorkspaceSurfaceMetadata: Effect.sync(() => [...this.surfaces.values()] as never),
       },
@@ -634,7 +629,7 @@ export class FakeAgents {
 
   constructor(
     private readonly clock: FakeClock,
-    private readonly bus: InternalRuntimeEventBusService,
+    private readonly bus: InternalRuntimeEventBus['Service'],
   ) {}
 
   /** An agent session that already exists, such as the one a workflow is launched from. */
@@ -803,7 +798,7 @@ export class FakeHeadless {
   private readonly outputs = new Map<number, string>();
   private nextProcess = 1;
 
-  constructor(private readonly bus: InternalRuntimeEventBusService) {}
+  constructor(private readonly bus: InternalRuntimeEventBus['Service']) {}
 
   port(): HeadlessPort {
     return {

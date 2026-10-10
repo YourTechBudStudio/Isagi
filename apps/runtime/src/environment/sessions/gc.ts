@@ -1,22 +1,12 @@
 import { Cause, Context, Effect, Layer } from 'effect';
 
-import { diagnosticPhase } from '../../platform/diagnostics/phase.js';
-import {
-  InternalRuntimeEventBus,
-  type InternalRuntimeEventBusService,
-} from '../../platform/events/index.js';
+import { AgentSessionArtifacts } from '../../harnesses/index.js';
+import { diagnosticPhase } from '../../platform/diagnostics/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import { SessionLifecycle, type SessionLifecycleService } from '../../session-lifecycle/index.js';
-import {
-  AgentSessionArtifacts,
-  AgentSessionRepository,
-  type AgentSessionArtifactsService,
-  type AgentSessionRepositoryService,
-} from '../agent-sessions/index.js';
-import {
-  TerminalSessionRepository,
-  type TerminalSessionRepositoryService,
-} from '../terminal-sessions/index.js';
+import { AgentSessionRepository } from '../agent-sessions/repository.js';
+import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
+import { SessionLifecycle } from './lifecycle.js';
 
 const orphanGraceMs = 60_000;
 const orphanGcIntervalMs = 60_000;
@@ -25,18 +15,12 @@ const orphanGcIntervalMs = 60_000;
 // has to absorb the mark/list race and a harness that outlives its row.
 const orphanAgentFolderGraceMs = 60 * 60_000;
 
-export interface SessionGcService {
-  readonly collectOrphans: Effect.Effect<void, DatabaseError>;
-}
-
-export const SessionGc = Context.Service<SessionGcService>('isagi/SessionGc');
-
 export interface SessionGcDependencies {
-  readonly agents: AgentSessionRepositoryService;
-  readonly terminals: TerminalSessionRepositoryService;
-  readonly lifecycle: SessionLifecycleService;
-  readonly events: InternalRuntimeEventBusService;
-  readonly artifacts: AgentSessionArtifactsService;
+  readonly agents: AgentSessionRepository['Service'];
+  readonly terminals: TerminalSessionRepository['Service'];
+  readonly lifecycle: SessionLifecycle['Service'];
+  readonly events: InternalRuntimeEventBus['Service'];
+  readonly artifacts: AgentSessionArtifacts['Service'];
 }
 
 /**
@@ -124,25 +108,31 @@ export function makeSessionGc({
   return { collectOrphans, tick };
 }
 
-export const SessionGcLive = Layer.effect(
+const make = Effect.gen(function* () {
+  const gc = makeSessionGc({
+    agents: yield* AgentSessionRepository,
+    terminals: yield* TerminalSessionRepository,
+    lifecycle: yield* SessionLifecycle,
+    events: yield* InternalRuntimeEventBus,
+    artifacts: yield* AgentSessionArtifacts,
+  });
+  const service = SessionGc.of({ collectOrphans: gc.collectOrphans });
+
+  const timer = setInterval(() => {
+    void Effect.runPromise(gc.tick);
+  }, orphanGcIntervalMs);
+  timer.unref();
+
+  return yield* Effect.acquireRelease(Effect.succeed(service), () =>
+    Effect.sync(() => clearInterval(timer)),
+  );
+});
+
+export class SessionGc extends Context.Service<
   SessionGc,
-  Effect.gen(function* () {
-    const gc = makeSessionGc({
-      agents: yield* AgentSessionRepository,
-      terminals: yield* TerminalSessionRepository,
-      lifecycle: yield* SessionLifecycle,
-      events: yield* InternalRuntimeEventBus,
-      artifacts: yield* AgentSessionArtifacts,
-    });
-    const service = { collectOrphans: gc.collectOrphans } satisfies SessionGcService;
-
-    const timer = setInterval(() => {
-      void Effect.runPromise(gc.tick);
-    }, orphanGcIntervalMs);
-    timer.unref();
-
-    return yield* Effect.acquireRelease(Effect.succeed(service), () =>
-      Effect.sync(() => clearInterval(timer)),
-    );
-  }),
-);
+  {
+    readonly collectOrphans: Effect.Effect<void, DatabaseError>;
+  }
+>()('isagi/runtime/environment/SessionGc') {
+  static readonly layer = Layer.effect(SessionGc, make);
+}

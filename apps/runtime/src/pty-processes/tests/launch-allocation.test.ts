@@ -11,13 +11,9 @@ import {
   publishOnlyRecordingEventBus,
   type RecordingEventBus,
 } from '../../platform/events/testing.js';
-import {
-  DatabaseError,
-  DataDirectory,
-  RuntimeDatabaseLive,
-} from '../../platform/persistence/index.js';
+import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from '../repository.js';
+import { PtyRepository } from '../repository.js';
 import { reconcilePersistedProcesses } from '../service.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from '../service/launch.js';
@@ -66,13 +62,13 @@ function catalogWith(nodePty: PtyBackendShape) {
 }
 
 interface Harness {
-  readonly repository: PtyRepositoryService;
+  readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly reservations: PtyReservations;
   readonly sessionsPath: string;
   readonly dependencies: (
     backend: PtyBackendShape,
-    repository?: PtyRepositoryService,
+    repository?: PtyRepository['Service'],
   ) => PtyLaunchDependencies;
 }
 
@@ -81,11 +77,11 @@ interface Harness {
 function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never>) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-allocation-'));
   const paths = makeTestDataDirectory(dataRoot);
-  // `PtyServiceLive` does this at startup; these tests drive the launch module
+  // `PtyService.layer` does this at startup; these tests drive the launch module
   // directly, so the log directory has to exist here too.
   mkdirSync(paths.paths.sessionsPath, { recursive: true });
   const directory = Layer.succeed(DataDirectory, paths);
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -115,7 +111,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             cliAccess: noCliAccess,
           }),
         });
-      }).pipe(Effect.provide(PtyRepositoryLive.pipe(Layer.provide(database)))),
+      }).pipe(Effect.provide(PtyRepository.layer.pipe(Layer.provide(database)))),
     ),
   ).finally(() => {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -128,7 +124,7 @@ test('the launch reservation is visible in the same write as the row', async () 
       // The proof has to happen inside the repository's own write section: by
       // the time `allocateLaunch` returns, an observer could already have run.
       let reservedAtInsert: boolean | null = null;
-      const observing: PtyRepositoryService = {
+      const observing: PtyRepository['Service'] = {
         ...harness.repository,
         createProcessMetadata: (input) =>
           harness.repository.createProcessMetadata({
@@ -160,7 +156,7 @@ test('an acquisition fault after the hook ran strands no reservation', async () 
       // Models a commit-level fault: the hook has already run, so only the
       // closure-captured compensation can release the entry.
       let hooked: number | null = null;
-      const failing: PtyRepositoryService = {
+      const failing: PtyRepository['Service'] = {
         ...harness.repository,
         createProcessMetadata: (input) =>
           Effect.sync(() => {
@@ -395,7 +391,7 @@ test('a hung spawn keeps its reservation and stays out of the poller', async () 
 test('a pre-spawn persistence failure folds and still returns metadata', async () => {
   await withHarness((harness) =>
     Effect.gen(function* () {
-      const failing: PtyRepositoryService = {
+      const failing: PtyRepository['Service'] = {
         ...harness.repository,
         updateBackendMetadata: () =>
           Effect.fail(
@@ -431,7 +427,7 @@ test('a spawn failure whose fold write also fails still returns metadata', async
     Effect.gen(function* () {
       // Both faults absorbed: the row stays `starting` and is classified by the
       // poller, which is the documented second-fault path.
-      const failing: PtyRepositoryService = {
+      const failing: PtyRepository['Service'] = {
         ...harness.repository,
         transitionProcess: () =>
           Effect.fail(
@@ -479,7 +475,7 @@ test('a post-launch persistence failure returns metadata without killing', async
             return { terminated: true };
           }),
       });
-      const failing: PtyRepositoryService = {
+      const failing: PtyRepository['Service'] = {
         ...harness.repository,
         updateBackendRef: () =>
           Effect.fail(
@@ -530,7 +526,7 @@ test('a failed final metadata read still returns a launch result without killing
       // Armed only once the `running` transition has landed, so the fault is
       // the closing reread alone and not the persistence before it.
       let readsFail = false;
-      const failing: PtyRepositoryService = {
+      const failing: PtyRepository['Service'] = {
         ...harness.repository,
         transitionProcess: (input) =>
           harness.repository.transitionProcess(input).pipe(

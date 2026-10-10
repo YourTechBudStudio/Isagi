@@ -17,6 +17,7 @@ import {
   createFixture,
   fakePtyProcessRow,
   runCommandServiceEffect,
+  systemError,
   writeConfig,
   type CommandRepositoryOptions,
 } from './test-support.js';
@@ -607,7 +608,7 @@ commands:
     name: 'an allocation failure',
     options: {
       config: portsConfig,
-      portProbe: commandPortProbe({ assignFailure: 'System error EADDRINUSE' }).service,
+      portProbe: commandPortProbe({ assignFailure: systemError('EADDRINUSE') }).service,
     },
   },
   {
@@ -677,7 +678,7 @@ test('a post-marker failure keeps the new incarnation snapshot, not the previous
 });
 
 test('an allocation failure follows the ordinary failed-run shape', async () => {
-  const probe = commandPortProbe({ assignFailure: 'System error EADDRINUSE' });
+  const probe = commandPortProbe({ assignFailure: systemError('EADDRINUSE') });
   const result = await launch({
     config: portsConfig,
     portProbe: probe.service,

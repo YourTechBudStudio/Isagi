@@ -1,37 +1,24 @@
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
-import {
-  EditorContextService,
-  type EditorContextServiceShape,
-} from '../../editor/contexts/index.js';
+import { EditorContextService } from '../../editor/index.js';
+import { AgentSessionArtifacts, HarnessAdapterRegistry } from '../../harnesses/index.js';
 import { AllowAllHarnessControlPlaneLayer } from '../../harnesses/testing.js';
-import { ptyProcesses } from '../../persistence/schema.js';
-import { InternalRuntimeEventBusLive } from '../../platform/events/index.js';
-import { EntityLockLive } from '../../platform/locks/entity-lock.js';
-import {
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../../platform/persistence/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { EntityLock } from '../../platform/locks/index.js';
+import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
-import type { LaunchPtyProcessInput } from '../../pty-processes/types.js';
-import { SessionLifecycleLive } from '../../session-lifecycle/index.js';
-import {
-  AgentSessionArtifactsLive,
-  AgentSessionRepositoryLive,
-  AgentSessionServiceLive,
-  HarnessAdapterRegistry,
-  type HarnessAdapterRegistryService,
-} from '../agent-sessions/index.js';
-import { SurfaceRepositoryLive, SurfaceServiceLive } from '../index.js';
+import { PtyService } from '../../pty-processes/index.js';
+import type { LaunchPtyProcessInput } from '../../pty-processes/index.js';
+import { ptyProcesses } from '../../pty-processes/tables.js';
+import { fakeTerminateMany } from '../../pty-processes/testing.js';
+import { AgentSessionRepository } from '../agent-sessions/repository.js';
+import { AgentSessionService } from '../agent-sessions/service.js';
+import { SurfaceRepository, SurfaceService } from '../index.js';
+import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { StartupSessionRestoreLayer } from '../sessions/restore.js';
-import {
-  TerminalSessionRepositoryLive,
-  TerminalSessionServiceLive,
-} from '../terminal-sessions/index.js';
+import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
+import { TerminalSessionService } from '../terminal-sessions/service.js';
 
 /**
  * The real session world — one database, real repositories, real agent and
@@ -81,21 +68,21 @@ export interface SessionWorldOptions {
  */
 export function sessionWorldLayers(dataRoot: string, options: SessionWorldOptions) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directory));
-  const events = InternalRuntimeEventBusLive;
-  const entityLock = EntityLockLive;
-  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(entityLock));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directory));
+  const events = InternalRuntimeEventBus.layer;
+  const entityLock = EntityLock.layer;
+  const sessionLifecycle = SessionLifecycle.layer.pipe(Layer.provide(entityLock));
 
-  const surfaceRepository = SurfaceRepositoryLive.pipe(
+  const surfaceRepository = SurfaceRepository.layer.pipe(
     Layer.provide(database),
     Layer.provide(artifacts),
   );
-  const agentRepository = AgentSessionRepositoryLive.pipe(
+  const agentRepository = AgentSessionRepository.layer.pipe(
     Layer.provide(database),
     Layer.provide(artifacts),
   );
-  const terminalRepository = TerminalSessionRepositoryLive.pipe(Layer.provide(database));
+  const terminalRepository = TerminalSessionRepository.layer.pipe(Layer.provide(database));
 
   const pty = Layer.effect(
     PtyService,
@@ -107,7 +94,7 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
     recordingHarnessRegistry(options.harnessLaunches),
   );
 
-  const agentService = AgentSessionServiceLive.pipe(
+  const agentService = AgentSessionService.layer.pipe(
     Layer.provide(AllowAllHarnessControlPlaneLayer),
     Layer.provide(agentRepository),
     Layer.provide(pty),
@@ -116,7 +103,7 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
     Layer.provide(events),
   );
 
-  const terminalService = TerminalSessionServiceLive.pipe(
+  const terminalService = TerminalSessionService.layer.pipe(
     Layer.provide(terminalRepository),
     Layer.provide(pty),
     Layer.provide(sessionLifecycle),
@@ -140,8 +127,8 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
 /** Database and artifacts only, for seeding or reading rows outside a service. */
 export function sessionDataLayer(dataRoot: string) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directory));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directory));
   return Layer.mergeAll(database, artifacts);
 }
 
@@ -165,14 +152,14 @@ export function realRestoreLayer(dataRoot: string, options: SessionWorldOptions)
  * those rows by hand would write the path the test already believed and prove
  * nothing about propagation.
  *
- * The editor service dies rather than being wired: `SurfaceServiceLive` requires
+ * The editor service dies rather than being wired: `SurfaceService.layer` requires
  * it for `openEditor`, which no caller of this layer uses, and a real editor
  * would drag provisioning, port probing, and a socket directory into a session
  * test. A death names the mistake if that assumption ever stops holding.
  */
 export function realSessionCreationLayer(dataRoot: string, options: SessionWorldOptions) {
   const world = sessionWorldLayers(dataRoot, options);
-  const surfaceService = SurfaceServiceLive.pipe(
+  const surfaceService = SurfaceService.layer.pipe(
     Layer.provide(world.surfaceRepository),
     Layer.provide(world.agentService),
     Layer.provide(world.terminalService),
@@ -200,9 +187,9 @@ export function realSessionCreationLayer(dataRoot: string, options: SessionWorld
  * claim about a real PID, a real shell, or a real harness.
  */
 export function recordingPtyService(
-  database: RuntimeDatabaseService,
+  database: RuntimeDatabase['Service'],
   options: SessionWorldOptions,
-): PtyServiceShape {
+): PtyService['Service'] {
   const allocate = options.allocatePtyProcessId;
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
@@ -265,11 +252,13 @@ export function recordingPtyService(
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
     terminate: () => Effect.succeed('terminated_live' as const),
+    terminateMany: fakeTerminateMany(() => Effect.succeed('terminated_live' as const)),
+    findProcess: () => Effect.die('findProcess is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
-  } satisfies PtyServiceShape;
+  } satisfies PtyService['Service'];
 }
 
 /**
@@ -279,7 +268,7 @@ export function recordingPtyService(
  */
 export function recordingHarnessRegistry(
   launches: HarnessLaunchRecord[],
-): HarnessAdapterRegistryService {
+): HarnessAdapterRegistry['Service'] {
   return {
     buildLaunch: (input) =>
       Effect.sync(() => {
@@ -295,10 +284,10 @@ export function recordingHarnessRegistry(
         return { command: 'pi', args, cwd: input.cwd };
       }),
     buildHeadlessLaunch: () => Effect.die('headless launch is not used'),
-  } satisfies HarnessAdapterRegistryService;
+  } satisfies HarnessAdapterRegistry['Service'];
 }
 
-const dyingEditorContextService: EditorContextServiceShape = {
+const dyingEditorContextService: EditorContextService['Service'] = {
   requireAvailable: Effect.die('editor requireAvailable is not used by session tests'),
   findForWorktree: () => Effect.die('editor findForWorktree is not used by session tests'),
   createForWorktree: () => Effect.die('editor createForWorktree is not used by session tests'),

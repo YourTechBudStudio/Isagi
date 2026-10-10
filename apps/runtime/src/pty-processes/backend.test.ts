@@ -3,14 +3,11 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import {
-  defaultRuntimeConfig,
-  RuntimeConfig,
-  type RuntimeConfigService,
-} from '../runtime-config/index.js';
+import { RuntimeConfig } from '../runtime-config/index.js';
+import { defaultRuntimeConfig } from '../runtime-config/testing.js';
 import { NodePtyBackend } from './adapters/node-pty.js';
 import { TmuxBackend } from './adapters/tmux.js';
-import { PtyBackendCatalog, PtyBackendCatalogLive } from './backend.js';
+import { PtyBackendCatalog } from './backend.js';
 import type { PtyBackendShape } from './index.js';
 
 test('PTY backend catalog defaults its launch preference to configured node-pty even when tmux is available', async () => {
@@ -110,11 +107,11 @@ function builtCatalog(
   const service = {
     get: Effect.succeed(value),
     acceptHarnessPolicy: () => Effect.die('acceptHarnessPolicy is not used'),
-  } satisfies RuntimeConfigService;
+  } satisfies RuntimeConfig['Service'];
   return Effect.gen(function* () {
     return yield* PtyBackendCatalog;
   }).pipe(
-    Effect.provide(PtyBackendCatalogLive),
+    Effect.provide(PtyBackendCatalog.layer),
     Effect.provideService(RuntimeConfig, service),
     Effect.provide(Layer.succeed(NodePtyBackend, fakeBackend('node_pty', true))),
     Effect.provide(Layer.succeed(TmuxBackend, fakeBackend('tmux', options.tmuxAvailable))),

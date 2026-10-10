@@ -10,7 +10,7 @@ import { terminalSettingsDefaults } from '@isagi/contracts';
 
 import { DataDirectory, type IsagiDataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { RuntimeConfig, RuntimeConfigError, RuntimeConfigLive } from './service.js';
+import { RuntimeConfig, RuntimeConfigError } from './service.js';
 
 test('runtime config creates config.yaml with node-pty as the default PTY backend', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-runtime-config-'));
@@ -127,7 +127,7 @@ function readConfig(root: string) {
     const current = yield* config.get;
     return { pty: current.pty };
   }).pipe(
-    Effect.provide(RuntimeConfigLive),
+    Effect.provide(RuntimeConfig.layer),
     Effect.provideService(DataDirectory, { paths: paths(root) }),
   );
 }
@@ -137,7 +137,7 @@ function readFullConfig(root: string) {
     const config = yield* RuntimeConfig;
     return yield* config.get;
   }).pipe(
-    Effect.provide(RuntimeConfigLive),
+    Effect.provide(RuntimeConfig.layer),
     Effect.provideService(DataDirectory, { paths: paths(root) }),
   );
 }

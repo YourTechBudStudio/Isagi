@@ -11,28 +11,17 @@ import {
   type PtyStreamOutputMessageSet,
 } from '@isagi/contracts';
 
-import { HarnessAdapterError } from '../../harnesses/types.js';
-import { EntityLockLive } from '../../platform/locks/entity-lock.js';
-import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
-import type { PtyAttachment } from '../../pty-processes/service.js';
-import {
-  SessionLifecycle,
-  SessionLifecycleLive,
-  type AttachTokenRecord,
-  type SessionLifecycleService,
-} from '../../session-lifecycle/index.js';
-import {
-  AgentSessionError,
-  AgentSessionService,
-  type AgentSessionServiceShape,
-} from '../agent-sessions/index.js';
-import {
-  TerminalSessionService,
-  type TerminalSessionServiceShape,
-} from '../terminal-sessions/index.js';
+import { HarnessAdapterError } from '../../harnesses/index.js';
+import { EntityLock } from '../../platform/locks/index.js';
+import { PtyService } from '../../pty-processes/index.js';
+import type { PtyAttachment } from '../../pty-processes/testing.js';
+import { fakeTerminateMany } from '../../pty-processes/testing.js';
+import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
+import { TerminalSessionService } from '../terminal-sessions/service.js';
 import { registerPtyApi } from './attach-route.js';
+import { SessionLifecycle, type AttachTokenRecord } from './lifecycle.js';
 
-const sessionLifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
+const sessionLifecycleLayer = SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer));
 
 type OutputSender = (message: PtyStreamOutputMessageSet) => void;
 
@@ -420,8 +409,8 @@ test('PTY websocket API supersede detaches the displaced viewer before the repla
 });
 
 function fakeAgentSessionService(
-  overrides: Partial<AgentSessionServiceShape> = {},
-): AgentSessionServiceShape {
+  overrides: Partial<AgentSessionService['Service']> = {},
+): AgentSessionService['Service'] {
   return {
     startFresh: () => Effect.die('startFresh is not used'),
     get: () => Effect.die('get is not used'),
@@ -429,16 +418,16 @@ function fakeAgentSessionService(
     activePtyProcessId: () => Effect.succeed(20),
     stopUnlessPlaced: () => Effect.die('stopUnlessPlaced is not used'),
     ...overrides,
-  } satisfies AgentSessionServiceShape;
+  } satisfies AgentSessionService['Service'];
 }
 
-function fakeTerminalSessionService(): TerminalSessionServiceShape {
+function fakeTerminalSessionService(): TerminalSessionService['Service'] {
   return {
     startFresh: () => Effect.die('startFresh is not used'),
     get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.die('terminal attach is not used'),
     activePtyProcessId: () => Effect.die('terminal attach is not used'),
-  } satisfies TerminalSessionServiceShape;
+  } satisfies TerminalSessionService['Service'];
 }
 
 function fakePtyService(input: {
@@ -454,7 +443,7 @@ function fakePtyService(input: {
   readonly resize?:
     | ((size: { readonly cols: number; readonly rows: number }) => Effect.Effect<void>)
     | undefined;
-}): PtyServiceShape {
+}): PtyService['Service'] {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     readLogTail: () => Effect.die('readLogTail is not used'),
@@ -479,17 +468,19 @@ function fakePtyService(input: {
     resize: ({ cols, rows }) => input.resize?.({ cols, rows }) ?? Effect.void,
     kill: () => Effect.succeed('terminated_live' as const),
     terminate: () => Effect.succeed('terminated_live' as const),
+    terminateMany: fakeTerminateMany(() => Effect.succeed('terminated_live' as const)),
+    findProcess: () => Effect.die('findProcess is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
-  } satisfies PtyServiceShape;
+  } satisfies PtyService['Service'];
 }
 
 function issueAgentAttachToken(
   runtime: {
     readonly runPromise: (
-      effect: Effect.Effect<AttachTokenRecord, never, SessionLifecycleService>,
+      effect: Effect.Effect<AttachTokenRecord, never, SessionLifecycle>,
     ) => Promise<AttachTokenRecord>;
   },
   sessionId: number,
@@ -612,5 +603,5 @@ function fakeRunningProcess() {
     updatedAt: '2026-06-15T00:00:00.000Z',
     exitedAt: null,
     lastSeenAt: null,
-  } satisfies Parameters<PtyServiceShape['replay']>[0]['session'];
+  } satisfies Parameters<PtyService['Service']['replay']>[0]['session'];
 }

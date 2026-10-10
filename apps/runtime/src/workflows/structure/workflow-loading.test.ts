@@ -24,16 +24,15 @@ import { Effect, Result, Layer, Ref } from 'effect';
 
 import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { defaultRuntimeConfig, RuntimeConfig } from '../../runtime-config/index.js';
+import { RuntimeConfig } from '../../runtime-config/index.js';
+import { defaultRuntimeConfig } from '../../runtime-config/testing.js';
 import { scanWorkflowSource } from './discovery.js';
 import { WorkflowLoadError } from './loader.js';
 import {
   createFilesystemWorkflowRegistry,
   WorkflowRegistry,
   WorkflowRegistryError,
-  WorkflowRegistryLive,
   type WorkflowRegistryContext,
-  type WorkflowRegistryService,
 } from './registry.js';
 
 test('live registry captures configured sources once at layer construction', async () => {
@@ -49,7 +48,7 @@ test('live registry captures configured sources once at layer construction', asy
         workflows: { additionalDirectories: [initial] },
       }),
     );
-    const registryLayer = WorkflowRegistryLive.pipe(
+    const registryLayer = WorkflowRegistry.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, { paths: dataDirectoryPaths(root) })),
       Layer.provide(
         Layer.succeed(RuntimeConfig, {
@@ -611,7 +610,7 @@ async function reason(effect: Effect.Effect<unknown, unknown>) {
 }
 
 function discoverAndLoad(
-  registry: WorkflowRegistryService,
+  registry: WorkflowRegistry['Service'],
   workflowKey: string,
   context?: WorkflowRegistryContext,
 ) {

@@ -2,64 +2,54 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// The one build-asset root. The build copies repository-owned files into it
+// (`scripts/sync-runtime-assets.mjs`); each owning module declares its own asset
+// constants with the helpers below, so this area names no domain asset.
+//
+// Assets ship inside the runtime, so a missing or unreadable one is a build
+// defect rather than an operational condition: owners read them at module load
+// and let a failure throw during import.
+
 const runtimeAssetRoot = findRuntimeAssetRoot();
 
 const manifest = readJsonAsset('manifest.json') as {
   readonly runtimePackageVersion?: unknown;
 };
 
+/** The runtime package's version, recorded in the asset manifest at build time. */
 export const runtimePackageVersion =
   typeof manifest.runtimePackageVersion === 'string' ? manifest.runtimePackageVersion : '0.0.0';
 
-export const configSchemaReferenceSources = {
-  'runtime-config.schema.ts': readTextAsset('config-schemas/runtime-config.schema.ts'),
-  'project-config.schema.ts': readTextAsset('config-schemas/project-config.schema.ts'),
-} as const;
+/** The absolute path of an asset file, asserting that it exists. */
+export function requireAssetFile(relativePath: string) {
+  const path = resolve(runtimeAssetRoot, relativePath);
+  if (!existsSync(path)) {
+    throw new Error(`Missing runtime asset ${relativePath} under ${runtimeAssetRoot}.`);
+  }
+  return path;
+}
+
+/** An asset file's text. */
+export function readTextAsset(relativePath: string) {
+  return readFileSync(resolve(runtimeAssetRoot, relativePath), 'utf8');
+}
 
 /**
- * The Code Server release pin, as shipped bytes. Read at module load because a
- * malformed or missing manifest is a build defect rather than an operational
- * condition — see `editor-provisioning/manifest.ts`.
+ * Every file under an asset directory, as text keyed by its POSIX-relative path
+ * (e.g. `src/index.ts`), in sorted path order. `directory` is the absolute path
+ * that was read, for the owner's own error messages.
  */
-export const codeServerManifestSource = readTextAsset('code-server.manifest.json');
-
-/**
- * The bundled `isagi` CLI, which the runtime's shim runs. Asserted at load, like every other asset:
- * a runtime built without it is a build defect, and terminals would silently lack the CLI.
- */
-export const cliEntryPath = requireAssetFile('cli/isagi.mjs');
-
-export const isagiDocsContentSources = {
-  'SKILL.md': readTextAsset('isagi-docs/SKILL.md'),
-  'config-global.md': readTextAsset('isagi-docs/config-global.md'),
-  'config-project.md': readTextAsset('isagi-docs/config-project.md'),
-  'workflows.md': readTextAsset('isagi-docs/workflows.md'),
-  'workflow-environments.md': readTextAsset('isagi-docs/workflow-environments.md'),
-  'workflow-agents.md': readTextAsset('isagi-docs/workflow-agents.md'),
-  'workflow-recovery.md': readTextAsset('isagi-docs/workflow-recovery.md'),
-  'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
-  'cli-investigate-runs.md': readTextAsset('isagi-docs/cli-investigate-runs.md'),
-  'cli-reconstruct-and-launch.md': readTextAsset('isagi-docs/cli-reconstruct-and-launch.md'),
-} as const;
-
-/**
- * The canonical workflow scaffold, copied verbatim from the verifier fixture at build time and
- * keyed by POSIX-relative path (e.g. `src/index.ts`). The shipped skill emits these as reference
- * files, and an anti-drift test asserts the emitted bytes equal these source bytes.
- */
-export const workflowScaffoldSources: ReadonlyMap<string, string> = readWorkflowScaffoldSources();
-
-function readWorkflowScaffoldSources(): ReadonlyMap<string, string> {
-  const scaffoldRoot = resolve(runtimeAssetRoot, 'minimal-workflow');
+export function readTextAssetTree(relativeDirectory: string): {
+  readonly directory: string;
+  readonly files: ReadonlyMap<string, string>;
+} {
+  const directory = resolve(runtimeAssetRoot, relativeDirectory);
   const files = new Map<string, string>();
-  for (const absolute of walkFiles(scaffoldRoot)) {
-    const key = relative(scaffoldRoot, absolute).split(sep).join('/');
+  for (const absolute of walkFiles(directory)) {
+    const key = relative(directory, absolute).split(sep).join('/');
     files.set(key, readFileSync(absolute, 'utf8'));
   }
-  if (files.size === 0) {
-    throw new Error(`No workflow scaffold assets found under ${scaffoldRoot}.`);
-  }
-  return files;
+  return { directory, files };
 }
 
 function walkFiles(root: string): string[] {
@@ -84,18 +74,6 @@ function findRuntimeAssetRoot() {
     throw new Error(`Could not find runtime assets. Checked: ${candidates.join(', ')}`);
   }
   return root;
-}
-
-function requireAssetFile(relativePath: string) {
-  const path = resolve(runtimeAssetRoot, relativePath);
-  if (!existsSync(path)) {
-    throw new Error(`Missing runtime asset ${relativePath} under ${runtimeAssetRoot}.`);
-  }
-  return path;
-}
-
-function readTextAsset(relativePath: string) {
-  return readFileSync(resolve(runtimeAssetRoot, relativePath), 'utf8');
 }
 
 function readJsonAsset(relativePath: string): unknown {

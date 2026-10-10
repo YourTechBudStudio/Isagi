@@ -1,11 +1,11 @@
 import { Effect } from 'effect';
 
-import type { AgentSessionArtifactsService } from './ledger.js';
+import type { AgentSessionArtifacts } from './ledger.js';
 
 export function harnessEnvForProcess(input: {
   readonly agentSessionId: number;
   readonly ptyProcessId: number;
-  readonly artifacts: AgentSessionArtifactsService;
+  readonly artifacts: AgentSessionArtifacts['Service'];
   readonly extraEnv?: NodeJS.ProcessEnv | undefined;
 }) {
   return Effect.gen(function* () {

@@ -25,49 +25,53 @@ export class GitCommandError extends Data.TaggedError('GitCommandError')<{
   readonly stderr: string;
 }> {}
 
-export interface GitService {
-  readonly run: (
-    args: readonly string[],
-    options?: {
-      readonly cwd?: string | undefined;
-      /** Merged over `process.env` for this child only. */
-      readonly env?: Readonly<Record<string, string>> | undefined;
-      /**
-       * Inherited variables removed before `env` is merged. For callers that must not be retargeted by
-       * the runtime's own environment — `-C <dir>` does not override an inherited `GIT_DIR`.
-       */
-      readonly unsetEnv?: readonly string[] | undefined;
-      /** Largest stdout or stderr accepted before the child is killed; defaults to 1 MiB. */
-      readonly maxBuffer?: number | undefined;
-    },
-  ) => Effect.Effect<{ readonly stdout: string; readonly stderr: string }, GitCommandError>;
-}
-
-export const Git = Context.Service<GitService>('isagi/Git');
-
-export const GitLive = Layer.succeed(Git, {
-  run: (args, options = {}) =>
-    Effect.tryPromise({
-      try: async (signal) => {
-        const { stdout, stderr } = await execFileAsync('git', [...args], {
-          cwd: options.cwd,
-          encoding: 'utf8',
-          env: options.env || options.unsetEnv ? childEnvironment(options) : undefined,
-          maxBuffer: options.maxBuffer ?? 1024 * 1024,
-          signal,
-        });
-        return { stdout, stderr };
+export class Git extends Context.Service<
+  Git,
+  {
+    readonly run: (
+      args: readonly string[],
+      options?: {
+        readonly cwd?: string | undefined;
+        /** Merged over `process.env` for this child only. */
+        readonly env?: Readonly<Record<string, string>> | undefined;
+        /**
+         * Inherited variables removed before `env` is merged. For callers that must not be retargeted by
+         * the runtime's own environment — `-C <dir>` does not override an inherited `GIT_DIR`.
+         */
+        readonly unsetEnv?: readonly string[] | undefined;
+        /** Largest stdout or stderr accepted before the child is killed; defaults to 1 MiB. */
+        readonly maxBuffer?: number | undefined;
       },
-      catch: (cause) =>
-        new GitCommandError({
-          args,
-          cause,
-          cwd: options.cwd,
-          failure: deriveGitCommandFailure(cause),
-          stderr: errorWithStderr(cause),
+    ) => Effect.Effect<{ readonly stdout: string; readonly stderr: string }, GitCommandError>;
+  }
+>()('isagi/runtime/platform/git/Git') {
+  static readonly layer = Layer.succeed(
+    Git,
+    Git.of({
+      run: (args, options = {}) =>
+        Effect.tryPromise({
+          try: async (signal) => {
+            const { stdout, stderr } = await execFileAsync('git', [...args], {
+              cwd: options.cwd,
+              encoding: 'utf8',
+              env: options.env || options.unsetEnv ? childEnvironment(options) : undefined,
+              maxBuffer: options.maxBuffer ?? 1024 * 1024,
+              signal,
+            });
+            return { stdout, stderr };
+          },
+          catch: (cause) =>
+            new GitCommandError({
+              args,
+              cause,
+              cwd: options.cwd,
+              failure: deriveGitCommandFailure(cause),
+              stderr: errorWithStderr(cause),
+            }),
         }),
     }),
-} satisfies GitService);
+  );
+}
 
 function childEnvironment(options: {
   readonly env?: Readonly<Record<string, string>> | undefined;

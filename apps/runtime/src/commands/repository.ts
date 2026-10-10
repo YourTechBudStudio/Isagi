@@ -11,13 +11,13 @@ import { Context, Effect, Layer, Schema } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
-import { worktreeCommandRuns, worktreeCommandStates } from '../persistence/schema.js';
 import {
   DatabaseError,
   RuntimeDatabase,
   type RuntimeDrizzleDatabase,
 } from '../platform/persistence/index.js';
 import { resolvedPortsSnapshotSchema, type ResolvedPortEntry } from './ports.js';
+import { worktreeCommandRuns, worktreeCommandStates } from './tables.js';
 
 type CommandStateRecord = InferSelectModel<typeof worktreeCommandStates>;
 type CommandRunRecord = InferSelectModel<typeof worktreeCommandRuns>;
@@ -64,7 +64,393 @@ export interface CommandFinalizeResult {
   readonly state: CommandStateRow | null;
 }
 
-export interface CommandRepositoryService {
+// One command's reference to one process incarnation. Deliberately not a row
+// type: it is the distinct union of two different columns in two tables, and
+// callers only ever need the identity triple to take the command lock and drive
+// cleanup.
+export interface CommandPtyLink {
+  readonly worktreeId: number;
+  readonly commandName: string;
+  readonly ptyProcessId: number;
+}
+
+const make = Effect.gen(function* () {
+  const database = yield* RuntimeDatabase;
+  const stateColumns = getTableColumns(worktreeCommandStates);
+  const runColumns = getTableColumns(worktreeCommandRuns);
+  // Link reads project only the identity triple: the union is built in
+  // JavaScript from two differently shaped tables, and selecting whole rows
+  // would invite a caller to reason about a `CommandPtyLink` as if it were one.
+  const stateLinkColumns = {
+    worktreeId: worktreeCommandStates.worktreeId,
+    commandName: worktreeCommandStates.commandName,
+    ptyProcessId: worktreeCommandStates.activePtyProcessId,
+  };
+  const runLinkColumns = {
+    worktreeId: worktreeCommandRuns.worktreeId,
+    commandName: worktreeCommandRuns.commandName,
+    ptyProcessId: worktreeCommandRuns.ptyProcessId,
+  };
+
+  return CommandRepository.of({
+    listStatesForWorktree: (worktreeId) =>
+      database.use('list_worktree_command_states', (db) =>
+        db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(eq(worktreeCommandStates.worktreeId, worktreeId))
+          .all()
+          .map(commandStateRow),
+      ),
+    findState: (input) =>
+      database.use('find_worktree_command_state', (db) => {
+        const row = db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(
+            and(
+              eq(worktreeCommandStates.worktreeId, input.worktreeId),
+              eq(worktreeCommandStates.commandName, input.commandName),
+            ),
+          )
+          .get();
+        return row ? commandStateRow(row) : null;
+      }),
+    listRunningStates: database.use('list_running_worktree_command_states', (db) =>
+      db
+        .select(stateColumns)
+        .from(worktreeCommandStates)
+        .where(eq(worktreeCommandStates.status, 'running'))
+        .all()
+        .map(commandStateRow),
+    ),
+    listRunningStatesForWorktree: (worktreeId) =>
+      database.use('list_running_worktree_command_states_for_worktree', (db) =>
+        db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(
+            and(
+              eq(worktreeCommandStates.worktreeId, worktreeId),
+              eq(worktreeCommandStates.status, 'running'),
+            ),
+          )
+          .all()
+          .map(commandStateRow),
+      ),
+    ensureState: (input) =>
+      database.transaction('ensure_worktree_command_state', (db) => {
+        const existing = db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(
+            and(
+              eq(worktreeCommandStates.worktreeId, input.worktreeId),
+              eq(worktreeCommandStates.commandName, input.commandName),
+            ),
+          )
+          .get();
+        if (existing) return commandStateRow(existing);
+        const now = timestamp();
+        const inserted = db
+          .insert(worktreeCommandStates)
+          .values({
+            worktreeId: input.worktreeId,
+            commandName: input.commandName,
+            status: input.status ?? 'idle',
+            activePtyProcessId: input.activePtyProcessId ?? null,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning(stateColumns)
+          .get();
+        return commandStateRow(inserted);
+      }),
+    transitionState: (input) =>
+      database.transaction('transition_worktree_command_state', (db) =>
+        writeCommandState(db, { ...input, resolvedPorts: undefined }),
+      ),
+    markLaunchInProgress: (input) =>
+      database.transaction('mark_worktree_command_launch_in_progress', (db) =>
+        writeCommandState(db, {
+          worktreeId: input.worktreeId,
+          commandName: input.commandName,
+          status: 'running',
+          activePtyProcessId: null,
+          resolvedPorts: input.resolvedPorts,
+        }),
+      ),
+    createRun: (input) =>
+      database.use('create_worktree_command_run', (db) => {
+        const now = timestamp();
+        const completedAt = input.completedAt === undefined ? null : input.completedAt;
+        const inserted = db
+          .insert(worktreeCommandRuns)
+          .values({
+            worktreeId: input.worktreeId,
+            commandName: input.commandName,
+            status: input.status,
+            ptyProcessId: input.ptyProcessId ?? null,
+            diagnosticReason: input.diagnosticReason ?? null,
+            diagnosticDetail: input.diagnosticDetail ?? null,
+            startedAt: now,
+            completedAt,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning(runColumns)
+          .get();
+        return commandRunRow(inserted);
+      }),
+    updateRunPty: (input) =>
+      database.use('update_worktree_command_run_pty', (db) => {
+        const row = db
+          .update(worktreeCommandRuns)
+          .set({
+            ptyProcessId: input.ptyProcessId,
+            updatedAt: timestamp(),
+          })
+          .where(eq(worktreeCommandRuns.id, input.runId))
+          .returning(runColumns)
+          .get();
+        return row ? commandRunRow(row) : null;
+      }),
+    completeRun: (input) =>
+      database.use('complete_worktree_command_run', (db) => {
+        const now = timestamp();
+        const row = db
+          .update(worktreeCommandRuns)
+          .set({
+            status: input.status,
+            diagnosticReason: input.diagnosticReason ?? null,
+            diagnosticDetail: input.diagnosticDetail ?? null,
+            completedAt: now,
+            updatedAt: now,
+          })
+          .where(eq(worktreeCommandRuns.id, input.runId))
+          .returning(runColumns)
+          .get();
+        return row ? commandRunRow(row) : null;
+      }),
+    finalizeRunAndStateByPty: (input) =>
+      database.transaction('finalize_worktree_command_run_and_state_by_pty', (db) =>
+        finalizeRunAndState(db, stateColumns, runColumns, input, {
+          selectRun: () =>
+            db
+              .select(runColumns)
+              .from(worktreeCommandRuns)
+              .where(
+                and(
+                  eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                  eq(worktreeCommandRuns.commandName, input.commandName),
+                  eq(worktreeCommandRuns.ptyProcessId, input.ptyProcessId),
+                ),
+              )
+              .orderBy(desc(worktreeCommandRuns.id))
+              .get(),
+          stateMatches: (state) => state.activePtyProcessId === input.ptyProcessId,
+        }),
+      ),
+    finalizeRunAndStateByRun: (input) =>
+      database.transaction('finalize_worktree_command_run_and_state_by_run', (db) =>
+        finalizeRunAndState(db, stateColumns, runColumns, input, {
+          // Scoped by identity as well as id: a caller that mixes up its
+          // inputs must complete nothing rather than complete one command's
+          // run while transitioning another command's state.
+          selectRun: () =>
+            db
+              .select(runColumns)
+              .from(worktreeCommandRuns)
+              .where(
+                and(
+                  eq(worktreeCommandRuns.id, input.runId),
+                  eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                  eq(worktreeCommandRuns.commandName, input.commandName),
+                ),
+              )
+              .get(),
+          stateMatches: (state) => state.status === 'running',
+        }),
+      ),
+    readoptCommandIncarnation: (input) =>
+      database.transaction('readopt_worktree_command_incarnation', (db) => {
+        const now = timestamp();
+        const existingState = db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(
+            and(
+              eq(worktreeCommandStates.worktreeId, input.worktreeId),
+              eq(worktreeCommandStates.commandName, input.commandName),
+            ),
+          )
+          .get();
+        const state = existingState
+          ? db
+              .update(worktreeCommandStates)
+              .set({
+                status: 'running',
+                activePtyProcessId: input.ptyProcessId,
+                updatedAt: now,
+              })
+              .where(eq(worktreeCommandStates.id, existingState.id))
+              .returning(stateColumns)
+              .get()
+          : db
+              .insert(worktreeCommandStates)
+              .values({
+                worktreeId: input.worktreeId,
+                commandName: input.commandName,
+                status: 'running',
+                activePtyProcessId: input.ptyProcessId,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .returning(stateColumns)
+              .get();
+
+        const existingRun = db
+          .select(runColumns)
+          .from(worktreeCommandRuns)
+          .where(
+            and(
+              eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+              eq(worktreeCommandRuns.commandName, input.commandName),
+            ),
+          )
+          .orderBy(desc(worktreeCommandRuns.id))
+          .get();
+        // The diagnostic columns are only named in the update when the caller
+        // supplied them, so an omitted diagnostic leaves the persisted values
+        // untouched rather than overwriting them with nulls.
+        const runDiagnosticColumns = input.diagnostic
+          ? {
+              diagnosticReason: input.diagnostic.reason,
+              diagnosticDetail: input.diagnostic.detail,
+            }
+          : {};
+        const run = existingRun
+          ? db
+              .update(worktreeCommandRuns)
+              .set({
+                status: 'running',
+                ptyProcessId: input.ptyProcessId,
+                ...runDiagnosticColumns,
+                completedAt: null,
+                updatedAt: now,
+              })
+              .where(eq(worktreeCommandRuns.id, existingRun.id))
+              .returning(runColumns)
+              .get()
+          : db
+              .insert(worktreeCommandRuns)
+              .values({
+                worktreeId: input.worktreeId,
+                commandName: input.commandName,
+                ptyProcessId: input.ptyProcessId,
+                status: 'running',
+                diagnosticReason: input.diagnostic?.reason ?? null,
+                diagnosticDetail: input.diagnostic?.detail ?? null,
+                startedAt: now,
+                completedAt: null,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .returning(runColumns)
+              .get();
+
+        return { state: commandStateRow(state), run: commandRunRow(run) };
+      }),
+    listCommandPtyLinks: database.use('list_worktree_command_pty_links', (db) =>
+      distinctCommandPtyLinks(
+        db.select(stateLinkColumns).from(worktreeCommandStates).all(),
+        db.select(runLinkColumns).from(worktreeCommandRuns).all(),
+      ),
+    ),
+    listCommandPtyLinksForWorktree: (worktreeId) =>
+      database.use('list_worktree_command_pty_links_for_worktree', (db) =>
+        distinctCommandPtyLinks(
+          db
+            .select(stateLinkColumns)
+            .from(worktreeCommandStates)
+            .where(eq(worktreeCommandStates.worktreeId, worktreeId))
+            .all(),
+          db
+            .select(runLinkColumns)
+            .from(worktreeCommandRuns)
+            .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
+            .all(),
+        ),
+      ),
+    listLinklessRunningRuns: database.use('list_linkless_running_worktree_command_runs', (db) =>
+      db
+        .select(runColumns)
+        .from(worktreeCommandRuns)
+        .where(
+          and(eq(worktreeCommandRuns.status, 'running'), isNull(worktreeCommandRuns.ptyProcessId)),
+        )
+        .all()
+        .map(commandRunRow),
+    ),
+    findLatestRun: (input) =>
+      database.use('find_latest_worktree_command_run', (db) => {
+        const row = db
+          .select(runColumns)
+          .from(worktreeCommandRuns)
+          .where(
+            and(
+              eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+              eq(worktreeCommandRuns.commandName, input.commandName),
+            ),
+          )
+          .orderBy(desc(worktreeCommandRuns.id))
+          .get();
+        return row ? commandRunRow(row) : null;
+      }),
+    findRunByPtyProcess: (ptyProcessId) =>
+      database.use('find_worktree_command_run_by_pty', (db) => {
+        const row = db
+          .select(runColumns)
+          .from(worktreeCommandRuns)
+          .where(eq(worktreeCommandRuns.ptyProcessId, ptyProcessId))
+          .orderBy(desc(worktreeCommandRuns.id))
+          .get();
+        return row ? commandRunRow(row) : null;
+      }),
+    // Keep only the newest `keep` runs for a command and delete the rest,
+    // returning the deleted rows so the caller can reclaim their command-log
+    // files. This is what stops historical runs from pinning PTY rows/logs
+    // forever (each retained run is a GC reference); pruned runs let the PTY
+    // GC reclaim their now-unreferenced process rows and session logs.
+    pruneRunHistory: (input) =>
+      database.transaction('prune_worktree_command_runs', (db) => {
+        const rows = db
+          .select(runColumns)
+          .from(worktreeCommandRuns)
+          .where(
+            and(
+              eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+              eq(worktreeCommandRuns.commandName, input.commandName),
+            ),
+          )
+          .orderBy(desc(worktreeCommandRuns.id))
+          .all();
+        const stale = rows.slice(Math.max(input.keep, 0));
+        if (stale.length === 0) return [];
+        db.delete(worktreeCommandRuns)
+          .where(
+            inArray(
+              worktreeCommandRuns.id,
+              stale.map((row) => row.id),
+            ),
+          )
+          .run();
+        return stale.map(commandRunRow);
+      }),
+  });
+});
+
+interface CommandRepositoryShape {
   readonly listStatesForWorktree: (
     worktreeId: number,
   ) => Effect.Effect<CommandStateRow[], DatabaseError>;
@@ -225,400 +611,11 @@ export interface CommandRepositoryService {
   readonly listLinklessRunningRuns: Effect.Effect<CommandRunRow[], DatabaseError>;
 }
 
-// One command's reference to one process incarnation. Deliberately not a row
-// type: it is the distinct union of two different columns in two tables, and
-// callers only ever need the identity triple to take the command lock and drive
-// cleanup.
-export interface CommandPtyLink {
-  readonly worktreeId: number;
-  readonly commandName: string;
-  readonly ptyProcessId: number;
+export class CommandRepository extends Context.Service<CommandRepository, CommandRepositoryShape>()(
+  'isagi/runtime/commands/CommandRepository',
+) {
+  static readonly layer = Layer.effect(CommandRepository, make);
 }
-
-export const CommandRepository =
-  Context.Service<CommandRepositoryService>('isagi/CommandRepository');
-
-export const CommandRepositoryLive = Layer.effect(
-  CommandRepository,
-  Effect.gen(function* () {
-    const database = yield* RuntimeDatabase;
-    const stateColumns = getTableColumns(worktreeCommandStates);
-    const runColumns = getTableColumns(worktreeCommandRuns);
-    // Link reads project only the identity triple: the union is built in
-    // JavaScript from two differently shaped tables, and selecting whole rows
-    // would invite a caller to reason about a `CommandPtyLink` as if it were one.
-    const stateLinkColumns = {
-      worktreeId: worktreeCommandStates.worktreeId,
-      commandName: worktreeCommandStates.commandName,
-      ptyProcessId: worktreeCommandStates.activePtyProcessId,
-    };
-    const runLinkColumns = {
-      worktreeId: worktreeCommandRuns.worktreeId,
-      commandName: worktreeCommandRuns.commandName,
-      ptyProcessId: worktreeCommandRuns.ptyProcessId,
-    };
-
-    return {
-      listStatesForWorktree: (worktreeId) =>
-        database.use('list_worktree_command_states', (db) =>
-          db
-            .select(stateColumns)
-            .from(worktreeCommandStates)
-            .where(eq(worktreeCommandStates.worktreeId, worktreeId))
-            .all()
-            .map(commandStateRow),
-        ),
-      findState: (input) =>
-        database.use('find_worktree_command_state', (db) => {
-          const row = db
-            .select(stateColumns)
-            .from(worktreeCommandStates)
-            .where(
-              and(
-                eq(worktreeCommandStates.worktreeId, input.worktreeId),
-                eq(worktreeCommandStates.commandName, input.commandName),
-              ),
-            )
-            .get();
-          return row ? commandStateRow(row) : null;
-        }),
-      listRunningStates: database.use('list_running_worktree_command_states', (db) =>
-        db
-          .select(stateColumns)
-          .from(worktreeCommandStates)
-          .where(eq(worktreeCommandStates.status, 'running'))
-          .all()
-          .map(commandStateRow),
-      ),
-      listRunningStatesForWorktree: (worktreeId) =>
-        database.use('list_running_worktree_command_states_for_worktree', (db) =>
-          db
-            .select(stateColumns)
-            .from(worktreeCommandStates)
-            .where(
-              and(
-                eq(worktreeCommandStates.worktreeId, worktreeId),
-                eq(worktreeCommandStates.status, 'running'),
-              ),
-            )
-            .all()
-            .map(commandStateRow),
-        ),
-      ensureState: (input) =>
-        database.transaction('ensure_worktree_command_state', (db) => {
-          const existing = db
-            .select(stateColumns)
-            .from(worktreeCommandStates)
-            .where(
-              and(
-                eq(worktreeCommandStates.worktreeId, input.worktreeId),
-                eq(worktreeCommandStates.commandName, input.commandName),
-              ),
-            )
-            .get();
-          if (existing) return commandStateRow(existing);
-          const now = timestamp();
-          const inserted = db
-            .insert(worktreeCommandStates)
-            .values({
-              worktreeId: input.worktreeId,
-              commandName: input.commandName,
-              status: input.status ?? 'idle',
-              activePtyProcessId: input.activePtyProcessId ?? null,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .returning(stateColumns)
-            .get();
-          return commandStateRow(inserted);
-        }),
-      transitionState: (input) =>
-        database.transaction('transition_worktree_command_state', (db) =>
-          writeCommandState(db, { ...input, resolvedPorts: undefined }),
-        ),
-      markLaunchInProgress: (input) =>
-        database.transaction('mark_worktree_command_launch_in_progress', (db) =>
-          writeCommandState(db, {
-            worktreeId: input.worktreeId,
-            commandName: input.commandName,
-            status: 'running',
-            activePtyProcessId: null,
-            resolvedPorts: input.resolvedPorts,
-          }),
-        ),
-      createRun: (input) =>
-        database.use('create_worktree_command_run', (db) => {
-          const now = timestamp();
-          const completedAt = input.completedAt === undefined ? null : input.completedAt;
-          const inserted = db
-            .insert(worktreeCommandRuns)
-            .values({
-              worktreeId: input.worktreeId,
-              commandName: input.commandName,
-              status: input.status,
-              ptyProcessId: input.ptyProcessId ?? null,
-              diagnosticReason: input.diagnosticReason ?? null,
-              diagnosticDetail: input.diagnosticDetail ?? null,
-              startedAt: now,
-              completedAt,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .returning(runColumns)
-            .get();
-          return commandRunRow(inserted);
-        }),
-      updateRunPty: (input) =>
-        database.use('update_worktree_command_run_pty', (db) => {
-          const row = db
-            .update(worktreeCommandRuns)
-            .set({
-              ptyProcessId: input.ptyProcessId,
-              updatedAt: timestamp(),
-            })
-            .where(eq(worktreeCommandRuns.id, input.runId))
-            .returning(runColumns)
-            .get();
-          return row ? commandRunRow(row) : null;
-        }),
-      completeRun: (input) =>
-        database.use('complete_worktree_command_run', (db) => {
-          const now = timestamp();
-          const row = db
-            .update(worktreeCommandRuns)
-            .set({
-              status: input.status,
-              diagnosticReason: input.diagnosticReason ?? null,
-              diagnosticDetail: input.diagnosticDetail ?? null,
-              completedAt: now,
-              updatedAt: now,
-            })
-            .where(eq(worktreeCommandRuns.id, input.runId))
-            .returning(runColumns)
-            .get();
-          return row ? commandRunRow(row) : null;
-        }),
-      finalizeRunAndStateByPty: (input) =>
-        database.transaction('finalize_worktree_command_run_and_state_by_pty', (db) =>
-          finalizeRunAndState(db, stateColumns, runColumns, input, {
-            selectRun: () =>
-              db
-                .select(runColumns)
-                .from(worktreeCommandRuns)
-                .where(
-                  and(
-                    eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                    eq(worktreeCommandRuns.commandName, input.commandName),
-                    eq(worktreeCommandRuns.ptyProcessId, input.ptyProcessId),
-                  ),
-                )
-                .orderBy(desc(worktreeCommandRuns.id))
-                .get(),
-            stateMatches: (state) => state.activePtyProcessId === input.ptyProcessId,
-          }),
-        ),
-      finalizeRunAndStateByRun: (input) =>
-        database.transaction('finalize_worktree_command_run_and_state_by_run', (db) =>
-          finalizeRunAndState(db, stateColumns, runColumns, input, {
-            // Scoped by identity as well as id: a caller that mixes up its
-            // inputs must complete nothing rather than complete one command's
-            // run while transitioning another command's state.
-            selectRun: () =>
-              db
-                .select(runColumns)
-                .from(worktreeCommandRuns)
-                .where(
-                  and(
-                    eq(worktreeCommandRuns.id, input.runId),
-                    eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                    eq(worktreeCommandRuns.commandName, input.commandName),
-                  ),
-                )
-                .get(),
-            stateMatches: (state) => state.status === 'running',
-          }),
-        ),
-      readoptCommandIncarnation: (input) =>
-        database.transaction('readopt_worktree_command_incarnation', (db) => {
-          const now = timestamp();
-          const existingState = db
-            .select(stateColumns)
-            .from(worktreeCommandStates)
-            .where(
-              and(
-                eq(worktreeCommandStates.worktreeId, input.worktreeId),
-                eq(worktreeCommandStates.commandName, input.commandName),
-              ),
-            )
-            .get();
-          const state = existingState
-            ? db
-                .update(worktreeCommandStates)
-                .set({
-                  status: 'running',
-                  activePtyProcessId: input.ptyProcessId,
-                  updatedAt: now,
-                })
-                .where(eq(worktreeCommandStates.id, existingState.id))
-                .returning(stateColumns)
-                .get()
-            : db
-                .insert(worktreeCommandStates)
-                .values({
-                  worktreeId: input.worktreeId,
-                  commandName: input.commandName,
-                  status: 'running',
-                  activePtyProcessId: input.ptyProcessId,
-                  createdAt: now,
-                  updatedAt: now,
-                })
-                .returning(stateColumns)
-                .get();
-
-          const existingRun = db
-            .select(runColumns)
-            .from(worktreeCommandRuns)
-            .where(
-              and(
-                eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                eq(worktreeCommandRuns.commandName, input.commandName),
-              ),
-            )
-            .orderBy(desc(worktreeCommandRuns.id))
-            .get();
-          // The diagnostic columns are only named in the update when the caller
-          // supplied them, so an omitted diagnostic leaves the persisted values
-          // untouched rather than overwriting them with nulls.
-          const runDiagnosticColumns = input.diagnostic
-            ? {
-                diagnosticReason: input.diagnostic.reason,
-                diagnosticDetail: input.diagnostic.detail,
-              }
-            : {};
-          const run = existingRun
-            ? db
-                .update(worktreeCommandRuns)
-                .set({
-                  status: 'running',
-                  ptyProcessId: input.ptyProcessId,
-                  ...runDiagnosticColumns,
-                  completedAt: null,
-                  updatedAt: now,
-                })
-                .where(eq(worktreeCommandRuns.id, existingRun.id))
-                .returning(runColumns)
-                .get()
-            : db
-                .insert(worktreeCommandRuns)
-                .values({
-                  worktreeId: input.worktreeId,
-                  commandName: input.commandName,
-                  ptyProcessId: input.ptyProcessId,
-                  status: 'running',
-                  diagnosticReason: input.diagnostic?.reason ?? null,
-                  diagnosticDetail: input.diagnostic?.detail ?? null,
-                  startedAt: now,
-                  completedAt: null,
-                  createdAt: now,
-                  updatedAt: now,
-                })
-                .returning(runColumns)
-                .get();
-
-          return { state: commandStateRow(state), run: commandRunRow(run) };
-        }),
-      listCommandPtyLinks: database.use('list_worktree_command_pty_links', (db) =>
-        distinctCommandPtyLinks(
-          db.select(stateLinkColumns).from(worktreeCommandStates).all(),
-          db.select(runLinkColumns).from(worktreeCommandRuns).all(),
-        ),
-      ),
-      listCommandPtyLinksForWorktree: (worktreeId) =>
-        database.use('list_worktree_command_pty_links_for_worktree', (db) =>
-          distinctCommandPtyLinks(
-            db
-              .select(stateLinkColumns)
-              .from(worktreeCommandStates)
-              .where(eq(worktreeCommandStates.worktreeId, worktreeId))
-              .all(),
-            db
-              .select(runLinkColumns)
-              .from(worktreeCommandRuns)
-              .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
-              .all(),
-          ),
-        ),
-      listLinklessRunningRuns: database.use('list_linkless_running_worktree_command_runs', (db) =>
-        db
-          .select(runColumns)
-          .from(worktreeCommandRuns)
-          .where(
-            and(
-              eq(worktreeCommandRuns.status, 'running'),
-              isNull(worktreeCommandRuns.ptyProcessId),
-            ),
-          )
-          .all()
-          .map(commandRunRow),
-      ),
-      findLatestRun: (input) =>
-        database.use('find_latest_worktree_command_run', (db) => {
-          const row = db
-            .select(runColumns)
-            .from(worktreeCommandRuns)
-            .where(
-              and(
-                eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                eq(worktreeCommandRuns.commandName, input.commandName),
-              ),
-            )
-            .orderBy(desc(worktreeCommandRuns.id))
-            .get();
-          return row ? commandRunRow(row) : null;
-        }),
-      findRunByPtyProcess: (ptyProcessId) =>
-        database.use('find_worktree_command_run_by_pty', (db) => {
-          const row = db
-            .select(runColumns)
-            .from(worktreeCommandRuns)
-            .where(eq(worktreeCommandRuns.ptyProcessId, ptyProcessId))
-            .orderBy(desc(worktreeCommandRuns.id))
-            .get();
-          return row ? commandRunRow(row) : null;
-        }),
-      // Keep only the newest `keep` runs for a command and delete the rest,
-      // returning the deleted rows so the caller can reclaim their command-log
-      // files. This is what stops historical runs from pinning PTY rows/logs
-      // forever (each retained run is a GC reference); pruned runs let the PTY
-      // GC reclaim their now-unreferenced process rows and session logs.
-      pruneRunHistory: (input) =>
-        database.transaction('prune_worktree_command_runs', (db) => {
-          const rows = db
-            .select(runColumns)
-            .from(worktreeCommandRuns)
-            .where(
-              and(
-                eq(worktreeCommandRuns.worktreeId, input.worktreeId),
-                eq(worktreeCommandRuns.commandName, input.commandName),
-              ),
-            )
-            .orderBy(desc(worktreeCommandRuns.id))
-            .all();
-          const stale = rows.slice(Math.max(input.keep, 0));
-          if (stale.length === 0) return [];
-          db.delete(worktreeCommandRuns)
-            .where(
-              inArray(
-                worktreeCommandRuns.id,
-                stale.map((row) => row.id),
-              ),
-            )
-            .run();
-          return stale.map(commandRunRow);
-        }),
-    } satisfies CommandRepositoryService;
-  }),
-);
 
 // The shared body of both finalizers, run directly on the caller's transaction
 // handle so run completion and state transition commit or roll back together.

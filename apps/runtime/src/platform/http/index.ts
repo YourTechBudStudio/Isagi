@@ -11,3 +11,4 @@ export {
 } from './errors.js';
 export type { ApiRouteContext } from './errors.js';
 export { infrastructureApiError } from './infrastructure-errors.js';
+export { enforceRuntimeWebSocketOrigin, isAllowedRuntimeOrigin } from './origin.js';

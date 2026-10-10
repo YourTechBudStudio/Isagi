@@ -16,13 +16,12 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import {
-  HarnessLedgerObserver,
-  pollHarnessLedgerObserverForTest,
-} from '../../../harnesses/observer.service.js';
-import { agentSessions, ptyProcesses } from '../../../persistence/schema.js';
+import { HarnessLedgerObserver } from '../../../harnesses/index.js';
+import { pollHarnessLedgerObserverForTest } from '../../../harnesses/testing.js';
 import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
+import { ptyProcesses } from '../../../pty-processes/tables.js';
+import { agentSessions } from '../../tables.js';
 import { seedActiveAgentSession, testLayer } from './test-support.js';
 
 test('startup replay is non-publishing and cache reads return paired history', async () => {
@@ -1442,7 +1441,7 @@ function ledgerRecord(
 }
 
 function insertRunningAgent(
-  database: import('../../../platform/persistence/index.js').RuntimeDatabaseService,
+  database: import('../../../platform/persistence/index.js').RuntimeDatabase['Service'],
   input: { readonly agentSessionId: number; readonly ptyProcessId: number },
 ) {
   return database.use('insert_running_observer_agent', (db) => {
@@ -1483,7 +1482,7 @@ function insertRunningAgent(
 }
 
 function insertReplacementPty(
-  database: import('../../../platform/persistence/index.js').RuntimeDatabaseService,
+  database: import('../../../platform/persistence/index.js').RuntimeDatabase['Service'],
   input: { readonly agentSessionId: number; readonly ptyProcessId: number },
 ) {
   return database.use('replace_observer_pty', (db) => {

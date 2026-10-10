@@ -3,17 +3,21 @@ import { dirname } from 'node:path';
 
 import { Cause, Effect, Result } from 'effect';
 
-import { diagnosticPhase, logDiagnosticEvent } from '../../platform/diagnostics/phase.js';
+import { diagnosticPhase, logDiagnosticEvent } from '../../platform/diagnostics/index.js';
 import {
   isIdName,
   listOrphanCandidates,
   openCollectorRoot,
   sweepOrphans,
-} from '../../platform/persistence/orphan-files.js';
-import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyRepositoryService } from '../repository.js';
-import type { PtyProcessRow } from '../types.js';
-import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../types.js';
+} from '../../platform/persistence/index.js';
+import type { PtyBackendCatalog } from '../backend.js';
+import type { PtyRepository } from '../repository.js';
+import type {
+  PtyProcessRow,
+  PtyBackend,
+  PtyBackendGcFinding,
+  PtyBackendGcSession,
+} from '../types.js';
 import { decodeBackendRef } from './backend-ref.js';
 import type { PtyLaunchReservations } from './lifecycle.js';
 import { cleanupOrphanPtyLogs } from './logs.js';
@@ -32,8 +36,8 @@ const orphanPtyLogRetentionMs = orphanPtyProcessRetentionMs;
 const orphanShellIntegrationRetentionMs = orphanPtyProcessRetentionMs;
 
 export function startPtyGarbageCollector(
-  repository: PtyRepositoryService,
-  catalog: PtyBackendCatalogService,
+  repository: PtyRepository['Service'],
+  catalog: PtyBackendCatalog['Service'],
   runtimeNamespace: string,
   sessionsPath: string,
   options: {
@@ -57,8 +61,8 @@ export function startPtyGarbageCollector(
 }
 
 export function collectPtyGarbage(
-  repository: PtyRepositoryService,
-  catalog: PtyBackendCatalogService,
+  repository: PtyRepository['Service'],
+  catalog: PtyBackendCatalog['Service'],
   runtimeNamespace: string,
   sessionsPath: string,
   options: {
@@ -95,7 +99,7 @@ export function collectPtyGarbage(
       }),
     ).pipe(tagGcPhaseError('orphan_logs'));
     // Contained, unlike its siblings: folder collection is housekeeping and must
-    // never fail the GC pass (which would fail the startup pass in PtyServiceLive).
+    // never fail the GC pass (which would fail the startup pass in PtyService.layer).
     yield* diagnosticPhase(
       'pty.gc.orphan_shell_integration',
       { sessionsPath },
@@ -119,7 +123,7 @@ export function collectPtyGarbage(
 // Deletes `sessions/shell-integration/<ptyProcessId>/` folders that no PTY row
 // references once they are older than the retention window.
 function cleanupOrphanShellIntegration(
-  repository: PtyRepositoryService,
+  repository: PtyRepository['Service'],
   sessionsPath: string,
   options: { readonly minAgeMs: number; readonly nowMs: number },
 ) {
@@ -164,8 +168,8 @@ function tagGcPhaseError<A, E, R>(phase: string) {
 // adapter that is actually available therefore collects, whatever the current
 // launch preference is.
 function cleanupBackendProcesses(
-  repository: PtyRepositoryService,
-  catalog: PtyBackendCatalogService,
+  repository: PtyRepository['Service'],
+  catalog: PtyBackendCatalog['Service'],
   runtimeNamespace: string,
 ) {
   return Effect.gen(function* () {
@@ -192,8 +196,8 @@ function cleanupBackendProcesses(
 }
 
 function cleanupOrphanPtyProcesses(
-  repository: PtyRepositoryService,
-  catalog: PtyBackendCatalogService,
+  repository: PtyRepository['Service'],
+  catalog: PtyBackendCatalog['Service'],
   options: {
     readonly nowMs: number;
     readonly pinnedPtyProcessIds: ReadonlySet<number>;
@@ -251,8 +255,8 @@ function cleanupOrphanPtyProcesses(
 }
 
 function cleanupOrphanPtyProcess(
-  repository: PtyRepositoryService,
-  catalog: PtyBackendCatalogService,
+  repository: PtyRepository['Service'],
+  catalog: PtyBackendCatalog['Service'],
   process: PtyProcessRow,
 ) {
   return Effect.gen(function* () {
@@ -340,7 +344,7 @@ function isMissingFileError(error: unknown) {
   );
 }
 
-function collectGcSessions(repository: PtyRepositoryService) {
+function collectGcSessions(repository: PtyRepository['Service']) {
   return Effect.gen(function* () {
     const sessions = yield* repository.listProcesses();
     const decoded: PtyBackendGcSession[] = [];

@@ -1,20 +1,30 @@
 import { basename } from 'node:path';
 import process from 'node:process';
 
-import type { LaunchPtyProcessInput, PtyLaunchMode } from '../../pty-processes/types.js';
+/**
+ * How a process is started: `direct` executes the command as given; `user_shell` runs it through
+ * the user's login/interactive shell so their rc files shape `PATH` and aliases.
+ */
+export type ShellLaunchMode = 'direct' | 'user_shell';
 
-export interface BackendLaunchCommand {
+export interface ShellLaunchInput {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly launchMode?: ShellLaunchMode | undefined;
+}
+
+export interface ShellLaunchCommand {
   readonly command: string;
   readonly args: readonly string[];
 }
 
 const simpleShellCommandName = /^[A-Za-z0-9._-]+$/;
 
-export function backendLaunchCommand(input: {
-  readonly launch: LaunchPtyProcessInput;
+export function shellLaunchCommand(input: {
+  readonly launch: ShellLaunchInput;
   readonly env: NodeJS.ProcessEnv;
-}): BackendLaunchCommand {
-  const mode: PtyLaunchMode = input.launch.launchMode ?? 'direct';
+}): ShellLaunchCommand {
+  const mode: ShellLaunchMode = input.launch.launchMode ?? 'direct';
   if (mode === 'direct') {
     return {
       command: input.launch.command,

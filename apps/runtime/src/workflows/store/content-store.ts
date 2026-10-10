@@ -7,9 +7,10 @@ import { pipeline } from 'node:stream/promises';
 
 import { Cause, Context, Data, Effect, Layer, Scope } from 'effect';
 
-import { diagnosticPhase } from '../../platform/diagnostics/phase.js';
-import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
+import { diagnosticPhase } from '../../platform/diagnostics/index.js';
 import {
+  DataDirectory,
+  RuntimeDatabase,
   childDirectory,
   listOrphanCandidates,
   openCollectorRoot,
@@ -17,7 +18,7 @@ import {
   type GuardedDirectory,
   type OrphanCandidate,
   type OrphanSweepStats,
-} from '../../platform/persistence/orphan-files.js';
+} from '../../platform/persistence/index.js';
 import { listReferencedContentHashes } from './checkpoints.js';
 
 /**
@@ -70,26 +71,6 @@ export class ContentUnavailable extends Data.TaggedError('ContentUnavailable')<{
   readonly cause: 'missing' | 'corrupt';
 }> {}
 
-export interface WorkflowContentStoreService {
-  /**
-   * Opens a capture lease. Every blob published or reused through it, and every temp it is writing,
-   * is protected from the collector until the scope closes. Checkpoint capture keeps the scope open
-   * until its checkpoint row has committed or the capture has failed.
-   */
-  readonly openCapture: Effect.Effect<ContentCapture, never, Scope.Scope>;
-  /**
-   * Verifies the whole file against its hash, then streams it. Two sequential reads per fetch.
-   *
-   * The cost is deliberate. A hash can only be confirmed at the last byte, and by then a streaming
-   * response has long since sent its status line; aborting a half-sent body would make "corrupt"
-   * indistinguishable to the client from a dropped connection. So the file is read once to prove it
-   * matches its reference and once to serve it, and a 200 never carries unverified bytes.
-   */
-  readonly open: (ref: string) => Effect.Effect<Readable, ContentUnavailable>;
-  /** Verifies in memory and returns the whole value. */
-  readonly readAll: (ref: string) => Effect.Effect<Buffer, ContentUnavailable>;
-}
-
 export interface ContentCapture {
   /**
    * Publishes a stream's bytes and returns the reference that names them. The bytes are hashed as
@@ -109,7 +90,7 @@ export interface ContentCapture {
 
 /** The store plus its collector. The collector is deliberately not on the service tag. */
 export interface WorkflowContentStoreInstance {
-  readonly service: WorkflowContentStoreService;
+  readonly service: WorkflowContentStore['Service'];
   readonly collectGarbage: (input: ContentGcInput) => Promise<ContentGcResult>;
 }
 
@@ -130,52 +111,68 @@ export type ContentGcResult =
     }
   | { readonly status: 'swept'; readonly stats: OrphanSweepStats };
 
-export const WorkflowContentStore = Context.Service<WorkflowContentStoreService>(
-  'isagi/WorkflowContentStore',
-);
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const database = yield* RuntimeDatabase;
+  const instance = makeWorkflowContentStore(directory.paths.root);
+
+  const tick = diagnosticPhase(
+    'workflow.content_gc',
+    {},
+    Effect.promise(() =>
+      instance.collectGarbage({
+        nowMs: Date.now(),
+        minAgeMs: contentGcGraceMs,
+        referencedHashes: () =>
+          Effect.runSync(
+            database.use('list_referenced_content_hashes', listReferencedContentHashes),
+          ),
+      }),
+    ),
+  ).pipe(
+    // catchCause, not catch: a rejected promise (a failed mark read included) is a defect
+    // here, and it must be logged and leave the next tick running.
+    Effect.catchCause((cause) =>
+      Effect.sync(() => console.warn('[runtime] Workflow content GC failed', Cause.pretty(cause))),
+    ),
+  );
+  const timer = setInterval(() => {
+    void Effect.runPromise(tick);
+  }, contentGcIntervalMs);
+  timer.unref();
+  yield* Effect.addFinalizer(() => Effect.sync(() => clearInterval(timer)));
+
+  return instance.service;
+});
 
 /**
  * The store and its hourly collector. Bind this layer once (`runtime.layer.ts`) so exactly one
  * collector runs over the root. There is no startup pass: the first tick is one interval in.
  */
-export const WorkflowContentStoreLive = Layer.effect(
+export class WorkflowContentStore extends Context.Service<
   WorkflowContentStore,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const database = yield* RuntimeDatabase;
-    const instance = makeWorkflowContentStore(directory.paths.root);
-
-    const tick = diagnosticPhase(
-      'workflow.content_gc',
-      {},
-      Effect.promise(() =>
-        instance.collectGarbage({
-          nowMs: Date.now(),
-          minAgeMs: contentGcGraceMs,
-          referencedHashes: () =>
-            Effect.runSync(
-              database.use('list_referenced_content_hashes', listReferencedContentHashes),
-            ),
-        }),
-      ),
-    ).pipe(
-      // catchCause, not catch: a rejected promise (a failed mark read included) is a defect
-      // here, and it must be logged and leave the next tick running.
-      Effect.catchCause((cause) =>
-        Effect.sync(() =>
-          console.warn('[runtime] Workflow content GC failed', Cause.pretty(cause)),
-        ),
-      ),
-    );
-    const timer = setInterval(() => {
-      void Effect.runPromise(tick);
-    }, contentGcIntervalMs);
-    timer.unref();
-    yield* Effect.addFinalizer(() => Effect.sync(() => clearInterval(timer)));
-
-    return instance.service;
-  }),
-);
+  {
+    /**
+     * Opens a capture lease. Every blob published or reused through it, and every temp it is writing,
+     * is protected from the collector until the scope closes. Checkpoint capture keeps the scope open
+     * until its checkpoint row has committed or the capture has failed.
+     */
+    readonly openCapture: Effect.Effect<ContentCapture, never, Scope.Scope>;
+    /**
+     * Verifies the whole file against its hash, then streams it. Two sequential reads per fetch.
+     *
+     * The cost is deliberate. A hash can only be confirmed at the last byte, and by then a streaming
+     * response has long since sent its status line; aborting a half-sent body would make "corrupt"
+     * indistinguishable to the client from a dropped connection. So the file is read once to prove it
+     * matches its reference and once to serve it, and a 200 never carries unverified bytes.
+     */
+    readonly open: (ref: string) => Effect.Effect<Readable, ContentUnavailable>;
+    /** Verifies in memory and returns the whole value. */
+    readonly readAll: (ref: string) => Effect.Effect<Buffer, ContentUnavailable>;
+  }
+>()('isagi/runtime/workflows/WorkflowContentStore') {
+  static readonly layer = Layer.effect(WorkflowContentStore, make);
+}
 
 /**
  * Absolute path of a reference's backing file under the store's root (`<data>/workflow-content`).

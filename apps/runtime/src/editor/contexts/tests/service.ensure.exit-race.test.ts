@@ -3,8 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { PtyRepository } from '../../../pty-processes/repository.js';
-import { PtyStartError } from '../../../pty-processes/types.js';
+import { PtyRepository, PtyStartError } from '../../../pty-processes/index.js';
 import {
   awaitProbeSettled,
   editorBackendStub,

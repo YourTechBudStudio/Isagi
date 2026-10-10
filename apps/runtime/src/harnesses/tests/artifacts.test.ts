@@ -21,7 +21,7 @@ import { Effect, Layer, Result } from 'effect';
 
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { AgentSessionArtifacts, AgentSessionArtifactsLive } from '../ledger.js';
+import { AgentSessionArtifacts } from '../ledger.js';
 
 test('agent session artifacts initialize and read harness metadata', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifacts-'));
@@ -341,7 +341,7 @@ function backdateFolder(path: string) {
 }
 
 function testLayer(dataRoot: string) {
-  return AgentSessionArtifactsLive.pipe(
+  return AgentSessionArtifacts.layer.pipe(
     Layer.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot))),
   );
 }

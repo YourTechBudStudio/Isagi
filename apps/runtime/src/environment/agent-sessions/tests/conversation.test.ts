@@ -6,8 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { getConversationHistory } from '../../../harnesses/conversation.js';
-import { AgentSessionArtifacts } from '../../../harnesses/ledger.js';
+import { getConversationHistory, AgentSessionArtifacts } from '../../../harnesses/index.js';
 import { harnessLogPath, testLayer } from './test-support.js';
 
 test('conversation history ignores hook-derived message records', async () => {

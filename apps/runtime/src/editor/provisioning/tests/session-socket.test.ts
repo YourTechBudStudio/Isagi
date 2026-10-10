@@ -8,11 +8,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { editorSessionSocketPath, maxSessionSocketPathBytes } from '../../contexts/launch-spec.js';
-import {
-  EditorInstallIo,
-  EditorInstallIoLive,
-  runtimeSessionSocketDirectory,
-} from '../install-io.js';
+import { EditorInstallIo, runtimeSessionSocketDirectory } from '../install-io.js';
 
 /**
  * The session socket is the one shared editor path anchored outside the data
@@ -72,7 +68,7 @@ test('shared editor state creates a private socket directory and reuses it', asy
     assert.equal(statSync(first.sessionSocketDirectory).mode & 0o777, 0o700);
     // The rest of the shared state stays where it was.
     assert.equal(path.dirname(path.dirname(first.userDataPath)), editorsPath);
-  }).pipe(Effect.provide(EditorInstallIoLive));
+  }).pipe(Effect.provide(EditorInstallIo.layer));
 
   try {
     await Effect.runPromise(run);
@@ -98,7 +94,7 @@ test('the session socket directory is removed when the runtime shuts down', asyn
     const { sessionSocketDirectory } = yield* io.prepareEditorState({ editorsPath });
     assert.equal(existsSync(sessionSocketDirectory), true);
     return sessionSocketDirectory;
-  }).pipe(Effect.provide(EditorInstallIoLive));
+  }).pipe(Effect.provide(EditorInstallIo.layer));
 
   try {
     const sessionSocketDirectory = await Effect.runPromise(run);

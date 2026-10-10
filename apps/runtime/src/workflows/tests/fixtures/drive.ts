@@ -2,8 +2,8 @@ import { eq } from 'drizzle-orm';
 
 import type { WorkflowUserInputAnswers, WorkflowWaitDto } from '@isagi/contracts';
 
-import { workflowOperations, workflowRuns } from '../../../persistence/schema.js';
 import type { EngineHarness } from '../../engine/test-support.js';
+import { workflowOperations, workflowRuns } from '../../tables.js';
 
 /**
  * Driving a fixture workflow to wherever it stops, by answering whatever the run waits on.

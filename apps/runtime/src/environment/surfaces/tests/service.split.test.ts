@@ -7,9 +7,9 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Result } from 'effect';
 
-import { surfacePanes } from '../../../persistence/schema.js';
 import { DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceError, SurfaceService } from '../../index.js';
+import { surfacePanes } from '../../tables.js';
 import { addPaneToSurface, insertWorktree, testLayer } from '../../testing.js';
 
 test('split pane creates a sibling terminal pane, updates layout, assigns session, and focuses it', async () => {

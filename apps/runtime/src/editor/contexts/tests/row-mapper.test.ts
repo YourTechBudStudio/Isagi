@@ -3,7 +3,8 @@ import test from 'node:test';
 
 import { type InferSelectModel } from 'drizzle-orm';
 
-import { editorContexts, ptyProcesses } from '../../../persistence/schema.js';
+import { ptyProcesses } from '../../../pty-processes/tables.js';
+import { editorContexts } from '../../tables.js';
 import { editorContextRow, EditorContextRowInvariantViolation } from '../row-mapper.js';
 
 type EditorContextRecord = InferSelectModel<typeof editorContexts>;

@@ -4,17 +4,10 @@
  */
 
 export { registerWorkflowApi } from './api.js';
-export {
-  WorkflowEngine,
-  WorkflowEngineLive,
-  startEngine,
-  type WorkflowEngineService,
-} from './engine/service.js';
-export {
-  WorkflowRunErasure,
-  WorkflowRunErasureLive,
-  type WorkflowRunErasureService,
-} from './erasure.js';
+export { WorkflowEngine, startEngine } from './engine/service.js';
+// The workspace's `ProjectDeletionParticipant` port, implemented over workflow runs. Only the
+// composition root wires it.
+export { WorkflowProjectErasure } from './erasure.js';
 export { WorkflowEngineError } from './errors.js';
 export {
   ContentPublishError,
@@ -22,12 +15,6 @@ export {
   type ContentCapture,
   makeWorkflowContentStore,
   WorkflowContentStore,
-  WorkflowContentStoreLive,
-  type WorkflowContentStoreService,
 } from './store/content-store.js';
 export { WorkflowLoadError, type LoadedWorkflowArtifact } from './structure/loader.js';
-export {
-  WorkflowRegistry,
-  WorkflowRegistryLive,
-  type WorkflowRegistryService,
-} from './structure/registry.js';
+export { WorkflowRegistry } from './structure/registry.js';

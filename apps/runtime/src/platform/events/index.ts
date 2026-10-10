@@ -10,14 +10,10 @@
 export {
   nextRuntimeEventEnvelope,
   RuntimeEventBus,
-  RuntimeEventBusLive,
-  type RuntimeEventBusService,
   type RuntimeEventSubscription,
 } from './runtime-events.js';
 export {
   InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
   type InternalRuntimeEvent,
-  type InternalRuntimeEventBusService,
   type InternalRuntimeEventSubscription,
 } from './internal-events.js';

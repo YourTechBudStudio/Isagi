@@ -8,45 +8,36 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
 import {
-  AgentSessionError,
-  AgentSessionArtifacts,
   AgentSessionService,
-  type AgentSessionServiceShape,
-} from '../../environment/agent-sessions/index.js';
-import { SurfaceService } from '../../environment/index.js';
-import { StartupSessionRestoreLayer } from '../../environment/sessions/restore.js';
-import {
+  SurfaceService,
   SurfaceRepository,
-  type SurfaceRepositoryService,
-} from '../../environment/surfaces/repository.js';
-import type { PaneSessionBinding } from '../../environment/surfaces/types.js';
-import {
   TerminalSessionService,
-  TerminalSessionError,
-  type TerminalSessionServiceShape,
-} from '../../environment/terminal-sessions/index.js';
+} from '../../environment/index.js';
+import type { PaneSessionBinding } from '../../environment/index.js';
 import {
+  agentSessions,
+  surfacePanes,
+  terminalSessions,
+  worktreeSurfaces,
+} from '../../environment/tables.js';
+import {
+  AgentSessionError,
+  StartupSessionRestoreLayer,
+  TerminalSessionError,
   captureStartupLogs,
   type HarnessLaunchRecord,
   realRestoreLayer,
   realSessionCreationLayer,
   sessionDataLayer,
-} from '../../environment/tests/restore-support.js';
-import { HarnessLaunchBlocked } from '../../harnesses/control-plane/index.js';
-import {
-  agentSessions,
-  projects,
-  ptyProcesses,
-  surfacePanes,
-  terminalSessions,
-  worktrees,
-  worktreeSurfaces,
-} from '../../persistence/schema.js';
+} from '../../environment/testing.js';
+import { AgentSessionArtifacts, HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../../projects/repository.js';
-import type { LaunchPtyProcessInput } from '../../pty-processes/types.js';
-import { WorkspaceService } from '../../workspace/service.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { projects, worktrees } from '../../projects/tables.js';
+import type { LaunchPtyProcessInput } from '../../pty-processes/index.js';
+import { ptyProcesses } from '../../pty-processes/tables.js';
+import { WorkspaceService } from '../../workspace/index.js';
 import { liveWorkspaceLayer } from '../../workspace/testing.js';
 
 test('startup session restore ensures every pane-bound session and isolates failures', async () => {
@@ -203,8 +194,8 @@ test('startup session restore uses real services to restore pane-bound sessions 
 
 function restoreLayer(input: {
   readonly bindings: readonly PaneSessionBinding[] | DatabaseError;
-  readonly agentService?: Partial<AgentSessionServiceShape> | undefined;
-  readonly terminalService?: Partial<TerminalSessionServiceShape> | undefined;
+  readonly agentService?: Partial<AgentSessionService['Service']> | undefined;
+  readonly terminalService?: Partial<TerminalSessionService['Service']> | undefined;
 }) {
   return StartupSessionRestoreLayer.pipe(
     Layer.provide(Layer.succeed(SurfaceRepository, fakeSurfaceRepository(input.bindings))),
@@ -400,7 +391,7 @@ const readRestoreIntegrationState = Effect.gen(function* () {
 
 function fakeSurfaceRepository(
   bindings: readonly PaneSessionBinding[] | DatabaseError,
-): SurfaceRepositoryService {
+): SurfaceRepository['Service'] {
   return {
     listPaneSessionBindings:
       bindings instanceof DatabaseError ? Effect.fail(bindings) : Effect.succeed([...bindings]),
@@ -411,6 +402,7 @@ function fakeSurfaceRepository(
     findEnvironmentFocus: () => Effect.die('findEnvironmentFocus is not used'),
     listWorkspaceSurfaceMetadata: Effect.die('listWorkspaceSurfaceMetadata is not used'),
     listEnvironmentFocusStates: Effect.die('listEnvironmentFocusStates is not used'),
+    listDurableSessions: Effect.die('listDurableSessions is not used'),
     listPanesForSurface: () => Effect.die('listPanesForSurface is not used'),
     listAgentSessionsForPanes: () => Effect.die('listAgentSessionsForPanes is not used'),
     listTerminalSessionsForPanes: () => Effect.die('listTerminalSessionsForPanes is not used'),
@@ -430,12 +422,12 @@ function fakeSurfaceRepository(
     claimPaneSession: () => Effect.die('claimPaneSession is not used'),
     setEnvironmentFocus: () => Effect.die('setEnvironmentFocus is not used'),
     moveSurfaceOrder: () => Effect.die('moveSurfaceOrder is not used'),
-  } satisfies SurfaceRepositoryService;
+  } satisfies SurfaceRepository['Service'];
 }
 
 function fakeAgentService(
-  overrides: Partial<AgentSessionServiceShape> = {},
-): AgentSessionServiceShape {
+  overrides: Partial<AgentSessionService['Service']> = {},
+): AgentSessionService['Service'] {
   return {
     startFresh: () => Effect.die('agent startFresh is not used'),
     get: () => Effect.die('agent get is not used'),
@@ -443,19 +435,19 @@ function fakeAgentService(
     activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used'),
     stopUnlessPlaced: () => Effect.die('agent stopUnlessPlaced is not used'),
     ...overrides,
-  } satisfies AgentSessionServiceShape;
+  } satisfies AgentSessionService['Service'];
 }
 
 function fakeTerminalService(
-  overrides: Partial<TerminalSessionServiceShape> = {},
-): TerminalSessionServiceShape {
+  overrides: Partial<TerminalSessionService['Service']> = {},
+): TerminalSessionService['Service'] {
   return {
     startFresh: () => Effect.die('terminal startFresh is not used'),
     get: () => Effect.die('terminal get is not used'),
     ensureActivePtyProcess: () => Effect.die('terminal ensureActivePtyProcess is not configured'),
     activePtyProcessId: () => Effect.die('terminal activePtyProcessId is not used'),
     ...overrides,
-  } satisfies TerminalSessionServiceShape;
+  } satisfies TerminalSessionService['Service'];
 }
 
 function agentBinding(input: {
@@ -504,7 +496,7 @@ test('a folder project keeps its sessions, paths, and resume identity across a r
     const registered = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* WorkspaceService;
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         const added = yield* service.registerProject({ path: projectPath });
         const worktree = (yield* repository.listWorktrees).find(
           (row) => row.projectId === added.projectId,

@@ -8,26 +8,16 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
 import {
-  projects,
-  ptyProcesses,
-  worktreeCommandRuns,
-  worktreeCommandStates,
-  worktrees,
-} from '../../persistence/schema.js';
-import {
   DatabaseError,
   DataDirectory,
   RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
   type RuntimeDrizzleDatabase,
 } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import {
-  CommandRepository,
-  CommandRepositoryLive,
-  type CommandRepositoryService,
-} from '../repository.js';
+import { projects, worktrees } from '../../projects/tables.js';
+import { ptyProcesses } from '../../pty-processes/tables.js';
+import { CommandRepository } from '../repository.js';
+import { worktreeCommandRuns, worktreeCommandStates } from '../tables.js';
 
 /**
  * The atomic finalizers are the only place where a command's run history and its
@@ -45,9 +35,9 @@ type TableFault = 'runs' | 'states' | null;
 
 function testLayer(dataRoot: string, fault: TableFault) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const live = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
+  const live = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
   const database = fault === null ? live : faultingDatabase(live, fault);
-  const repository = CommandRepositoryLive.pipe(Layer.provide(database));
+  const repository = CommandRepository.layer.pipe(Layer.provide(database));
   return Layer.mergeAll(database, repository);
 }
 
@@ -55,7 +45,7 @@ function testLayer(dataRoot: string, fault: TableFault) {
 // transaction. Everything else — including the reads and the other table's
 // writes — is the genuine implementation.
 function faultingDatabase(
-  live: Layer.Layer<RuntimeDatabaseService, DatabaseError>,
+  live: Layer.Layer<RuntimeDatabase, DatabaseError>,
   fault: 'runs' | 'states',
 ) {
   const table = fault === 'runs' ? worktreeCommandRuns : worktreeCommandStates;
@@ -84,13 +74,13 @@ function faultingDatabase(
               }) as RuntimeDrizzleDatabase,
             ),
           ),
-      } satisfies RuntimeDatabaseService;
+      } satisfies RuntimeDatabase['Service'];
     }),
   ).pipe(Layer.provide(live));
 }
 
 function runWithDatabase<A, E>(
-  build: Effect.Effect<A, E, RuntimeDatabaseService | CommandRepositoryService>,
+  build: Effect.Effect<A, E, RuntimeDatabase | CommandRepository>,
   options: { readonly fault?: TableFault | undefined } = {},
 ) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-command-repository-'));
@@ -759,7 +749,7 @@ test('a resolved snapshot survives closing and reopening the database', async ()
 
   try {
     const withFreshLayer = <A, E>(
-      build: Effect.Effect<A, E, RuntimeDatabaseService | CommandRepositoryService>,
+      build: Effect.Effect<A, E, RuntimeDatabase | CommandRepository>,
     ) => Effect.runPromise(build.pipe(Effect.provide(testLayer(dataRoot, null))));
 
     const worktreeId = await withFreshLayer(

@@ -4,8 +4,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import { isPermissionError } from '../fs/fs-errors.js';
-import { normalizeHomePath } from '../fs/paths.js';
+import { isPermissionError, normalizeHomePath } from '../fs/index.js';
 import { Git, type GitCommandError } from './command.js';
 import { gitMetadataOnPath } from './git-metadata.js';
 

@@ -13,7 +13,7 @@ import {
   type WireSchema,
 } from '@isagi/contracts';
 
-import { logDiagnosticEvent } from '../diagnostics/phase.js';
+import { logDiagnosticEvent } from '../diagnostics/index.js';
 import {
   requestDecodingFailed,
   responseEncodingFailed,

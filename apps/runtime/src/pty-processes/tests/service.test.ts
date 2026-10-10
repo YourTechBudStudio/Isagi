@@ -7,14 +7,14 @@ import test from 'node:test';
 import { Effect, Layer, Result } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
-import { InternalRuntimeEventBusLive } from '../../platform/events/index.js';
-import { DataDirectory, RuntimeDatabaseLive } from '../../platform/persistence/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell, type UserShellService } from '../../platform/process/user-shell.js';
+import { UserShell } from '../../platform/process/index.js';
 import { PtyBackendCatalog } from '../backend.js';
-import { PtyForegroundStateLive } from '../foreground-state.js';
-import { PtyRepository, PtyRepositoryLive } from '../repository.js';
-import { PtyService, PtyServiceLive } from '../service.js';
+import { PtyForegroundState } from '../foreground-state.js';
+import { PtyRepository } from '../repository.js';
+import { PtyService } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js';
 
@@ -25,27 +25,27 @@ function dataDirectoryLayer(dataRoot: string) {
 
 function testLayer(dataRoot: string) {
   const directory = dataDirectoryLayer(dataRoot);
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const repository = PtyRepositoryLive.pipe(Layer.provide(database));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  const repository = PtyRepository.layer.pipe(Layer.provide(database));
   return Layer.mergeAll(database, repository);
 }
 
 function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const directory = dataDirectoryLayer(dataRoot);
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const repository = PtyRepositoryLive.pipe(Layer.provide(database));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  const repository = PtyRepository.layer.pipe(Layer.provide(database));
   const backendLayer = Layer.succeed(
     PtyBackendCatalog,
     fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
   );
   const userShellLayer = Layer.succeed(UserShell, testUserShell());
-  const service = PtyServiceLive.pipe(
+  const service = PtyService.layer.pipe(
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(backendLayer),
-    Layer.provide(PtyForegroundStateLive),
+    Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
-    Layer.provide(InternalRuntimeEventBusLive),
+    Layer.provide(InternalRuntimeEventBus.layer),
     Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);
@@ -68,7 +68,7 @@ function unusedTmuxBackend(): PtyBackendShape {
   };
 }
 
-function testUserShell(): UserShellService {
+function testUserShell(): UserShell['Service'] {
   const environment = {
     _tag: 'Available' as const,
     values: {

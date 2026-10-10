@@ -9,14 +9,15 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
 import { parse } from 'yaml';
 
-import { isagiDocsName, isagiDocsPackageFiles } from '../../harnesses/isagi-docs.js';
 import {
   configSchemaReferenceSources,
   isagiDocsContentSources,
+  isagiDocsName,
+  isagiDocsPackageFiles,
   workflowScaffoldSources,
-} from '../../platform/assets/index.js';
-import { projectConfigSchema } from '../../projects/config/config-schema.js';
-import { runtimeConfigSchema } from '../../runtime-config/config-schema.js';
+} from '../../harnesses/testing.js';
+import { projectConfigSchema } from '../../projects/testing.js';
+import { runtimeConfigSchema } from '../../runtime-config/testing.js';
 
 const dataRoot = '/Users/example/.isagi';
 const files = isagiDocsPackageFiles(dataRoot);

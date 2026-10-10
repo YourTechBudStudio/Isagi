@@ -20,25 +20,21 @@ import type {
   WorkflowUserInputAnswers,
 } from '@isagi/contracts';
 
-import { AgentSessionService } from '../../environment/agent-sessions/index.js';
-import { SurfaceRepository, SurfaceService } from '../../environment/index.js';
-import { HarnessControlPlane } from '../../harnesses/control-plane/index.js';
-import { HarnessAdapterRegistry } from '../../harnesses/index.js';
-import { AgentSessionArtifacts } from '../../harnesses/ledger.js';
-import { HarnessLedgerObserver } from '../../harnesses/observer.service.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
+import {
+  HarnessControlPlane,
+  HarnessAdapterRegistry,
+  AgentSessionArtifacts,
+  HarnessLedgerObserver,
+} from '../../harnesses/index.js';
 import {
   InternalRuntimeEventBus,
   nextRuntimeEventEnvelope,
   RuntimeEventBus,
-  type RuntimeEventBusService,
 } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
-import {
-  RuntimeDatabase,
-  type DatabaseError,
-  type RuntimeDatabaseService,
-} from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../../projects/repository.js';
+import { RuntimeDatabase, type DatabaseError } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { WorkspaceService } from '../../workspace/index.js';
 import { exportCheckpoint } from '../checkpoints/export.js';
@@ -80,13 +76,46 @@ import {
 import { recoverAtStartup } from './restart.js';
 import type { Emit, EngineDeps, EngineRuntime, HeadlessProcess } from './runtime.js';
 
-/**
- * The workflow engine: launch, the controls, and the reads, behind one narrow surface.
- *
- * `startEngine` is the whole engine given its dependencies; the live layer only gathers the owning
- * services and hands them over, and tests hand over fakes instead.
- */
-export interface WorkflowEngineService {
+/** The engine plus a way to wait until its background work has settled, for tests and scripts. */
+export interface EngineHandle extends WorkflowEngineShape {
+  readonly awaitIdle: Effect.Effect<void>;
+}
+
+const make = Effect.gen(function* () {
+  const workspaceService = yield* WorkspaceService;
+  const surfaces = yield* SurfaceService;
+  const agents = yield* AgentSessionService;
+  const artifacts = yield* AgentSessionArtifacts;
+  const observer = yield* HarnessLedgerObserver;
+  const pty = yield* PtyService;
+  return yield* startEngine({
+    database: yield* RuntimeDatabase,
+    events: yield* RuntimeEventBus,
+    deps: {
+      registry: yield* WorkflowRegistry,
+      places: {
+        workspace: yield* ProjectRepository,
+        workspaceService,
+        surfaceReads: surfaces,
+        surfaces,
+      },
+      agents: makeAgentPort({ agents, surfaces, pty, artifacts, observer }),
+      checkpoints: makeCheckpointsPort({
+        git: yield* Git,
+        content: yield* WorkflowContentStore,
+        workspace: workspaceService,
+      }),
+      headless: makeHeadlessPort({
+        harnesses: yield* HarnessAdapterRegistry,
+        controlPlane: yield* HarnessControlPlane,
+        pty,
+      }),
+      internalEvents: yield* InternalRuntimeEventBus,
+    },
+  });
+});
+
+interface WorkflowEngineShape {
   readonly listWorkflowDescriptors: (
     origin: WorkflowLaunchOrigin,
   ) => Effect.Effect<readonly DescriptorListing[], unknown>;
@@ -144,53 +173,21 @@ export interface WorkflowEngineService {
   ) => Effect.Effect<ExportWorkflowCheckpointOutput, unknown>;
 }
 
-export const WorkflowEngine = Context.Service<WorkflowEngineService>('isagi/WorkflowEngine');
-
-/** The engine plus a way to wait until its background work has settled, for tests and scripts. */
-export interface EngineHandle extends WorkflowEngineService {
-  readonly awaitIdle: Effect.Effect<void>;
+/**
+ * The workflow engine: launch, the controls, and the reads, behind one narrow surface.
+ *
+ * `startEngine` is the whole engine given its dependencies; the live layer only gathers the owning
+ * services and hands them over, and tests hand over fakes instead.
+ */
+export class WorkflowEngine extends Context.Service<WorkflowEngine, WorkflowEngineShape>()(
+  'isagi/runtime/workflows/WorkflowEngine',
+) {
+  static readonly layer = Layer.effect(WorkflowEngine, make);
 }
 
-export const WorkflowEngineLive = Layer.effect(
-  WorkflowEngine,
-  Effect.gen(function* () {
-    const workspaceService = yield* WorkspaceService;
-    const surfaces = yield* SurfaceService;
-    const agents = yield* AgentSessionService;
-    const artifacts = yield* AgentSessionArtifacts;
-    const observer = yield* HarnessLedgerObserver;
-    const pty = yield* PtyService;
-    return yield* startEngine({
-      database: yield* RuntimeDatabase,
-      events: yield* RuntimeEventBus,
-      deps: {
-        registry: yield* WorkflowRegistry,
-        places: {
-          workspace: yield* WorkspaceRepository,
-          workspaceService,
-          surfaceRepository: yield* SurfaceRepository,
-          surfaces,
-        },
-        agents: makeAgentPort({ agents, surfaces, pty, artifacts, observer }),
-        checkpoints: makeCheckpointsPort({
-          git: yield* Git,
-          content: yield* WorkflowContentStore,
-          workspace: workspaceService,
-        }),
-        headless: makeHeadlessPort({
-          harnesses: yield* HarnessAdapterRegistry,
-          controlPlane: yield* HarnessControlPlane,
-          pty,
-        }),
-        internalEvents: yield* InternalRuntimeEventBus,
-      },
-    });
-  }),
-);
-
 export function startEngine(input: {
-  readonly database: RuntimeDatabaseService;
-  readonly events: RuntimeEventBusService;
+  readonly database: RuntimeDatabase['Service'];
+  readonly events: RuntimeEventBus['Service'];
   readonly deps: EngineDeps;
 }): Effect.Effect<EngineHandle, unknown, Scope.Scope> {
   return Effect.gen(function* () {

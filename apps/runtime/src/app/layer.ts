@@ -1,200 +1,179 @@
 import { Effect, Layer } from 'effect';
 
-import { CliAccessLive, type CliAccessService } from '../cli-access/index.js';
+import { CliAccess } from '../cli-access/index.js';
+import { CommandRepository, CommandService } from '../commands/index.js';
 import {
-  CommandPortProbeLive,
-  CommandRepositoryLive,
-  CommandService,
-  CommandServiceLive,
-  type CommandServiceShape,
-} from '../commands/index.js';
+  EditorContextRepository,
+  EditorContextService,
+  EditorInstallIo,
+  EditorProvisioning,
+} from '../editor/index.js';
 import {
-  EditorContextRepositoryLive,
-  EditorContextServiceLive,
-  type EditorContextServiceShape,
-} from '../editor/contexts/index.js';
-import {
-  EditorInstallIoLive,
-  EditorProvisioningLive,
-  type EditorProvisioningService,
-} from '../editor/provisioning/index.js';
-import {
-  AgentSessionAttentionProjectionLive,
-  AgentSessionArtifactsLive,
-  AgentSessionRepositoryLive,
-  AgentSessionServiceLive,
-  type AgentSessionAttentionProjectionService,
-  type AgentSessionServiceShape,
-} from '../environment/agent-sessions/index.js';
-import {
-  SurfaceRepositoryLive,
-  SurfaceServiceLive,
-  type SurfaceRepositoryService,
-  type SurfaceServiceShape,
+  AgentSessionAttentionProjection,
+  AgentSessionRepository,
+  AgentSessionService,
+  HarnessObservationTargetsLayer,
+  SurfaceRepository,
+  SurfaceService,
+  RuntimeEventProjection,
+  TerminalSessionRepository,
+  TerminalSessionService,
+  SessionGc,
+  SessionLifecycle,
 } from '../environment/index.js';
-import { RuntimeEventProjectionLive } from '../environment/runtime-event-projection.js';
 import {
-  TerminalSessionRepositoryLive,
-  TerminalSessionServiceLive,
-  type TerminalSessionServiceShape,
-} from '../environment/terminal-sessions/index.js';
+  AgentSessionArtifacts,
+  HarnessControlPlane,
+  HarnessAdapterRegistry,
+  HarnessLedgerObserver,
+  HostInventory,
+} from '../harnesses/index.js';
+import { EventLoopWatchdog } from '../platform/diagnostics/index.js';
+import { InternalRuntimeEventBus, RuntimeEventBus } from '../platform/events/index.js';
+import { Git } from '../platform/git/index.js';
+import { EntityLock } from '../platform/locks/index.js';
+import { LoopbackPortProbe } from '../platform/net/index.js';
+import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
+import { UserShell } from '../platform/process/index.js';
+import { ProjectRepository } from '../projects/index.js';
 import {
-  HarnessControlPlaneLive,
-  type HarnessControlPlaneService,
-} from '../harnesses/control-plane/index.js';
-import { HarnessAdapterRegistryLive, HarnessLedgerObserverLive } from '../harnesses/index.js';
-import {
-  HostInventoryLive,
-  type HostInventoryService,
-  UserShellLive,
-} from '../harnesses/inventory/index.js';
-import { EventLoopWatchdogLive } from '../platform/diagnostics/event-loop-watchdog.js';
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-  RuntimeEventBusLive,
-  type InternalRuntimeEventBusService,
-  type RuntimeEventBusService,
-} from '../platform/events/index.js';
-import { GitLive } from '../platform/git/index.js';
-import { EntityLockLive } from '../platform/locks/entity-lock.js';
-import { LoopbackPortProbeLive } from '../platform/net/loopback-port-probe.js';
-import {
-  DataDirectoryLive,
-  RuntimeDatabaseLive,
-  StateFileLive,
-} from '../platform/persistence/index.js';
-import { StateFile } from '../platform/persistence/index.js';
-import {
-  NodePtyBackendLive,
-  PtyBackendCatalogLive,
-  PtyForegroundStateLive,
-  PtyRepositoryLive,
-  PtyServiceLive,
-  TmuxBackendLive,
-  type PtyServiceShape,
+  NodePtyBackend,
+  PtyBackendCatalog,
+  PtyForegroundState,
+  PtyRepository,
+  PtyService,
+  TmuxBackend,
 } from '../pty-processes/index.js';
-import { RuntimeConfigLive, type RuntimeConfigService } from '../runtime-config/index.js';
-import { SessionGcLive, type SessionGcService } from '../session-gc/index.js';
-import { SessionLifecycleLive, type SessionLifecycleService } from '../session-lifecycle/index.js';
+import { RuntimeConfig } from '../runtime-config/index.js';
 import {
-  WorkflowContentStoreLive,
-  WorkflowEngineLive,
-  WorkflowRegistryLive,
-  WorkflowRunErasureLive,
-  type WorkflowEngineService,
+  WorkflowContentStore,
+  WorkflowEngine,
+  WorkflowRegistry,
+  WorkflowProjectErasure,
 } from '../workflows/index.js';
 import {
-  WorkspaceRepository,
-  WorkspaceRepositoryLive,
-  WorkspaceServiceLive,
-  type WorkspaceServiceShape,
+  StateFile,
+  WorkspaceService,
+  WorktreeDeleteDiagnosticsReader,
+  WorktreeSetupRepository,
+  WorktreeSetupService,
 } from '../workspace/index.js';
-import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from '../workspace/setup/index.js';
 
-const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
-const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
-const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
-const HostInventoryLayer = HostInventoryLive;
+const DatabaseLayer = RuntimeDatabase.layer.pipe(Layer.provide(DataDirectory.layer));
+const StateFileLayer = StateFile.layer.pipe(Layer.provide(DataDirectory.layer));
+const RuntimeConfigLayer = RuntimeConfig.layer.pipe(Layer.provide(DataDirectory.layer));
+const HostInventoryLayer = HostInventory.layer;
 // Bound once, like the entity lock: the provisioning attempt, its semaphore, and
 // the resolved installation are per-instance state, so the control plane and the
 // API must observe the same service rather than two independently constructed
 // ones.
-const EditorProvisioningLayer = EditorProvisioningLive.pipe(
-  Layer.provide(DataDirectoryLive),
-  Layer.provide(EditorInstallIoLive),
+const EditorProvisioningLayer = EditorProvisioning.layer.pipe(
+  Layer.provide(DataDirectory.layer),
+  Layer.provide(EditorInstallIo.layer),
 );
-const HarnessControlPlaneLayer = HarnessControlPlaneLive.pipe(
+const HarnessControlPlaneLayer = HarnessControlPlane.layer.pipe(
   Layer.provide(HostInventoryLayer),
   Layer.provide(RuntimeConfigLayer),
-  Layer.provide(DataDirectoryLive),
+  Layer.provide(DataDirectory.layer),
   Layer.provide(EditorProvisioningLayer),
 );
-const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
-const PtyForegroundStateLayer = PtyForegroundStateLive;
-const HarnessLedgerObserverLayer = HarnessLedgerObserverLive.pipe(
-  Layer.provide(AgentSessionArtifactsLayer),
-  Layer.provide(DataDirectoryLive),
-  Layer.provide(DatabaseLive),
+const ProjectRepositoryLayer = ProjectRepository.layer.pipe(Layer.provide(DatabaseLayer));
+const AgentSessionArtifactsLayer = AgentSessionArtifacts.layer.pipe(
+  Layer.provide(DataDirectory.layer),
 );
-const AgentSessionAttentionProjectionLayer = AgentSessionAttentionProjectionLive.pipe(
+const PtyForegroundStateLayer = PtyForegroundState.layer;
+// The observer's `HarnessObservationTargets` port, answered by the environment's agent sessions.
+const HarnessObservationTargetsPort = HarnessObservationTargetsLayer.pipe(
+  Layer.provide(DatabaseLayer),
+);
+const HarnessLedgerObserverLayer = HarnessLedgerObserver.layer.pipe(
+  Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(DataDirectory.layer),
+  Layer.provide(HarnessObservationTargetsPort),
+);
+const AgentSessionAttentionProjectionLayer = AgentSessionAttentionProjection.layer.pipe(
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
   Layer.provide(PtyForegroundStateLayer),
-  Layer.provide(DatabaseLive),
+  Layer.provide(DatabaseLayer),
 );
-const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
-  Layer.provide(DatabaseLive),
+const SurfaceRepositoryLayer = SurfaceRepository.layer.pipe(
+  Layer.provide(DatabaseLayer),
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(AgentSessionAttentionProjectionLayer),
 );
-const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
-const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowRegistryLayer = WorkflowRegistryLive.pipe(
-  Layer.provide(DataDirectoryLive),
+const WorktreeSetupRepositoryLayer = WorktreeSetupRepository.layer.pipe(
+  Layer.provide(DatabaseLayer),
+);
+const WorktreeSetupServiceLayer = WorktreeSetupService.layer.pipe(
+  Layer.provide(WorktreeSetupRepositoryLayer),
+);
+const PtyRepositoryLayer = PtyRepository.layer.pipe(Layer.provide(DatabaseLayer));
+const CommandRepositoryLayer = CommandRepository.layer.pipe(Layer.provide(DatabaseLayer));
+const WorkflowRegistryLayer = WorkflowRegistry.layer.pipe(
+  Layer.provide(DataDirectory.layer),
   Layer.provide(RuntimeConfigLayer),
 );
 // One instance for the whole runtime: the server publishes the URL into the same service every PTY
 // launch reads its environment from.
-const CliAccessLayer = CliAccessLive.pipe(Layer.provide(DataDirectoryLive));
-const PtyServiceLayer = PtyServiceLive.pipe(
+const CliAccessLayer = CliAccess.layer.pipe(Layer.provide(DataDirectory.layer));
+const PtyServiceLayer = PtyService.layer.pipe(
   Layer.provide(CliAccessLayer),
   Layer.provide(PtyRepositoryLayer),
-  Layer.provide(PtyBackendCatalogLive),
+  Layer.provide(PtyBackendCatalog.layer),
   Layer.provide(PtyForegroundStateLayer),
   Layer.provide(RuntimeConfigLayer),
-  Layer.provide(NodePtyBackendLive),
-  Layer.provide(TmuxBackendLive),
-  Layer.provide(DataDirectoryLive),
+  Layer.provide(NodePtyBackend.layer),
+  Layer.provide(TmuxBackend.layer),
+  Layer.provide(DataDirectory.layer),
 );
-const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
-  Layer.provide(DataDirectoryLive),
+const HarnessAdapterRegistryLayer = HarnessAdapterRegistry.layer.pipe(
+  Layer.provide(DataDirectory.layer),
   Layer.provide(AgentSessionArtifactsLayer),
 );
-const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
-  Layer.provide(DatabaseLive),
+const AgentSessionRepositoryLayer = AgentSessionRepository.layer.pipe(
+  Layer.provide(DatabaseLayer),
   Layer.provide(AgentSessionArtifactsLayer),
 );
-const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
-  Layer.provide(DatabaseLive),
+const TerminalSessionRepositoryLayer = TerminalSessionRepository.layer.pipe(
+  Layer.provide(DatabaseLayer),
 );
 // Bound once so every consumer below provides the same layer value, which is
 // what makes "one lock scope" a fact rather than a convention.
-const EntityLockLayer = EntityLockLive;
+const EntityLockLayer = EntityLock.layer;
 // Stateless, unlike the lock: sharing the reference is graph hygiene rather
 // than a correctness property.
-const LoopbackPortProbeLayer = LoopbackPortProbeLive;
-const SessionLifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLayer));
-const EditorContextRepositoryLayer = EditorContextRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const LoopbackPortProbeLayer = LoopbackPortProbe.layer;
+const SessionLifecycleLayer = SessionLifecycle.layer.pipe(Layer.provide(EntityLockLayer));
+const EditorContextRepositoryLayer = EditorContextRepository.layer.pipe(
+  Layer.provide(DatabaseLayer),
+);
 // Scoped: constructing it converges interrupted boot attempts, forks the single
 // interpreter of editor PTY events, and takes ownership of the probe fibers. It
 // is provided the same `EntityLockLayer` value as session lifecycle, which is
 // what makes "one lock scope per worktree" true across both domains.
-const EditorContextServiceLayer = EditorContextServiceLive.pipe(
+const EditorContextServiceLayer = EditorContextService.layer.pipe(
   Layer.provide(EditorContextRepositoryLayer),
-  Layer.provide(RepositoryLive),
+  Layer.provide(ProjectRepositoryLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(EditorProvisioningLayer),
   Layer.provide(LoopbackPortProbeLayer),
   Layer.provide(EntityLockLayer),
 );
-const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
+const AgentSessionServiceLayer = AgentSessionService.layer.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(SessionLifecycleLayer),
   Layer.provide(HarnessControlPlaneLayer),
 );
-const TerminalSessionServiceLayer = TerminalSessionServiceLive.pipe(
+const TerminalSessionServiceLayer = TerminalSessionService.layer.pipe(
   Layer.provide(TerminalSessionRepositoryLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(SessionLifecycleLayer),
 );
 const SessionServicesLayer = Layer.mergeAll(AgentSessionServiceLayer, TerminalSessionServiceLayer);
-const SurfaceServiceLayer = SurfaceServiceLive.pipe(
+const SurfaceServiceLayer = SurfaceService.layer.pipe(
   Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(TerminalSessionServiceLayer),
@@ -208,39 +187,37 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(EntityLockLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
-const CommandServiceLayer = CommandServiceLive.pipe(
+const CommandServiceLayer = CommandService.layer.pipe(
   Layer.provide(CommandRepositoryLayer),
-  Layer.provide(RepositoryLive),
+  Layer.provide(ProjectRepositoryLayer),
   Layer.provide(PtyServiceLayer),
-  Layer.provide(PtyRepositoryLayer),
-  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
-  Layer.provide(DataDirectoryLive),
+  Layer.provide(LoopbackPortProbeLayer),
+  Layer.provide(DataDirectory.layer),
 );
 // Project deletion erases the project's workflow runs inside its own transaction, through the
-// workflows domain's stateless `WorkflowRunErasure`.
-const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(SurfaceRepositoryLayer),
+// `ProjectDeletionParticipant` port the workflows domain implements (`WorkflowProjectErasure`).
+const WorkspaceServiceLayer = WorkspaceService.layer.pipe(
+  Layer.provide(WorktreeDeleteDiagnosticsReader.layer.pipe(Layer.provide(DatabaseLayer))),
   Layer.provide(SurfaceAndPtyServiceLayer),
   Layer.provide(CommandServiceLayer),
-  Layer.provide(WorkflowRunErasureLive),
+  Layer.provide(WorkflowProjectErasure),
 );
 // Bound once so exactly one content collector runs; the engine is its only consumer.
-const WorkflowContentStoreLayer = WorkflowContentStoreLive.pipe(
-  Layer.provide(DataDirectoryLive),
-  Layer.provide(DatabaseLive),
+const WorkflowContentStoreLayer = WorkflowContentStore.layer.pipe(
+  Layer.provide(DataDirectory.layer),
+  Layer.provide(DatabaseLayer),
 );
 // The engine owns every workflow write and pushes its events live, with one exception: project
-// deletion erases a project's runs through `WorkflowRunErasure`. It creates worktrees and surfaces
+// deletion erases a project's runs through `WorkflowProjectErasure`. It creates worktrees and surfaces
 // through their owning services (ADR 0008).
-const WorkflowEngineLayer = WorkflowEngineLive.pipe(
-  Layer.provide(DatabaseLive),
-  Layer.provide(GitLive),
+const WorkflowEngineLayer = WorkflowEngine.layer.pipe(
+  Layer.provide(DatabaseLayer),
+  Layer.provide(Git.layer),
   Layer.provide(WorkflowContentStoreLayer),
   Layer.provide(WorkflowRegistryLayer),
-  Layer.provide(RepositoryLive),
+  Layer.provide(ProjectRepositoryLayer),
   Layer.provide(WorkspaceServiceLayer),
   Layer.provide(SurfaceServiceLayer),
-  Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
@@ -248,13 +225,13 @@ const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(HarnessControlPlaneLayer),
 );
-const SessionGcLayer = SessionGcLive.pipe(
+const SessionGcLayer = SessionGc.layer.pipe(
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
   Layer.provide(SessionLifecycleLayer),
 );
-const EventProjectionLayer = RuntimeEventProjectionLive.pipe(
+const EventProjectionLayer = RuntimeEventProjection.layer.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
   Layer.provide(SurfaceRepositoryLayer),
@@ -272,75 +249,67 @@ const ApiServicesLayer = Layer.mergeAll(
   EditorContextServiceLayer,
   CliAccessLayer,
 );
+// The command service is built first so its activation subscriber hears the restored activation.
 const StartupActivationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* CommandService;
-    const stateFile = yield* StateFile;
-    const repository = yield* WorkspaceRepository;
-    const internalEvents = yield* InternalRuntimeEventBus;
-    const state = yield* stateFile.read;
-    const worktreeId = state.workspace.activeWorktreeId;
-    if (worktreeId === null) return;
-    const worktree = yield* repository.findWorktree(worktreeId);
-    if (!worktree) return;
-    yield* internalEvents.publish({
-      type: 'worktree_activation_change',
-      previousWorktreeId: null,
-      nextWorktreeId: worktree.id,
-      cause: 'startup_restored',
-    });
+    const workspace = yield* WorkspaceService;
+    yield* workspace.publishRestoredActivation;
   }),
-).pipe(Layer.provide(CommandServiceLayer), Layer.provide(RepositoryLive), Layer.provide(StateLive));
+).pipe(Layer.provide(CommandServiceLayer), Layer.provide(WorkspaceServiceLayer));
 
 export type RuntimeServices =
-  | CommandServiceShape
-  | WorkspaceServiceShape
-  | SurfaceServiceShape
-  | PtyServiceShape
-  | AgentSessionServiceShape
-  | AgentSessionAttentionProjectionService
-  | TerminalSessionServiceShape
-  | RuntimeEventBusService
-  | InternalRuntimeEventBusService
-  | SessionLifecycleService
-  | SessionGcService
-  | SurfaceRepositoryService
-  | WorkflowEngineService
-  | HostInventoryService
-  | HarnessControlPlaneService
-  | EditorProvisioningService
-  | CliAccessService
-  // `EntityLockService` is deliberately absent, and stays absent now that the
+  | CommandService
+  | WorkspaceService
+  | SurfaceService
+  | PtyService
+  | AgentSessionService
+  | AgentSessionAttentionProjection
+  | TerminalSessionService
+  | RuntimeEventBus
+  | InternalRuntimeEventBus
+  | SessionLifecycle
+  | SessionGc
+  | SurfaceRepository
+  | WorkflowEngine
+  | HostInventory
+  | HarnessControlPlane
+  | EditorProvisioning
+  | CliAccess
+  // `EntityLock` is deliberately absent, and stays absent now that the
   // placement path uses it: it is a construction dependency of
   // `SessionLifecycle`, `EditorContextService`, and `SurfaceService`, each of
   // which resolves it once when its layer is built. No effect run through
   // `ManagedRuntime` requires the tag, so adding it here would widen the runtime
   // environment for a caller that does not exist.
-  | EditorContextServiceShape
-  | RuntimeConfigService;
+  | EditorContextService
+  | RuntimeConfig;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,
   CommandServiceLayer,
   WorkflowEngineLayer,
   StartupActivationLayer,
-  EventLoopWatchdogLive,
+  EventLoopWatchdog.layer,
   HostInventoryLayer,
   HarnessControlPlaneLayer,
   RuntimeConfigLayer,
   ApiServicesLayer,
-).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
+).pipe(
+  Layer.provideMerge(InternalRuntimeEventBus.layer),
+  Layer.provideMerge(RuntimeEventBus.layer),
+);
 
 export const RuntimeLayer = ServicesLayer.pipe(
-  Layer.provide(UserShellLive),
+  Layer.provide(UserShell.layer),
   Layer.provide(
     Layer.mergeAll(
-      RepositoryLive,
-      SetupRepositoryLive,
-      SetupServiceLive,
-      StateLive,
-      GitLive,
-      DataDirectoryLive,
+      ProjectRepositoryLayer,
+      WorktreeSetupRepositoryLayer,
+      WorktreeSetupServiceLayer,
+      StateFileLayer,
+      Git.layer,
+      DataDirectory.layer,
     ),
   ),
 );

@@ -9,31 +9,29 @@ import { Effect } from 'effect';
 
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
-import { CommandError, type CommandServiceShape } from '../../commands/index.js';
-import { AgentSessionService } from '../../environment/agent-sessions/index.js';
-import { SurfaceService } from '../../environment/index.js';
-import { TerminalSessionService } from '../../environment/terminal-sessions/index.js';
-import { realSessionCreationLayer } from '../../environment/tests/restore-support.js';
+import { CommandError, type CommandService } from '../../commands/index.js';
+import {
+  AgentSessionService,
+  SurfaceService,
+  TerminalSessionService,
+} from '../../environment/index.js';
 import {
   agentSessions,
-  projects,
   surfacePanes,
   terminalSessions,
-  worktrees,
   worktreeSurfaces,
-} from '../../persistence/schema.js';
-import type {
-  InternalRuntimeEvent,
-  InternalRuntimeEventBusService,
-} from '../../platform/events/index.js';
-import type { GitService } from '../../platform/git/index.js';
+} from '../../environment/tables.js';
+import { realSessionCreationLayer } from '../../environment/testing.js';
+import type { InternalRuntimeEvent, InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { Git } from '../../platform/git/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { RuntimeDatabase } from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../../projects/repository.js';
-import { countRunRows, seedProjectRuns } from '../../workflows/store/test-support.js';
-import { WorkspaceError, WorkspaceService } from '../../workspace/service.js';
-import { liveWorkspaceLayer } from '../../workspace/testing.js';
-import { directoryTree } from '../../workspace/tests/test-support.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { projects, worktrees } from '../../projects/tables.js';
+import { WorkflowProjectErasure } from '../../workflows/index.js';
+import { countRunRows, seedProjectRuns } from '../../workflows/testing.js';
+import { WorkspaceError, WorkspaceService } from '../../workspace/index.js';
+import { liveWorkspaceLayer, directoryTree } from '../../workspace/testing.js';
 
 /**
  * Removing a folder project removes Isagi's record of it and nothing else.
@@ -60,7 +58,7 @@ afterAll(() => {
 });
 
 /** Git must not be reachable from any part of removing a folder project. */
-const dyingGit: GitService = {
+const dyingGit: Git['Service'] = {
   run: () => Effect.die('git must not run while removing a folder project'),
 };
 
@@ -90,11 +88,14 @@ function inspectingEventBus() {
           observations.push({ event, projectRowStillPresent });
         }),
       subscribe: () => Effect.succeed({ take: Effect.never, unsubscribe: Effect.void }),
-    } satisfies InternalRuntimeEventBusService,
+    } satisfies InternalRuntimeEventBus['Service'],
   };
 }
 
-function recordingCommands(record: string[], failCleanup: boolean): Partial<CommandServiceShape> {
+function recordingCommands(
+  record: string[],
+  failCleanup: boolean,
+): Partial<CommandService['Service']> {
   return {
     cleanupBeforeWorktreeDelete: (input: { readonly worktreeId: number }) =>
       Effect.gen(function* () {
@@ -143,14 +144,18 @@ async function seedFolderProject(name: string) {
   const registered = await Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* WorkspaceService;
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const added = yield* service.registerProject({ path: projectPath });
       const worktree = (yield* repository.listWorktrees).find(
         (row) => row.projectId === added.projectId,
       );
       if (!worktree) throw new Error('Expected the folder project to own an environment.');
       return { projectId: added.projectId, worktreeId: worktree.id };
-    }).pipe(Effect.provide(liveWorkspaceLayer(dataRoot, {}))),
+    }).pipe(
+      Effect.provide(
+        liveWorkspaceLayer(dataRoot, { projectDeletionParticipant: WorkflowProjectErasure }),
+      ),
+    ),
   );
 
   const sessions = await Effect.runPromise(
@@ -234,6 +239,7 @@ describe('removing a folder project', () => {
               decorateGit: () => dyingGit,
               commands: recordingCommands(record, false),
               internalEvents: bus.service,
+              projectDeletionParticipant: WorkflowProjectErasure,
             }),
           ),
         ),
@@ -347,6 +353,7 @@ describe('removing a folder project', () => {
               decorateGit: () => dyingGit,
               commands: recordingCommands(record, true),
               internalEvents: bus.service,
+              projectDeletionParticipant: WorkflowProjectErasure,
             }),
           ),
         ),

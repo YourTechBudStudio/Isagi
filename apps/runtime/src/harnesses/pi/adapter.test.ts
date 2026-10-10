@@ -6,11 +6,11 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
-import { emptyOrphanSweepStats } from '../../platform/persistence/orphan-files.js';
+import { emptyOrphanSweepStats } from '../../platform/persistence/index.js';
 import { prepareHarnessIntegrationArtifacts } from '../artifacts.js';
 import { buildClaudeHeadlessLaunch, buildClaudeLaunch } from '../claude/adapter.js';
 import { buildCodexHeadlessLaunch, buildCodexLaunch } from '../codex/adapter.js';
-import type { AgentSessionArtifactsService } from '../ledger.js';
+import type { AgentSessionArtifacts } from '../ledger.js';
 import { buildOpenCodeHeadlessLaunch, buildOpenCodeLaunch } from '../opencode/adapter.js';
 import { HarnessAdapterError } from '../types.js';
 import { buildPiHeadlessLaunch, buildPiLaunch } from './adapter.js';
@@ -596,7 +596,7 @@ test('headless harness adapters build non-interactive launch envelopes', async (
   assert.equal(opencode.launchMode, 'user_shell');
 });
 
-function fakeArtifacts(root: string): AgentSessionArtifactsService {
+function fakeArtifacts(root: string): AgentSessionArtifacts['Service'] {
   return {
     paths: (input) => {
       const directory = resolve(root, 'sessions', 'agent-sessions', String(input.agentSessionId));
@@ -620,5 +620,5 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
     listAgentSessionIds: Effect.succeed([]),
     writeHarnessSessionId: () => Effect.void,
     collectOrphanFolders: () => Effect.succeed(emptyOrphanSweepStats),
-  } satisfies AgentSessionArtifactsService;
+  } satisfies AgentSessionArtifacts['Service'];
 }

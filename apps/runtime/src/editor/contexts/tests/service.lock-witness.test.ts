@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect, Exit } from 'effect';
 
-import { EntityLock } from '../../../platform/locks/entity-lock.js';
+import { EntityLock } from '../../../platform/locks/index.js';
 import { insertWorktree, neverSettlingProbe, withEditorService } from '../../testing.js';
 import { EditorContextRepository } from '../repository.js';
 import { EditorContextService, editorLockKey } from '../service.js';

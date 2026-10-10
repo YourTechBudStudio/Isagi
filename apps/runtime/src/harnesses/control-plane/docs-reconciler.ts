@@ -14,7 +14,7 @@ import { Data, Effect } from 'effect';
 
 import type { AgentHarness, DocsReconciliationResult } from '@isagi/contracts';
 
-import { boundedDiagnostic } from '../../platform/diagnostics/bounded.js';
+import { boundedDiagnostic } from '../../platform/diagnostics/index.js';
 import type { RuntimeHarnessPolicy } from '../../runtime-config/index.js';
 import { harnessDefinition, supportedHarnesses } from '../definitions.js';
 import { executableAvailability, type HostInventory } from '../inventory/types.js';

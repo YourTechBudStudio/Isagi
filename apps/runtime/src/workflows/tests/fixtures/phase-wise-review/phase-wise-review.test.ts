@@ -3,10 +3,10 @@ import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
 
-import { workflowExecutions, workflowRuns } from '../../../../persistence/schema.js';
 import { withEngine } from '../../../engine/test-support.js';
 import { WorkflowEngineError } from '../../../errors.js';
 import type { AnyWorkflowDefinition } from '../../../structure/loader.js';
+import { workflowExecutions, workflowRuns } from '../../../tables.js';
 import { driveRun } from '../drive.js';
 import { phaseWiseReviewWorkflow } from './index.js';
 

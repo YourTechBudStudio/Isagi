@@ -41,18 +41,36 @@ export interface EntityLockHeld {
   readonly key: EntityLockKey;
 }
 
-export interface EntityLockService {
-  readonly withLock: <A, E, R>(
-    key: EntityLockKey,
-    run: (held: EntityLockHeld) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R>;
-}
-
-export const EntityLock = Context.Service<EntityLockService>('isagi/EntityLock');
-
 export function entityLockKeyId(key: EntityLockKey) {
   return `${key.kind}:${key.id}`;
 }
+
+const make = Effect.gen(function* () {
+  const semaphores = new Map<string, Semaphore.Semaphore>();
+
+  const service = EntityLock.of({
+    withLock: (key, run) =>
+      Effect.gen(function* () {
+        const keyId = entityLockKeyId(key);
+        let semaphore = semaphores.get(keyId);
+        if (!semaphore) {
+          semaphore = yield* Semaphore.make(1);
+          semaphores.set(keyId, semaphore);
+        }
+        // The one place a witness is created, and the only reason this file
+        // asserts anything: the brand has no runtime representation, so the
+        // value carries exactly the key and the cast is the proof.
+        const held = { key } as EntityLockHeld;
+        return yield* semaphore.withPermits(1)(run(held));
+      }),
+  });
+
+  return yield* Effect.acquireRelease(Effect.succeed(service), () =>
+    Effect.sync(() => {
+      semaphores.clear();
+    }),
+  );
+});
 
 /**
  * One instance per runtime scope, which is what makes "the same lock" a fact
@@ -64,32 +82,14 @@ export function entityLockKeyId(key: EntityLockKey) {
  * at shutdown rather than a lifecycle guarantee — normal code cannot reach the
  * map once its scope is gone.
  */
-export const EntityLockLive = Layer.effect(
+export class EntityLock extends Context.Service<
   EntityLock,
-  Effect.gen(function* () {
-    const semaphores = new Map<string, Semaphore.Semaphore>();
-
-    const service: EntityLockService = {
-      withLock: (key, run) =>
-        Effect.gen(function* () {
-          const keyId = entityLockKeyId(key);
-          let semaphore = semaphores.get(keyId);
-          if (!semaphore) {
-            semaphore = yield* Semaphore.make(1);
-            semaphores.set(keyId, semaphore);
-          }
-          // The one place a witness is created, and the only reason this file
-          // asserts anything: the brand has no runtime representation, so the
-          // value carries exactly the key and the cast is the proof.
-          const held = { key } as EntityLockHeld;
-          return yield* semaphore.withPermits(1)(run(held));
-        }),
-    };
-
-    return yield* Effect.acquireRelease(Effect.succeed(service), () =>
-      Effect.sync(() => {
-        semaphores.clear();
-      }),
-    );
-  }),
-);
+  {
+    readonly withLock: <A, E, R>(
+      key: EntityLockKey,
+      run: (held: EntityLockHeld) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
+  }
+>()('isagi/runtime/platform/locks/EntityLock') {
+  static readonly layer = Layer.effect(EntityLock, make);
+}

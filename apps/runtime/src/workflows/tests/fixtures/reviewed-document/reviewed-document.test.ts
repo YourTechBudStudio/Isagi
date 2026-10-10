@@ -3,14 +3,14 @@ import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
 
+import { withEngine } from '../../../engine/test-support.js';
+import type { AnyWorkflowDefinition } from '../../../structure/loader.js';
 import {
   workflowExecutions,
   workflowGraphInvocations,
   workflowOperations,
   workflowRuns,
-} from '../../../../persistence/schema.js';
-import { withEngine } from '../../../engine/test-support.js';
-import type { AnyWorkflowDefinition } from '../../../structure/loader.js';
+} from '../../../tables.js';
 import { driveRun } from '../drive.js';
 import { makeReviewedDocumentWorkflow } from './index.js';
 

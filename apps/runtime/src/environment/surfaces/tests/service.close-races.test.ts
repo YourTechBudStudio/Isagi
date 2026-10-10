@@ -7,14 +7,16 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Deferred, Effect, Fiber, Result } from 'effect';
 
-import { EditorContextRepository } from '../../../editor/contexts/index.js';
-import { insertPtyProcess as insertEditorPtyProcess } from '../../../editor/testing.js';
-import { surfacePanes, terminalSessions } from '../../../persistence/schema.js';
+import {
+  EditorContextRepository,
+  insertPtyProcess as insertEditorPtyProcess,
+} from '../../../editor/testing.js';
 import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
 import { DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
-import { SessionLifecycle } from '../../../session-lifecycle/index.js';
 import { SurfaceError, SurfaceRepository, SurfaceService } from '../../index.js';
-import type { TerminalSessionServiceShape } from '../../terminal-sessions/index.js';
+import { SessionLifecycle } from '../../sessions/lifecycle.js';
+import { surfacePanes, terminalSessions } from '../../tables.js';
+import type { TerminalSessionService } from '../../terminal-sessions/service.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
 /**
@@ -211,7 +213,7 @@ test('a claim that validated a session before orphan GC deleted it refuses to bi
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-close-race-claim-gc-'));
   const validated = Effect.runSync(Deferred.make<void>());
   const resume = Effect.runSync(Deferred.make<void>());
-  let terminals: TerminalSessionServiceShape | null = null;
+  let terminals: TerminalSessionService['Service'] | null = null;
   let pauseNextGet = false;
   try {
     const output = await Effect.runPromise(
@@ -219,7 +221,7 @@ test('a claim that validated a session before orphan GC deleted it refuses to bi
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
         const repository = yield* SurfaceRepository;
-        const service = terminals as TerminalSessionServiceShape | null;
+        const service = terminals as TerminalSessionService['Service'] | null;
         if (!service) throw new Error('the terminal service was not built');
         const { terminalSessionId } = yield* service.startFresh({ worktreeId, cwd: '/repo/isagi' });
         const other = yield* surfaces.createEmptySurface({ worktreeId, titleBase: 'Other' });

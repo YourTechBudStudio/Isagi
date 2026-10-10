@@ -7,14 +7,10 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Cause, Effect, Exit, Layer, Option, Result } from 'effect';
 
-import { EditorContextRepository } from '../../../editor/contexts/index.js';
-import {
-  surfacePanes,
-  worktreeEnvironmentStates,
-  worktreeSurfaces,
-} from '../../../persistence/schema.js';
+import { EditorContextRepository } from '../../../editor/testing.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceRepository, SurfaceRepositoryInitialSessionRejected } from '../../index.js';
+import { surfacePanes, worktreeEnvironmentStates, worktreeSurfaces } from '../../tables.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
 type TestServices = Layer.Success<ReturnType<typeof testLayer>>;

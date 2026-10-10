@@ -8,7 +8,7 @@ import { Effect, Schema } from 'effect';
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
-import { WorkspaceRepository } from '../../projects/repository.js';
+import { ProjectRepository } from '../../projects/index.js';
 import { WorkspaceError, WorkspaceService } from '../service.js';
 import { runWithLiveWorkspace } from '../testing.js';
 import { directoryTree } from './test-support.js';
@@ -36,7 +36,7 @@ function gitRepository(name: string) {
 }
 
 const readRows = Effect.gen(function* () {
-  const repository = yield* WorkspaceRepository;
+  const repository = yield* ProjectRepository;
   return {
     projects: yield* repository.listProjects,
     worktrees: yield* repository.listWorktrees,

@@ -3,14 +3,14 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Option } from 'effect';
 
-import type { WorktreeCommandPortConfig } from '../../projects/config/config-schema.js';
+import type { WorktreeCommandPortConfig } from '../../projects/index.js';
 import {
   CommandPortAllocationError,
   portEnvInjections,
   resolveCommandPorts,
   type ResolvedPortEntry,
 } from '../ports.js';
-import { commandPortProbe } from './test-support.js';
+import { commandPortProbe, systemError } from './test-support.js';
 
 /**
  * Allocation policy, with no sockets involved.
@@ -217,7 +217,7 @@ test('re-asking is bounded, and exhaustion is a policy failure naming the endpoi
 test('an adapter assignment failure is re-composed with the endpoint that asked', async () => {
   // The adapter knows the operational cause; only the resolver knows which
   // endpoint was being served. The persisted detail needs both.
-  const probe = commandPortProbe({ assignFailure: 'System error EADDRNOTAVAIL' });
+  const probe = commandPortProbe({ assignFailure: systemError('EADDRNOTAVAIL') });
   const exit = await resolve({ declared: [allocated('API_PORT')], probe });
 
   const error = expectedFailure(exit);

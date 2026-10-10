@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { disabledHarnessPolicy } from '../../runtime-config/index.js';
+import { disabledHarnessPolicy } from '../../runtime-config/testing.js';
 import { isagiDocsPackageFiles } from '../isagi-docs.js';
 import {
   docsReconciliationFingerprint,

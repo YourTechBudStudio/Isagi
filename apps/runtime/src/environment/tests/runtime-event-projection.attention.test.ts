@@ -5,23 +5,14 @@ import { Effect, Layer, Logger } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-} from '../../platform/events/internal-events.js';
-import {
-  RuntimeEventBus,
-  type RuntimeEventBusService,
-} from '../../platform/events/runtime-events.js';
+import { InternalRuntimeEventBus, RuntimeEventBus } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
-import {
-  AgentSessionAttentionProjection,
-  AgentSessionRepository,
-} from '../agent-sessions/index.js';
-import { SurfaceRepository, type SurfaceRepositoryService } from '../index.js';
-import { RuntimeEventProjectionLive } from '../runtime-event-projection.js';
-import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
-import { TerminalSessionRepository } from '../terminal-sessions/index.js';
+import { AgentSessionAttentionProjection } from '../agent-sessions/attention.js';
+import { AgentSessionRepository } from '../agent-sessions/repository.js';
+import { SurfaceRepository } from '../index.js';
+import { RuntimeEventProjection } from '../runtime-event-projection.js';
+import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
+import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 
 /**
  * These tests exist for one product rule: `attention_source_removed` is a claim
@@ -64,13 +55,13 @@ function harness(input: {
   const publicBus = Layer.succeed(RuntimeEventBus, {
     publish: (event: RuntimeEvent) => Effect.sync(() => void input.published.push(event)),
     subscribe: Effect.die('this test never subscribes publicly'),
-  } as unknown as RuntimeEventBusService);
-  return RuntimeEventProjectionLive.pipe(
-    Layer.provideMerge(InternalRuntimeEventBusLive),
+  } as unknown as RuntimeEventBus['Service']);
+  return RuntimeEventProjection.layer.pipe(
+    Layer.provideMerge(InternalRuntimeEventBus.layer),
     Layer.provide(
       Layer.succeed(SurfaceRepository, {
         findPaneForSession: input.placements,
-      } as unknown as SurfaceRepositoryService),
+      } as unknown as SurfaceRepository['Service']),
     ),
     Layer.provide(publicBus),
     Layer.provide(

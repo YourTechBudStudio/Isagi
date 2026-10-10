@@ -6,40 +6,34 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import {
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../platform/persistence/index.js';
+import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { WorkflowRunErasure, WorkflowRunErasureLive } from './erasure.js';
+import { ProjectDeletionParticipant } from '../workspace/index.js';
+import { WorkflowProjectErasure } from './erasure.js';
 import { countRunRows, seedProjectRuns } from './store/test-support.js';
 
 /** Runs `body` against a real, migrated database in its own temp data root. */
 function withDatabase(
   body: (
-    database: RuntimeDatabaseService,
+    database: RuntimeDatabase['Service'],
     erase: (projectId: number) => Effect.Effect<number, unknown>,
   ) => Effect.Effect<void, unknown>,
 ) {
   return async () => {
     const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-run-erasure-'));
     const layer = Layer.mergeAll(
-      RuntimeDatabaseLive.pipe(
+      RuntimeDatabase.layer.pipe(
         Layer.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot))),
       ),
-      WorkflowRunErasureLive,
+      WorkflowProjectErasure,
     );
     try {
       await Effect.runPromise(
         Effect.gen(function* () {
           const database = yield* RuntimeDatabase;
-          const erasure = yield* WorkflowRunErasure;
+          const erasure = yield* ProjectDeletionParticipant;
           const erase = (projectId: number) =>
-            database.transaction('erase', (db) =>
-              erasure.eraseProjectRunsInTransaction(db, projectId),
-            );
+            database.transaction('erase', (db) => erasure.eraseInTransaction(db, projectId));
           yield* body(database, erase);
         }).pipe(Effect.provide(layer), Effect.scoped),
       );

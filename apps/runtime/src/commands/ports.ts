@@ -1,11 +1,8 @@
-import { Context, Data, Effect, Layer, Schema } from 'effect';
+import { Data, Effect, Schema } from 'effect';
 
-import { LoopbackPortProbe } from '../platform/net/loopback-port-probe.js';
-import type {
-  CommandPortPathConfig,
-  WorktreeCommandPortConfig,
-} from '../projects/config/config-schema.js';
-import { describeCommandCause } from './diagnostics.js';
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
+import type { LoopbackPortUnavailable, LoopbackPortProbe } from '../platform/net/index.js';
+import type { CommandPortPathConfig, WorktreeCommandPortConfig } from '../projects/index.js';
 
 // The resolved-port vocabulary shared by persistence, launch, and projection.
 //
@@ -56,57 +53,23 @@ const maxOsAssignReasks = 5;
 
 // The expected failure of resolution. `detail` is runtime-authored and safe to
 // persist and display: it names the endpoint's environment variable (a
-// config-authored identifier) and may embed `describeCommandCause` output,
+// config-authored identifier) and may embed `describeOperationalCause` output,
 // which is the same trust posture `env_invalid` and `pty_launch_failed` take.
 export class CommandPortAllocationError extends Data.TaggedError('CommandPortAllocationError')<{
   readonly detail: string;
 }> {}
 
-export interface CommandPortProbeService {
-  /**
-   * Best-effort availability check. True only when a loopback bind of the port
-   * succeeded *and* its listener finished closing — a port is never reported
-   * inactive while this call might still hold it, because the caller's next act
-   * is to hand it to a process that must bind it.
-   *
-   * Exposes no expected failure: a bind refusal is the ordinary "in use"
-   * answer, and every other operational fault folds to `false` so that a probe
-   * fault on a remembered port cannot kill a launch a fresh assignment could
-   * still serve. Interruption is preserved, and genuine defects stay defects.
-   */
-  readonly probeInactive: (port: number) => Effect.Effect<boolean>;
-  /**
-   * Bind `127.0.0.1:0`, read the port the operating system assigned, and return
-   * it only once the listener has finished closing. Bind and close failures are
-   * both `CommandPortAllocationError`: a port that may still be held is never
-   * handed out.
-   */
-  readonly obtainEphemeralPort: Effect.Effect<number, CommandPortAllocationError>;
-}
-
-export const CommandPortProbe = Context.Service<CommandPortProbeService>('isagi/CommandPortProbe');
-
 /**
- * The commands domain's view of the one socket adapter in the runtime.
- *
- * The adapter owns the listener lifecycle and hands back a structured cause;
- * this layer owns the command vocabulary and is the boundary that decides the
- * cause is safe to render. It classifies `error.cause` rather than the error
- * itself on purpose: the shared classifier deliberately does not know
- * `lib/net`'s type, and naming it there would put a low-level adapter into a
- * module every domain imports.
+ * The adapter failure, composed into the text a user will read. The adapter
+ * hands back a structured cause and renders nothing; this is the commands
+ * boundary that names the endpoint and decides the cause is safe to render, via
+ * the shared classifier.
  */
-export const CommandPortProbeLive = Layer.effect(
-  CommandPortProbe,
-  Effect.map(LoopbackPortProbe, (probe) => ({
-    probeInactive: probe.probeInactive,
-    obtainEphemeralPort: probe.obtainEphemeralPort.pipe(
-      Effect.mapError(
-        (error) => new CommandPortAllocationError({ detail: describeCommandCause(error.cause) }),
-      ),
-    ),
-  })),
-);
+function allocationFailure(envVar: string, error: LoopbackPortUnavailable) {
+  return new CommandPortAllocationError({
+    detail: `Could not allocate a port for ${envVar}: ${describeOperationalCause(error.cause)}`,
+  });
+}
 
 /**
  * Resolve one command's declared ports into the snapshot its incarnation will
@@ -125,7 +88,7 @@ export const CommandPortProbeLive = Layer.effect(
 export function resolveCommandPorts(input: {
   readonly declared: readonly WorktreeCommandPortConfig[];
   readonly remembered: readonly ResolvedPortEntry[] | null;
-  readonly probe: CommandPortProbeService;
+  readonly probe: LoopbackPortProbe['Service'];
 }): Effect.Effect<ResolvedPortEntry[], CommandPortAllocationError> {
   return Effect.gen(function* () {
     const { declared, remembered, probe } = input;
@@ -163,7 +126,7 @@ function resolveAllocatedPort(input: {
   readonly envVar: string;
   readonly remembered: readonly ResolvedPortEntry[] | null;
   readonly excluded: ReadonlySet<number>;
-  readonly probe: CommandPortProbeService;
+  readonly probe: LoopbackPortProbe['Service'];
 }) {
   return Effect.gen(function* () {
     const { envVar, remembered, excluded, probe } = input;
@@ -183,12 +146,7 @@ function resolveAllocatedPort(input: {
         // The adapter knows the operational cause but not which endpoint asked;
         // this is the layer that knows the endpoint, so it composes the text a
         // user will read.
-        Effect.mapError(
-          (error) =>
-            new CommandPortAllocationError({
-              detail: `Could not allocate a port for ${envVar}: ${error.detail}`,
-            }),
-        ),
+        Effect.mapError((error) => allocationFailure(envVar, error)),
       );
       if (!excluded.has(candidate)) return candidate;
     }

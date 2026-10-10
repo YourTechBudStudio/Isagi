@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { Effect, Result } from 'effect';
 
 import type { CheckpointScope } from '../store/checkpoints.js';
-import type { WorkflowContentStoreService } from '../store/content-store.js';
+import type { WorkflowContentStore } from '../store/content-store.js';
 import { isExcluded } from './capture.js';
 
 /**
@@ -36,7 +36,7 @@ export class MirrorFailed extends Error {
 export async function mirrorScopes(
   root: string,
   scopes: readonly CheckpointScope[],
-  content: WorkflowContentStoreService,
+  content: WorkflowContentStore['Service'],
 ): Promise<void> {
   for (const scope of scopes) {
     if (scope.kind === 'directory') {
@@ -101,7 +101,7 @@ async function removeFile(root: string, path: string): Promise<void> {
 async function writeCapturedFile(
   root: string,
   file: CheckpointScope['files'][number],
-  content: WorkflowContentStoreService,
+  content: WorkflowContentStore['Service'],
 ): Promise<void> {
   const parts = file.path.split('/');
   for (let index = 1; index < parts.length; index += 1) {

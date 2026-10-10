@@ -5,11 +5,11 @@ import { Context, Data, Effect, Layer } from 'effect';
 // The only socket code in the runtime. Everything any domain believes about a
 // port's availability, it believes because of this file.
 //
-// It sits in `lib/` and stays there: it imports no runtime domain, renders
-// nothing, and formats nothing. Deciding which error classes are safe to *name*
-// is domain knowledge (`diagnostics/operational-cause.ts`), so this adapter
-// hands its callers a structured cause and lets each one classify at its own
-// boundary.
+// It sits in `platform/net` and stays there: it imports no runtime domain,
+// renders nothing, and formats nothing. Rendering a cause is the job of the
+// shared classifier (`platform/diagnostics/operational-cause.ts`), so this
+// adapter hands its callers a structured cause and lets each one classify at its
+// own boundary.
 //
 // Both operations are the same short-lived experiment — bind a loopback
 // listener, read the port, let it go — differing only in which port they ask
@@ -38,8 +38,8 @@ import { Context, Data, Effect, Layer } from 'effect';
  * itself rather than reconstructed from a tag nothing else reads.
  *
  * `cause` is structured and unrendered on purpose. It travels to a consumer
- * that knows which error classes are safe to name — the commands adapter below
- * turns it into a `CommandPortAllocationError.detail` — and this module never
+ * that composes the user-visible text — commands port resolution
+ * (`commands/ports.ts`) turns it into a `CommandPortAllocationError.detail` — and this module never
  * reads or formats it.
  */
 export class LoopbackPortUnavailable extends Data.TaggedError('LoopbackPortUnavailable')<{
@@ -99,34 +99,9 @@ export interface LoopbackPortProbeHooks {
   }) => Effect.Effect<void, LoopbackPortUnavailable>;
 }
 
-export interface LoopbackPortProbeService {
-  /**
-   * Best-effort availability check. True only when a loopback bind of the port
-   * succeeded *and* its listener finished closing — a port is never reported
-   * inactive while this call might still hold it, because the caller's next act
-   * is to hand it to a process that must bind it.
-   *
-   * Exposes no expected failure: a bind refusal is the ordinary "in use"
-   * answer, and every other operational fault folds to `false` so that a probe
-   * fault on a remembered port cannot kill a launch a fresh assignment could
-   * still serve. Interruption is preserved, and genuine defects stay defects.
-   */
-  readonly probeInactive: (port: number) => Effect.Effect<boolean>;
-  /**
-   * Bind `127.0.0.1:0`, read the port the operating system assigned, and return
-   * it only once the listener has finished closing. Bind and close failures are
-   * both `LoopbackPortUnavailable`: a port that may still be held is never
-   * handed out.
-   */
-  readonly obtainEphemeralPort: Effect.Effect<number, LoopbackPortUnavailable>;
-}
-
-export const LoopbackPortProbe =
-  Context.Service<LoopbackPortProbeService>('isagi/LoopbackPortProbe');
-
 export function makeLoopbackPortProbe(
   hooks: LoopbackPortProbeHooks = {},
-): LoopbackPortProbeService {
+): LoopbackPortProbe['Service'] {
   const probeInactive = (port: number) =>
     withLoopbackPort(port, hooks).pipe(
       Effect.as(true),
@@ -147,10 +122,32 @@ export function makeLoopbackPortProbe(
  * behind a tag because it is real IO that the launch lifecycle's tests must be
  * able to substitute.
  */
-export const LoopbackPortProbeLive: Layer.Layer<LoopbackPortProbeService> = Layer.succeed(
+export class LoopbackPortProbe extends Context.Service<
   LoopbackPortProbe,
-  makeLoopbackPortProbe(),
-);
+  {
+    /**
+     * Best-effort availability check. True only when a loopback bind of the port
+     * succeeded *and* its listener finished closing — a port is never reported
+     * inactive while this call might still hold it, because the caller's next act
+     * is to hand it to a process that must bind it.
+     *
+     * Exposes no expected failure: a bind refusal is the ordinary "in use"
+     * answer, and every other operational fault folds to `false` so that a probe
+     * fault on a remembered port cannot kill a launch a fresh assignment could
+     * still serve. Interruption is preserved, and genuine defects stay defects.
+     */
+    readonly probeInactive: (port: number) => Effect.Effect<boolean>;
+    /**
+     * Bind `127.0.0.1:0`, read the port the operating system assigned, and return
+     * it only once the listener has finished closing. Bind and close failures are
+     * both `LoopbackPortUnavailable`: a port that may still be held is never
+     * handed out.
+     */
+    readonly obtainEphemeralPort: Effect.Effect<number, LoopbackPortUnavailable>;
+  }
+>()('isagi/runtime/platform/net/LoopbackPortProbe') {
+  static readonly layer = Layer.succeed(LoopbackPortProbe, makeLoopbackPortProbe());
+}
 
 // Binds `127.0.0.1:<port>`, reads the bound port, and returns it only after the
 // listener has confirmably closed. `port: 0` asks the operating system to

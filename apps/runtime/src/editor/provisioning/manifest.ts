@@ -2,7 +2,7 @@ import process from 'node:process';
 
 import { Schema } from 'effect';
 
-import { codeServerManifestSource } from '../../platform/assets/index.js';
+import { readTextAsset } from '../../platform/assets/index.js';
 
 // The release pin, as shipped data rather than as code.
 //
@@ -52,6 +52,9 @@ const codeServerManifestSchema = Schema.Struct({
     'linux-x64': codeServerArtifactSchema,
   }),
 });
+
+/** The Code Server release pin, as shipped bytes (read at module load; see above). */
+export const codeServerManifestSource = readTextAsset('code-server.manifest.json');
 
 export type CodeServerArtifact = typeof codeServerArtifactSchema.Type;
 export type CodeServerManifest = typeof codeServerManifestSchema.Type;

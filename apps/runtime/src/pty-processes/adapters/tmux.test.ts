@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { TmuxBackend, TmuxBackendLive } from './tmux.js';
+import { TmuxBackend } from './tmux.js';
 
 test('tmux replay captures the full pane and marks replay output', async () => {
   await withFakeTmux(async ({ logPath, path }) => {
@@ -22,7 +22,7 @@ test('tmux replay captures the full pane and marks replay output', async () => {
           send: (message) => replayMessages.push(message),
         });
         return replayMessages;
-      }).pipe(Effect.provide(TmuxBackendLive)),
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
 
     assert.deepEqual(messages, [
@@ -56,7 +56,7 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           logPath: null,
           onExit: () => {},
         });
-      }).pipe(Effect.provide(TmuxBackendLive)),
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
 
     assert.deepEqual(readTmuxCalls(logPath), [
@@ -128,7 +128,7 @@ test('tmux launch shell-quotes structured command arguments', async () => {
           logPath: null,
           onExit: () => {},
         });
-      }).pipe(Effect.provide(TmuxBackendLive)),
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
 
     const call = readTmuxCalls(logPath)[0];

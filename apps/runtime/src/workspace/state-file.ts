@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
-import { DataDirectory } from '../platform/persistence/data-directory.js';
+import { DataDirectory } from '../platform/persistence/index.js';
 
 export interface WorkspaceState {
   readonly version: 1;
@@ -19,18 +19,6 @@ export class StateFileError extends Data.TaggedError('StateFileError')<{
   readonly operation: string;
 }> {}
 
-export interface StateFileService {
-  readonly read: Effect.Effect<WorkspaceState, StateFileError>;
-  readonly write: (state: WorkspaceState) => Effect.Effect<void, StateFileError>;
-  readonly writeActiveContextIfFresh: (input: {
-    readonly activeProjectId: number | null;
-    readonly activeWorktreeId: number | null;
-    readonly revision: number;
-  }) => Effect.Effect<WorkspaceState, StateFileError>;
-}
-
-export const StateFile = Context.Service<StateFileService>('isagi/StateFile');
-
 const defaultState: WorkspaceState = {
   version: 1,
   workspace: {
@@ -40,60 +28,72 @@ const defaultState: WorkspaceState = {
   },
 };
 
-export const StateFileLive = Layer.effect(
-  StateFile,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
 
-    return {
-      read: Effect.try({
-        try: () => {
-          if (!existsSync(directory.paths.statePath)) {
-            writeStateFile(directory.paths.statePath, defaultState);
-            return defaultState;
-          }
+  return StateFile.of({
+    read: Effect.try({
+      try: () => {
+        if (!existsSync(directory.paths.statePath)) {
+          writeStateFile(directory.paths.statePath, defaultState);
+          return defaultState;
+        }
 
-          try {
-            return parseState(JSON.parse(readFileSync(directory.paths.statePath, 'utf8')));
-          } catch {
-            const backupPath = `${directory.paths.statePath}.malformed-${Date.now()}`;
-            renameSync(directory.paths.statePath, backupPath);
-            const recoveryMessage = `Recovered malformed Isagi state file by moving it to ${backupPath}. Active workspace context was reset.`;
-            // This is intentionally a runtime-only diagnostic for now. The workspace
-            // snapshot stays declarative and does not carry transient recovery messages.
-            console.warn(recoveryMessage);
-            writeStateFile(directory.paths.statePath, defaultState);
-            return defaultState;
-          }
-        },
-        catch: (cause) => new StateFileError({ operation: 'read_state_file', cause }),
+        try {
+          return parseState(JSON.parse(readFileSync(directory.paths.statePath, 'utf8')));
+        } catch {
+          const backupPath = `${directory.paths.statePath}.malformed-${Date.now()}`;
+          renameSync(directory.paths.statePath, backupPath);
+          const recoveryMessage = `Recovered malformed Isagi state file by moving it to ${backupPath}. Active workspace context was reset.`;
+          // This is intentionally a runtime-only diagnostic for now. The workspace
+          // snapshot stays declarative and does not carry transient recovery messages.
+          console.warn(recoveryMessage);
+          writeStateFile(directory.paths.statePath, defaultState);
+          return defaultState;
+        }
+      },
+      catch: (cause) => new StateFileError({ operation: 'read_state_file', cause }),
+    }),
+    write: (state) =>
+      Effect.try({
+        try: () => writeStateFile(directory.paths.statePath, state),
+        catch: (cause) => new StateFileError({ operation: 'write_state_file', cause }),
       }),
-      write: (state) =>
-        Effect.try({
-          try: () => writeStateFile(directory.paths.statePath, state),
-          catch: (cause) => new StateFileError({ operation: 'write_state_file', cause }),
-        }),
-      writeActiveContextIfFresh: (input) =>
-        Effect.try({
-          try: () => {
-            const current = readStateFile(directory.paths.statePath);
-            if (input.revision <= current.workspace.activeContextRevision) {
-              return current;
-            }
-            const next = stateFromActiveContext(
-              input.activeProjectId,
-              input.activeWorktreeId,
-              input.revision,
-            );
-            writeStateFile(directory.paths.statePath, next);
-            return next;
-          },
-          catch: (cause) =>
-            new StateFileError({ operation: 'write_active_context_state_file', cause }),
-        }),
-    } satisfies StateFileService;
-  }),
-);
+    writeActiveContextIfFresh: (input) =>
+      Effect.try({
+        try: () => {
+          const current = readStateFile(directory.paths.statePath);
+          if (input.revision <= current.workspace.activeContextRevision) {
+            return current;
+          }
+          const next = stateFromActiveContext(
+            input.activeProjectId,
+            input.activeWorktreeId,
+            input.revision,
+          );
+          writeStateFile(directory.paths.statePath, next);
+          return next;
+        },
+        catch: (cause) =>
+          new StateFileError({ operation: 'write_active_context_state_file', cause }),
+      }),
+  });
+});
+
+export class StateFile extends Context.Service<
+  StateFile,
+  {
+    readonly read: Effect.Effect<WorkspaceState, StateFileError>;
+    readonly write: (state: WorkspaceState) => Effect.Effect<void, StateFileError>;
+    readonly writeActiveContextIfFresh: (input: {
+      readonly activeProjectId: number | null;
+      readonly activeWorktreeId: number | null;
+      readonly revision: number;
+    }) => Effect.Effect<WorkspaceState, StateFileError>;
+  }
+>()('isagi/runtime/workspace/StateFile') {
+  static readonly layer = Layer.effect(StateFile, make);
+}
 
 export function stateFromActiveContext(
   activeProjectId: number | null,

@@ -7,9 +7,9 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Result, type Layer } from 'effect';
 
-import { worktreeSurfaces } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceOrderError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { worktreeSurfaces } from '../../tables.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
 /**

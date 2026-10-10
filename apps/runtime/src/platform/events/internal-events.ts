@@ -129,59 +129,57 @@ export interface InternalRuntimeEventSubscription {
   readonly unsubscribe: Effect.Effect<void>;
 }
 
-export interface InternalRuntimeEventBusService {
-  readonly publish: (event: InternalRuntimeEvent) => Effect.Effect<void>;
-  readonly subscribe: (filter?: {
-    readonly types?: readonly InternalRuntimeEvent['type'][] | undefined;
-  }) => Effect.Effect<InternalRuntimeEventSubscription>;
-}
+const make = Effect.gen(function* () {
+  const subscribers = new Set<{
+    readonly queue: Queue.Queue<InternalRuntimeEvent>;
+    readonly types: ReadonlySet<InternalRuntimeEvent['type']> | null;
+  }>();
 
-export const InternalRuntimeEventBus = Context.Service<InternalRuntimeEventBusService>(
-  'isagi/InternalRuntimeEventBus',
-);
-
-export const InternalRuntimeEventBusLive = Layer.effect(
-  InternalRuntimeEventBus,
-  Effect.gen(function* () {
-    const subscribers = new Set<{
-      readonly queue: Queue.Queue<InternalRuntimeEvent>;
-      readonly types: ReadonlySet<InternalRuntimeEvent['type']> | null;
-    }>();
-
-    const service = {
-      publish: (event) =>
-        Effect.sync(() => {
-          for (const subscriber of subscribers) {
-            if (!subscriber.types || subscriber.types.has(event.type)) {
-              Queue.offerUnsafe(subscriber.queue, event);
-            }
-          }
-        }),
-      subscribe: (filter) =>
-        Queue.unbounded<InternalRuntimeEvent>().pipe(
-          Effect.map((queue) => {
-            const subscriber = {
-              queue,
-              types: filter?.types ? new Set(filter.types) : null,
-            };
-            subscribers.add(subscriber);
-            return {
-              take: Queue.take(queue),
-              unsubscribe: Effect.sync(() => {
-                subscribers.delete(subscriber);
-              }).pipe(Effect.andThen(Queue.shutdown(queue))),
-            } satisfies InternalRuntimeEventSubscription;
-          }),
-        ),
-    } satisfies InternalRuntimeEventBusService;
-
-    return yield* Effect.acquireRelease(Effect.succeed(service), () =>
-      Effect.gen(function* () {
+  const service = InternalRuntimeEventBus.of({
+    publish: (event) =>
+      Effect.sync(() => {
         for (const subscriber of subscribers) {
-          yield* Queue.shutdown(subscriber.queue);
+          if (!subscriber.types || subscriber.types.has(event.type)) {
+            Queue.offerUnsafe(subscriber.queue, event);
+          }
         }
-        subscribers.clear();
       }),
-    );
-  }),
-);
+    subscribe: (filter) =>
+      Queue.unbounded<InternalRuntimeEvent>().pipe(
+        Effect.map((queue) => {
+          const subscriber = {
+            queue,
+            types: filter?.types ? new Set(filter.types) : null,
+          };
+          subscribers.add(subscriber);
+          return {
+            take: Queue.take(queue),
+            unsubscribe: Effect.sync(() => {
+              subscribers.delete(subscriber);
+            }).pipe(Effect.andThen(Queue.shutdown(queue))),
+          } satisfies InternalRuntimeEventSubscription;
+        }),
+      ),
+  });
+
+  return yield* Effect.acquireRelease(Effect.succeed(service), () =>
+    Effect.gen(function* () {
+      for (const subscriber of subscribers) {
+        yield* Queue.shutdown(subscriber.queue);
+      }
+      subscribers.clear();
+    }),
+  );
+});
+
+export class InternalRuntimeEventBus extends Context.Service<
+  InternalRuntimeEventBus,
+  {
+    readonly publish: (event: InternalRuntimeEvent) => Effect.Effect<void>;
+    readonly subscribe: (filter?: {
+      readonly types?: readonly InternalRuntimeEvent['type'][] | undefined;
+    }) => Effect.Effect<InternalRuntimeEventSubscription>;
+  }
+>()('isagi/runtime/platform/events/InternalRuntimeEventBus') {
+  static readonly layer = Layer.effect(InternalRuntimeEventBus, make);
+}

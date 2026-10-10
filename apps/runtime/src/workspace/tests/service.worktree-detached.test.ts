@@ -17,9 +17,9 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { GitCommandError, type GitService } from '../../platform/git/index.js';
+import { GitCommandError, type Git } from '../../platform/git/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
+import { ProjectRepository } from '../../projects/index.js';
 import { DetachedWorktreeError } from '../detached-worktree.js';
 import { WorkspaceService } from '../service.js';
 import { type LiveWorkspaceOptions, runWithLiveWorkspace } from '../testing.js';
@@ -57,12 +57,12 @@ const writeMethods = [
   'reconcileProjectWorktrees',
   'restoreProjectAtRootPath',
   'setProjectStatus',
-] as const satisfies readonly (keyof WorkspaceRepositoryService)[];
+] as const satisfies readonly (keyof ProjectRepository['Service'])[];
 
 type GitOverride = (
   args: readonly string[],
-  inner: GitService,
-) => ReturnType<GitService['run']> | undefined;
+  inner: Git['Service'],
+) => ReturnType<Git['Service']['run']> | undefined;
 
 function recorder(
   input: {
@@ -89,7 +89,7 @@ function recorder(
           return input.repository?.[name]?.() ?? original(...args);
         };
       }
-      return decorated as unknown as WorkspaceRepositoryService;
+      return decorated as unknown as ProjectRepository['Service'];
     },
     decorateGit: (inner) => ({
       run: (args, runOptions) => {
@@ -150,7 +150,7 @@ function createAgainstFixture(
   return withRegisteredGitProject(label, fixture.rootPath, rec.options, (projectId) =>
     Effect.gen(function* () {
       const service = yield* WorkspaceService;
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const request = input(projectId);
       yield* rec.arm;
       const result = yield* service
@@ -439,7 +439,7 @@ describe('an unusable repository is project_unavailable and leaves its row alone
       rec.options,
       (projectId) =>
         Effect.gen(function* () {
-          yield* (yield* WorkspaceRepository).setProjectStatus({
+          yield* (yield* ProjectRepository).setProjectStatus({
             id: projectId,
             status: 'missing',
             missingReason: 'test',
@@ -480,7 +480,7 @@ describe('an unusable repository is project_unavailable and leaves its row alone
               const error = yield* (yield* WorkspaceService)
                 .createDetachedWorktree({ projectId, commit, path: freshDestination() })
                 .pipe(Effect.flip);
-              return { error, project: yield* (yield* WorkspaceRepository).findProject(projectId) };
+              return { error, project: yield* (yield* ProjectRepository).findProject(projectId) };
             }),
         );
         assert.equal(expectDetached(outcome.error).reason, 'project_unavailable');

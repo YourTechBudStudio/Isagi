@@ -8,7 +8,7 @@ import type { PtyProcessRow } from './types.js';
  * user-facing sentence imports it from here rather than from whichever domain
  * happened to need it first, so the phrasing cannot drift between them.
  *
- * Unrelated to the redacting classifier in `diagnostics/operational-cause.ts`:
+ * Unrelated to the redacting classifier in `platform/diagnostics/operational-cause.ts`:
  * every value below is a column this runtime wrote itself.
  */
 export function exitDetail(process: PtyProcessRow) {

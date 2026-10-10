@@ -10,14 +10,15 @@ import {
   type ApiRouteContext,
   errorMessage,
 } from '../platform/http/index.js';
-import { ProjectConfigError } from '../projects/config/service.js';
+import { ProjectConfigError } from '../projects/index.js';
+import { workspaceApiError } from './api-errors.js';
 import {
   ProjectOrderError,
   WorkspaceError,
   WorkspaceService,
   WorktreeOrderError,
-} from './index.js';
-import { WorktreeSetupError } from './setup/index.js';
+} from './service.js';
+import { WorktreeSetupError } from './setup/service.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -332,7 +333,7 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
    *
    * That is the one thing about these two classes that depends on which endpoint ran, so it is the
    * one thing that stays here. Everything else about them is endpoint-independent and is answered by
-   * `infrastructureApiError` below, which is also what the workflow boundary calls.
+   * `workspaceApiError` (`api-errors.ts`) below, which is also what the workflow boundary calls.
    */
   if (
     context.endpointId === 'worktrees.open' &&
@@ -507,6 +508,8 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
     };
   }
 
+  const workspace = workspaceApiError(error, context);
+  if (workspace) return workspace;
   const infrastructure = infrastructureApiError(error, context);
   if (infrastructure) return infrastructure;
 

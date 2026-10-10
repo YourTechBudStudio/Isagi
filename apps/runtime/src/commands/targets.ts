@@ -2,12 +2,11 @@ import { Effect } from 'effect';
 
 import type { CommandActionOutput, CommandStatus } from '@isagi/contracts';
 
-import type { WorktreeCommandConfig } from '../projects/config/config-schema.js';
-import { loadWorktreeCommandCatalog } from '../projects/config/service.js';
-import type { WorkspaceRepositoryService } from '../workspace/index.js';
+import type { WorktreeCommandConfig, ProjectRepository } from '../projects/index.js';
+import { loadWorktreeCommandCatalog } from '../projects/index.js';
 import { CommandError, type CommandServiceError } from './errors.js';
 import type { ResolvedPortEntry } from './ports.js';
-import type { CommandRepositoryService } from './repository.js';
+import type { CommandRepository } from './repository.js';
 import { buildCommandSummary } from './summary.js';
 
 // Resolving a (worktreeId, commandName) request to the thing it names, and
@@ -26,11 +25,11 @@ export interface ManagedCommandTarget {
 }
 
 export function resolveConfiguredCommand(
-  workspaceRepository: WorkspaceRepositoryService,
+  projectRepository: ProjectRepository['Service'],
   input: { readonly worktreeId: number; readonly commandName: string },
 ): Effect.Effect<CommandTarget, CommandServiceError> {
   return Effect.gen(function* () {
-    const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+    const target = yield* loadCommandTarget(projectRepository, input.worktreeId);
     const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
     if (catalog.status === 'config_error') {
       return yield* Effect.fail(
@@ -60,12 +59,12 @@ export function resolveConfiguredCommand(
 }
 
 export function resolveReadableCommand(
-  workspaceRepository: WorkspaceRepositoryService,
-  commandRepository: CommandRepositoryService,
+  projectRepository: ProjectRepository['Service'],
+  commandRepository: CommandRepository['Service'],
   input: { readonly worktreeId: number; readonly commandName: string },
 ): Effect.Effect<void, CommandServiceError> {
   return Effect.gen(function* () {
-    const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+    const target = yield* loadCommandTarget(projectRepository, input.worktreeId);
     const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
     if (catalog.status === 'configured') {
       const configured = catalog.config.commands.some(
@@ -93,12 +92,12 @@ export function resolveReadableCommand(
 }
 
 export function resolveStoppableCommand(
-  workspaceRepository: WorkspaceRepositoryService,
-  commandRepository: CommandRepositoryService,
+  projectRepository: ProjectRepository['Service'],
+  commandRepository: CommandRepository['Service'],
   input: { readonly worktreeId: number; readonly commandName: string },
 ): Effect.Effect<ManagedCommandTarget, CommandServiceError> {
   return Effect.gen(function* () {
-    const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+    const target = yield* loadCommandTarget(projectRepository, input.worktreeId);
     const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
     if (catalog.status === 'configured') {
       const command = catalog.config.commands.find(
@@ -132,11 +131,11 @@ export function resolveStoppableCommand(
 }
 
 export function loadCommandTarget(
-  workspaceRepository: WorkspaceRepositoryService,
+  projectRepository: ProjectRepository['Service'],
   worktreeId: number,
 ) {
   return Effect.gen(function* () {
-    const worktree = yield* workspaceRepository.findWorktree(worktreeId);
+    const worktree = yield* projectRepository.findWorktree(worktreeId);
     if (!worktree) {
       return yield* Effect.fail(
         new CommandError({

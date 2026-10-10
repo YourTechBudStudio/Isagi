@@ -3,11 +3,7 @@ import { Effect, Layer } from 'effect';
 import type { EditorProvisioningState } from '@isagi/contracts';
 
 import type { ResolvedEditorInstallation } from '../install.js';
-import {
-  EditorProvisioning,
-  EditorUnavailable,
-  type EditorProvisioningService,
-} from '../service.js';
+import { EditorProvisioning, EditorUnavailable } from '../service.js';
 
 /**
  * A provisioning service pinned to one state, for consumers that compose the
@@ -24,7 +20,7 @@ export function editorProvisioningStateLayer(state: EditorProvisioningState) {
     requireReady: Effect.fail(
       new EditorUnavailable({ reason: 'editor_unavailable', diagnostic: null }),
     ),
-  } satisfies EditorProvisioningService);
+  } satisfies EditorProvisioning['Service']);
 }
 
 /** The default for a runtime that declares no editor capability. */
@@ -49,5 +45,5 @@ export function readyEditorProvisioningLayer(installation: ResolvedEditorInstall
     } satisfies EditorProvisioningState),
     retry: Effect.die('retry is not used by this test'),
     requireReady: Effect.succeed(installation),
-  } satisfies EditorProvisioningService);
+  } satisfies EditorProvisioning['Service']);
 }

@@ -13,12 +13,7 @@ import type {
   SurfaceDetail,
 } from '@isagi/contracts';
 
-import {
-  SurfaceError,
-  SurfaceOrderError,
-  SurfaceService,
-  type SurfaceServiceShape,
-} from '../../index.js';
+import { SurfaceError, SurfaceOrderError, SurfaceService } from '../../index.js';
 import { registerSurfacesApi } from '../api.js';
 
 test('surface rename route decodes params and body through the contract path', async () => {
@@ -96,7 +91,7 @@ test('surface pane delete route decodes both route params', async () => {
 });
 
 test('surface start-pane route decodes the new pane and maps a non-empty surface', async () => {
-  let input: Parameters<SurfaceServiceShape['startPane']>[0] | null = null;
+  let input: Parameters<SurfaceService['Service']['startPane']>[0] | null = null;
   await withSurfacesApi(
     fakeSurfaceService({
       startPane: (request) =>
@@ -152,7 +147,7 @@ test('surface start-pane route decodes the new pane and maps a non-empty surface
 });
 
 test('surface creation route decodes initial pane through the contract path', async () => {
-  let input: Parameters<SurfaceServiceShape['createSurface']>[0] | null = null;
+  let input: Parameters<SurfaceService['Service']['createSurface']>[0] | null = null;
   await withSurfacesApi(
     fakeSurfaceService({
       createSurface: (request) =>
@@ -190,7 +185,7 @@ test('surface creation route decodes initial pane through the contract path', as
 });
 
 test('split pane route decodes the source pane and new pane spec through the contract path', async () => {
-  let input: Parameters<SurfaceServiceShape['splitPane']>[0] | null = null;
+  let input: Parameters<SurfaceService['Service']['splitPane']>[0] | null = null;
   await withSurfacesApi(
     fakeSurfaceService({
       splitPane: (request) =>
@@ -236,7 +231,7 @@ test('split pane route decodes the source pane and new pane spec through the con
 });
 
 test('set split weights route decodes body and params through the contract path', async () => {
-  let input: Parameters<SurfaceServiceShape['setSplitWeights']>[0] | null = null;
+  let input: Parameters<SurfaceService['Service']['setSplitWeights']>[0] | null = null;
   await withSurfacesApi(
     fakeSurfaceService({
       setSplitWeights: (request) =>
@@ -531,7 +526,7 @@ test('surface order route reports a cross-worktree anchor with the anchor identi
 });
 
 async function withSurfacesApi<A>(
-  service: SurfaceServiceShape,
+  service: SurfaceService['Service'],
   run: (fastify: Fastify.FastifyInstance) => Promise<A>,
 ) {
   const fastify = Fastify({ logger: false });
@@ -546,8 +541,15 @@ async function withSurfacesApi<A>(
   }
 }
 
-function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): SurfaceServiceShape {
+function fakeSurfaceService(
+  overrides: Partial<SurfaceService['Service']> = {},
+): SurfaceService['Service'] {
   return {
+    findSurface: () => Effect.die('findSurface is not used by surfaces API tests'),
+    listWorkspaceSurfaceMetadata: Effect.die('surface metadata is not used by surfaces API tests'),
+    listEnvironmentFocusStates: Effect.die('environment focus is not used by surfaces API tests'),
+    listDurableSessions: Effect.die('durable sessions are not used by surfaces API tests'),
+    restorePaneBoundSessions: Effect.die('session restore is not used by surfaces API tests'),
     getSurfaceDetail: () => Effect.succeed(surfaceDetail),
     openEditor: () => Effect.die('openEditor is not used by surfaces API tests'),
     renameSurface: (input) => Effect.succeed({ surfaceId: input.surfaceId, title: input.title }),

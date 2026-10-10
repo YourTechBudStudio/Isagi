@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 
-import type { SurfaceRepositoryService } from '../../../environment/index.js';
-import type { WorkspaceRepositoryService } from '../../../projects/repository.js';
+import type { SurfaceService } from '../../../environment/index.js';
+import type { ProjectRepository } from '../../../projects/index.js';
 import type {
   WorkflowOrigin,
   WorkflowPlacementContext,
@@ -11,8 +11,8 @@ import type {
 import type { LaunchProject } from './types.js';
 
 export interface DiscoveryDeps {
-  readonly workspace: Pick<WorkspaceRepositoryService, 'listWorktrees' | 'findWorktree'>;
-  readonly surfaceRepository: Pick<SurfaceRepositoryService, 'listWorkspaceSurfaceMetadata'>;
+  readonly workspace: Pick<ProjectRepository['Service'], 'listWorktrees' | 'findWorktree'>;
+  readonly surfaceReads: Pick<SurfaceService['Service'], 'listWorkspaceSurfaceMetadata'>;
 }
 
 /**
@@ -90,7 +90,7 @@ export function makePlacementContext(
           if (!worktree || worktree.projectId !== input.project.id) {
             return yield* Effect.fail(new Error(`Worktree ${worktreeId} is not in this project.`));
           }
-          const surfaces = yield* deps.surfaceRepository.listWorkspaceSurfaceMetadata;
+          const surfaces = yield* deps.surfaceReads.listWorkspaceSurfaceMetadata;
           return surfaces
             .filter((row) => row.worktreeId === worktreeId)
             .map(

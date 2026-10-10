@@ -1,8 +1,4 @@
-import type { ProjectKind, WorkspaceSnapshot } from '@isagi/contracts';
-
-import type { EnvironmentFocusRow, SurfaceMetadataRow } from '../environment/index.js';
-
-export type { EnvironmentFocusRow, SurfaceMetadataRow };
+import type { ProjectKind } from '@isagi/contracts';
 
 export type ProjectStatus = 'present' | 'missing';
 
@@ -35,5 +31,3 @@ export interface DiscoveredWorktree {
   readonly branch: string | null;
   readonly head: string | null;
 }
-
-export type WorkspaceServiceSnapshot = WorkspaceSnapshot;

@@ -7,11 +7,11 @@ import test from 'node:test';
 
 import { Effect, Fiber } from 'effect';
 
-import { WorktreeSetupRepository, type WorktreeSetupRepositoryService } from './repository.js';
+import { WorktreeSetupRepository } from './repository.js';
 import { runPostCreateSetup } from './runner.js';
 
 function capturingRepository(captured: {
-  input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0];
+  input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
 }) {
   return {
     findTrust: () => Effect.succeed(null),
@@ -23,14 +23,15 @@ function capturingRepository(captured: {
         return 42;
       }),
     listRunSteps: () => Effect.succeed([]),
-  } satisfies WorktreeSetupRepositoryService;
+  } satisfies WorktreeSetupRepository['Service'];
 }
 
 test('copy hooks preserve relative paths and apply exclude after include', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
   const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
-  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
-    {};
+  const captured: {
+    input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
+  } = {};
 
   try {
     await mkdir(join(projectRoot, 'config', 'nested'), { recursive: true });
@@ -94,8 +95,9 @@ async function runCopyHookFixture(
 ) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
   const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
-  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
-    {};
+  const captured: {
+    input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
+  } = {};
 
   try {
     arrange({ projectRoot, worktreeRoot });
@@ -116,7 +118,7 @@ async function runCopyHookFixture(
 }
 
 type CreateSetupStepFixture = Parameters<
-  WorktreeSetupRepositoryService['createRunWithSteps']
+  WorktreeSetupRepository['Service']['createRunWithSteps']
 >[0]['steps'][number];
 
 test('copy hooks copy a file source directly to dest', async () => {
@@ -175,8 +177,9 @@ test('copy hooks reject include or exclude on a file source', async () => {
 test('command hooks are interrupted without persisting a setup run', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
   const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
-  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
-    {};
+  const captured: {
+    input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
+  } = {};
 
   try {
     await Effect.runPromise(
@@ -215,8 +218,9 @@ test('command hooks are interrupted without persisting a setup run', async () =>
 test('command hook timeout is recorded as a failed setup result', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
   const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
-  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
-    {};
+  const captured: {
+    input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
+  } = {};
 
   try {
     const result = await Effect.runPromise(
@@ -254,8 +258,9 @@ test('command hook timeout is recorded as a failed setup result', async () => {
 test('command hook failure captures merged, ANSI-stripped output', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
   const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
-  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
-    {};
+  const captured: {
+    input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
+  } = {};
 
   // Build a script that writes ANSI-colored lines to both stdout and stderr and
   // exits non-zero. The escape (27) and newline (10) bytes are produced inside

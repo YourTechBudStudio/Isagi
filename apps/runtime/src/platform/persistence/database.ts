@@ -3,64 +3,75 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { Context, Data, Effect, Layer } from 'effect';
 
-import * as schema from '../../persistence/schema.js';
+import { describeSafely, type SafeDiagnostic } from '../diagnostics/index.js';
 import { DataDirectory } from './data-directory.js';
 import { migrationsDirectory } from './migrations.js';
 
 const applicationId = 0x49534147; // ISAG
 const schemaVersion = 1;
 
-export type RuntimeDrizzleDatabase = BetterSQLite3Database<typeof schema>;
+/**
+ * Schema-less on purpose: every table lives in its owning module's `tables.ts`, and queries import
+ * the tables they use. Only `db.query.*` needs a schema object, and the runtime does not use it.
+ */
+export type RuntimeDrizzleDatabase = BetterSQLite3Database;
 
 type RuntimeDatabaseClient = BetterSqlite.Database;
 
-export class DatabaseError extends Data.TaggedError('DatabaseError')<{
-  readonly cause: unknown;
-  readonly operation: string;
-}> {}
-
-export interface RuntimeDatabaseService {
-  readonly use: <A>(
-    operation: string,
-    run: (database: RuntimeDrizzleDatabase) => A,
-  ) => Effect.Effect<A, DatabaseError>;
-  readonly transaction: <A>(
-    operation: string,
-    run: (database: RuntimeDrizzleDatabase) => A,
-  ) => Effect.Effect<A, DatabaseError>;
+export class DatabaseError
+  extends Data.TaggedError('DatabaseError')<{
+    readonly cause: unknown;
+    readonly operation: string;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return { label: `Database operation ${this.operation} failed`, cause: this.cause };
+  }
 }
 
-export const RuntimeDatabase = Context.Service<RuntimeDatabaseService>('isagi/RuntimeDatabase');
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const resource = yield* Effect.acquireRelease(
+    Effect.try({
+      try: () => openRuntimeDatabase(directory.paths.databasePath),
+      catch: (cause) => new DatabaseError({ operation: 'open_database', cause }),
+    }),
+    ({ client }) => Effect.sync(() => client.close()),
+  );
 
-export const RuntimeDatabaseLive = Layer.effect(
-  RuntimeDatabase,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const resource = yield* Effect.acquireRelease(
+  return RuntimeDatabase.of({
+    use: (operation, run) =>
       Effect.try({
-        try: () => openRuntimeDatabase(directory.paths.databasePath),
-        catch: (cause) => new DatabaseError({ operation: 'open_database', cause }),
+        try: () => run(resource.database),
+        catch: (cause) => new DatabaseError({ operation, cause }),
       }),
-      ({ client }) => Effect.sync(() => client.close()),
-    );
+    transaction: (operation, run) =>
+      Effect.try({
+        try: () =>
+          resource.database.transaction((transaction) =>
+            run(transaction as unknown as RuntimeDrizzleDatabase),
+          ),
+        catch: (cause) => new DatabaseError({ operation, cause }),
+      }),
+  });
+});
 
-    return {
-      use: (operation, run) =>
-        Effect.try({
-          try: () => run(resource.database),
-          catch: (cause) => new DatabaseError({ operation, cause }),
-        }),
-      transaction: (operation, run) =>
-        Effect.try({
-          try: () =>
-            resource.database.transaction((transaction) =>
-              run(transaction as unknown as RuntimeDrizzleDatabase),
-            ),
-          catch: (cause) => new DatabaseError({ operation, cause }),
-        }),
-    } satisfies RuntimeDatabaseService;
-  }),
-);
+export class RuntimeDatabase extends Context.Service<
+  RuntimeDatabase,
+  {
+    readonly use: <A>(
+      operation: string,
+      run: (database: RuntimeDrizzleDatabase) => A,
+    ) => Effect.Effect<A, DatabaseError>;
+    readonly transaction: <A>(
+      operation: string,
+      run: (database: RuntimeDrizzleDatabase) => A,
+    ) => Effect.Effect<A, DatabaseError>;
+  }
+>()('isagi/runtime/platform/persistence/RuntimeDatabase') {
+  static readonly layer = Layer.effect(RuntimeDatabase, make);
+}
 
 function openRuntimeDatabase(path: string): {
   readonly client: RuntimeDatabaseClient;
@@ -76,7 +87,7 @@ function openRuntimeDatabase(path: string): {
   client.pragma(`application_id = ${applicationId}`);
   client.pragma(`user_version = ${schemaVersion}`);
 
-  const database = drizzle(client, { schema });
+  const database = drizzle(client);
   migrate(database, { migrationsFolder: migrationsDirectory() });
 
   return { client, database };

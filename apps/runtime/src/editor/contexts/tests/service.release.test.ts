@@ -3,9 +3,8 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { EntityLock } from '../../../platform/locks/entity-lock.js';
-import { PtyRepository } from '../../../pty-processes/repository.js';
-import { PtyKillError } from '../../../pty-processes/types.js';
+import { EntityLock } from '../../../platform/locks/index.js';
+import { PtyRepository, PtyKillError } from '../../../pty-processes/index.js';
 import {
   editorBackendStub,
   immediateProbe,

@@ -2,23 +2,20 @@ import { Context, Deferred, Effect, Fiber, Layer, Result } from 'effect';
 
 import type { EditorAttemptFailureReason, EditorDiagnosticsOutput } from '@isagi/contracts';
 
-import { describeOperationalCause } from '../../platform/diagnostics/operational-cause.js';
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import {
   EntityLock,
   entityLockKeyId,
   type EntityLockHeld,
   type EntityLockKey,
-} from '../../platform/locks/entity-lock.js';
-import { LoopbackPortProbe } from '../../platform/net/loopback-port-probe.js';
+} from '../../platform/locks/index.js';
+import { LoopbackPortProbe } from '../../platform/net/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
 import { PtyService, type PtyTerminateOutcome } from '../../pty-processes/index.js';
-import { WorkspaceRepository } from '../../workspace/index.js';
-import {
-  EditorProvisioning,
-  type EditorUnavailable,
-  type ResolvedEditorInstallation,
-} from '../provisioning/index.js';
+import { type ResolvedEditorInstallation } from '../provisioning/install.js';
+import { EditorProvisioning, type EditorUnavailable } from '../provisioning/service.js';
 import { EditorDiagnosticsUnavailable, EditorError, EditorLaunchFailed } from './errors.js';
 import { launchEditorIncarnation, type EditorLaunchDependencies } from './launch.js';
 import { deriveEditorContextFacts } from './projection.js';
@@ -48,65 +45,6 @@ export const editorDiagnosticsMaxBytes = 16 * 1_024;
  */
 export const editorReplaceGracefulTimeoutMs = 2_000;
 export const editorReleaseGracefulTimeoutMs = 1_000;
-
-export interface EditorContextServiceShape {
-  /**
-   * The Class C guard both operations call first, and the same one the palette's
-   * availability path uses. A façade over provisioning on purpose: the editor
-   * domain stays the single door, so no other layer has to learn how
-   * provisioning models capability.
-   */
-  readonly requireAvailable: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
-  readonly findForWorktree: (
-    worktreeId: number,
-  ) => Effect.Effect<EditorContextRow | null, DatabaseError>;
-  /** Called by placement while it holds `editorLockKey(worktreeId)`; the witness proves it. */
-  readonly createForWorktree: (input: {
-    readonly held: EntityLockHeld;
-    readonly worktreeId: number;
-  }) => Effect.Effect<EditorContextRow, DatabaseError>;
-  /**
-   * Takes the lock itself, after reading the context's worktree, and re-reads the
-   * row inside it. Returns the editor's own facts — never a pane projection,
-   * because placement is not this domain's to know.
-   */
-  readonly ensureRuntime: (input: {
-    readonly editorContextId: number;
-    readonly intent: 'reuse' | 'replace';
-  }) => Effect.Effect<
-    EditorContextFacts,
-    DatabaseError | EditorError | EditorUnavailable | EditorLaunchFailed
-  >;
-  /**
-   * Called by the deletion path with the lock already held, for a context it has
-   * already established is unplaced. Never fails on a termination problem: an
-   * unconfirmed stop is recorded on the row instead, because a cleanup that can
-   * refuse would make placement removal fail for a reason the user cannot act on.
-   */
-  readonly releaseIncarnation: (input: {
-    readonly held: EntityLockHeld;
-    readonly editorContextId: number;
-  }) => Effect.Effect<void, DatabaseError>;
-  /** The in-memory half of the read projection, composed by surface detail. */
-  readonly readinessFor: (
-    ptyProcessIds: readonly number[],
-  ) => Effect.Effect<ReadonlyMap<number, EditorReadinessObservation>>;
-  readonly diagnostics: (input: {
-    readonly editorContextId: number;
-    /**
-     * The incarnation the caller believes it is reading. A mismatch with the
-     * context's current pointer is refused, never silently redirected.
-     */
-    readonly ptyProcessId: number;
-  }) => Effect.Effect<
-    EditorDiagnosticsOutput,
-    DatabaseError | EditorError | EditorDiagnosticsUnavailable
-  >;
-}
-
-export const EditorContextService = Context.Service<EditorContextServiceShape>(
-  'isagi/EditorContextService',
-);
 
 export interface EditorContextServiceOptions {
   /**
@@ -146,7 +84,7 @@ export type EditorProbeRunner = (input: {
 export function makeEditorContextService(options: EditorContextServiceOptions = {}) {
   return Effect.gen(function* () {
     const repository = yield* EditorContextRepository;
-    const workspace = yield* WorkspaceRepository;
+    const workspace = yield* ProjectRepository;
     const pty = yield* PtyService;
     const provisioning = yield* EditorProvisioning;
     const portProbe = yield* LoopbackPortProbe;
@@ -440,7 +378,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
         return yield* launchFrom(yield* requireRow(editorContextId), installation);
       });
 
-    const service: EditorContextServiceShape = {
+    const service = EditorContextService.of({
       requireAvailable: provisioning.requireReady,
 
       findForWorktree: repository.findByWorktree,
@@ -543,7 +481,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
             totalBytes: tail.totalBytes,
           };
         }),
-    };
+    });
 
     // Construction step 3, registered first so nothing forked below can outlive
     // it: interrupt every live probe and drop the in-memory state.
@@ -601,7 +539,62 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
   });
 }
 
-export const EditorContextServiceLive = Layer.effect(
+export class EditorContextService extends Context.Service<
   EditorContextService,
-  makeEditorContextService(),
-);
+  {
+    /**
+     * The Class C guard both operations call first, and the same one the palette's
+     * availability path uses. A façade over provisioning on purpose: the editor
+     * domain stays the single door, so no other layer has to learn how
+     * provisioning models capability.
+     */
+    readonly requireAvailable: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
+    readonly findForWorktree: (
+      worktreeId: number,
+    ) => Effect.Effect<EditorContextRow | null, DatabaseError>;
+    /** Called by placement while it holds `editorLockKey(worktreeId)`; the witness proves it. */
+    readonly createForWorktree: (input: {
+      readonly held: EntityLockHeld;
+      readonly worktreeId: number;
+    }) => Effect.Effect<EditorContextRow, DatabaseError>;
+    /**
+     * Takes the lock itself, after reading the context's worktree, and re-reads the
+     * row inside it. Returns the editor's own facts — never a pane projection,
+     * because placement is not this domain's to know.
+     */
+    readonly ensureRuntime: (input: {
+      readonly editorContextId: number;
+      readonly intent: 'reuse' | 'replace';
+    }) => Effect.Effect<
+      EditorContextFacts,
+      DatabaseError | EditorError | EditorUnavailable | EditorLaunchFailed
+    >;
+    /**
+     * Called by the deletion path with the lock already held, for a context it has
+     * already established is unplaced. Never fails on a termination problem: an
+     * unconfirmed stop is recorded on the row instead, because a cleanup that can
+     * refuse would make placement removal fail for a reason the user cannot act on.
+     */
+    readonly releaseIncarnation: (input: {
+      readonly held: EntityLockHeld;
+      readonly editorContextId: number;
+    }) => Effect.Effect<void, DatabaseError>;
+    /** The in-memory half of the read projection, composed by surface detail. */
+    readonly readinessFor: (
+      ptyProcessIds: readonly number[],
+    ) => Effect.Effect<ReadonlyMap<number, EditorReadinessObservation>>;
+    readonly diagnostics: (input: {
+      readonly editorContextId: number;
+      /**
+       * The incarnation the caller believes it is reading. A mismatch with the
+       * context's current pointer is refused, never silently redirected.
+       */
+      readonly ptyProcessId: number;
+    }) => Effect.Effect<
+      EditorDiagnosticsOutput,
+      DatabaseError | EditorError | EditorDiagnosticsUnavailable
+    >;
+  }
+>()('isagi/runtime/editor/EditorContextService') {
+  static readonly layer = Layer.effect(EditorContextService, makeEditorContextService());
+}

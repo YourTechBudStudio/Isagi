@@ -46,8 +46,6 @@ const isagiTmuxOptions = [
 
 const tmuxKillTimeoutMs = 5_000;
 
-export const TmuxBackend = Context.Service<PtyBackendShape>('isagi/TmuxBackend');
-
 const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
   Effect.map(({ stdout }) =>
     stdout
@@ -68,212 +66,216 @@ const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
   ),
 );
 
-export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
-  name: 'tmux',
-  available: runTmux(['-V']).pipe(
-    Effect.as(true),
-    Effect.catch(() => Effect.succeed(false)),
-  ),
-  launch: (input) =>
-    Effect.gen(function* () {
-      if (!input.backendSessionName) {
-        return yield* Effect.fail(
-          new PtyStartError({
-            ptyProcessId: input.ptyProcessId,
-            command: input.command,
-            cwd: input.cwd,
-            cause: new Error('Tmux launch requires a deterministic backend session name.'),
-          }),
-        );
-      }
-      const sessionName = input.backendSessionName;
-      yield* runConfiguredTmux(
-        [
-          'new-session',
-          '-d',
-          '-s',
-          sessionName,
-          '-c',
-          input.cwd,
-          shellCommand(input.command, input.args),
-        ],
-        {
-          env: input.env,
-        },
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
+export class TmuxBackend extends Context.Service<TmuxBackend, PtyBackendShape>()(
+  'isagi/runtime/pty-processes/TmuxBackend',
+) {
+  static readonly layer = Layer.succeed(TmuxBackend, {
+    name: 'tmux',
+    available: runTmux(['-V']).pipe(
+      Effect.as(true),
+      Effect.catch(() => Effect.succeed(false)),
+    ),
+    launch: (input) =>
+      Effect.gen(function* () {
+        if (!input.backendSessionName) {
+          return yield* Effect.fail(
             new PtyStartError({
               ptyProcessId: input.ptyProcessId,
               command: input.command,
               cwd: input.cwd,
+              cause: new Error('Tmux launch requires a deterministic backend session name.'),
+            }),
+          );
+        }
+        const sessionName = input.backendSessionName;
+        yield* runConfiguredTmux(
+          [
+            'new-session',
+            '-d',
+            '-s',
+            sessionName,
+            '-c',
+            input.cwd,
+            shellCommand(input.command, input.args),
+          ],
+          {
+            env: input.env,
+          },
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PtyStartError({
+                ptyProcessId: input.ptyProcessId,
+                command: input.command,
+                cwd: input.cwd,
+                cause,
+              }),
+          ),
+        );
+        return {
+          schemaVersion: 1,
+          backend: 'tmux',
+          sessionName,
+          shellIntegrationToken: input.shellIntegration?.token ?? null,
+        } satisfies TmuxBackendRef;
+      }),
+    attach: (input) =>
+      Effect.gen(function* () {
+        if (input.ref.backend !== 'tmux') {
+          return yield* Effect.fail(
+            new PtyStartError({
+              command: 'tmux attach-session',
+              cwd: '',
+              cause: new Error(`Cannot attach tmux backend to ${input.ref.backend} ref.`),
+            }),
+          );
+        }
+        const sessionName = input.ref.sessionName;
+        return yield* Effect.try({
+          try: () => {
+            const client = nodePty.spawn(
+              'tmux',
+              tmuxArgs(configuredTmuxCommand(['attach-session', '-t', sessionName])),
+              {
+                name: 'xterm-256color',
+                cols: input.cols,
+                rows: input.rows,
+                env: {
+                  ...process.env,
+                  TERM: 'xterm-256color',
+                  COLORTERM: 'truecolor',
+                },
+              },
+            );
+            // The parser is created per attach, so a command already running when a
+            // client (re)attaches — or any command alive across a runtime restart —
+            // emits no start marker the runtime can observe and reads as idle until it
+            // ends. tmux is a legacy/optional backend; under-reporting to idle is the
+            // safe direction (never a false "working"). node-pty binds the parser at
+            // launch and does not have this gap.
+            const parser = createShellIntegrationParser({
+              shellIntegration: shellIntegrationTokenFromRef(input.ref),
+              onEvent: (event) => {
+                if (input.ref.backend !== 'tmux') return;
+                const ptyProcessId = ptyProcessIdFromTmuxSessionName(input.ref.sessionName);
+                if (ptyProcessId > 0) {
+                  input.onForegroundCommand?.({
+                    ptyProcessId,
+                    state: foregroundStateFromEvent(event),
+                  });
+                }
+              },
+            });
+            client.onData((data) => {
+              const visible = parser.push(data);
+              if (visible.length > 0) input.onOutput(visible);
+            });
+            client.onExit(() => {
+              // The tmux client is only the runtime attachment. Its exit is not durable
+              // session exit; startup reconciliation and polling own tmux session state.
+            });
+            return {
+              replayBytes: null,
+              write: (data) =>
+                Effect.try({
+                  try: () => client.write(data),
+                  catch: (cause) => new PtyWriteError({ cause }),
+                }),
+              resize: (size) =>
+                Effect.try({
+                  try: () => client.resize(size.cols, size.rows),
+                  catch: (cause) => new PtyResizeError({ cause }),
+                }),
+              detach: Effect.sync(() => {
+                client.kill();
+              }),
+            } satisfies BackendAttachment;
+          },
+          catch: (cause) =>
+            new PtyStartError({
+              command: 'tmux attach-session',
+              cwd: '',
               cause,
             }),
-        ),
-      );
-      return {
-        schemaVersion: 1,
-        backend: 'tmux',
-        sessionName,
-        shellIntegrationToken: input.shellIntegration?.token ?? null,
-      } satisfies TmuxBackendRef;
-    }),
-  attach: (input) =>
-    Effect.gen(function* () {
-      if (input.ref.backend !== 'tmux') {
-        return yield* Effect.fail(
-          new PtyStartError({
-            command: 'tmux attach-session',
-            cwd: '',
-            cause: new Error(`Cannot attach tmux backend to ${input.ref.backend} ref.`),
-          }),
-        );
-      }
-      const sessionName = input.ref.sessionName;
-      return yield* Effect.try({
-        try: () => {
-          const client = nodePty.spawn(
-            'tmux',
-            tmuxArgs(configuredTmuxCommand(['attach-session', '-t', sessionName])),
-            {
-              name: 'xterm-256color',
-              cols: input.cols,
-              rows: input.rows,
-              env: {
-                ...process.env,
-                TERM: 'xterm-256color',
-                COLORTERM: 'truecolor',
-              },
-            },
-          );
-          // The parser is created per attach, so a command already running when a
-          // client (re)attaches — or any command alive across a runtime restart —
-          // emits no start marker the runtime can observe and reads as idle until it
-          // ends. tmux is a legacy/optional backend; under-reporting to idle is the
-          // safe direction (never a false "working"). node-pty binds the parser at
-          // launch and does not have this gap.
-          const parser = createShellIntegrationParser({
-            shellIntegration: shellIntegrationTokenFromRef(input.ref),
-            onEvent: (event) => {
-              if (input.ref.backend !== 'tmux') return;
-              const ptyProcessId = ptyProcessIdFromTmuxSessionName(input.ref.sessionName);
-              if (ptyProcessId > 0) {
-                input.onForegroundCommand?.({
-                  ptyProcessId,
-                  state: foregroundStateFromEvent(event),
-                });
-              }
-            },
-          });
-          client.onData((data) => {
-            const visible = parser.push(data);
-            if (visible.length > 0) input.onOutput(visible);
-          });
-          client.onExit(() => {
-            // The tmux client is only the runtime attachment. Its exit is not durable
-            // session exit; startup reconciliation and polling own tmux session state.
-          });
-          return {
-            replayBytes: null,
-            write: (data) =>
-              Effect.try({
-                try: () => client.write(data),
-                catch: (cause) => new PtyWriteError({ cause }),
-              }),
-            resize: (size) =>
-              Effect.try({
-                try: () => client.resize(size.cols, size.rows),
-                catch: (cause) => new PtyResizeError({ cause }),
-              }),
-            detach: Effect.sync(() => {
-              client.kill();
+        });
+      }),
+    writeInput: (input) =>
+      Effect.gen(function* () {
+        if (input.ref.backend !== 'tmux') {
+          return yield* Effect.fail(
+            new PtyWriteError({
+              cause: new Error(`Cannot write tmux input to ${input.ref.backend} ref.`),
             }),
-          } satisfies BackendAttachment;
-        },
-        catch: (cause) =>
-          new PtyStartError({
-            command: 'tmux attach-session',
-            cwd: '',
-            cause,
-          }),
-      });
-    }),
-  writeInput: (input) =>
-    Effect.gen(function* () {
-      if (input.ref.backend !== 'tmux') {
-        return yield* Effect.fail(
-          new PtyWriteError({
-            cause: new Error(`Cannot write tmux input to ${input.ref.backend} ref.`),
-          }),
+          );
+        }
+        const bufferName = `isagi-input-${process.pid}-${Date.now()}`;
+        yield* runTmux(['set-buffer', '-b', bufferName, input.data]).pipe(
+          Effect.mapError((cause) => new PtyWriteError({ cause })),
         );
-      }
-      const bufferName = `isagi-input-${process.pid}-${Date.now()}`;
-      yield* runTmux(['set-buffer', '-b', bufferName, input.data]).pipe(
-        Effect.mapError((cause) => new PtyWriteError({ cause })),
-      );
-      yield* runTmux(['paste-buffer', '-d', '-b', bufferName, '-t', input.ref.sessionName]).pipe(
-        Effect.asVoid,
-        Effect.mapError((cause) => new PtyWriteError({ cause })),
-      );
-    }),
-  replay: (input) =>
-    Effect.gen(function* () {
-      if (input.ref.backend !== 'tmux') {
-        return yield* Effect.fail(
-          new PtyServiceError({
-            code: 'log_read_failed',
-            message: `Cannot replay tmux backend from ${input.ref.backend} ref.`,
-          }),
+        yield* runTmux(['paste-buffer', '-d', '-b', bufferName, '-t', input.ref.sessionName]).pipe(
+          Effect.asVoid,
+          Effect.mapError((cause) => new PtyWriteError({ cause })),
         );
-      }
-      const ref = input.ref;
-      const { stdout } = yield* runTmux([
-        'capture-pane',
-        '-p',
-        '-e',
-        '-S',
-        '-',
-        '-t',
-        ref.sessionName,
-      ]).pipe(
-        Effect.mapError(
-          (cause) =>
+      }),
+    replay: (input) =>
+      Effect.gen(function* () {
+        if (input.ref.backend !== 'tmux') {
+          return yield* Effect.fail(
             new PtyServiceError({
               code: 'log_read_failed',
-              message: `Could not replay tmux session ${ref.sessionName}.`,
-              cause,
+              message: `Cannot replay tmux backend from ${input.ref.backend} ref.`,
             }),
-        ),
+          );
+        }
+        const ref = input.ref;
+        const { stdout } = yield* runTmux([
+          'capture-pane',
+          '-p',
+          '-e',
+          '-S',
+          '-',
+          '-t',
+          ref.sessionName,
+        ]).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PtyServiceError({
+                code: 'log_read_failed',
+                message: `Could not replay tmux session ${ref.sessionName}.`,
+                cause,
+              }),
+          ),
+        );
+        const replayData = terminalReplayDataFromCapturePane(stdout);
+        const data = ref.shellIntegrationToken
+          ? stripShellIntegrationMarkers(replayData, shellIntegrationTokenFromRef(ref))
+          : replayData;
+        const bytes = Buffer.byteLength(data);
+        input.send({ type: 'replay_start', bytes });
+        if (bytes > 0) {
+          input.send({ type: 'output', data, replay: true });
+        }
+        input.send({ type: 'replay_end' });
+      }),
+    inspect: (ref) =>
+      runTmux(['has-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
+        Effect.as({ status: 'alive' as const }),
+        Effect.catch((cause) => Effect.succeed(classifyTmuxInspectFailure(cause))),
+      ),
+    listSessions: listTmuxSessions,
+    collectGarbage: (input) => collectTmuxGarbage(input, listTmuxSessions),
+    terminate: (input) => {
+      console.warn(
+        '[runtime] tmux PTY backend does not support reliable graceful termination; killing tmux session directly.',
       );
-      const replayData = terminalReplayDataFromCapturePane(stdout);
-      const data = ref.shellIntegrationToken
-        ? stripShellIntegrationMarkers(replayData, shellIntegrationTokenFromRef(ref))
-        : replayData;
-      const bytes = Buffer.byteLength(data);
-      input.send({ type: 'replay_start', bytes });
-      if (bytes > 0) {
-        input.send({ type: 'output', data, replay: true });
-      }
-      input.send({ type: 'replay_end' });
-    }),
-  inspect: (ref) =>
-    runTmux(['has-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
-      Effect.as({ status: 'alive' as const }),
-      Effect.catch((cause) => Effect.succeed(classifyTmuxInspectFailure(cause))),
-    ),
-  listSessions: listTmuxSessions,
-  collectGarbage: (input) => collectTmuxGarbage(input, listTmuxSessions),
-  terminate: (input) => {
-    console.warn(
-      '[runtime] tmux PTY backend does not support reliable graceful termination; killing tmux session directly.',
-    );
-    return killTmuxSession(
-      input.ref.backend === 'tmux' ? input.ref.sessionName : '',
-      input.gracefulTimeoutMs,
-    );
-  },
-  kill: (ref) => killTmuxSession(ref.backend === 'tmux' ? ref.sessionName : '', null),
-} satisfies PtyBackendShape);
+      return killTmuxSession(
+        input.ref.backend === 'tmux' ? input.ref.sessionName : '',
+        input.gracefulTimeoutMs,
+      );
+    },
+    kill: (ref) => killTmuxSession(ref.backend === 'tmux' ? ref.sessionName : '', null),
+  } satisfies PtyBackendShape);
+}
 
 // A successful `kill-session` is an affirmative kill. A missing session or a
 // missing server is verified absence: the attempt terminated nothing, so its

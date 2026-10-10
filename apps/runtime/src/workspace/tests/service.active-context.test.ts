@@ -4,22 +4,18 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService, SurfaceRepository } from '../../environment/index.js';
-import {
-  InternalRuntimeEventBus,
-  type InternalRuntimeEventBusService,
-} from '../../platform/events/index.js';
+import { SurfaceService } from '../../environment/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
-import {
-  DataDirectory,
-  StateFile,
-  stateFromActiveContext,
-} from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../../projects/repository.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorkspaceService, WorkspaceServiceLive } from '../service.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile, stateFromActiveContext } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   featureWorktree,
   git,
@@ -31,7 +27,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  testWorktreeDeleteDiagnostics,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -54,13 +50,13 @@ test('active context persistence validates before writing state', async () => {
           revision: 1,
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
@@ -89,13 +85,13 @@ test('valid active context persistence writes after validation', async () => {
         revision: 1,
       });
     }).pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layer),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
@@ -126,7 +122,7 @@ test('active context persistence publishes internal activation changes for accep
       Effect.sync(() => {
         events.push(event);
       }),
-  } satisfies InternalRuntimeEventBusService;
+  } satisfies InternalRuntimeEventBus['Service'];
 
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -136,13 +132,13 @@ test('active context persistence publishes internal activation changes for accep
         revision: 2,
       });
     }).pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layer),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, internalEvents),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),

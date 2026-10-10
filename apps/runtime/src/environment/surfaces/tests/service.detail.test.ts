@@ -7,9 +7,11 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import { EditorContextRepository } from '../../../editor/contexts/index.js';
-import { insertPtyProcess as insertEditorPtyProcess } from '../../../editor/testing.js';
-import { editorContexts } from '../../../persistence/schema.js';
+import { editorContexts } from '../../../editor/tables.js';
+import {
+  EditorContextRepository,
+  insertPtyProcess as insertEditorPtyProcess,
+} from '../../../editor/testing.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceService } from '../../index.js';
 import { insertWorktree, testLayer } from '../../testing.js';

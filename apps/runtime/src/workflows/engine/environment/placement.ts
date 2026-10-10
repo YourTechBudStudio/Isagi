@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 
 import { SurfaceError, validateSurfaceTitle } from '../../../environment/index.js';
 import type { DatabaseError } from '../../../platform/persistence/index.js';
-import { WorkspaceError, type WorkspaceServiceError } from '../../../workspace/service.js';
+import { WorkspaceError, type WorkspaceServiceError } from '../../../workspace/index.js';
 import { WorkflowEngineError } from '../../errors.js';
 import type { WorkflowOrigin } from '../../types.js';
 import type { LaunchProject, PlacementSelection, ResolvedPlacement } from './types.js';
@@ -39,7 +39,7 @@ export interface PlacementDeps {
       readonly fromRef: string;
     }) => Effect.Effect<{ readonly commit: string }, WorkspaceServiceError>;
   };
-  readonly surfaceRepository: {
+  readonly surfaceReads: {
     readonly findSurface: (
       surfaceId: number,
     ) => Effect.Effect<{ readonly id: number; readonly worktreeId: number } | null, DatabaseError>;
@@ -307,7 +307,7 @@ function resolveSurface(
 
     case 'existing':
       return Effect.gen(function* () {
-        const row = yield* deps.surfaceRepository.findSurface(choice.surfaceId);
+        const row = yield* deps.surfaceReads.findSurface(choice.surfaceId);
         if (!row) {
           return yield* Effect.fail(
             new WorkflowEngineError({

@@ -16,6 +16,7 @@ import {
   registerContentEndpoint,
   type ApiRouteContext,
 } from '../platform/http/index.js';
+import { workspaceApiError } from '../workspace/index.js';
 import { WorkflowEngine } from './engine/service.js';
 import { WorkflowEngineError } from './errors.js';
 
@@ -223,6 +224,8 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
 
   // Launch makes one owning-service call (the worktree preflight), so Git, the database, the
   // state file and project paths can fail underneath it. They are reported as themselves.
+  const workspace = workspaceApiError(error, context);
+  if (workspace) return workspace;
   const infrastructure = infrastructureApiError(error, context);
   if (infrastructure) return infrastructure;
 

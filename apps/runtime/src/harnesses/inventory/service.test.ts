@@ -7,9 +7,8 @@ import {
   UserShell,
   type UserShellCommand,
   type UserShellCommandResult,
-  type UserShellService,
-} from '../../platform/process/user-shell.js';
-import { HostInventory, HostInventoryLive } from './service.js';
+} from '../../platform/process/index.js';
+import { HostInventory } from './service.js';
 
 const success = (stdout: string, stderr = ''): UserShellCommandResult => ({
   exitCode: 0,
@@ -43,7 +42,7 @@ test('inventory begins pending and atomically publishes a whitelisted ready snap
       const cached = yield* inventory.getCached;
       assert.equal(cached['_tag'], 'Ready');
       if (cached['_tag'] === 'Ready') assert.deepEqual(cached.inventory, refreshed);
-    }).pipe(Effect.provide(HostInventoryLive), Effect.provide(Layer.succeed(UserShell, shell))),
+    }).pipe(Effect.provide(HostInventory.layer), Effect.provide(Layer.succeed(UserShell, shell))),
   );
 });
 
@@ -65,7 +64,7 @@ test('inventory distinguishes missing, nonzero, malformed, and bounded output', 
   const snapshot = await Effect.runPromise(
     Effect.gen(function* () {
       return yield* (yield* HostInventory).refresh;
-    }).pipe(Effect.provide(HostInventoryLive), Effect.provide(Layer.succeed(UserShell, shell))),
+    }).pipe(Effect.provide(HostInventory.layer), Effect.provide(Layer.succeed(UserShell, shell))),
   );
   assert.equal(snapshot.environment['_tag'], 'ProbeFailed');
   assert.deepEqual(tagAndReason(snapshot.harnesses.pi), ['ProbeFailed', 'nonzero_exit']);
@@ -111,7 +110,7 @@ test('concurrent refreshes are single-flight and keep the previous ready snapsho
       if (after['_tag'] === 'Ready' && after.inventory.harnesses.pi['_tag'] === 'Available') {
         assert.equal(after.inventory.harnesses.pi.version, 'pi 2.0.0');
       }
-    }).pipe(Effect.provide(HostInventoryLive), Effect.provide(Layer.succeed(UserShell, shell))),
+    }).pipe(Effect.provide(HostInventory.layer), Effect.provide(Layer.succeed(UserShell, shell))),
   );
 });
 
@@ -125,7 +124,7 @@ test('managed runtime disposal interrupts an in-flight inventory refresh', async
     ),
   );
   const runtime = ManagedRuntime.make(
-    HostInventoryLive.pipe(Layer.provide(Layer.succeed(UserShell, shell))),
+    HostInventory.layer.pipe(Layer.provide(Layer.succeed(UserShell, shell))),
   );
   await runtime.runPromise(Effect.flatMap(HostInventory, (inventory) => inventory.startRefresh));
   // `startRefresh` only forks the refresh; v4 starts that fiber on a later scheduler tick, so wait
@@ -137,11 +136,11 @@ test('managed runtime disposal interrupts an in-flight inventory refresh', async
 
 function fakeShell(
   run: (input: UserShellCommand) => UserShellCommandResult | Effect.Effect<UserShellCommandResult>,
-  environment: UserShellService['environment'] = {
+  environment: UserShell['Service']['environment'] = {
     _tag: 'Available',
     values: { HOME: '/fallback', PATH: '/fallback/bin' },
   },
-): UserShellService {
+): UserShell['Service'] {
   return {
     environment,
     run: (input) =>

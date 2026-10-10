@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 
-import { isPermissionError } from '../platform/fs/fs-errors.js';
+import { isPermissionError } from '../platform/fs/index.js';
 
 export type DirectoryAvailability =
   | { readonly available: true }

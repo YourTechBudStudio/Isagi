@@ -5,7 +5,7 @@ import { sql } from 'drizzle-orm';
 import { Cause, Effect, Exit } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../repository.js';
+import { ProjectRepository } from '../repository.js';
 import { runWithDatabase } from '../testing.js';
 
 /**
@@ -43,7 +43,7 @@ function blockWorktreeInserts() {
 
 function readState() {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     const projects = yield* repository.listProjects;
     const worktrees = yield* repository.listWorktrees;
     return {
@@ -92,7 +92,7 @@ test('creating a git project inserts the project and no environment', async () =
   const result = await runWithDatabase(
     'create-project-git',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const created = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
@@ -119,7 +119,7 @@ test('creating a folder project inserts its sole root environment in the same un
   const result = await runWithDatabase(
     'create-project-folder',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const created = yield* repository.createProject({
         name: 'notes',
         rootPath: '/folders/notes',
@@ -147,7 +147,7 @@ test('creation appends to the present project order regardless of kind', async (
   const rootPaths = await runWithDatabase(
     'create-project-append-order',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       yield* repository.createProject({ name: 'alpha', rootPath: '/repo/alpha', kind: 'git' });
       yield* repository.createProject({
         name: 'notes',
@@ -166,7 +166,7 @@ test('a duplicate folder path fails and leaves exactly one project and one envir
   const result = await runWithDatabase(
     'create-project-duplicate-folder',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       // The repository is handed an already canonicalized path; alias
       // normalization belongs to registration, not to this boundary.
       yield* repository.createProject({
@@ -190,7 +190,7 @@ test('a duplicate git path fails and leaves exactly one project and no environme
   const result = await runWithDatabase(
     'create-project-duplicate-git',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       yield* repository.createProject({ name: 'isagi', rootPath: '/repo/isagi', kind: 'git' });
       const exit = yield* Effect.exit(
         repository.createProject({ name: 'isagi', rootPath: '/repo/isagi', kind: 'git' }),
@@ -208,7 +208,7 @@ test('a blocked singleton insert rolls the whole folder project back', async () 
   const result = await runWithDatabase(
     'create-project-rollback',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       yield* blockWorktreeInserts();
 
       // Control: the trigger is inert on the project insert. A Git project

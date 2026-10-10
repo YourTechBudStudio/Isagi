@@ -6,9 +6,9 @@ import test from 'node:test';
 
 import { Effect, type Layer } from 'effect';
 
-import { surfacePanes, worktreeSurfaces } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceError, SurfaceService, validateSurfaceTitle } from '../../index.js';
+import { surfacePanes, worktreeSurfaces } from '../../tables.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
 type TestServices = Layer.Success<ReturnType<typeof testLayer>>;

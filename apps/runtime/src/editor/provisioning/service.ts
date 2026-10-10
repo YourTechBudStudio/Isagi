@@ -4,8 +4,8 @@ import { Context, Data, Duration, Effect, Layer, Option, Ref, Semaphore } from '
 
 import type { EditorProvisioningFailureReason, EditorProvisioningState } from '@isagi/contracts';
 
-import { DataDirectory, type DataDirectoryService } from '../../platform/persistence/index.js';
-import { EditorInstallIo, type EditorInstallIoService } from './install-io.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { EditorInstallIo } from './install-io.js';
 import {
   provisionCodeServer,
   EditorProvisioningFailure,
@@ -37,30 +37,6 @@ export class EditorUnavailable extends Data.TaggedError('EditorUnavailable')<{
 }> {}
 
 export class EditorProvisioningBusy extends Data.TaggedError('EditorProvisioningBusy')<{}> {}
-
-export interface EditorProvisioningService {
-  /** Forked from `startRuntimeServer`, the way `HarnessControlPlane.start`
-   *  forks docs reconciliation. Idempotent, and never fails. */
-  readonly start: Effect.Effect<void>;
-  readonly state: Effect.Effect<EditorProvisioningState>;
-  /** The user-initiated retry. Re-enters the same attempt and returns the
-   *  settled state; refuses while one is already running rather than queueing a
-   *  second download behind it. */
-  readonly retry: Effect.Effect<EditorProvisioningState, EditorProvisioningBusy>;
-  /**
-   * The guard every editor *operation* calls first.
-   *
-   * `retry` deliberately does not call it: retry asks the domain to report or
-   * re-enter its state, and `not_applicable` is a complete answer to that
-   * question. Operations that need an installation are the ones that must
-   * refuse.
-   */
-  readonly requireReady: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
-}
-
-export const EditorProvisioning = Context.Service<EditorProvisioningService>(
-  'isagi/EditorProvisioning',
-);
 
 export type EditorCapability = 'code_server' | null;
 
@@ -123,7 +99,7 @@ export interface EditorProvisioningOptions {
 /**
  * The scoped implementation, with the capability passed in.
  *
- * `EditorProvisioningLive` is the production binding that resolves the
+ * `EditorProvisioning.layer` is the production binding that resolves the
  * capability from the environment exactly once, at layer acquisition; tests
  * drive this with an explicit value instead.
  */
@@ -221,7 +197,7 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
       ),
     );
 
-    return {
+    return EditorProvisioning.of({
       start: Ref.getAndSet(attemptRequested, true).pipe(
         Effect.flatMap((alreadyRequested) =>
           alreadyRequested
@@ -256,7 +232,7 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
           diagnostic: current.kind === 'failed' ? current.diagnostic : null,
         });
       }),
-    } satisfies EditorProvisioningService;
+    });
   });
 }
 
@@ -266,7 +242,7 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
  * made, and `requireReady` says honestly that this runtime is not the kind that
  * has an editor.
  */
-const notApplicableService: EditorProvisioningService = {
+const notApplicableService: EditorProvisioning['Service'] = {
   start: Effect.void,
   state: Effect.succeed(notApplicable),
   retry: Effect.succeed(notApplicable),
@@ -275,15 +251,33 @@ const notApplicableService: EditorProvisioningService = {
   ),
 };
 
-export const EditorProvisioningLive: Layer.Layer<
-  EditorProvisioningService,
-  never,
-  DataDirectoryService | EditorInstallIoService
-> = Layer.effect(
-  EditorProvisioning,
-  Effect.suspend(() =>
-    // Read once, at layer acquisition. Everything below this line takes the
-    // capability as a value.
-    makeEditorProvisioning({ capability: editorCapabilityFromEnvironment(process.env) }),
-  ),
+const make = Effect.suspend(() =>
+  // Read once, at layer acquisition. Everything below this line takes the
+  // capability as a value.
+  makeEditorProvisioning({ capability: editorCapabilityFromEnvironment(process.env) }),
 );
+
+export class EditorProvisioning extends Context.Service<
+  EditorProvisioning,
+  {
+    /** Forked from `startRuntimeServer`, the way `HarnessControlPlane.start`
+     *  forks docs reconciliation. Idempotent, and never fails. */
+    readonly start: Effect.Effect<void>;
+    readonly state: Effect.Effect<EditorProvisioningState>;
+    /** The user-initiated retry. Re-enters the same attempt and returns the
+     *  settled state; refuses while one is already running rather than queueing a
+     *  second download behind it. */
+    readonly retry: Effect.Effect<EditorProvisioningState, EditorProvisioningBusy>;
+    /**
+     * The guard every editor *operation* calls first.
+     *
+     * `retry` deliberately does not call it: retry asks the domain to report or
+     * re-enter its state, and `not_applicable` is a complete answer to that
+     * question. Operations that need an installation are the ones that must
+     * refuse.
+     */
+    readonly requireReady: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
+  }
+>()('isagi/runtime/editor/EditorProvisioning') {
+  static readonly layer = Layer.effect(EditorProvisioning, make);
+}

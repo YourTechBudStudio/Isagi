@@ -3,14 +3,14 @@ import { pathToFileURL } from 'node:url';
 import { Effect } from 'effect';
 
 import { harnessEnvForProcess } from '../env.js';
-import type { AgentSessionArtifactsService } from '../ledger.js';
+import type { AgentSessionArtifacts } from '../ledger.js';
 import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
 export function buildOpenCodeLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly pluginPath: string;
-    readonly artifacts: AgentSessionArtifactsService;
+    readonly artifacts: AgentSessionArtifacts['Service'];
   },
 ) {
   return Effect.sync(() => {

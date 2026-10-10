@@ -234,7 +234,7 @@ async function main() {
  * scaffold is harness-free and takes the default current/current placement, so none of it is used.
  */
 async function proveEngineLaunch(
-  registry: import('../src/workflows/structure/registry.js').WorkflowRegistryService,
+  registry: import('../src/workflows/structure/registry.js').WorkflowRegistry['Service'],
   artifactHash: string,
 ) {
   const { makeEngineHarness } = await import('../src/workflows/engine/test-support.js');

@@ -3,21 +3,22 @@ import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import { AgentSessionArtifactsLive } from '../../../harnesses/ledger.js';
-import { HarnessLedgerObserverLive } from '../../../harnesses/observer.service.js';
-import { agentSessions, projects, ptyProcesses, worktrees } from '../../../persistence/schema.js';
-import { InternalRuntimeEventBusLive } from '../../../platform/events/index.js';
+import { AgentSessionArtifacts, HarnessLedgerObserver } from '../../../harnesses/index.js';
+import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
 import {
   DataDirectory,
   RuntimeDatabase,
-  RuntimeDatabaseLive,
   type RuntimeDrizzleDatabase,
 } from '../../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../../platform/persistence/testing.js';
-import { PtyForegroundStateLive } from '../../../pty-processes/index.js';
+import { projects, worktrees } from '../../../projects/tables.js';
+import { PtyForegroundState } from '../../../pty-processes/index.js';
 import type { PtyProcessRow } from '../../../pty-processes/index.js';
-import type { AgentSessionRow, TerminalSessionRow } from '../../surfaces/types.js';
-import { AgentSessionAttentionProjectionLive } from '../attention.js';
+import { ptyProcesses } from '../../../pty-processes/tables.js';
+import type { AgentSessionRow, TerminalSessionRow } from '../../sessions/types.js';
+import { agentSessions } from '../../tables.js';
+import { AgentSessionAttentionProjection } from '../attention.js';
+import { HarnessObservationTargetsLayer } from '../observation-targets.js';
 
 export function appendRecord(
   path: string,
@@ -234,22 +235,22 @@ export function seedRuntimeDatabase(
 }
 
 function databaseLayer(dataRoot: string) {
-  return RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer(dataRoot)));
+  return RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer(dataRoot)));
 }
 
 export function testLayer(dataRoot: string) {
   const directoryLayer = dataDirectoryLayer(dataRoot);
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directoryLayer));
-  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directoryLayer));
-  const internalBus = InternalRuntimeEventBusLive;
-  const foreground = PtyForegroundStateLive;
-  const observer = HarnessLedgerObserverLive.pipe(
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directoryLayer));
+  const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directoryLayer));
+  const internalBus = InternalRuntimeEventBus.layer;
+  const foreground = PtyForegroundState.layer;
+  const observer = HarnessLedgerObserver.layer.pipe(
     Layer.provide(directoryLayer),
-    Layer.provide(database),
+    Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
     Layer.provide(artifacts),
     Layer.provide(internalBus),
   );
-  const attention = AgentSessionAttentionProjectionLive.pipe(
+  const attention = AgentSessionAttentionProjection.layer.pipe(
     Layer.provide(database),
     Layer.provide(artifacts),
     Layer.provide(foreground),

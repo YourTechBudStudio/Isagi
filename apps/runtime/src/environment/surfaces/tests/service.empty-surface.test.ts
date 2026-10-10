@@ -7,9 +7,10 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Deferred, Effect, Fiber, Result } from 'effect';
 
-import { ptyProcesses, surfacePanes, terminalSessions } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
+import { ptyProcesses } from '../../../pty-processes/tables.js';
 import { SurfaceError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { surfacePanes, terminalSessions } from '../../tables.js';
 import { insertPtyProcess, insertWorktree, testLayer } from '../../testing.js';
 
 function withTerminals(dataRoot: string) {

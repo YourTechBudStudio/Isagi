@@ -11,24 +11,21 @@ import {
 } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../../app/layer.js';
-import { HarnessLaunchBlocked } from '../../harnesses/control-plane/index.js';
-import { HarnessAdapterError } from '../../harnesses/types.js';
+import { HarnessLaunchBlocked, HarnessAdapterError } from '../../harnesses/index.js';
 import { errorMessage } from '../../platform/http/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
-import { PtyService } from '../../pty-processes/service.js';
-import type { PtyAttachmentPlan } from '../../pty-processes/service.js';
 import {
+  PtyService,
   registerPtyStreamRoute,
   type PtyStreamStrategy,
-} from '../../pty-processes/stream-route.js';
-import { PtyResizeError, PtyServiceError, PtyWriteError } from '../../pty-processes/types.js';
-import {
-  SessionLifecycle,
-  SessionLifecycleError,
-  type SessionLifecycleKey,
-} from '../../session-lifecycle/index.js';
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
-import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
+  PtyResizeError,
+  PtyServiceError,
+  PtyWriteError,
+} from '../../pty-processes/index.js';
+import type { PtyAttachmentPlan } from '../../pty-processes/index.js';
+import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
+import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/service.js';
+import { SessionLifecycle, SessionLifecycleError, type SessionLifecycleKey } from './lifecycle.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>

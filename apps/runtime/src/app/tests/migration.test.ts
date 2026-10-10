@@ -7,17 +7,28 @@ import test from 'node:test';
 import BetterSqlite from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { getTableConfig, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { Effect, Layer, Schema } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { projects, workflowRuns, worktrees } from '../../persistence/schema.js';
-import { DataDirectory } from '../../platform/persistence/data-directory.js';
-import { RuntimeDatabase, RuntimeDatabaseLive } from '../../platform/persistence/database.js';
-import { migrationsDirectory } from '../../platform/persistence/migrations.js';
+import * as commandTables from '../../commands/tables.js';
+import * as editorTables from '../../editor/tables.js';
+import * as environmentTables from '../../environment/tables.js';
+import {
+  DataDirectory,
+  RuntimeDatabase,
+  migrationsDirectory,
+} from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { WorkspaceRepository, WorkspaceRepositoryLive } from '../../projects/repository.js';
-import { buildWorkspaceSnapshot } from '../../workspace/snapshot.js';
+import { ProjectRepository } from '../../projects/index.js';
+import * as projectTables from '../../projects/tables.js';
+import { projects, worktrees } from '../../projects/tables.js';
+import * as ptyProcessTables from '../../pty-processes/tables.js';
+import * as workflowsTables from '../../workflows/tables.js';
+import { workflowRuns } from '../../workflows/tables.js';
+import * as workspaceTables from '../../workspace/tables.js';
+import { buildWorkspaceSnapshot } from '../../workspace/testing.js';
 
 /**
  * Proves the rail-ordering migration (`0002`) upgrades a database created before
@@ -227,13 +238,13 @@ test('the rail-order migration upgrades a pre-0002 database without losing data'
 
     // Opening the production layer applies the committed migration set, which is
     // the upgrade an existing installation performs on its next launch.
-    const database = RuntimeDatabaseLive.pipe(
+    const database = RuntimeDatabase.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
     );
     const upgraded = await Effect.runPromise(
       Effect.gen(function* () {
         const db = yield* RuntimeDatabase;
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         const rows = yield* db.use('test_read_upgraded_rows', (connection) => ({
           projects: connection.select().from(projects).orderBy(projects.id).all(),
           worktrees: connection.select().from(worktrees).orderBy(worktrees.id).all(),
@@ -247,7 +258,7 @@ test('the rail-order migration upgrades a pre-0002 database without losing data'
         };
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(database, WorkspaceRepositoryLive.pipe(Layer.provide(database))),
+          Layer.mergeAll(database, ProjectRepository.layer.pipe(Layer.provide(database))),
         ),
       ),
     );
@@ -344,12 +355,60 @@ function assertGraphWorkflowSchema(client: BetterSqlite.Database) {
   assert.deepEqual(client.pragma('foreign_key_check'), []);
 }
 
+test('every module table is a migrated table with the same columns, and every migrated table has an owner', async () => {
+  // Tables live in their owning module's `tables.ts`, and `drizzle.config.ts` globs them. This
+  // pins the split against the migrations: a table that loses its owner file, or an owner file
+  // that drifts from what the migrations create, fails here rather than in a later
+  // `drizzle-kit generate`.
+  const declared = new Map<string, readonly string[]>();
+  for (const owner of [
+    commandTables,
+    editorTables,
+    environmentTables,
+    projectTables,
+    ptyProcessTables,
+    workflowsTables,
+    workspaceTables,
+  ]) {
+    for (const value of Object.values(owner)) {
+      if (!(value instanceof SQLiteTable)) continue;
+      const config = getTableConfig(value);
+      assert.equal(declared.has(config.name), false, `${config.name} is declared twice`);
+      declared.set(config.name, config.columns.map((column) => column.name).sort());
+    }
+  }
+
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-table-owners-'));
+  const client = new BetterSqlite(join(dataRoot, 'isagi.db'));
+  try {
+    migrate(drizzle(client), { migrationsFolder: migrationsDirectory() });
+    const migrated = (
+      client
+        .prepare(
+          `SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations' ORDER BY name`,
+        )
+        .all() as { readonly name: string }[]
+    ).map((row) => row.name);
+
+    assert.deepEqual([...declared.keys()].sort(), migrated);
+    for (const table of migrated) {
+      const columns = (client.pragma(`table_info(${table})`) as { readonly name: string }[])
+        .map((column) => column.name)
+        .sort();
+      assert.deepEqual(declared.get(table), columns, `${table} columns`);
+    }
+  } finally {
+    client.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('a fresh database gets exactly the seven graph-workflow tables', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-fresh-schema-'));
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   try {
-    const database = RuntimeDatabaseLive.pipe(
+    const database = RuntimeDatabase.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
     );
     const runs = await Effect.runPromise(
@@ -424,7 +483,7 @@ test('the graph-workflow migrations drop the old workflow store and keep everyth
       client.close();
     }
 
-    const database = RuntimeDatabaseLive.pipe(
+    const database = RuntimeDatabase.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
     );
     await Effect.runPromise(
@@ -578,7 +637,7 @@ test('the launch-parse migrations clear workflow runs, keep builds and add the n
       client.close();
     }
 
-    const database = RuntimeDatabaseLive.pipe(
+    const database = RuntimeDatabase.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
     );
     await Effect.runPromise(
@@ -690,12 +749,12 @@ test('the project-kind migration upgrades a pre-kind database and backfills git'
       historicalMigrationsFolder(dataRoot, PRE_PROJECT_KIND_TAGS),
     );
 
-    const database = RuntimeDatabaseLive.pipe(
+    const database = RuntimeDatabase.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
     );
     const upgraded = await Effect.runPromise(
       Effect.gen(function* () {
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         return {
           projects: yield* repository.listProjects,
           snapshot: buildWorkspaceSnapshot(
@@ -705,7 +764,7 @@ test('the project-kind migration upgrades a pre-kind database and backfills git'
         };
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(database, WorkspaceRepositoryLive.pipe(Layer.provide(database))),
+          Layer.mergeAll(database, ProjectRepository.layer.pipe(Layer.provide(database))),
         ),
       ),
     );

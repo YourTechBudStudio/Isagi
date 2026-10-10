@@ -7,11 +7,11 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Result } from 'effect';
 
-import { surfacePanes, worktreeSurfaces } from '../../../persistence/schema.js';
 import { DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
-import { type AgentSessionServiceShape } from '../../agent-sessions/index.js';
+import type { AgentSessionService } from '../../agent-sessions/service.js';
 import { SurfaceService } from '../../index.js';
-import { type TerminalSessionServiceShape } from '../../terminal-sessions/index.js';
+import { surfacePanes, worktreeSurfaces } from '../../tables.js';
+import type { TerminalSessionService } from '../../terminal-sessions/service.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
 test('single-pane surface creation persists duplicate-safe titles and one-leaf layout', async () => {
@@ -56,7 +56,7 @@ test('single-pane surface creation persists duplicate-safe titles and one-leaf l
 
 test('create surface API slice creates and focuses an initial terminal session', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-create-api-'));
-  let startFreshInput: Parameters<TerminalSessionServiceShape['startFresh']>[0] | null = null;
+  let startFreshInput: Parameters<TerminalSessionService['Service']['startFresh']>[0] | null = null;
   try {
     const output = await Effect.runPromise(
       Effect.gen(function* () {
@@ -115,7 +115,7 @@ test('create surface API slice creates and focuses an initial terminal session',
 
 test('create surface uses harness display names with duplicate-safe titles', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-launch-agent-'));
-  const startFreshInputs: Parameters<AgentSessionServiceShape['startFresh']>[0][] = [];
+  const startFreshInputs: Parameters<AgentSessionService['Service']['startFresh']>[0][] = [];
   let nextAgentSessionId = 900;
   try {
     const output = await Effect.runPromise(

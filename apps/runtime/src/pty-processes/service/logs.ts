@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import type { PtyProcessLogMode, PtyStreamOutputMessageSet } from '@isagi/contracts';
 
 import { replayUtf8LogFile } from '../log-replay.js';
-import type { PtyRepositoryService } from '../repository.js';
+import type { PtyRepository } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
 import { PtyServiceError } from '../types.js';
 
@@ -22,7 +22,7 @@ export interface OrphanPtyLogCleanupStats {
   readonly failed: readonly string[];
 }
 
-export function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
+export function reportOrphanPtyLogs(repository: PtyRepository['Service'], sessionsPath: string) {
   return detectOrphanPtyLogs(repository, sessionsPath).pipe(
     Effect.tap((orphans) =>
       Effect.sync(() => {
@@ -44,7 +44,7 @@ export function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
   );
 }
 
-export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
+export function detectOrphanPtyLogs(repository: PtyRepository['Service'], sessionsPath: string) {
   return Effect.gen(function* () {
     const referencedLogPaths = new Set((yield* repository.listProcessLogPaths).map(normalizePath));
     const entries = yield* Effect.try({
@@ -66,7 +66,7 @@ export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
 }
 
 export function cleanupOrphanPtyLogs(
-  repository: PtyRepositoryService,
+  repository: PtyRepository['Service'],
   sessionsPath: string,
   options: { readonly minAgeMs: number; readonly nowMs?: number | undefined },
 ) {

@@ -4,13 +4,9 @@ import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import {
-  DataDirectory,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../platform/persistence/index.js';
+import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { WorkspaceRepositoryLive, type WorkspaceRepositoryService } from './repository.js';
+import { ProjectRepository } from './repository.js';
 
 /**
  * The narrowest graph that can exercise the workspace repository: a real
@@ -23,15 +19,15 @@ import { WorkspaceRepositoryLive, type WorkspaceRepositoryService } from './repo
  */
 function repositoryTestLayer(dataRoot: string) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
-  const repository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
+  const repository = ProjectRepository.layer.pipe(Layer.provide(database));
   return Layer.mergeAll(database, repository);
 }
 
 /** Runs `build` against a throwaway database rooted in its own temp directory. */
 export function runWithDatabase<A, E>(
   name: string,
-  build: Effect.Effect<A, E, RuntimeDatabaseService | WorkspaceRepositoryService>,
+  build: Effect.Effect<A, E, RuntimeDatabase | ProjectRepository>,
 ) {
   const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${name}-`));
   return Effect.runPromise(build.pipe(Effect.provide(repositoryTestLayer(dataRoot)))).finally(
@@ -40,3 +36,7 @@ export function runWithDatabase<A, E>(
     },
   );
 }
+
+// Internals and builders other modules' tests use; never imported by production code.
+export { defaultCommandLifecycle, projectConfigSchema } from './config/config-schema.js';
+export { prunedWorktreeIds } from './repository.js';

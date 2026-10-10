@@ -10,7 +10,7 @@ import {
 } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../app/layer.js';
-import { enforceRuntimeWebSocketOrigin } from '../platform/http/origin.js';
+import { enforceRuntimeWebSocketOrigin } from '../platform/http/index.js';
 import {
   PtyService,
   type PtyAttachment,

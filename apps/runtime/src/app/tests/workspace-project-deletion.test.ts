@@ -5,21 +5,26 @@ import { join } from 'node:path';
 import test, { after as afterAll, describe } from 'node:test';
 
 import { count, eq } from 'drizzle-orm';
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 
-import { AgentSessionService } from '../../environment/agent-sessions/index.js';
-import { SurfaceService } from '../../environment/index.js';
-import { realSessionCreationLayer } from '../../environment/tests/restore-support.js';
-import { agentSessions, projects, workflowRuns, worktrees } from '../../persistence/schema.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
+import { agentSessions } from '../../environment/tables.js';
+import { realSessionCreationLayer } from '../../environment/testing.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { WorkspaceRepository } from '../../projects/repository.js';
-import { countRunRows, seedProjectRuns } from '../../workflows/store/test-support.js';
-import { WorkspaceService } from '../../workspace/service.js';
-import { liveWorkspaceLayer, type LiveWorkspaceOptions } from '../../workspace/testing.js';
-import { createGitProjectFixture } from '../../workspace/tests/live-git-support.js';
-import { directoryTree } from '../../workspace/tests/test-support.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { projects, worktrees } from '../../projects/tables.js';
+import { WorkflowProjectErasure } from '../../workflows/index.js';
+import { workflowRuns } from '../../workflows/tables.js';
+import { countRunRows, seedProjectRuns } from '../../workflows/testing.js';
+import { ProjectDeletionParticipant, WorkspaceService } from '../../workspace/index.js';
+import {
+  liveWorkspaceLayer,
+  type LiveWorkspaceOptions,
+  createGitProjectFixture,
+  directoryTree,
+} from '../../workspace/testing.js';
 
 /**
  * Deleting a project erases everything Isagi knows about it, workflow runs included, in one
@@ -35,12 +40,16 @@ afterAll(() => {
   folders.cleanup();
 });
 
-/** Deletion's gate passes and post-create succeeds; neither is under test here. */
+/**
+ * Deletion's gate passes and post-create succeeds; neither is under test here. Project deletion
+ * erases runs through the real workflows participant, which is the claim under test.
+ */
 const passingCommands = {
   commands: {
     cleanupBeforeWorktreeDelete: () => Effect.void,
     runPostCreateLifecycle: () => Effect.void,
   },
+  projectDeletionParticipant: WorkflowProjectErasure,
 } satisfies LiveWorkspaceOptions;
 
 function withDataRoot(name: string, body: (dataRoot: string) => Promise<void>) {
@@ -121,7 +130,7 @@ describe('deleting a project', () => {
         const seeded = await Effect.runPromise(
           Effect.gen(function* () {
             const service = yield* WorkspaceService;
-            const repository = yield* WorkspaceRepository;
+            const repository = yield* ProjectRepository;
             const doomed = yield* register(git.rootPath);
             const kept = yield* register(folderProject('project-delete-runs-kept'));
             const opened = yield* service.openWorktree({
@@ -262,13 +271,16 @@ describe('deleting a project', () => {
           Effect.provide(
             liveWorkspaceLayer(dataRoot, {
               ...passingCommands,
-              runErasure: {
-                eraseProjectRunsInTransaction: (db, projectId) => {
-                  // Erase for real first, so the rollback has something to undo.
-                  db.delete(workflowRuns).where(eq(workflowRuns.projectId, projectId)).run();
-                  throw new Error('erasure failed');
-                },
-              },
+              projectDeletionParticipant: Layer.succeed(
+                ProjectDeletionParticipant,
+                ProjectDeletionParticipant.of({
+                  eraseInTransaction: (db, projectId) => {
+                    // Erase for real first, so the rollback has something to undo.
+                    db.delete(workflowRuns).where(eq(workflowRuns.projectId, projectId)).run();
+                    throw new Error('erasure failed');
+                  },
+                }),
+              ),
             }),
           ),
         ),

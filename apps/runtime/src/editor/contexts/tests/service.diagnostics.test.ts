@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { PtyRepository } from '../../../pty-processes/repository.js';
+import { PtyRepository } from '../../../pty-processes/index.js';
 import { insertWorktree, neverSettlingProbe, withEditorService } from '../../testing.js';
 import { EditorContextRepository } from '../repository.js';
 import { EditorContextService, editorDiagnosticsMaxBytes } from '../service.js';

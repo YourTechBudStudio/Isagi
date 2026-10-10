@@ -9,9 +9,9 @@ import { TestClock } from 'effect/testing';
 
 import type { EditorProvisioningState } from '@isagi/contracts';
 
-import { DataDirectory, type DataDirectoryService } from '../../../platform/persistence/index.js';
+import { DataDirectory } from '../../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../../platform/persistence/testing.js';
-import { EditorInstallIo, type EditorInstallIoService } from '../install-io.js';
+import { EditorInstallIo } from '../install-io.js';
 import { codeServerManifest } from '../manifest.js';
 import {
   EditorProvisioning,
@@ -19,7 +19,6 @@ import {
   editorCapabilityFromEnvironment,
   makeEditorProvisioning,
   type EditorCapability,
-  type EditorProvisioningService,
 } from '../service.js';
 import { pinnedVersion, recordingInstallIo, type InstallIoBehaviour } from './test-support.js';
 
@@ -43,11 +42,11 @@ function makeRoots() {
 function withService<A, E>(
   input: {
     readonly capability: EditorCapability;
-    readonly directory: DataDirectoryService;
-    readonly io: EditorInstallIoService;
+    readonly directory: DataDirectory['Service'];
+    readonly io: EditorInstallIo['Service'];
     readonly deadline?: Duration.Input;
   },
-  use: (service: EditorProvisioningService) => Effect.Effect<A, E>,
+  use: (service: EditorProvisioning['Service']) => Effect.Effect<A, E>,
 ) {
   return Effect.scoped(
     Effect.gen(function* () {
@@ -228,7 +227,7 @@ test('retry re-enters a settled failure and can succeed', async () => {
   try {
     const failing = { value: true };
     const base = recordingInstallIo();
-    const io: EditorInstallIoService = {
+    const io: EditorInstallIo['Service'] = {
       ...base.io,
       downloadTo: (input) =>
         failing.value
@@ -262,7 +261,7 @@ test('a retry arriving while one is running is refused rather than queued', asyn
       Effect.gen(function* () {
         const reached = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const io: EditorInstallIoService = {
+        const io: EditorInstallIo['Service'] = {
           ...base.io,
           downloadTo: (input) =>
             Effect.andThen(
@@ -336,7 +335,7 @@ test('start returns while its attempt is still running', async () => {
       Effect.gen(function* () {
         const reached = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const io: EditorInstallIoService = {
+        const io: EditorInstallIo['Service'] = {
           ...base.io,
           downloadTo: (input) =>
             Effect.andThen(
@@ -382,7 +381,7 @@ test('an attempt that outruns its deadline settles as a timeout and leaves no st
     const settled = await Effect.runPromise(
       Effect.gen(function* () {
         const reached = yield* Deferred.make<void>();
-        const io: EditorInstallIoService = {
+        const io: EditorInstallIo['Service'] = {
           ...base.io,
           // Never completes: the deadline is the only thing that can end this.
           downloadTo: () =>
@@ -458,7 +457,7 @@ test('a failed attempt clears any previously resolved installation', async () =>
   try {
     const base = recordingInstallIo();
     const failing = { value: false };
-    const io: EditorInstallIoService = {
+    const io: EditorInstallIo['Service'] = {
       ...base.io,
       // Fails on the *shared state* step rather than the download, because after
       // a successful first attempt the second one legitimately takes the receipt
@@ -499,7 +498,7 @@ test('an interrupted attempt settles as a failure instead of staying transient',
     const outcome = await Effect.runPromise(
       Effect.gen(function* () {
         const reached = yield* Deferred.make<void>();
-        const io: EditorInstallIoService = {
+        const io: EditorInstallIo['Service'] = {
           ...base.io,
           // Blocks forever: only interruption can end this attempt.
           downloadTo: () =>
@@ -558,7 +557,7 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
         const blocked = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const blocking = { value: false };
-        const io: EditorInstallIoService = {
+        const io: EditorInstallIo['Service'] = {
           ...base.io,
           // The second attempt takes the receipt fast path, so the step that has
           // to block is one that runs on *both* paths.

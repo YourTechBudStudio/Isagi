@@ -1,30 +1,20 @@
-import { and, eq, inArray, max, ne, sql, type InferSelectModel } from 'drizzle-orm';
+import { and, eq, max, ne, sql, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type {
-  DurableSessionInventory,
   ProjectKind,
   ProjectOrderRejectionReason,
   WorktreeOrderRejectionReason,
 } from '@isagi/contracts';
 
 import {
-  agentSessions,
-  projects,
-  surfacePanes,
-  terminalSessions,
-  worktreeCommandRuns,
-  worktreeCommandStates,
-  worktrees,
-  worktreeSurfaces,
-} from '../persistence/schema.js';
-import {
   DatabaseError,
   RuntimeDatabase,
-  type RuntimeDatabaseService,
   type RuntimeDrizzleDatabase,
+  compactedRankChanges,
+  moveBefore,
 } from '../platform/persistence/index.js';
-import { compactedRankChanges, moveBefore } from '../platform/persistence/sibling-order.js';
+import { projects, worktrees } from './tables.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 
 type ProjectRecord = InferSelectModel<typeof projects>;
@@ -35,19 +25,6 @@ type ReconciledWorktreeSummary = Pick<WorktreeRow, 'id' | 'path' | 'branch'>;
 export interface WorkspaceReconcileProjectWorktreesResult {
   readonly added: readonly ReconciledWorktreeSummary[];
   readonly missing: readonly ReconciledWorktreeSummary[];
-}
-
-export interface WorktreeDeleteDiagnostics {
-  readonly agentSessionCount: number;
-  readonly agentSessionActivePtyProcessIds: readonly number[];
-  readonly commandRunCount: number;
-  readonly commandRunPtyProcessIds: readonly number[];
-  readonly commandStateCount: number;
-  readonly commandStateActivePtyProcessIds: readonly number[];
-  readonly paneCount: number;
-  readonly surfaceCount: number;
-  readonly terminalSessionCount: number;
-  readonly terminalSessionActivePtyProcessIds: readonly number[];
 }
 
 /**
@@ -63,13 +40,186 @@ export type WorktreeOrderMoveResult =
   | { readonly status: 'moved' }
   | { readonly status: 'rejected'; readonly reason: WorktreeOrderRejectionReason };
 
-export interface WorkspaceRepositoryService {
-  /**
-   * Every durable session the runtime still owns, with its worktree scope. This is the
-   * authoritative set clients reconcile their cached terminals against, so it is required:
-   * an absent implementation would otherwise read as "all durable sessions are gone".
-   */
-  readonly listDurableSessions: Effect.Effect<DurableSessionInventory, DatabaseError>;
+const make = Effect.gen(function* () {
+  const database = yield* RuntimeDatabase;
+
+  return ProjectRepository.of({
+    findProject: (projectId) =>
+      database.use<ProjectRow | null>('find_project', (db) => {
+        const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
+        return row ? projectRow(row) : null;
+      }),
+    findProjectByRootPath: (rootPath) =>
+      database.use<ProjectRow | null>('find_project_by_root_path', (db) => {
+        const row = db.select().from(projects).where(eq(projects.rootPath, rootPath)).get();
+        return row ? projectRow(row) : null;
+      }),
+    findWorktree: (worktreeId) =>
+      database.use<WorktreeRow | null>('find_worktree', (db) => {
+        const row = db.select().from(worktrees).where(eq(worktrees.id, worktreeId)).get();
+        return row ? worktreeRow(row) : null;
+      }),
+    findProjectWorktree: (input) =>
+      database.use<WorktreeRow | null>('find_project_worktree', (db) => {
+        const row = db
+          .select()
+          .from(worktrees)
+          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.id, input.worktreeId)))
+          .get();
+        return row ? worktreeRow(row) : null;
+      }),
+    findProjectRootWorktree: (input) =>
+      database.use<WorktreeRow | null>('find_project_root_worktree', (db) => {
+        const row = db
+          .select()
+          .from(worktrees)
+          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.rootPath)))
+          .get();
+        return row ? worktreeRow(row) : null;
+      }),
+    findProjectWorktreeByBranch: (input) =>
+      database.use<WorktreeRow | null>('find_project_worktree_by_branch', (db) => {
+        const row = db
+          .select()
+          .from(worktrees)
+          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.branch, input.branch)))
+          .get();
+        return row ? worktreeRow(row) : null;
+      }),
+    findProjectWorktreeByPath: (input) =>
+      database.use<WorktreeRow | null>('find_project_worktree_by_path', (db) => {
+        const row = db
+          .select()
+          .from(worktrees)
+          .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.path)))
+          .get();
+        return row ? worktreeRow(row) : null;
+      }),
+    deleteProject: (projectId, inTransaction) =>
+      database.transaction('delete_project', (db) => {
+        inTransaction(db);
+        const result = db.delete(projects).where(eq(projects.id, projectId)).run();
+        return result.changes > 0;
+      }),
+    deleteWorktree: (worktreeId) =>
+      database.use('delete_worktree', (db) => {
+        const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
+        return result.changes > 0;
+      }),
+    createProject: (input) =>
+      // One transaction for the whole registration unit: the appended rank is
+      // read from the same present-project set the insert then joins, and a
+      // folder project's sole environment is created with it. The transaction
+      // is what makes this atomic — a successful registration can therefore
+      // never expose a folder project with no environment.
+      database.transaction('create_project', (db) => {
+        const now = timestamp();
+        const row = db
+          .insert(projects)
+          .values({
+            name: input.name,
+            rootPath: input.rootPath,
+            kind: input.kind,
+            status: 'present',
+            sortOrder: nextPresentProjectOrder(db),
+            createdAt: now,
+            updatedAt: now,
+            lastSeenAt: now,
+            missingReason: null,
+          })
+          .returning()
+          .get();
+
+        if (input.kind === 'folder') {
+          // The runtime owns this environment: no branch, no head, and a path
+          // equal to the project root so the existing derived `isRoot` holds.
+          // It is never rediscovered and never pruned, so it is inserted
+          // directly rather than through Git worktree reconciliation, which
+          // upserts, prunes, and refreshes presence for externally discovered
+          // membership.
+          db.insert(worktrees)
+            .values({
+              projectId: row.id,
+              path: input.rootPath,
+              branch: null,
+              head: null,
+              sortOrder: nextProjectWorktreeOrder(db, row.id),
+              createdAt: now,
+              updatedAt: now,
+              firstSeenAt: now,
+              lastSeenAt: now,
+            })
+            .run();
+        }
+
+        return projectRow(row);
+      }),
+    listProjects: database.use<ProjectRow[]>('list_projects', (db) =>
+      db
+        .select()
+        .from(projects)
+        .orderBy(...projectDisplayOrder)
+        .all()
+        .map(projectRow),
+    ),
+    listWorktrees: database.use<WorktreeRow[]>('list_worktrees', (db) =>
+      db
+        .select()
+        .from(worktrees)
+        .orderBy(worktrees.projectId, worktrees.sortOrder, worktrees.id)
+        .all()
+        .map(worktreeRow),
+    ),
+    reconcileProjectWorktrees: (input) =>
+      database.transaction('reconcile_project_worktrees', (db) =>
+        reconcileProjectWorktreesInTransaction(db, input),
+      ),
+    restoreProjectAtRootPath: (input) =>
+      database.transaction('restore_project_at_root_path', (db) => {
+        const now = timestamp();
+        db.update(projects)
+          .set({
+            rootPath: input.rootPath,
+            status: 'present',
+            // Read before the write below lands, so the transition is judged
+            // against the stored status rather than the caller's stale row.
+            ...presenceRankPatch(db, input.projectId),
+            updatedAt: now,
+            lastSeenAt: now,
+            missingReason: null,
+          })
+          .where(eq(projects.id, input.projectId))
+          .run();
+
+        return reconcileProjectWorktreesInTransaction(db, input);
+      }),
+    setProjectStatus: (input) =>
+      // Reconciliation calls this for every project on every sweep, so the
+      // rank patch must read the stored status and stay empty for a project
+      // that is already present. Presence metadata still refreshes.
+      database.transaction('set_project_status', (db) => {
+        const now = timestamp();
+        db.update(projects)
+          .set({
+            status: input.status,
+            ...(input.status === 'present' ? presenceRankPatch(db, input.id) : {}),
+            updatedAt: now,
+            lastSeenAt: input.status === 'present' ? now : null,
+            missingReason: input.status === 'missing' ? (input.missingReason ?? null) : null,
+          })
+          .where(eq(projects.id, input.id))
+          .run();
+      }),
+    moveProjectOrder: (input) =>
+      database.transaction('move_project_order', (db) => moveProjectOrderInTransaction(db, input)),
+    moveProjectWorktreeOrder: (input) =>
+      database.transaction('move_project_worktree_order', (db) =>
+        moveProjectWorktreeOrderInTransaction(db, input),
+      ),
+  });
+});
+
+interface ProjectRepositoryShape {
   readonly findProject: (projectId: number) => Effect.Effect<ProjectRow | null, DatabaseError>;
   readonly findProjectByRootPath: (
     rootPath: string,
@@ -103,9 +253,6 @@ export interface WorkspaceRepositoryService {
     inTransaction: (db: RuntimeDrizzleDatabase) => void,
   ) => Effect.Effect<boolean, DatabaseError>;
   readonly deleteWorktree: (worktreeId: number) => Effect.Effect<boolean, DatabaseError>;
-  readonly readWorktreeDeleteDiagnostics: (
-    worktreeId: number,
-  ) => Effect.Effect<WorktreeDeleteDiagnostics, DatabaseError>;
   /**
    * Creates a project and, for a folder project, its sole environment as one
    * durable unit. The caller supplies the classified kind; the repository never
@@ -143,286 +290,11 @@ export interface WorkspaceRepositoryService {
   }) => Effect.Effect<WorktreeOrderMoveResult, DatabaseError>;
 }
 
-export const WorkspaceRepository = Context.Service<WorkspaceRepositoryService>(
-  'isagi/WorkspaceRepository',
-);
-
-export const WorkspaceRepositoryLive = Layer.effect(
-  WorkspaceRepository,
-  Effect.gen(function* () {
-    const database = yield* RuntimeDatabase;
-
-    return {
-      listDurableSessions: Effect.all([
-        database.use('list_agent_session_identities', (db) =>
-          db
-            .select({ sessionId: agentSessions.id, worktreeId: agentSessions.worktreeId })
-            .from(agentSessions)
-            .orderBy(agentSessions.id)
-            .all(),
-        ),
-        database.use('list_terminal_session_identities', (db) =>
-          db
-            .select({ sessionId: terminalSessions.id, worktreeId: terminalSessions.worktreeId })
-            .from(terminalSessions)
-            .orderBy(terminalSessions.id)
-            .all(),
-        ),
-      ]).pipe(
-        Effect.map(([agents, terminals]) => ({
-          sessions: [
-            ...agents.map((identity) => ({ kind: 'agent_session' as const, ...identity })),
-            ...terminals.map((identity) => ({ kind: 'terminal_session' as const, ...identity })),
-          ],
-        })),
-      ),
-      findProject: (projectId) =>
-        database.use<ProjectRow | null>('find_project', (db) => {
-          const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
-          return row ? projectRow(row) : null;
-        }),
-      findProjectByRootPath: (rootPath) =>
-        database.use<ProjectRow | null>('find_project_by_root_path', (db) => {
-          const row = db.select().from(projects).where(eq(projects.rootPath, rootPath)).get();
-          return row ? projectRow(row) : null;
-        }),
-      findWorktree: (worktreeId) =>
-        database.use<WorktreeRow | null>('find_worktree', (db) => {
-          const row = db.select().from(worktrees).where(eq(worktrees.id, worktreeId)).get();
-          return row ? worktreeRow(row) : null;
-        }),
-      findProjectWorktree: (input) =>
-        database.use<WorktreeRow | null>('find_project_worktree', (db) => {
-          const row = db
-            .select()
-            .from(worktrees)
-            .where(
-              and(eq(worktrees.projectId, input.projectId), eq(worktrees.id, input.worktreeId)),
-            )
-            .get();
-          return row ? worktreeRow(row) : null;
-        }),
-      findProjectRootWorktree: (input) =>
-        database.use<WorktreeRow | null>('find_project_root_worktree', (db) => {
-          const row = db
-            .select()
-            .from(worktrees)
-            .where(
-              and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.rootPath)),
-            )
-            .get();
-          return row ? worktreeRow(row) : null;
-        }),
-      findProjectWorktreeByBranch: (input) =>
-        database.use<WorktreeRow | null>('find_project_worktree_by_branch', (db) => {
-          const row = db
-            .select()
-            .from(worktrees)
-            .where(
-              and(eq(worktrees.projectId, input.projectId), eq(worktrees.branch, input.branch)),
-            )
-            .get();
-          return row ? worktreeRow(row) : null;
-        }),
-      findProjectWorktreeByPath: (input) =>
-        database.use<WorktreeRow | null>('find_project_worktree_by_path', (db) => {
-          const row = db
-            .select()
-            .from(worktrees)
-            .where(and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.path)))
-            .get();
-          return row ? worktreeRow(row) : null;
-        }),
-      deleteProject: (projectId, inTransaction) =>
-        database.transaction('delete_project', (db) => {
-          inTransaction(db);
-          const result = db.delete(projects).where(eq(projects.id, projectId)).run();
-          return result.changes > 0;
-        }),
-      deleteWorktree: (worktreeId) =>
-        database.use('delete_worktree', (db) => {
-          const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
-          return result.changes > 0;
-        }),
-      readWorktreeDeleteDiagnostics: (worktreeId) =>
-        database.use('read_worktree_delete_diagnostics', (db) => {
-          const surfaces = db
-            .select({ id: worktreeSurfaces.id })
-            .from(worktreeSurfaces)
-            .where(eq(worktreeSurfaces.worktreeId, worktreeId))
-            .all();
-          const surfaceIds = surfaces.map((surface) => surface.id);
-          const panes =
-            surfaceIds.length === 0
-              ? []
-              : db
-                  .select({ id: surfacePanes.id })
-                  .from(surfacePanes)
-                  .where(inArray(surfacePanes.surfaceId, surfaceIds))
-                  .all();
-          const agents = db
-            .select({
-              activePtyProcessId: agentSessions.activePtyProcessId,
-            })
-            .from(agentSessions)
-            .where(eq(agentSessions.worktreeId, worktreeId))
-            .all();
-          const terminals = db
-            .select({
-              activePtyProcessId: terminalSessions.activePtyProcessId,
-            })
-            .from(terminalSessions)
-            .where(eq(terminalSessions.worktreeId, worktreeId))
-            .all();
-          const commandStates = db
-            .select({
-              activePtyProcessId: worktreeCommandStates.activePtyProcessId,
-            })
-            .from(worktreeCommandStates)
-            .where(eq(worktreeCommandStates.worktreeId, worktreeId))
-            .all();
-          const commandRuns = db
-            .select({
-              ptyProcessId: worktreeCommandRuns.ptyProcessId,
-            })
-            .from(worktreeCommandRuns)
-            .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
-            .all();
-
-          return {
-            agentSessionCount: agents.length,
-            agentSessionActivePtyProcessIds: compactIds(
-              agents.map((agent) => agent.activePtyProcessId),
-            ),
-            commandRunCount: commandRuns.length,
-            commandRunPtyProcessIds: compactIds(commandRuns.map((run) => run.ptyProcessId)),
-            commandStateCount: commandStates.length,
-            commandStateActivePtyProcessIds: compactIds(
-              commandStates.map((state) => state.activePtyProcessId),
-            ),
-            paneCount: panes.length,
-            surfaceCount: surfaces.length,
-            terminalSessionCount: terminals.length,
-            terminalSessionActivePtyProcessIds: compactIds(
-              terminals.map((terminal) => terminal.activePtyProcessId),
-            ),
-          } satisfies WorktreeDeleteDiagnostics;
-        }),
-      createProject: (input) =>
-        // One transaction for the whole registration unit: the appended rank is
-        // read from the same present-project set the insert then joins, and a
-        // folder project's sole environment is created with it. The transaction
-        // is what makes this atomic — a successful registration can therefore
-        // never expose a folder project with no environment.
-        database.transaction('create_project', (db) => {
-          const now = timestamp();
-          const row = db
-            .insert(projects)
-            .values({
-              name: input.name,
-              rootPath: input.rootPath,
-              kind: input.kind,
-              status: 'present',
-              sortOrder: nextPresentProjectOrder(db),
-              createdAt: now,
-              updatedAt: now,
-              lastSeenAt: now,
-              missingReason: null,
-            })
-            .returning()
-            .get();
-
-          if (input.kind === 'folder') {
-            // The runtime owns this environment: no branch, no head, and a path
-            // equal to the project root so the existing derived `isRoot` holds.
-            // It is never rediscovered and never pruned, so it is inserted
-            // directly rather than through Git worktree reconciliation, which
-            // upserts, prunes, and refreshes presence for externally discovered
-            // membership.
-            db.insert(worktrees)
-              .values({
-                projectId: row.id,
-                path: input.rootPath,
-                branch: null,
-                head: null,
-                sortOrder: nextProjectWorktreeOrder(db, row.id),
-                createdAt: now,
-                updatedAt: now,
-                firstSeenAt: now,
-                lastSeenAt: now,
-              })
-              .run();
-          }
-
-          return projectRow(row);
-        }),
-      listProjects: database.use<ProjectRow[]>('list_projects', (db) =>
-        db
-          .select()
-          .from(projects)
-          .orderBy(...projectDisplayOrder)
-          .all()
-          .map(projectRow),
-      ),
-      listWorktrees: database.use<WorktreeRow[]>('list_worktrees', (db) =>
-        db
-          .select()
-          .from(worktrees)
-          .orderBy(worktrees.projectId, worktrees.sortOrder, worktrees.id)
-          .all()
-          .map(worktreeRow),
-      ),
-      reconcileProjectWorktrees: (input) =>
-        database.transaction('reconcile_project_worktrees', (db) =>
-          reconcileProjectWorktreesInTransaction(db, input),
-        ),
-      restoreProjectAtRootPath: (input) =>
-        database.transaction('restore_project_at_root_path', (db) => {
-          const now = timestamp();
-          db.update(projects)
-            .set({
-              rootPath: input.rootPath,
-              status: 'present',
-              // Read before the write below lands, so the transition is judged
-              // against the stored status rather than the caller's stale row.
-              ...presenceRankPatch(db, input.projectId),
-              updatedAt: now,
-              lastSeenAt: now,
-              missingReason: null,
-            })
-            .where(eq(projects.id, input.projectId))
-            .run();
-
-          return reconcileProjectWorktreesInTransaction(db, input);
-        }),
-      setProjectStatus: (input) =>
-        // Reconciliation calls this for every project on every sweep, so the
-        // rank patch must read the stored status and stay empty for a project
-        // that is already present. Presence metadata still refreshes.
-        database.transaction('set_project_status', (db) => {
-          const now = timestamp();
-          db.update(projects)
-            .set({
-              status: input.status,
-              ...(input.status === 'present' ? presenceRankPatch(db, input.id) : {}),
-              updatedAt: now,
-              lastSeenAt: input.status === 'present' ? now : null,
-              missingReason: input.status === 'missing' ? (input.missingReason ?? null) : null,
-            })
-            .where(eq(projects.id, input.id))
-            .run();
-        }),
-      moveProjectOrder: (input) =>
-        database.transaction('move_project_order', (db) =>
-          moveProjectOrderInTransaction(db, input),
-        ),
-      moveProjectWorktreeOrder: (input) =>
-        database.transaction('move_project_worktree_order', (db) =>
-          moveProjectWorktreeOrderInTransaction(db, input),
-        ),
-    } satisfies WorkspaceRepositoryService;
-  }),
-);
+export class ProjectRepository extends Context.Service<ProjectRepository, ProjectRepositoryShape>()(
+  'isagi/runtime/projects/ProjectRepository',
+) {
+  static readonly layer = Layer.effect(ProjectRepository, make);
+}
 
 function reconcileProjectWorktreesInTransaction(
   db: RuntimeDatabaseConnection,
@@ -741,10 +613,6 @@ function timestamp() {
   return new Date().toISOString();
 }
 
-function compactIds(ids: readonly (number | null)[]) {
-  return ids.filter((id): id is number => id !== null);
-}
-
 type RuntimeDatabaseConnection = Parameters<
-  Parameters<RuntimeDatabaseService['transaction']>[1]
+  Parameters<RuntimeDatabase['Service']['transaction']>[1]
 >[0];

@@ -3,23 +3,20 @@ import test from 'node:test';
 
 import { Effect, Layer, Result } from 'effect';
 
-import { HarnessLaunchBlocked } from '../../../harnesses/control-plane/index.js';
-import {
-  HarnessAdapterRegistry,
-  type HarnessAdapterRegistryService,
-} from '../../../harnesses/index.js';
+import { HarnessLaunchBlocked, HarnessAdapterRegistry } from '../../../harnesses/index.js';
 import {
   AllowAllHarnessControlPlaneLayer,
   blockedHarnessControlPlaneLayer,
 } from '../../../harnesses/testing.js';
-import { InternalRuntimeEventBusLive } from '../../../platform/events/index.js';
-import { EntityLockLive } from '../../../platform/locks/entity-lock.js';
-import { PtyService, type PtyServiceShape } from '../../../pty-processes/index.js';
+import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
+import { EntityLock } from '../../../platform/locks/index.js';
+import { PtyService } from '../../../pty-processes/index.js';
 import type { PtyProcessRow } from '../../../pty-processes/index.js';
-import { SessionLifecycleLive } from '../../../session-lifecycle/index.js';
-import type { AgentSessionRow } from '../../index.js';
-import { AgentSessionError, AgentSessionService, AgentSessionServiceLive } from '../index.js';
-import { AgentSessionRepository, type AgentSessionRepositoryService } from '../repository.js';
+import { fakeTerminateMany } from '../../../pty-processes/testing.js';
+import { SessionLifecycle } from '../../sessions/lifecycle.js';
+import type { AgentSessionRow } from '../../sessions/types.js';
+import { AgentSessionRepository } from '../repository.js';
+import { AgentSessionError, AgentSessionService } from '../service.js';
 
 type RecordedLaunchInput = {
   readonly latestHarnessSessionId: string | null;
@@ -308,7 +305,7 @@ test('agent session startup restore replaces stale node-pty running process rows
 test('stopUnlessPlaced leaves a placed session running and stops an unplaced one', async () => {
   const run = (input: {
     readonly placement: { readonly surfaceId: number; readonly paneId: number } | null;
-    readonly terminate: PtyServiceShape['terminate'];
+    readonly terminate: PtyService['Service']['terminate'];
   }) =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -327,7 +324,7 @@ test('stopUnlessPlaced leaves a placed session running and stops an unplaced one
       ),
     );
   const stopped: number[] = [];
-  const terminate: PtyServiceShape['terminate'] = (request) =>
+  const terminate: PtyService['Service']['terminate'] = (request) =>
     Effect.sync(() => {
       stopped.push(request.ptyProcessId);
       return 'terminated_live' as const;
@@ -357,9 +354,9 @@ function testLayer(input: {
   readonly createCalls?: number[] | undefined;
   readonly controlPlaneLayer?: ReturnType<typeof blockedHarnessControlPlaneLayer> | undefined;
   readonly placement?: { readonly surfaceId: number; readonly paneId: number } | null | undefined;
-  readonly terminate?: PtyServiceShape['terminate'] | undefined;
+  readonly terminate?: PtyService['Service']['terminate'] | undefined;
 }) {
-  return AgentSessionServiceLive.pipe(
+  return AgentSessionService.layer.pipe(
     Layer.provide(
       Layer.succeed(
         AgentSessionRepository,
@@ -368,8 +365,8 @@ function testLayer(input: {
     ),
     Layer.provide(Layer.succeed(PtyService, fakePtyService(input.ptyLaunches, input.terminate))),
     Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses(input.launchInputs))),
-    Layer.provide(SessionLifecycleLive.pipe(Layer.provide(EntityLockLive))),
-    Layer.provide(InternalRuntimeEventBusLive),
+    Layer.provide(SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer))),
+    Layer.provide(InternalRuntimeEventBus.layer),
     Layer.provide(input.controlPlaneLayer ?? AllowAllHarnessControlPlaneLayer),
   );
 }
@@ -378,7 +375,7 @@ function fakeRepository(
   state: ReturnType<typeof mutableAgentSession>,
   createCalls: number[] = [],
   placement: { readonly surfaceId: number; readonly paneId: number } | null | undefined = undefined,
-): AgentSessionRepositoryService {
+): AgentSessionRepository['Service'] {
   return {
     create: () =>
       Effect.sync(() => {
@@ -404,13 +401,13 @@ function fakeRepository(
     delete: () => Effect.die('delete is not used'),
     findPlacement: () =>
       placement === undefined ? Effect.die('findPlacement is not used') : Effect.succeed(placement),
-  } satisfies AgentSessionRepositoryService;
+  } satisfies AgentSessionRepository['Service'];
 }
 
 function fakePtyService(
   ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>,
-  terminate: PtyServiceShape['terminate'] = () => Effect.die('terminate is not used'),
-): PtyServiceShape {
+  terminate: PtyService['Service']['terminate'] = () => Effect.die('terminate is not used'),
+): PtyService['Service'] {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     readLogTail: () => Effect.die('readLogTail is not used'),
@@ -433,14 +430,16 @@ function fakePtyService(
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
     terminate,
+    terminateMany: fakeTerminateMany(terminate),
+    findProcess: () => Effect.die('findProcess is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
-  } satisfies PtyServiceShape;
+  } satisfies PtyService['Service'];
 }
 
-function fakeHarnesses(launchInputs: RecordedLaunchInput[]): HarnessAdapterRegistryService {
+function fakeHarnesses(launchInputs: RecordedLaunchInput[]): HarnessAdapterRegistry['Service'] {
   return {
     buildLaunch: (input) =>
       Effect.sync(() => {
@@ -459,7 +458,7 @@ function fakeHarnesses(launchInputs: RecordedLaunchInput[]): HarnessAdapterRegis
         };
       }),
     buildHeadlessLaunch: () => Effect.die('buildHeadlessLaunch is not used'),
-  } satisfies HarnessAdapterRegistryService;
+  } satisfies HarnessAdapterRegistry['Service'];
 }
 
 function mutableAgentSession(

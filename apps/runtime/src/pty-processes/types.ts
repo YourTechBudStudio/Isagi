@@ -7,6 +7,9 @@ import type {
   SessionStatus,
 } from '@isagi/contracts';
 
+import { coordinates, describeSafely, type SafeDiagnostic } from '../platform/diagnostics/index.js';
+import type { ShellLaunchMode } from '../platform/process/index.js';
+
 export type PtyBackendName = PtyProcessBackend;
 export type PtyProcessStatus = SessionStatus;
 export type PtyProcessStatusReason =
@@ -142,61 +145,149 @@ export interface PtyExit {
   readonly signal: string | null;
 }
 
-export class PtyStartError extends Data.TaggedError('PtyStartError')<{
-  readonly ptyProcessId?: number | undefined;
-  readonly command: string;
-  readonly cwd: string;
-  readonly reason?: 'backend_session_not_live' | undefined;
-  readonly cause: unknown;
-}> {}
+export class PtyStartError
+  extends Data.TaggedError('PtyStartError')<{
+    readonly ptyProcessId?: number | undefined;
+    readonly command: string;
+    readonly cwd: string;
+    readonly reason?: 'backend_session_not_live' | undefined;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  // `command` and `cwd` are deliberately omitted: a resolved command line and
+  // a filesystem path are process data, not coordinates.
+  [describeSafely]() {
+    return {
+      label: `PTY start error${this.reason ? ` ${this.reason}` : ''}${coordinates({
+        ptyProcess: this.ptyProcessId,
+      })}`,
+      cause: this.cause,
+    };
+  }
+}
 
-export class PtyWriteError extends Data.TaggedError('PtyWriteError')<{
-  readonly ptyProcessId?: number | undefined;
-  readonly cause: unknown;
-}> {}
+export class PtyWriteError
+  extends Data.TaggedError('PtyWriteError')<{
+    readonly ptyProcessId?: number | undefined;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return {
+      label: `PTY write error${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
 
-export class PtyResizeError extends Data.TaggedError('PtyResizeError')<{
-  readonly ptyProcessId?: number | undefined;
-  readonly cause: unknown;
-}> {}
+export class PtyResizeError
+  extends Data.TaggedError('PtyResizeError')<{
+    readonly ptyProcessId?: number | undefined;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return {
+      label: `PTY resize error${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
 
-export class PtyKillError extends Data.TaggedError('PtyKillError')<{
-  readonly ptyProcessId?: number | undefined;
-  readonly cause: unknown;
-}> {}
+export class PtyKillError
+  extends Data.TaggedError('PtyKillError')<{
+    readonly ptyProcessId?: number | undefined;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return {
+      label: `PTY kill error${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
 
 // A termination attempt is already reserved for this row. The second caller is
 // rejected rather than joined: reusing the first attempt's outcome would lend
 // its affirmative kill to a cause that did not commit it. Internal to
 // `pty-processes` — deliberately not re-exported from the feature barrel.
-export class PtyTerminationInProgressError extends Data.TaggedError(
-  'PtyTerminationInProgressError',
-)<{
-  readonly ptyProcessId: number;
-}> {}
+export class PtyTerminationInProgressError
+  extends Data.TaggedError('PtyTerminationInProgressError')<{
+    readonly ptyProcessId: number;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return {
+      label: `PTY termination already in progress${coordinates({
+        ptyProcess: this.ptyProcessId,
+      })}`,
+      cause: null,
+    };
+  }
+}
 
-export class PtyServiceError extends Data.TaggedError('PtyServiceError')<{
-  readonly code:
-    | 'worktree_not_found'
-    | 'session_not_found'
-    | 'session_not_running'
-    | 'active_process_missing'
-    | 'active_process_not_running'
-    | 'session_already_attached'
-    | 'backend_unavailable'
-    | 'backend_session_missing'
-    | 'backend_attach_failed'
-    | 'log_read_failed';
-  readonly message: string;
-  readonly worktreeId?: number | undefined;
-  readonly ptyProcessId?: number | undefined;
-  readonly cause?: unknown;
-}> {}
-
-export class PtyInspectError extends Data.TaggedError('PtyInspectError')<{
-  readonly ptyProcessId?: number | undefined;
+/**
+ * A `required` multi-process teardown left processes running. Names every process it could not
+ * stop; `cause` is the first failure (each one is logged when it happens).
+ */
+export class PtyTeardownError extends Data.TaggedError('PtyTeardownError')<{
+  readonly operation: string;
+  readonly ptyProcessIds: readonly number[];
   readonly cause: unknown;
 }> {}
+
+export class PtyServiceError
+  extends Data.TaggedError('PtyServiceError')<{
+    readonly code:
+      | 'worktree_not_found'
+      | 'session_not_found'
+      | 'session_not_running'
+      | 'active_process_missing'
+      | 'active_process_not_running'
+      | 'session_already_attached'
+      | 'backend_unavailable'
+      | 'backend_session_missing'
+      | 'backend_attach_failed'
+      | 'log_read_failed';
+    readonly message: string;
+    readonly worktreeId?: number | undefined;
+    readonly ptyProcessId?: number | undefined;
+    readonly cause?: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  // `message` is never rendered: two authored messages embed ref-derived values.
+  [describeSafely]() {
+    return {
+      label: `PTY service error ${this.code}${coordinates({
+        ptyProcess: this.ptyProcessId,
+        worktree: this.worktreeId,
+      })}`,
+      cause: this.cause,
+    };
+  }
+}
+
+export class PtyInspectError
+  extends Data.TaggedError('PtyInspectError')<{
+    readonly ptyProcessId?: number | undefined;
+    readonly cause: unknown;
+  }>
+  implements SafeDiagnostic
+{
+  [describeSafely]() {
+    return {
+      label: `PTY inspect error${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
 
 // Attempt-honest kill result. `false` means this attempt found no live process
 // for the ref: it terminated nothing and must persist no `killed` fact.
@@ -283,7 +374,7 @@ export interface LaunchPtyProcessInput {
   readonly backend?: PtyBackendName | undefined;
 }
 
-export type PtyLaunchMode = 'direct' | 'user_shell';
+export type PtyLaunchMode = ShellLaunchMode;
 
 export interface PtyProcessLaunchMetadata {
   readonly ptyProcessId: number;

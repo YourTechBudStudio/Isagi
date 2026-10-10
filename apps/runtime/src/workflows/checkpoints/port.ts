@@ -1,15 +1,18 @@
 import { Effect } from 'effect';
 
-import type { GitService } from '../../platform/git/index.js';
-import type { WorkspaceServiceShape } from '../../workspace/index.js';
+import type { Git } from '../../platform/git/index.js';
+import type { WorkspaceService } from '../../workspace/index.js';
 import type { CheckpointsPort } from '../engine/runtime.js';
-import type { WorkflowContentStoreService } from '../store/content-store.js';
+import type { WorkflowContentStore } from '../store/content-store.js';
 
 /** The live checkpoints port over the owning services. Tests build it the same way. */
 export function makeCheckpointsPort(input: {
-  readonly git: GitService;
-  readonly content: WorkflowContentStoreService;
-  readonly workspace: Pick<WorkspaceServiceShape, 'createDetachedWorktree' | 'checkNewDirectory'>;
+  readonly git: Git['Service'];
+  readonly content: WorkflowContentStore['Service'];
+  readonly workspace: Pick<
+    WorkspaceService['Service'],
+    'createDetachedWorktree' | 'checkNewDirectory'
+  >;
 }): CheckpointsPort {
   return {
     headCommit: (checkoutPath) => headCommit(input.git, checkoutPath),
@@ -24,7 +27,7 @@ export function makeCheckpointsPort(input: {
  * and means no commit. Every other failure passes through, so a broken repository fails the capture
  * instead of silently recording no commit.
  */
-function headCommit(git: GitService, checkoutPath: string) {
+function headCommit(git: Git['Service'], checkoutPath: string) {
   return git.run(['-C', checkoutPath, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).pipe(
     Effect.map(({ stdout }): string | null => stdout.trim()),
     Effect.catchIf(

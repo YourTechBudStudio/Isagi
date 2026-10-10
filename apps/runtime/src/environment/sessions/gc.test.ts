@@ -16,33 +16,17 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import { agentSessions, projects, worktrees } from '../../persistence/schema.js';
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-} from '../../platform/events/index.js';
-import { EntityLockLive } from '../../platform/locks/entity-lock.js';
-import {
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../../platform/persistence/index.js';
+import { AgentSessionArtifacts } from '../../harnesses/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { EntityLock } from '../../platform/locks/index.js';
+import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { SessionLifecycle, SessionLifecycleLive } from '../../session-lifecycle/index.js';
-import {
-  AgentSessionArtifacts,
-  AgentSessionArtifactsLive,
-  AgentSessionRepository,
-  AgentSessionRepositoryLive,
-  type AgentSessionArtifactsService,
-  type AgentSessionRepositoryService,
-} from '../agent-sessions/index.js';
-import {
-  TerminalSessionRepository,
-  TerminalSessionRepositoryLive,
-} from '../terminal-sessions/index.js';
+import { projects, worktrees } from '../../projects/tables.js';
+import { AgentSessionRepository } from '../agent-sessions/repository.js';
+import { agentSessions } from '../tables.js';
+import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 import { makeSessionGc } from './gc.js';
+import { SessionLifecycle } from './lifecycle.js';
 
 // Two hours: past the one-hour folder grace and the one-minute row grace.
 const oldDate = new Date(Date.now() - 2 * 60 * 60_000);
@@ -161,21 +145,21 @@ function runWithSessionGc<E>(
   dataRoot: string,
   body: (input: {
     readonly tick: Effect.Effect<void>;
-    readonly agents: AgentSessionRepositoryService;
-    readonly artifacts: AgentSessionArtifactsService;
-  }) => Effect.Effect<void, E, RuntimeDatabaseService>,
-  wrapArtifacts: (artifacts: AgentSessionArtifactsService) => AgentSessionArtifactsService = (
-    artifacts,
-  ) => artifacts,
+    readonly agents: AgentSessionRepository['Service'];
+    readonly artifacts: AgentSessionArtifacts['Service'];
+  }) => Effect.Effect<void, E, RuntimeDatabase>,
+  wrapArtifacts: (
+    artifacts: AgentSessionArtifacts['Service'],
+  ) => AgentSessionArtifacts['Service'] = (artifacts) => artifacts,
 ) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directory));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directory));
   const layer = Layer.mergeAll(
-    AgentSessionRepositoryLive,
-    TerminalSessionRepositoryLive,
-    SessionLifecycleLive.pipe(Layer.provide(EntityLockLive)),
-    InternalRuntimeEventBusLive,
+    AgentSessionRepository.layer,
+    TerminalSessionRepository.layer,
+    SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer)),
+    InternalRuntimeEventBus.layer,
     artifacts,
     database,
   ).pipe(Layer.provide(artifacts), Layer.provide(database));

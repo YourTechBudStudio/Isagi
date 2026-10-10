@@ -5,46 +5,16 @@ import type { AgentHarness } from '@isagi/contracts';
 import {
   HarnessControlPlane,
   type HarnessLaunchBlocked,
-} from '../../harnesses/control-plane/index.js';
-import { HarnessAdapterRegistry } from '../../harnesses/index.js';
-import { HarnessAdapterError, type HarnessLaunchOptions } from '../../harnesses/types.js';
+  HarnessAdapterRegistry,
+  HarnessAdapterError,
+  type HarnessLaunchOptions,
+} from '../../harnesses/index.js';
 import { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
-import { PtyService, type PtyLaunchError } from '../../pty-processes/service.js';
-import { SessionLifecycle } from '../../session-lifecycle/index.js';
-import type { AgentSessionRow } from '../surfaces/types.js';
+import { PtyService, type PtyLaunchError } from '../../pty-processes/index.js';
+import { SessionLifecycle } from '../sessions/lifecycle.js';
+import type { AgentSessionRow } from '../sessions/types.js';
 import { AgentSessionRepository } from './repository.js';
-
-export interface AgentSessionService {
-  readonly startFresh: (input: {
-    readonly worktreeId: number;
-    readonly harness: AgentHarness;
-    readonly cwd: string;
-  }) => Effect.Effect<{ readonly agentSessionId: number }, DatabaseError | HarnessLaunchBlocked>;
-  readonly get: (
-    agentSessionId: number,
-  ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
-  readonly ensureActivePtyProcess: (
-    agentSessionId: number,
-    options?: AgentSessionEnsureActiveOptions,
-  ) => Effect.Effect<
-    number,
-    DatabaseError | AgentSessionError | PtyLaunchError | HarnessAdapterError | HarnessLaunchBlocked
-  >;
-  readonly activePtyProcessId: (
-    agentSessionId: number,
-  ) => Effect.Effect<number, DatabaseError | AgentSessionError>;
-  /**
-   * Stops a process its launcher started, unless a pane holds the session. The
-   * placement read and the stop happen under the session's lock, which a claim
-   * also takes to bind the session, so a claim can never land between them: a
-   * session placed at any point up to the decision keeps its process.
-   */
-  readonly stopUnlessPlaced: (input: {
-    readonly agentSessionId: number;
-    readonly ptyProcessId: number;
-  }) => Effect.Effect<StopUnlessPlacedOutcome, DatabaseError>;
-}
 
 export type StopUnlessPlacedOutcome =
   | { readonly kind: 'placed'; readonly surfaceId: number; readonly paneId: number }
@@ -72,116 +42,149 @@ export class AgentSessionError extends Error {
   }
 }
 
-export const AgentSessionService = Context.Service<AgentSessionService>(
-  'isagi/AgentSessionService',
-);
+const make = Effect.gen(function* () {
+  const repository = yield* AgentSessionRepository;
+  const pty = yield* PtyService;
+  const harnesses = yield* HarnessAdapterRegistry;
+  const eventBus = yield* InternalRuntimeEventBus;
+  const lifecycle = yield* SessionLifecycle;
+  const controlPlane = yield* HarnessControlPlane;
 
-export const AgentSessionServiceLive = Layer.effect(
-  AgentSessionService,
-  Effect.gen(function* () {
-    const repository = yield* AgentSessionRepository;
-    const pty = yield* PtyService;
-    const harnesses = yield* HarnessAdapterRegistry;
-    const eventBus = yield* InternalRuntimeEventBus;
-    const lifecycle = yield* SessionLifecycle;
-    const controlPlane = yield* HarnessControlPlane;
+  const publishChanged = (agentSessionId: number) =>
+    eventBus.publish({ type: 'agent_session_changed', agentSessionId });
 
-    const publishChanged = (agentSessionId: number) =>
-      eventBus.publish({ type: 'agent_session_changed', agentSessionId });
-
-    const launchProcessForSession = (session: AgentSessionRow, options?: HarnessLaunchOptions) =>
-      Effect.gen(function* () {
-        yield* controlPlane.assertCanCreateProcess(session.harness);
-        const launch = yield* agentLaunchEnvelope(harnesses, session, options);
-        const process = yield* pty.launch(launch);
-        yield* repository.setActivePtyProcess({
-          agentSessionId: session.id,
-          ptyProcessId: process.ptyProcessId,
-        });
-        yield* eventBus.publish({
-          type: 'agent_session_active_process_changed',
-          agentSessionId: session.id,
-          ptyProcessId: process.ptyProcessId,
-        });
-        return process.ptyProcessId;
+  const launchProcessForSession = (session: AgentSessionRow, options?: HarnessLaunchOptions) =>
+    Effect.gen(function* () {
+      yield* controlPlane.assertCanCreateProcess(session.harness);
+      const launch = yield* agentLaunchEnvelope(harnesses, session, options);
+      const process = yield* pty.launch(launch);
+      yield* repository.setActivePtyProcess({
+        agentSessionId: session.id,
+        ptyProcessId: process.ptyProcessId,
       });
+      yield* eventBus.publish({
+        type: 'agent_session_active_process_changed',
+        agentSessionId: session.id,
+        ptyProcessId: process.ptyProcessId,
+      });
+      return process.ptyProcessId;
+    });
 
-    const ensureActivePtyProcess = (
+  const ensureActivePtyProcess = (
+    agentSessionId: number,
+    options?: AgentSessionEnsureActiveOptions,
+  ) =>
+    lifecycle.withRestoreLock(
+      { kind: 'agent_session', sessionId: agentSessionId },
+      Effect.gen(function* () {
+        const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+        yield* validateHarnessMetadata(session);
+        const process = session.activePtyProcess;
+        const replaceEphemeralProcess =
+          options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+        const canReuseActiveProcess =
+          session.activePtyProcessId &&
+          !replaceEphemeralProcess &&
+          (process?.status === 'running' || process?.status === 'starting');
+        if (canReuseActiveProcess) {
+          return session.activePtyProcessId;
+        }
+        return yield* launchProcessForSession(session, options);
+      }),
+    );
+
+  return AgentSessionService.of({
+    startFresh: (input) =>
+      Effect.gen(function* () {
+        yield* controlPlane.assertCanCreateProcess(input.harness);
+        const agentSessionId = yield* repository.create({
+          worktreeId: input.worktreeId,
+          harness: input.harness,
+          cwd: input.cwd,
+        });
+        yield* publishChanged(agentSessionId);
+        return { agentSessionId };
+      }),
+    get: (agentSessionId) => findAgentSessionOrFail(repository, agentSessionId),
+    ensureActivePtyProcess,
+    stopUnlessPlaced: (input) =>
+      lifecycle.withRestoreLock(
+        { kind: 'agent_session', sessionId: input.agentSessionId },
+        Effect.gen(function* () {
+          const placement = yield* repository.findPlacement(input.agentSessionId);
+          if (placement) return { kind: 'placed', ...placement } as const;
+          const stopped = yield* pty
+            .terminate({ ptyProcessId: input.ptyProcessId, gracefulTimeoutMs: 1_000 })
+            .pipe(Effect.result);
+          return Result.isSuccess(stopped)
+            ? ({ kind: 'stopped' } as const)
+            : ({ kind: 'stop_failed', cause: stopped.failure } as const);
+        }),
+      ),
+    activePtyProcessId: (agentSessionId) =>
+      Effect.gen(function* () {
+        const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+        if (!session.activePtyProcessId || !session.activePtyProcess)
+          return yield* Effect.fail(
+            new AgentSessionError(
+              'active_process_missing',
+              `Agent session ${agentSessionId} has no active PTY process.`,
+            ),
+          );
+        if (session.activePtyProcess.status !== 'running')
+          return yield* Effect.fail(
+            new AgentSessionError(
+              'active_process_not_running',
+              `Agent session ${agentSessionId} active process is not running.`,
+            ),
+          );
+        return session.activePtyProcessId;
+      }),
+  });
+});
+
+export class AgentSessionService extends Context.Service<
+  AgentSessionService,
+  {
+    readonly startFresh: (input: {
+      readonly worktreeId: number;
+      readonly harness: AgentHarness;
+      readonly cwd: string;
+    }) => Effect.Effect<{ readonly agentSessionId: number }, DatabaseError | HarnessLaunchBlocked>;
+    readonly get: (
+      agentSessionId: number,
+    ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
+    readonly ensureActivePtyProcess: (
       agentSessionId: number,
       options?: AgentSessionEnsureActiveOptions,
-    ) =>
-      lifecycle.withRestoreLock(
-        { kind: 'agent_session', sessionId: agentSessionId },
-        Effect.gen(function* () {
-          const session = yield* findAgentSessionOrFail(repository, agentSessionId);
-          yield* validateHarnessMetadata(session);
-          const process = session.activePtyProcess;
-          const replaceEphemeralProcess =
-            options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
-          const canReuseActiveProcess =
-            session.activePtyProcessId &&
-            !replaceEphemeralProcess &&
-            (process?.status === 'running' || process?.status === 'starting');
-          if (canReuseActiveProcess) {
-            return session.activePtyProcessId;
-          }
-          return yield* launchProcessForSession(session, options);
-        }),
-      );
-
-    return {
-      startFresh: (input) =>
-        Effect.gen(function* () {
-          yield* controlPlane.assertCanCreateProcess(input.harness);
-          const agentSessionId = yield* repository.create({
-            worktreeId: input.worktreeId,
-            harness: input.harness,
-            cwd: input.cwd,
-          });
-          yield* publishChanged(agentSessionId);
-          return { agentSessionId };
-        }),
-      get: (agentSessionId) => findAgentSessionOrFail(repository, agentSessionId),
-      ensureActivePtyProcess,
-      stopUnlessPlaced: (input) =>
-        lifecycle.withRestoreLock(
-          { kind: 'agent_session', sessionId: input.agentSessionId },
-          Effect.gen(function* () {
-            const placement = yield* repository.findPlacement(input.agentSessionId);
-            if (placement) return { kind: 'placed', ...placement } as const;
-            const stopped = yield* pty
-              .terminate({ ptyProcessId: input.ptyProcessId, gracefulTimeoutMs: 1_000 })
-              .pipe(Effect.result);
-            return Result.isSuccess(stopped)
-              ? ({ kind: 'stopped' } as const)
-              : ({ kind: 'stop_failed', cause: stopped.failure } as const);
-          }),
-        ),
-      activePtyProcessId: (agentSessionId) =>
-        Effect.gen(function* () {
-          const session = yield* findAgentSessionOrFail(repository, agentSessionId);
-          if (!session.activePtyProcessId || !session.activePtyProcess)
-            return yield* Effect.fail(
-              new AgentSessionError(
-                'active_process_missing',
-                `Agent session ${agentSessionId} has no active PTY process.`,
-              ),
-            );
-          if (session.activePtyProcess.status !== 'running')
-            return yield* Effect.fail(
-              new AgentSessionError(
-                'active_process_not_running',
-                `Agent session ${agentSessionId} active process is not running.`,
-              ),
-            );
-          return session.activePtyProcessId;
-        }),
-    } satisfies AgentSessionService;
-  }),
-);
+    ) => Effect.Effect<
+      number,
+      | DatabaseError
+      | AgentSessionError
+      | PtyLaunchError
+      | HarnessAdapterError
+      | HarnessLaunchBlocked
+    >;
+    readonly activePtyProcessId: (
+      agentSessionId: number,
+    ) => Effect.Effect<number, DatabaseError | AgentSessionError>;
+    /**
+     * Stops a process its launcher started, unless a pane holds the session. The
+     * placement read and the stop happen under the session's lock, which a claim
+     * also takes to bind the session, so a claim can never land between them: a
+     * session placed at any point up to the decision keeps its process.
+     */
+    readonly stopUnlessPlaced: (input: {
+      readonly agentSessionId: number;
+      readonly ptyProcessId: number;
+    }) => Effect.Effect<StopUnlessPlacedOutcome, DatabaseError>;
+  }
+>()('isagi/runtime/environment/AgentSessionService') {
+  static readonly layer = Layer.effect(AgentSessionService, make);
+}
 
 function findAgentSessionOrFail(
-  repository: import('./repository.js').AgentSessionRepositoryService,
+  repository: import('./repository.js').AgentSessionRepository['Service'],
   agentSessionId: number,
 ) {
   return Effect.gen(function* () {
@@ -229,7 +232,7 @@ function validateHarnessMetadata(session: AgentSessionRow) {
 }
 
 function agentLaunchEnvelope(
-  harnesses: import('../../harnesses/index.js').HarnessAdapterRegistryService,
+  harnesses: import('../../harnesses/index.js').HarnessAdapterRegistry['Service'],
   session: AgentSessionRow,
   options?: HarnessLaunchOptions,
 ) {
@@ -243,4 +246,4 @@ function agentLaunchEnvelope(
   });
 }
 
-export type { AgentSessionRepositoryService } from './repository.js';
+export type { AgentSessionRepository } from './repository.js';

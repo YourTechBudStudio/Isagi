@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { LoopbackPortUnavailable } from '../../../platform/net/loopback-port-probe.js';
+import { LoopbackPortUnavailable } from '../../../platform/net/index.js';
 import {
   editorContextChangedIds,
   insertWorktree,

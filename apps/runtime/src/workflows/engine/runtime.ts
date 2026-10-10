@@ -1,17 +1,17 @@
 import type { Effect } from 'effect';
 
-import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../environment/index.js';
-import type { HarnessConversationTurn } from '../../harnesses/definition-types.js';
-import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { SurfaceService } from '../../environment/index.js';
+import type { HarnessConversationTurn } from '../../harnesses/index.js';
+import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import type { WorkspaceRepositoryService } from '../../projects/repository.js';
-import type { WorkspaceServiceShape } from '../../workspace/index.js';
+import type { ProjectRepository } from '../../projects/index.js';
+import type { WorkspaceService } from '../../workspace/index.js';
 import type { WorkflowEngineError } from '../errors.js';
-import type { WorkflowContentStoreService } from '../store/content-store.js';
+import type { WorkflowContentStore } from '../store/content-store.js';
 import type { EventDraft } from '../store/events.js';
 import type { Db } from '../store/rows.js';
 import type { LoadedWorkflowArtifact } from '../structure/loader.js';
-import type { WorkflowRegistryService } from '../structure/registry.js';
+import type { WorkflowRegistry } from '../structure/registry.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import type { TurnEdge } from '../waits/latest-turn.js';
 
@@ -71,38 +71,38 @@ export interface HeadlessProcess {
  * services (ADR 0008); tests supply fakes.
  */
 export interface EngineDeps {
-  readonly registry: WorkflowRegistryService;
+  readonly registry: WorkflowRegistry['Service'];
   readonly places: PlacesPort;
   readonly agents: AgentPort;
   readonly headless: HeadlessPort;
   readonly checkpoints: CheckpointsPort;
-  readonly internalEvents: InternalRuntimeEventBusService;
+  readonly internalEvents: InternalRuntimeEventBus['Service'];
 }
 
 /** Worktrees and surfaces: read for launch validation, created by preparation. */
 export interface PlacesPort {
   readonly workspace: Pick<
-    WorkspaceRepositoryService,
+    ProjectRepository['Service'],
     'findWorktree' | 'findProject' | 'listWorktrees'
   >;
   readonly workspaceService: Pick<
-    WorkspaceServiceShape,
+    WorkspaceService['Service'],
     'preflightWorktreeCreation' | 'openWorktree' | 'runWorktreeSetup'
   >;
-  readonly surfaceRepository: Pick<
-    SurfaceRepositoryService,
+  readonly surfaceReads: Pick<
+    SurfaceService['Service'],
     'findSurface' | 'listWorkspaceSurfaceMetadata'
   >;
-  readonly surfaces: Pick<SurfaceServiceShape, 'getSurfaceDetail' | 'createEmptySurface'>;
+  readonly surfaces: Pick<SurfaceService['Service'], 'getSurfaceDetail' | 'createEmptySurface'>;
 }
 
 /** What checkpoint capture and export need: Git's HEAD, the content store, and new directories. */
 export interface CheckpointsPort {
   /** The checkout's HEAD commit, or null when the repository has no commits yet. */
   readonly headCommit: (checkoutPath: string) => Effect.Effect<string | null, unknown>;
-  readonly content: WorkflowContentStoreService;
-  readonly createDetachedWorktree: WorkspaceServiceShape['createDetachedWorktree'];
-  readonly checkNewDirectory: WorkspaceServiceShape['checkNewDirectory'];
+  readonly content: WorkflowContentStore['Service'];
+  readonly createDetachedWorktree: WorkspaceService['Service']['createDetachedWorktree'];
+  readonly checkNewDirectory: WorkspaceService['Service']['checkNewDirectory'];
 }
 
 export interface AgentPort {

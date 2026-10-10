@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
-import { PtyServiceError } from '../../pty-processes/types.js';
+import { PtyServiceError } from '../../pty-processes/index.js';
 import { terminalCommandOutcomeForPtyRow } from '../outcomes.js';
 import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {

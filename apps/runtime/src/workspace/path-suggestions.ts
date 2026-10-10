@@ -4,8 +4,8 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { Effect } from 'effect';
 
-import { logDiagnosticEvent } from '../platform/diagnostics/phase.js';
-import { normalizeHomePath } from '../platform/fs/paths.js';
+import { logDiagnosticEvent } from '../platform/diagnostics/index.js';
+import { normalizeHomePath } from '../platform/fs/index.js';
 
 export interface PathSuggestInput {
   readonly input: string;

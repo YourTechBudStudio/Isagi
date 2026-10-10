@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import type { ResolvedEditorInstallation } from '../provisioning/index.js';
+import type { ResolvedEditorInstallation } from '../provisioning/install.js';
 
 /**
  * The loopback host every editor incarnation binds to. IPv4 rather than

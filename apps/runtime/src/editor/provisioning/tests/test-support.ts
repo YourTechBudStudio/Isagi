@@ -13,8 +13,8 @@ import { Effect } from 'effect';
 
 import {
   EditorInstallIoError,
-  type EditorInstallIoService,
   type EditorSharedStatePaths,
+  type EditorInstallIo,
 } from '../install-io.js';
 import { codeServerManifest } from '../manifest.js';
 
@@ -22,7 +22,7 @@ export const pinnedVersion = codeServerManifest.version;
 export const testArtifact = codeServerManifest.artifacts['darwin-arm64'];
 
 export interface InstallIoRecorder {
-  readonly io: EditorInstallIoService;
+  readonly io: EditorInstallIo['Service'];
   /** Operation names in call order — the evidence behind "the receipt fast path
    *  performs zero IO". */
   readonly calls: string[];
@@ -44,7 +44,7 @@ export interface InstallIoBehaviour {
 /**
  * Every socket directory this double hands out lives under one root owned by
  * the test process, removed when it exits. Production releases its directory
- * through `EditorInstallIoLive`'s scope; the double has no scope to hang a
+ * through `EditorInstallIo.layer`'s scope; the double has no scope to hang a
  * finalizer on, so the process owns them instead — a test run must not leave
  * `isagi-editor-*` directories behind any more than a runtime may.
  */
@@ -81,7 +81,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
       behaviour.observe?.() ?? Effect.void,
     );
 
-  const io: EditorInstallIoService = {
+  const io: EditorInstallIo['Service'] = {
     downloadTo: ({ destination }) =>
       Effect.andThen(
         record('downloadTo'),

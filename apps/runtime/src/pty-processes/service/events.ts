@@ -1,8 +1,8 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
-import type { PtyForegroundStateService } from '../foreground-state.js';
-import type { PtyProcessTransitionResult, PtyRepositoryService } from '../repository.js';
+import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { PtyForegroundState } from '../foreground-state.js';
+import type { PtyProcessTransitionResult, PtyRepository } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
 import type {
   PtyForegroundCommandState,
@@ -24,8 +24,8 @@ export interface PtyProcessTransitionInput {
 // other domains derive process state from, so a rejected write must be
 // observably a no-op rather than an announcement of a status that never landed.
 export function transitionProcessAndPublish(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
+  repository: PtyRepository['Service'],
+  eventBus: InternalRuntimeEventBus['Service'],
   previous: PtyProcessRecord,
   input: PtyProcessTransitionInput,
 ) {
@@ -37,8 +37,8 @@ export function transitionProcessAndPublish(
 }
 
 export function transitionProcessByIdAndPublish(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
+  repository: PtyRepository['Service'],
+  eventBus: InternalRuntimeEventBus['Service'],
   input: PtyProcessTransitionInput,
 ) {
   return Effect.gen(function* () {
@@ -52,7 +52,7 @@ export function transitionProcessByIdAndPublish(
 }
 
 function publishAppliedTransition(
-  eventBus: InternalRuntimeEventBusService,
+  eventBus: InternalRuntimeEventBus['Service'],
   previous: PtyProcessRecord,
   input: PtyProcessTransitionInput,
   result: PtyProcessTransitionResult,
@@ -67,7 +67,7 @@ function publishAppliedTransition(
 }
 
 function publishPtyProcessChangedIfNeeded(
-  eventBus: InternalRuntimeEventBusService,
+  eventBus: InternalRuntimeEventBus['Service'],
   previous: PtyProcessRecord,
   next: {
     readonly status: PtyProcessStatus;
@@ -115,8 +115,8 @@ function publishPtyProcessChangedIfNeeded(
 // Shared by the launch path and the attach path, which both receive foreground
 // notifications from a backend and must announce only real changes.
 export function recordForegroundCommandState(
-  foreground: PtyForegroundStateService,
-  eventBus: InternalRuntimeEventBusService,
+  foreground: PtyForegroundState['Service'],
+  eventBus: InternalRuntimeEventBus['Service'],
   ptyProcessId: number,
   state: PtyForegroundCommandState,
 ) {

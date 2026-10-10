@@ -5,11 +5,9 @@ import { Effect } from 'effect';
 
 import {
   EntityLock,
-  EntityLockLive,
   entityLockKeyId,
   type EntityLockHeld,
   type EntityLockKey,
-  type EntityLockService,
 } from './entity-lock.js';
 
 const agentKey = { kind: 'agent_session', id: 10 } as const;
@@ -18,7 +16,7 @@ const editorKey = { kind: 'editor_context', id: 10 } as const;
 
 // Records start/end around a sleep, so an interleaving is visible in the
 // transcript rather than inferred from timing.
-function recorded(lock: EntityLockService, key: EntityLockKey, name: string, events: string[]) {
+function recorded(lock: EntityLock['Service'], key: EntityLockKey, name: string, events: string[]) {
   return lock.withLock(key, () =>
     Effect.gen(function* () {
       events.push(`${name}:start`);
@@ -38,7 +36,7 @@ test('work on the same key serializes', async () => {
         { concurrency: 'unbounded' },
       );
       return transcript;
-    }).pipe(Effect.provide(EntityLockLive)),
+    }).pipe(Effect.provide(EntityLock.layer)),
   );
 
   assert.deepEqual(events, ['a:start', 'a:end', 'b:start', 'b:end']);
@@ -54,7 +52,7 @@ test('work on different ids of the same kind does not serialize', async () => {
         { concurrency: 'unbounded' },
       );
       return transcript;
-    }).pipe(Effect.provide(EntityLockLive)),
+    }).pipe(Effect.provide(EntityLock.layer)),
   );
 
   assert.deepEqual(events, ['a:start', 'b:start', 'a:end', 'b:end']);
@@ -75,7 +73,7 @@ test('work on the same id under different kinds does not serialize', async () =>
         { concurrency: 'unbounded' },
       );
       return transcript;
-    }).pipe(Effect.provide(EntityLockLive)),
+    }).pipe(Effect.provide(EntityLock.layer)),
   );
 
   assert.deepEqual(events, ['session:start', 'editor:start', 'session:end', 'editor:end']);
@@ -86,7 +84,7 @@ test('the witness carries the exact key the lock was granted for', async () => {
     Effect.gen(function* () {
       const lock = yield* EntityLock;
       return yield* lock.withLock(editorKey, (granted: EntityLockHeld) => Effect.succeed(granted));
-    }).pipe(Effect.provide(EntityLockLive)),
+    }).pipe(Effect.provide(EntityLock.layer)),
   );
 
   assert.deepEqual(held.key, editorKey);

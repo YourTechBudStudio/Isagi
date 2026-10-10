@@ -9,7 +9,7 @@ import {
 } from '@isagi/contracts';
 
 import { PtyServiceError } from '../../pty-processes/index.js';
-import type { PtyAttachment } from '../../pty-processes/service.js';
+import type { PtyAttachment } from '../../pty-processes/testing.js';
 import {
   commandService,
   delayedSucceed,

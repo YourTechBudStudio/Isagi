@@ -3,64 +3,54 @@ import { Context, Effect, Layer } from 'effect';
 
 import type { AttentionSource, AttentionState, TerminalAttentionState } from '@isagi/contracts';
 
-import { AgentSessionArtifacts } from '../../harnesses/ledger.js';
-import { HarnessLedgerObserver } from '../../harnesses/observer.service.js';
-import {
-  agentSessions,
-  ptyProcesses,
-  surfacePanes,
-  terminalSessions,
-  worktreeSurfaces,
-} from '../../persistence/schema.js';
+import { AgentSessionArtifacts, HarnessLedgerObserver } from '../../harnesses/index.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
 import {
   PtyForegroundState,
   ptyProcessRow,
-  type PtyForegroundStateService,
   type PtyProcessRow,
 } from '../../pty-processes/index.js';
+import { ptyProcesses } from '../../pty-processes/tables.js';
+import { agentSessionRow } from '../sessions/row-mappers.js';
 import { deriveAgentSessionState } from '../sessions/status.js';
-import { agentSessionRow } from '../surfaces/row-mappers.js';
-import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
+import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
+import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from '../tables.js';
 
-export interface AgentSessionAttentionProjectionService {
-  readonly agentSessionAttention: (session: AgentSessionRow) => Effect.Effect<AttentionState>;
-  readonly terminalSessionAttention: (session: TerminalSessionRow) => TerminalAttentionState;
-  readonly listAttentionSources: Effect.Effect<readonly AttentionSource[], DatabaseError>;
-  readonly workingAgentCount: Effect.Effect<number, DatabaseError>;
+const make = Effect.gen(function* () {
+  const artifacts = yield* AgentSessionArtifacts;
+  const foreground = yield* PtyForegroundState;
+  const database = yield* RuntimeDatabase;
+  const observer = yield* HarnessLedgerObserver;
+
+  const service = AgentSessionAttentionProjection.of({
+    agentSessionAttention: (session) =>
+      Effect.gen(function* () {
+        const harnessAttention = yield* observer.getAttention(session.id);
+        return deriveAgentSessionAttention(session, harnessAttention ?? 'idle');
+      }),
+    terminalSessionAttention: (session) => deriveTerminalSessionAttention(session, foreground),
+    listAttentionSources: Effect.suspend(() => listAttentionSources(artifacts, database, service)),
+    workingAgentCount: Effect.suspend(() => workingAgentCount(artifacts, database, service)),
+  });
+  return service;
+});
+
+export class AgentSessionAttentionProjection extends Context.Service<
+  AgentSessionAttentionProjection,
+  {
+    readonly agentSessionAttention: (session: AgentSessionRow) => Effect.Effect<AttentionState>;
+    readonly terminalSessionAttention: (session: TerminalSessionRow) => TerminalAttentionState;
+    readonly listAttentionSources: Effect.Effect<readonly AttentionSource[], DatabaseError>;
+    readonly workingAgentCount: Effect.Effect<number, DatabaseError>;
+  }
+>()('isagi/runtime/environment/AgentSessionAttentionProjection') {
+  static readonly layer = Layer.effect(AgentSessionAttentionProjection, make);
 }
 
-export const AgentSessionAttentionProjection =
-  Context.Service<AgentSessionAttentionProjectionService>('isagi/AgentSessionAttentionProjection');
-
-export const AgentSessionAttentionProjectionLive = Layer.effect(
-  AgentSessionAttentionProjection,
-  Effect.gen(function* () {
-    const artifacts = yield* AgentSessionArtifacts;
-    const foreground = yield* PtyForegroundState;
-    const database = yield* RuntimeDatabase;
-    const observer = yield* HarnessLedgerObserver;
-
-    const service: AgentSessionAttentionProjectionService = {
-      agentSessionAttention: (session) =>
-        Effect.gen(function* () {
-          const harnessAttention = yield* observer.getAttention(session.id);
-          return deriveAgentSessionAttention(session, harnessAttention ?? 'idle');
-        }),
-      terminalSessionAttention: (session) => deriveTerminalSessionAttention(session, foreground),
-      listAttentionSources: Effect.suspend(() =>
-        listAttentionSources(artifacts, database, service),
-      ),
-      workingAgentCount: Effect.suspend(() => workingAgentCount(artifacts, database, service)),
-    };
-    return service;
-  }),
-);
-
 function workingAgentCount(
-  artifacts: import('../../harnesses/ledger.js').AgentSessionArtifactsService,
-  database: import('../../platform/persistence/index.js').RuntimeDatabaseService,
-  attention: Pick<AgentSessionAttentionProjectionService, 'agentSessionAttention'>,
+  artifacts: import('../../harnesses/index.js').AgentSessionArtifacts['Service'],
+  database: import('../../platform/persistence/index.js').RuntimeDatabase['Service'],
+  attention: Pick<AgentSessionAttentionProjection['Service'], 'agentSessionAttention'>,
 ) {
   return Effect.gen(function* () {
     const rows = yield* database.use('working_agent_count', (db) =>
@@ -83,10 +73,10 @@ function workingAgentCount(
 }
 
 function listAttentionSources(
-  artifacts: import('../../harnesses/ledger.js').AgentSessionArtifactsService,
-  database: import('../../platform/persistence/index.js').RuntimeDatabaseService,
+  artifacts: import('../../harnesses/index.js').AgentSessionArtifacts['Service'],
+  database: import('../../platform/persistence/index.js').RuntimeDatabase['Service'],
   attention: Pick<
-    AgentSessionAttentionProjectionService,
+    AgentSessionAttentionProjection['Service'],
     'agentSessionAttention' | 'terminalSessionAttention'
   >,
 ) {
@@ -236,7 +226,7 @@ function isBenignKillReason(statusReason: string | null): boolean {
 
 function deriveTerminalSessionAttention(
   session: TerminalSessionRow,
-  foreground: PtyForegroundStateService,
+  foreground: PtyForegroundState['Service'],
 ): TerminalAttentionState {
   const process = session.activePtyProcess;
   if (!session.activePtyProcessId) return 'idle';

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Cause, Effect, Exit, Option } from 'effect';
 
-import { deriveGitCommandFailure, Git, GitCommandError, GitLive } from './command.js';
+import { deriveGitCommandFailure, Git, GitCommandError } from './command.js';
 import { removeTree, requireGit } from './testing.js';
 
 /**
@@ -37,7 +37,7 @@ function run(args: readonly string[], options?: { readonly env?: Record<string, 
     Effect.gen(function* () {
       const git = yield* Git;
       return yield* git.run(args, options);
-    }).pipe(Effect.provide(GitLive)),
+    }).pipe(Effect.provide(Git.layer)),
   );
 }
 

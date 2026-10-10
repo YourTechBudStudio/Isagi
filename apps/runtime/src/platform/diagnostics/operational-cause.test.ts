@@ -3,9 +3,12 @@ import test from 'node:test';
 
 import { Schema } from 'effect';
 
-import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
-import { DatabaseError } from '../persistence/index.js';
-import { describeOperationalCause } from './operational-cause.js';
+import {
+  coordinates,
+  describeOperationalCause,
+  describeSafely,
+  type SafeDiagnostic,
+} from './operational-cause.js';
 
 /**
  * The trust boundary: nothing a user can read may carry a value this codebase
@@ -16,34 +19,50 @@ import { describeOperationalCause } from './operational-cause.js';
  * decode fails — so echoing a decoder's message would publish a secret into a
  * durable, user-visible diagnostic and into logs that end up in bug reports.
  *
- * These are the classifier's own rules. The command domain's wrapper adds one
- * recognizer on top and is tested beside it, in
- * `commands/tests/diagnostics.redaction.test.ts`, together with the end-to-end
- * proof that the boundary holds through a real command flow.
+ * These are the classifier's own rules, exercised through a local error class
+ * that implements the `SafeDiagnostic` protocol the way every runtime error does.
+ * The runtime's own labels are tested beside their classes
+ * (`platform/persistence/database-error.test.ts`,
+ * `pty-processes/tests/safe-diagnostics.test.ts`), and the end-to-end proof that
+ * the boundary holds through a real command flow is
+ * `commands/tests/diagnostics.redaction.test.ts`.
  */
 
 const SENTINEL = 'SUPERSECRETTOKEN12345';
 const SESSION_NAME = 'isagi_testruntime_801';
 
+/** A recognized error: an authored label over authored fields, and a cause to walk. */
+class OperationFailed extends Error implements SafeDiagnostic {
+  constructor(
+    readonly operation: string,
+    override readonly cause: unknown,
+    message = `${operation} failed`,
+    readonly ptyProcessId?: number,
+  ) {
+    super(message);
+  }
+
+  [describeSafely]() {
+    return {
+      label: `Operation ${this.operation} failed${coordinates({ ptyProcess: this.ptyProcessId })}`,
+      cause: this.cause,
+    };
+  }
+}
+
 test('the renderer composes from authored fields and never from foreign text', () => {
   assert.equal(
-    describeOperationalCause(
-      new DatabaseError({ operation: 'find_pty_process', cause: new Error(SENTINEL) }),
-    ),
-    'Database operation find_pty_process failed: Error',
+    describeOperationalCause(new OperationFailed('find_pty_process', new Error(SENTINEL))),
+    'Operation find_pty_process failed: Error',
   );
 
   // A recognized error's own `message` is never read, even though we authored it
   // — two authored messages embed ref-derived values today.
   assert.equal(
     describeOperationalCause(
-      new PtyServiceError({
-        code: 'backend_unavailable',
-        message: `Could not replay tmux session ${SESSION_NAME}.`,
-        ptyProcessId: 7,
-      }),
+      new OperationFailed('replay', null, `Could not replay tmux session ${SESSION_NAME}.`, 7),
     ),
-    'PTY service error backend_unavailable (ptyProcess=7)',
+    'Operation replay failed (ptyProcess=7)',
   );
 });
 
@@ -61,6 +80,21 @@ test('a foreign value cannot name itself', () => {
   assert.equal(describeOperationalCause(new SyntaxError('boom')), 'SyntaxError');
 });
 
+test('only the module-local protocol key is recognized, never a look-alike', () => {
+  // The protocol key is a module-local `Symbol`, so a value can only claim to be
+  // one of ours by importing it. A registered symbol with the same description,
+  // or a string key, is just another foreign field.
+  const lookAlike = (key: PropertyKey) => ({
+    [key]: () => ({ label: SENTINEL, cause: null }),
+  });
+  assert.equal(
+    describeOperationalCause(lookAlike(Symbol.for('isagi.describeSafely'))),
+    'UnknownError',
+  );
+  assert.equal(describeOperationalCause(lookAlike('isagi.describeSafely')), 'UnknownError');
+  assert.equal(describeOperationalCause(lookAlike(Symbol('isagi.describeSafely'))), 'UnknownError');
+});
+
 test('a schema decode failure is named but its message is never rendered', () => {
   // The proven value-echoing case: Effect Schema puts the offending input in its
   // message. The type is allowlisted by its Effect v4 name (`ParseError` in v3),
@@ -74,8 +108,8 @@ test('a schema decode failure is named but its message is never rendered', () =>
   assert.ok(failure instanceof Error);
   assert.equal(describeOperationalCause(failure), 'SchemaError');
   assert.equal(
-    describeOperationalCause(new DatabaseError({ operation: 'decode_ref', cause: failure })),
-    'Database operation decode_ref failed: SchemaError',
+    describeOperationalCause(new OperationFailed('decode_ref', failure)),
+    'Operation decode_ref failed: SchemaError',
   );
 });
 
@@ -84,9 +118,9 @@ test('the cause chain stops at the first foreign link', () => {
   // this codebase's authorship and cannot be vouched for.
   const nested = new Error('outer');
   (nested as { cause?: unknown }).cause = new Error(SENTINEL);
-  const rendered = describeOperationalCause(new PtyKillError({ cause: nested, ptyProcessId: 801 }));
+  const rendered = describeOperationalCause(new OperationFailed('kill', nested, 'kill', 801));
 
-  assert.equal(rendered, 'PTY kill error (ptyProcess=801): Error');
+  assert.equal(rendered, 'Operation kill failed (ptyProcess=801): Error');
   assert.ok(!rendered.includes(SENTINEL));
 });
 
@@ -150,7 +184,7 @@ test('a system error code renders inside a recognized cause chain', () => {
   const bindFailure = new Error('listen EACCES');
   (bindFailure as { code?: unknown }).code = 'EACCES';
   assert.equal(
-    describeOperationalCause(new PtyKillError({ cause: bindFailure, ptyProcessId: 801 })),
-    'PTY kill error (ptyProcess=801): System error EACCES',
+    describeOperationalCause(new OperationFailed('kill', bindFailure, 'kill', 801)),
+    'Operation kill failed (ptyProcess=801): System error EACCES',
   );
 });

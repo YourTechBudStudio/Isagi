@@ -9,16 +9,9 @@ import { glob } from 'tinyglobby';
 import type { WorktreeSetupResult } from '@isagi/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import { stripAnsi } from '../../platform/process/ansi.js';
-import type {
-  WorktreeHooksConfig,
-  WorktreePostCreateHook,
-} from '../../projects/config/config-schema.js';
-import {
-  WorktreeSetupRepository,
-  type CreateSetupStepInput,
-  type WorktreeSetupRepositoryService,
-} from './repository.js';
+import { stripAnsi } from '../../platform/process/index.js';
+import type { WorktreeHooksConfig, WorktreePostCreateHook } from '../../projects/index.js';
+import { WorktreeSetupRepository, type CreateSetupStepInput } from './repository.js';
 
 const maxOutputExcerptBytes = 32 * 1024;
 
@@ -50,7 +43,7 @@ export function runPostCreateSetup(input: {
 }): Effect.Effect<
   WorktreePostCreateSetupResult,
   WorktreeSetupRunnerError,
-  WorktreeSetupRepositoryService
+  WorktreeSetupRepository
 > {
   return Effect.gen(function* () {
     const repository = yield* WorktreeSetupRepository;

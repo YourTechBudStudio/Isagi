@@ -4,9 +4,6 @@ import type { FastifyInstance } from 'fastify';
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../app/layer.js';
-import { SurfaceService } from '../environment/index.js';
-import { toSurfaceApiError } from '../environment/surfaces/api.js';
-import { SurfaceError } from '../environment/surfaces/errors.js';
 import {
   registerApiEndpoint,
   type ApiRouteContext,
@@ -14,23 +11,20 @@ import {
 } from '../platform/http/index.js';
 import { DatabaseError } from '../platform/persistence/index.js';
 import {
-  EditorContextService,
   EditorDiagnosticsUnavailable,
   EditorError,
   EditorLaunchFailed,
+} from './contexts/errors.js';
+import { EditorContextService } from './contexts/service.js';
+import {
   EditorUnavailable,
-} from './contexts/index.js';
-import { EditorProvisioning, EditorProvisioningBusy } from './provisioning/index.js';
+  EditorProvisioning,
+  EditorProvisioningBusy,
+} from './provisioning/service.js';
 
-// The editor feature spans two domains — placement is a surfaces operation and
-// the runtime lifecycle is an editor one — so its HTTP routes live in a
-// composition module that depends on both and is depended on by neither.
-// `server.ts` is its only importer.
-//
-// Putting these routes inside either domain would close a module cycle:
-// `editor-contexts → api.ts → surfaces → editor-contexts`. Every `register*Api`
-// in this repository is already a leaf, so this is that convention applied where
-// a feature genuinely spans domains.
+// The editor runtime routes. Opening an editor is a placement, so `editor.open`
+// is registered by the environment's surface routes, which map its editor
+// failures through `editorApiError` below.
 
 export function registerEditorApi(
   fastify: FastifyInstance,
@@ -40,19 +34,6 @@ export function registerEditorApi(
     effect: Effect.Effect<A, unknown, RuntimeServices>,
     options?: { readonly signal?: AbortSignal | undefined },
   ) => runtime.runPromise(effect, options);
-
-  registerApiEndpoint(fastify, apiEndpoints.editor.open, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.openEditor({
-          worktreeId: params.worktreeId,
-          intoSurfaceId: input.intoSurfaceId,
-        });
-      }),
-    mapError: toEditorApiError,
-    run,
-  });
 
   registerApiEndpoint(fastify, apiEndpoints.editor.ensureRuntime, {
     handle: (input, _context, params) =>
@@ -64,7 +45,7 @@ export function registerEditorApi(
         });
         return { editorContext };
       }),
-    mapError: toEditorApiError,
+    mapError: editorApiError,
     run,
   });
 
@@ -77,7 +58,7 @@ export function registerEditorApi(
           ptyProcessId: query.ptyProcessId,
         });
       }),
-    mapError: toEditorApiError,
+    mapError: editorApiError,
     run,
   });
 
@@ -87,13 +68,15 @@ export function registerEditorApi(
         Effect.flatMap(EditorProvisioning, (provisioning) => provisioning.retry),
         (provisioning) => ({ provisioning }),
       ),
-    mapError: toEditorApiError,
+    mapError: editorApiError,
     run,
   });
 }
 
 /**
- * The editor error mapper, total over every failure the four routes can produce.
+ * The editor error mapper, total over every editor failure the editor routes and
+ * `editor.open` can produce. `editor.open` maps its surface failures first and
+ * delegates everything else here.
  *
  * Totality here is a runtime property, not a typing nicety: `sendRouteApiError`
  * validates every error whose code does not begin with `api_` against the
@@ -102,7 +85,7 @@ export function registerEditorApi(
  * happened. Each branch below has a member in `editorApiErrorSchema`, and the
  * union has no member this mapper cannot produce.
  */
-function toEditorApiError(error: unknown, context: ApiRouteContext): ApiError {
+export function editorApiError(error: unknown, context: ApiRouteContext): ApiError {
   if (error instanceof EditorUnavailable)
     return {
       code: 'editor_rejected',
@@ -157,26 +140,6 @@ function toEditorApiError(error: unknown, context: ApiRouteContext): ApiError {
       requestId: context.requestId,
       data: { detail: error.detail },
     };
-  if (error instanceof SurfaceError) {
-    // Translated rather than delegated, because the editor's own refusal
-    // vocabulary already names it and the palette reads one reason set. The
-    // target-surface refusals (`surface_not_found`, `surface_not_empty`) are
-    // surfaces conditions and delegate as such; the rest are unreachable from
-    // `openEditor` in practice, but the type channel carries them, so
-    // delegation keeps this mapper total.
-    if (error.code === 'worktree_not_found')
-      return {
-        code: 'editor_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: 'worktree_not_found',
-          ...(error.worktreeId === undefined ? {} : { worktreeId: error.worktreeId }),
-        },
-      };
-    return toSurfaceApiError(error, context);
-  }
   if (error instanceof DatabaseError)
     return {
       code: 'runtime_database_failed',

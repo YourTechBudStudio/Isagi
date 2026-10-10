@@ -2,7 +2,8 @@ import { and, asc, eq, gt, inArray, isNotNull, notInArray } from 'drizzle-orm';
 
 import type { WorkflowRunStatus } from '@isagi/contracts';
 
-import { projects, workflowArtifacts, workflowRuns } from '../../persistence/schema.js';
+import { projects } from '../../projects/tables.js';
+import { workflowArtifacts, workflowRuns } from '../tables.js';
 import { now, type ArtifactRow, type Db, type RunRow } from './rows.js';
 
 /** Runs and the artifact rows they point at. */

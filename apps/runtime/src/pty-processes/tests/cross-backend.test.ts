@@ -7,14 +7,14 @@ import test from 'node:test';
 import { Effect, Layer, Result } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
-import { InternalRuntimeEventBusLive } from '../../platform/events/index.js';
-import { DataDirectory, RuntimeDatabaseLive } from '../../platform/persistence/index.js';
+import { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell, type UserShellService } from '../../platform/process/user-shell.js';
+import { UserShell } from '../../platform/process/index.js';
 import { PtyBackendCatalog } from '../backend.js';
-import { PtyForegroundStateLive } from '../foreground-state.js';
-import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from '../repository.js';
-import { PtyService, PtyServiceLive } from '../service.js';
+import { PtyForegroundState } from '../foreground-state.js';
+import { PtyRepository } from '../repository.js';
+import { PtyService } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
 import {
   PtyServiceError,
@@ -27,7 +27,7 @@ import {
 // backend catalog every one of these operations failed `backend_unavailable`
 // purely because the row's backend differed from the launch preference.
 
-function testUserShell(): UserShellService {
+function testUserShell(): UserShell['Service'] {
   return {
     environment: {
       _tag: 'Available' as const,
@@ -60,21 +60,21 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
 
 function repositoryLayer(dataRoot: string) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  return Layer.mergeAll(database, PtyRepositoryLive.pipe(Layer.provide(database)));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  return Layer.mergeAll(database, PtyRepository.layer.pipe(Layer.provide(database)));
 }
 
 function serviceLayer(dataRoot: string, catalog: ReturnType<typeof fakeBackendCatalog>) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const repository = PtyRepositoryLive.pipe(Layer.provide(database));
-  const service = PtyServiceLive.pipe(
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  const repository = PtyRepository.layer.pipe(Layer.provide(database));
+  const service = PtyService.layer.pipe(
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(Layer.succeed(PtyBackendCatalog, catalog)),
-    Layer.provide(PtyForegroundStateLive),
+    Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
-    Layer.provide(InternalRuntimeEventBusLive),
+    Layer.provide(InternalRuntimeEventBus.layer),
     Layer.provide(Layer.succeed(UserShell, testUserShell())),
   );
   return Layer.mergeAll(database, repository, service);
@@ -111,7 +111,7 @@ function seedTmuxRow() {
 function withNodePtyConfigured<A, E>(
   dataRoot: string,
   tmux: PtyBackendShape,
-  body: (ptyProcessId: number) => Effect.Effect<A, E, PtyService | PtyRepositoryService>,
+  body: (ptyProcessId: number) => Effect.Effect<A, E, PtyService | PtyRepository>,
 ) {
   const catalog = fakeBackendCatalog({
     configured: 'node_pty',

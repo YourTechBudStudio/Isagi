@@ -1,10 +1,10 @@
 import { Effect, Layer, Result } from 'effect';
 
-import { HarnessLaunchBlocked } from '../../harnesses/control-plane/index.js';
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
-import { SurfaceRepository } from '../index.js';
-import type { PaneSessionBinding } from '../surfaces/types.js';
-import { TerminalSessionService } from '../terminal-sessions/index.js';
+import { HarnessLaunchBlocked } from '../../harnesses/index.js';
+import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
+import { SurfaceRepository } from '../surfaces/repository.js';
+import { TerminalSessionService } from '../terminal-sessions/service.js';
+import type { PaneSessionBinding } from './types.js';
 
 type RestoreOutcome =
   | { readonly kind: 'reused'; readonly binding: PaneSessionBinding; readonly ptyProcessId: number }
@@ -16,38 +16,60 @@ type RestoreOutcome =
   | { readonly kind: 'skipped_unrecoverable'; readonly binding: PaneSessionBinding }
   | { readonly kind: 'failed'; readonly binding: PaneSessionBinding };
 
-const restoreStartupSessionsEffect = Effect.gen(function* () {
+interface RestoreDependencies {
+  readonly repository: Pick<SurfaceRepository['Service'], 'listPaneSessionBindings'>;
+  readonly agentSessions: AgentSessionService['Service'];
+  readonly terminalSessions: TerminalSessionService['Service'];
+}
+
+/**
+ * Startup: relaunches (or reuses) the PTY process of every pane-bound agent and terminal session,
+ * each in isolation, and logs a summary. Never fails: a binding that cannot be restored is logged
+ * and left for the user, and a failed binding discovery skips the restore. Exposed as
+ * `SurfaceService.restorePaneBoundSessions`.
+ */
+export function restorePaneBoundSessions(deps: RestoreDependencies): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const bindings = yield* deps.repository.listPaneSessionBindings;
+
+    // Deliberately unbounded: boot restores the small set of sessions the user
+    // already had pane-bound before runtime restart.
+    const outcomes = yield* Effect.forEach(bindings, (binding) => restoreBinding(deps, binding), {
+      concurrency: 'unbounded',
+    });
+
+    const summary = summarize(outcomes);
+    console.info('[runtime][startup-restore] Completed pane-bound session restore', summary);
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.sync(() => {
+        console.warn('[runtime][startup-restore] Skipped: binding discovery failed', {
+          errorTag: errorTag(error),
+          errorCode: errorCode(error),
+          message: errorMessage(error),
+        });
+      }),
+    ),
+  );
+}
+
+/**
+ * `restorePaneBoundSessions` over the services in context. The composition root runs it through
+ * `SurfaceService`; this layer form remains for the restore suites until composition is
+ * self-wired.
+ */
+export const restoreStartupSessions = Effect.gen(function* () {
   const repository = yield* SurfaceRepository;
-  const bindings = yield* repository.listPaneSessionBindings;
-
-  // Deliberately unbounded: boot restores the small set of sessions the user
-  // already had pane-bound before runtime restart.
-  const outcomes = yield* Effect.forEach(bindings, restoreBinding, {
-    concurrency: 'unbounded',
-  });
-
-  const summary = summarize(outcomes);
-  console.info('[runtime][startup-restore] Completed pane-bound session restore', summary);
+  const agentSessions = yield* AgentSessionService;
+  const terminalSessions = yield* TerminalSessionService;
+  yield* restorePaneBoundSessions({ repository, agentSessions, terminalSessions });
 });
-
-export const restoreStartupSessions = restoreStartupSessionsEffect.pipe(
-  Effect.catch((error) =>
-    Effect.sync(() => {
-      console.warn('[runtime][startup-restore] Skipped: binding discovery failed', {
-        errorTag: errorTag(error),
-        errorCode: errorCode(error),
-        message: errorMessage(error),
-      });
-    }),
-  ),
-);
 
 export const StartupSessionRestoreLayer = Layer.effectDiscard(restoreStartupSessions);
 
-function restoreBinding(binding: PaneSessionBinding) {
+function restoreBinding(deps: RestoreDependencies, binding: PaneSessionBinding) {
   return Effect.gen(function* () {
-    const agentSessions = yield* AgentSessionService;
-    const terminalSessions = yield* TerminalSessionService;
+    const { agentSessions, terminalSessions } = deps;
     return yield* restoreWithIsolation(
       binding,
       binding.sessionKind === 'agent_session'

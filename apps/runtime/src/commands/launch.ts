@@ -7,15 +7,11 @@ import { Effect, Result } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/contracts';
 
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
+import type { LoopbackPortProbe } from '../platform/net/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
-import type { WorktreeCommandConfig } from '../projects/config/config-schema.js';
-import type {
-  PtyProcessAllocation,
-  PtyRepositoryService,
-  PtyServiceShape,
-} from '../pty-processes/index.js';
-import type { WorkspaceRepositoryService } from '../workspace/index.js';
-import { describeCommandCause } from './diagnostics.js';
+import type { WorktreeCommandConfig, ProjectRepository } from '../projects/index.js';
+import type { PtyProcessAllocation, PtyService } from '../pty-processes/index.js';
 import { parseDotenv } from './dotenv.js';
 import {
   terminalCommandOutcomeForPtyRow,
@@ -24,8 +20,8 @@ import {
   type TerminalCommandOutcome,
   type TerminalRunStatus,
 } from './outcomes.js';
-import { portEnvInjections, resolveCommandPorts, type CommandPortProbeService } from './ports.js';
-import type { CommandFinalizeResult, CommandRepositoryService } from './repository.js';
+import { portEnvInjections, resolveCommandPorts } from './ports.js';
+import type { CommandFinalizeResult, CommandRepository } from './repository.js';
 import { actionOutput, resolveConfiguredCommand, type CommandTarget } from './targets.js';
 
 // Keep only the newest run per command. Each retained run pins a PTY row + log
@@ -33,14 +29,13 @@ import { actionOutput, resolveConfiguredCommand, type CommandTarget } from './ta
 const latestCommandRunsToRetain = 1;
 
 export interface CommandLauncherDependencies {
-  readonly workspaceRepository: WorkspaceRepositoryService;
-  readonly commandRepository: CommandRepositoryService;
-  readonly ptyRepository: PtyRepositoryService;
-  readonly pty: PtyServiceShape;
+  readonly projectRepository: ProjectRepository['Service'];
+  readonly commandRepository: CommandRepository['Service'];
+  readonly pty: PtyService['Service'];
   // The loopback probe the endpoint resolution stage runs on. Injected rather
   // than imported so lifecycle tests can prove a launch either did or did not
   // perform socket IO.
-  readonly portProbe: CommandPortProbeService;
+  readonly portProbe: LoopbackPortProbe['Service'];
   readonly publishCommandChanged: (
     worktreeId: number,
     commandName: string,
@@ -67,9 +62,8 @@ export interface CommandLauncherDependencies {
 // commandName) being launched.
 export function makeCommandLauncher(deps: CommandLauncherDependencies) {
   const {
-    workspaceRepository,
+    projectRepository,
     commandRepository,
-    ptyRepository,
     pty,
     portProbe,
     publishCommandChanged,
@@ -87,7 +81,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
   // run or hands it to a named recovery; none may leave it silently `running`.
   const runCommand = (input: { readonly worktreeId: number; readonly commandName: string }) =>
     Effect.gen(function* () {
-      const target = yield* resolveConfiguredCommand(workspaceRepository, input);
+      const target = yield* resolveConfiguredCommand(projectRepository, input);
       const current = yield* commandRepository.findState(input);
       if (current?.status === 'running') {
         return actionOutput(
@@ -201,7 +195,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             console.warn(
               `[runtime] Command launch could not record its failure diagnostic worktree=${worktreeId} command=${commandName} cause=${
                 Result.isFailure(completed)
-                  ? describeCommandCause(completed.failure)
+                  ? describeOperationalCause(completed.failure)
                   : 'run row missing'
               }`,
             );
@@ -227,7 +221,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         // would abandon a possibly-live incarnation under a null pointer.
         // Both a nonterminal row and a failed read therefore fall through to
         // ownership.
-        const row = yield* ptyRepository.findProcess(allocation.ptyProcessId).pipe(Effect.result);
+        const row = yield* pty.findProcess(allocation.ptyProcessId).pipe(Effect.result);
         const terminal = Result.isSuccess(row) ? terminalPtyFactsForRow(row.success) : null;
         if (terminal) {
           yield* converge(terminalCommandOutcomeForPtyRow(terminal, 'launch'));
@@ -249,7 +243,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         Effect.catch((error) =>
           Effect.sync(() => {
             console.warn(
-              `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName} cause=${describeCommandCause(error)}`,
+              `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName} cause=${describeOperationalCause(error)}`,
             );
           }),
         ),
@@ -263,7 +257,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         if (Result.isFailure(pruned)) {
           return yield* convergeBeforeMarker(
             pruned.failure,
-            `Could not prepare the launch: ${describeCommandCause(pruned.failure)}`,
+            `Could not prepare the launch: ${describeOperationalCause(pruned.failure)}`,
           );
         }
 
@@ -283,7 +277,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         if (Result.isFailure(marker)) {
           return yield* convergeBeforeMarker(
             marker.failure,
-            `Could not record the launch: ${describeCommandCause(marker.failure)}`,
+            `Could not record the launch: ${describeOperationalCause(marker.failure)}`,
           );
         }
 
@@ -304,7 +298,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               (candidate) => candidate.abandon,
             ).pipe(Effect.result);
             if (Result.isFailure(acquired)) {
-              yield* converge(launchFailure(describeCommandCause(acquired.failure)));
+              yield* converge(launchFailure(describeOperationalCause(acquired.failure)));
               return actionOutput(target.command, 'failed', worktreeId, null);
             }
             const acquiredAllocation = acquired.success;
@@ -318,7 +312,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               yield* acquiredAllocation.abandon;
               const converged = yield* converge(
                 launchFailure(
-                  `Could not record the process association; the command was not started: ${describeCommandCause(link.failure)}`,
+                  `Could not record the process association; the command was not started: ${describeOperationalCause(link.failure)}`,
                 ),
               ).pipe(Effect.result);
               // Only when the convergence write also fails does the original
@@ -349,7 +343,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             // end the command here. An unreadable row leaves ownership to be
             // installed below, where the poller and the incarnation's own
             // event can still converge it.
-            const startedRow = yield* ptyRepository
+            const startedRow = yield* pty
               .findProcess(acquiredAllocation.ptyProcessId)
               .pipe(Effect.result);
             const terminal = Result.isSuccess(startedRow)
@@ -441,7 +435,7 @@ function directoryExists(path: string) {
 }
 
 function pruneCommandRunHistory(
-  commandRepository: CommandRepositoryService,
+  commandRepository: CommandRepository['Service'],
   input: { readonly worktreeId: number; readonly commandName: string },
 ) {
   return commandRepository

@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { EditorInstallIo, EditorInstallIoLive } from '../install-io.js';
+import { EditorInstallIo } from '../install-io.js';
 
 /**
  * The settings Isagi seeds into a Code Server user-data directory the first
@@ -18,7 +18,7 @@ function prepare(editorsPath: string) {
     Effect.gen(function* () {
       const io = yield* EditorInstallIo;
       return yield* io.prepareEditorState({ editorsPath });
-    }).pipe(Effect.provide(EditorInstallIoLive)),
+    }).pipe(Effect.provide(EditorInstallIo.layer)),
   );
 }
 

@@ -10,13 +10,9 @@ import {
   publishOnlyRecordingEventBus,
   type RecordingEventBus,
 } from '../../platform/events/testing.js';
-import {
-  DatabaseError,
-  DataDirectory,
-  RuntimeDatabaseLive,
-} from '../../platform/persistence/index.js';
+import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from '../repository.js';
+import { PtyRepository } from '../repository.js';
 import { reconcilePersistedProcesses } from '../service.js';
 import type { ActiveAttachment } from '../service/attachments.js';
 import { handleExit, type PtyTerminations } from '../service/lifecycle.js';
@@ -59,7 +55,7 @@ function catalogWith(nodePty: PtyBackendShape) {
 }
 
 interface Harness {
-  readonly repository: PtyRepositoryService;
+  readonly repository: PtyRepository['Service'];
   readonly bus: RecordingEventBus;
   readonly terminations: PtyTerminations;
   readonly retry: ReturnType<typeof manualPtyRetryScheduler>;
@@ -72,7 +68,7 @@ interface Harness {
 function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never>) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-termination-'));
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -91,7 +87,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
           activeAttachments: new Map(),
           ptyProcessId,
         });
-      }).pipe(Effect.provide(PtyRepositoryLive.pipe(Layer.provide(database)))),
+      }).pipe(Effect.provide(PtyRepository.layer.pipe(Layer.provide(database)))),
     ),
   ).finally(() => {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -101,7 +97,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
 function terminate(
   harness: Harness,
   backend: PtyBackendShape,
-  repository: PtyRepositoryService = harness.repository,
+  repository: PtyRepository['Service'] = harness.repository,
 ) {
   return terminatePtyProcess({
     repository,
@@ -269,7 +265,7 @@ test('a kill that fails with no exit writes nothing and surfaces the failure', a
 function repositoryFailingWrites(
   harness: Harness,
   failures: number,
-): { readonly repository: PtyRepositoryService; readonly attempts: () => number } {
+): { readonly repository: PtyRepository['Service']; readonly attempts: () => number } {
   let remaining = failures;
   let attempts = 0;
   return {

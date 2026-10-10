@@ -6,10 +6,7 @@ import Fastify from 'fastify';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { registerAgentSessionsApi } from './api.js';
-import {
-  AgentSessionAttentionProjection,
-  type AgentSessionAttentionProjectionService,
-} from './attention.js';
+import { AgentSessionAttentionProjection } from './attention.js';
 
 function service(workingAgentCount: Effect.Effect<number, DatabaseError>) {
   return {
@@ -17,7 +14,7 @@ function service(workingAgentCount: Effect.Effect<number, DatabaseError>) {
     terminalSessionAttention: () => 'idle' as const,
     listAttentionSources: Effect.succeed([]),
     workingAgentCount,
-  } satisfies AgentSessionAttentionProjectionService;
+  } satisfies AgentSessionAttentionProjection['Service'];
 }
 
 test('agent session activity returns the schema-backed working count', async () => {

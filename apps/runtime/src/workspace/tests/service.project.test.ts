@@ -7,16 +7,19 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService, SurfaceRepository } from '../../environment/index.js';
+import { SurfaceService } from '../../environment/index.js';
 import { InternalRuntimeEventBus } from '../../platform/events/index.js';
-import { Git, type GitService } from '../../platform/git/index.js';
-import { DataDirectory, StateFile } from '../../platform/persistence/index.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
-import type { ProjectRow } from '../../projects/types.js';
+import { Git } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { ProjectRow } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../service.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   git,
   project,
@@ -26,7 +29,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  testWorktreeDeleteDiagnostics,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -46,20 +49,20 @@ test('project deletion does not touch frontend-owned active context persistence'
         deleteCalls += 1;
         return projectId === project.id;
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
 
   const output = await Effect.runPromise(
     Effect.gen(function* () {
       const workspace = yield* WorkspaceService;
       return yield* workspace.deleteProject(project.id);
     }).pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layer),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
@@ -84,7 +87,7 @@ test('project relocation rejects projects that are not missing before touching g
         gitCalls += 1;
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   const error = await Effect.runPromise(
     Effect.flip(
@@ -92,13 +95,13 @@ test('project relocation rejects projects that are not missing before touching g
         const workspace = yield* WorkspaceService;
         return yield* workspace.relocateProject({ projectId: project.id, path: '/repo/elsewhere' });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, quietGit),
@@ -135,7 +138,7 @@ test('project relocation restores the same project id and reconciles discovered 
         restoredRootPath = input.rootPath;
         return { added: [{ id: worktree.id, path: input.rootPath, branch: 'main' }], missing: [] };
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const stateFile = stateFileWithWriteCounter(() => {});
   const relocationGit = {
     run: (args: readonly string[]) =>
@@ -158,7 +161,7 @@ test('project relocation restores the same project id and reconciles discovered 
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   try {
     const output = await Effect.runPromise(
@@ -166,13 +169,13 @@ test('project relocation restores the same project id and reconciles discovered 
         const workspace = yield* WorkspaceService;
         return yield* workspace.relocateProject({ projectId: project.id, path: projectRoot });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, relocationGit),
@@ -225,7 +228,7 @@ test('registering a new project reconciles the created row without a follow-up l
         reconciledProjectId = input.projectId;
         return { added: [], missing: [] };
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const registrationGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -247,7 +250,7 @@ test('registering a new project reconciles the created row without a follow-up l
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   try {
     const output = await Effect.runPromise(
@@ -255,13 +258,13 @@ test('registering a new project reconciles the created row without a follow-up l
         const workspace = yield* WorkspaceService;
         return yield* workspace.registerProject({ path: projectRoot });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(
           StateFile,

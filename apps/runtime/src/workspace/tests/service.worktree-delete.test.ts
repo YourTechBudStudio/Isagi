@@ -3,16 +3,20 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CommandError, CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { SurfaceService, SurfaceRepository } from '../../environment/index.js';
+import { CommandError, CommandService } from '../../commands/index.js';
+import { SurfaceService } from '../../environment/index.js';
 import { InternalRuntimeEventBus } from '../../platform/events/index.js';
-import { Git, GitCommandError, type GitService } from '../../platform/git/index.js';
-import { DataDirectory, StateFile } from '../../platform/persistence/index.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
-import { PtyService, PtyServiceError, type PtyServiceShape } from '../../pty-processes/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../service.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
+import { Git, GitCommandError } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { PtyService, PtyServiceError } from '../../pty-processes/index.js';
+import { fakeTerminateMany } from '../../pty-processes/testing.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   deleteFixtures,
   recordingInternalEvents,
@@ -22,7 +26,9 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  surfaceServiceWith,
+  testWorktreeDeleteDiagnostics,
+  worktreeDeleteDiagnosticsWith,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -42,7 +48,7 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
         deleteCalls += 1;
         return true;
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const dirtyGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -52,7 +58,7 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   const error = await Effect.runPromise(
     Effect.flip(
@@ -64,13 +70,13 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(
           StateFile,
@@ -97,6 +103,18 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
 test('delete worktree force removes checkout before deleting DB row and returns root selection', async () => {
   const fixtures = deleteFixtures();
   const events: string[] = [];
+  const diagnostics = worktreeDeleteDiagnosticsWith({
+    agentSessionCount: 1,
+    agentSessionActivePtyProcessIds: [21],
+    commandRunCount: 0,
+    commandRunPtyProcessIds: [],
+    commandStateCount: 0,
+    commandStateActivePtyProcessIds: [],
+    paneCount: 2,
+    surfaceCount: 1,
+    terminalSessionCount: 1,
+    terminalSessionActivePtyProcessIds: [22],
+  });
   const repository = {
     ...repositoryWithWorktrees({
       project: fixtures.project,
@@ -107,20 +125,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         events.push(`db:${worktreeId}`);
         return true;
       }),
-    readWorktreeDeleteDiagnostics: () =>
-      Effect.succeed({
-        agentSessionCount: 1,
-        agentSessionActivePtyProcessIds: [21],
-        commandRunCount: 0,
-        commandRunPtyProcessIds: [],
-        commandStateCount: 0,
-        commandStateActivePtyProcessIds: [],
-        paneCount: 2,
-        surfaceCount: 1,
-        terminalSessionCount: 1,
-        terminalSessionActivePtyProcessIds: [22],
-      }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const deleteGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -130,22 +135,27 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         events.push(`git:${args.join(' ')}`);
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const commandService = {
     ...testCommandService,
     cleanupBeforeWorktreeDelete: (input: { readonly worktreeId: number }) =>
       Effect.sync(() => {
         events.push(`commands:${input.worktreeId}`);
       }),
-  } satisfies CommandServiceShape;
+  } satisfies CommandService['Service'];
+  const terminate = (input: {
+    readonly ptyProcessId: number;
+    readonly gracefulTimeoutMs: number;
+  }) =>
+    Effect.sync(() => {
+      events.push(`pty:${input.ptyProcessId}:${input.gracefulTimeoutMs}`);
+      return 'terminated_live' as const;
+    });
   const ptyService = {
     ...testPtyService,
-    terminate: (input: { readonly ptyProcessId: number; readonly gracefulTimeoutMs: number }) =>
-      Effect.sync(() => {
-        events.push(`pty:${input.ptyProcessId}:${input.gracefulTimeoutMs}`);
-        return 'terminated_live' as const;
-      }),
-  } satisfies PtyServiceShape;
+    terminate,
+    terminateMany: fakeTerminateMany(terminate),
+  } satisfies PtyService['Service'];
 
   const output = await Effect.runPromise(
     Effect.gen(function* () {
@@ -156,13 +166,13 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         request: { checkoutRemovalMode: 'force', branchRemovalMode: 'preserve' },
       });
     }).pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layer),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, commandService),
       Effect.provideService(PtyService, ptyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(
         StateFile,
@@ -199,28 +209,30 @@ test('delete worktree announces every durable session it cascaded away', async (
     { kind: 'agent_session' as const, sessionId: 41, worktreeId: fixtures.targetWorktree.id },
     { kind: 'terminal_session' as const, sessionId: 42, worktreeId: fixtures.targetWorktree.id },
   ];
+  const surfaces = surfaceServiceWith({
+    durableSessions: [
+      ...doomed,
+      // A session in a worktree that survives must never be announced as deleted.
+      { kind: 'agent_session' as const, sessionId: 43, worktreeId: fixtures.rootWorktree.id },
+    ],
+  });
   const repository = {
     ...repositoryWithWorktrees({
       project: fixtures.project,
       worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
-      durableSessions: [
-        ...doomed,
-        // A session in a worktree that survives must never be announced as deleted.
-        { kind: 'agent_session' as const, sessionId: 43, worktreeId: fixtures.rootWorktree.id },
-      ],
     }),
     deleteWorktree: () =>
       Effect.sync(() => {
         order.push('db_delete');
         return true;
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const deleteGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() =>
         args.includes('status') ? { stdout: '', stderr: '' } : { stdout: '', stderr: '' },
       ),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -231,8 +243,8 @@ test('delete worktree announces every durable session it cascaded away', async (
         request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
       });
     }).pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layer),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, {
@@ -242,9 +254,9 @@ test('delete worktree announces every durable session it cascaded away', async (
             order.push(`publish:${event.type}`);
           }).pipe(Effect.andThen(bus.service.publish(event))),
       }),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
-      Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
+      Effect.provideService(SurfaceService, surfaces),
       Effect.provideService(
         StateFile,
         stateFileWithWriteCounter(() => {}),
@@ -281,6 +293,18 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
   const fixtures = deleteFixtures();
   const events: string[] = [];
   let dbDeleteCalls = 0;
+  const diagnostics = worktreeDeleteDiagnosticsWith({
+    agentSessionCount: 1,
+    agentSessionActivePtyProcessIds: [21],
+    commandRunCount: 0,
+    commandRunPtyProcessIds: [],
+    commandStateCount: 0,
+    commandStateActivePtyProcessIds: [],
+    paneCount: 1,
+    surfaceCount: 1,
+    terminalSessionCount: 1,
+    terminalSessionActivePtyProcessIds: [22],
+  });
   const repository = {
     ...repositoryWithWorktrees({
       project: fixtures.project,
@@ -292,20 +316,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
         events.push('db');
         return true;
       }),
-    readWorktreeDeleteDiagnostics: () =>
-      Effect.succeed({
-        agentSessionCount: 1,
-        agentSessionActivePtyProcessIds: [21],
-        commandRunCount: 0,
-        commandRunPtyProcessIds: [],
-        commandStateCount: 0,
-        commandStateActivePtyProcessIds: [],
-        paneCount: 1,
-        surfaceCount: 1,
-        terminalSessionCount: 1,
-        terminalSessionActivePtyProcessIds: [22],
-      }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const deleteGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -315,31 +326,36 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
         events.push(`git:${args.join(' ')}`);
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const commandService = {
     ...testCommandService,
     cleanupBeforeWorktreeDelete: () =>
       Effect.sync(() => {
         events.push('commands');
       }),
-  } satisfies CommandServiceShape;
+  } satisfies CommandService['Service'];
+  const terminate = (input: {
+    readonly ptyProcessId: number;
+    readonly gracefulTimeoutMs: number;
+  }) =>
+    Effect.gen(function* () {
+      events.push(`pty:${input.ptyProcessId}`);
+      if (input.ptyProcessId === 21) {
+        return yield* Effect.fail(
+          new PtyServiceError({
+            code: 'backend_unavailable',
+            message: 'PTY backend is unavailable.',
+            ptyProcessId: input.ptyProcessId,
+          }),
+        );
+      }
+      return 'terminated_live' as const;
+    });
   const ptyService = {
     ...testPtyService,
-    terminate: (input: { readonly ptyProcessId: number; readonly gracefulTimeoutMs: number }) =>
-      Effect.gen(function* () {
-        events.push(`pty:${input.ptyProcessId}`);
-        if (input.ptyProcessId === 21) {
-          return yield* Effect.fail(
-            new PtyServiceError({
-              code: 'backend_unavailable',
-              message: 'PTY backend is unavailable.',
-              ptyProcessId: input.ptyProcessId,
-            }),
-          );
-        }
-        return 'terminated_live' as const;
-      }),
-  } satisfies PtyServiceShape;
+    terminate,
+    terminateMany: fakeTerminateMany(terminate),
+  } satisfies PtyService['Service'];
 
   const error = await Effect.runPromise(
     Effect.flip(
@@ -351,13 +367,13 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, ptyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(
           StateFile,
@@ -401,7 +417,7 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
         events.push('db');
         return true;
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const deleteGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -409,7 +425,7 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
         events.push(`git:${args.join(' ')}`);
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const commandService = {
     ...testCommandService,
     cleanupBeforeWorktreeDelete: () =>
@@ -423,7 +439,7 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
           }),
         );
       }),
-  } satisfies CommandServiceShape;
+  } satisfies CommandService['Service'];
 
   const error = await Effect.runPromise(
     Effect.flip(
@@ -435,13 +451,13 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(
           StateFile,
@@ -487,7 +503,7 @@ test('delete worktree reports safe branch deletion failure as partial success', 
       }
       return Effect.succeed({ stdout: '', stderr: '' });
     },
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   const output = await Effect.runPromise(
     Effect.gen(function* () {
@@ -498,13 +514,13 @@ test('delete worktree reports safe branch deletion failure as partial success', 
         request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'delete_if_safe' },
       });
     }).pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layer),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(
         StateFile,
@@ -533,7 +549,7 @@ test('delete worktree rejects before destructive work when root fallback is miss
   });
   const quietGit = {
     run: () => Effect.succeed({ stdout: '', stderr: '' }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   const error = await Effect.runPromise(
     Effect.flip(
@@ -545,13 +561,13 @@ test('delete worktree rejects before destructive work when root fallback is miss
           request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layer),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(
           StateFile,

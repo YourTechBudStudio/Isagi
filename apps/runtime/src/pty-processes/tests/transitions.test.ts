@@ -10,9 +10,9 @@ import {
   publishOnlyRecordingEventBus,
   type RecordingEventBus,
 } from '../../platform/events/testing.js';
-import { DataDirectory, RuntimeDatabaseLive } from '../../platform/persistence/index.js';
+import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from '../repository.js';
+import { PtyRepository } from '../repository.js';
 import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from '../service/events.js';
 
 // A PTY row dies exactly once. These tests pin the two halves of that guarantee:
@@ -22,12 +22,12 @@ import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from '..
 
 function repositoryLayer(dataRoot: string) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  return PtyRepositoryLive.pipe(Layer.provide(database));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
+  return PtyRepository.layer.pipe(Layer.provide(database));
 }
 
 function withRepository<A, E>(
-  body: (bus: RecordingEventBus) => Effect.Effect<A, E, PtyRepositoryService>,
+  body: (bus: RecordingEventBus) => Effect.Effect<A, E, PtyRepository>,
 ) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-transitions-'));
   const bus = publishOnlyRecordingEventBus('transition tests do not subscribe');

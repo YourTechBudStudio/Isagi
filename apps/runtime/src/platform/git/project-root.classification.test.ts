@@ -5,7 +5,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { Cause, Effect, Exit, Layer, Option } from 'effect';
 
-import { Git, GitLive } from './command.js';
+import { Git } from './command.js';
 import {
   classifyProjectRoot,
   normalizeExistingDirectory,
@@ -46,7 +46,7 @@ const refuseToRunGit = Layer.succeed(Git, {
 
 async function classify(path: string) {
   const root = await Effect.runPromise(normalizeExistingDirectory(path));
-  return Effect.runPromiseExit(classifyProjectRoot(root).pipe(Effect.provide(GitLive)));
+  return Effect.runPromiseExit(classifyProjectRoot(root).pipe(Effect.provide(Git.layer)));
 }
 
 async function expectKind(path: string, kind: ProjectRootClassification['kind']) {
@@ -227,7 +227,7 @@ describe('validateProjectRoot stays Git-only', () => {
   test('an ordinary folder is refused as not a Git repository', async () => {
     const path = workspace.directory('wrapper-ordinary');
     const exit = await Effect.runPromiseExit(
-      validateProjectRoot(path).pipe(Effect.provide(GitLive)),
+      validateProjectRoot(path).pipe(Effect.provide(Git.layer)),
     );
     assert.equal(typedFailure(exit).code, 'not_git_repository');
   });
@@ -235,7 +235,7 @@ describe('validateProjectRoot stays Git-only', () => {
   test('a Git root passes through with its canonical path and name', async () => {
     const path = workspace.directory('wrapper-repository');
     workspace.git(path, ['init']);
-    const root = await Effect.runPromise(validateProjectRoot(path).pipe(Effect.provide(GitLive)));
+    const root = await Effect.runPromise(validateProjectRoot(path).pipe(Effect.provide(Git.layer)));
     assert.deepEqual(root, { rootPath: path, name: 'wrapper-repository' });
   });
 });

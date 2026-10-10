@@ -14,10 +14,7 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
-import {
-  HarnessLedgerObserver,
-  HarnessObserverRefreshError,
-} from '../../../harnesses/observer.service.js';
+import { HarnessLedgerObserver, HarnessObserverRefreshError } from '../../../harnesses/index.js';
 import { seedActiveAgentSession, testLayer } from './test-support.js';
 
 test('explicit turn refresh tails native events without waiting for the background poll', async () => {

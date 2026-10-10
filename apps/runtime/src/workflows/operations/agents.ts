@@ -4,17 +4,15 @@ import { Effect } from 'effect';
 
 import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 
-import type { AgentSessionService as AgentSessionServiceShape } from '../../environment/agent-sessions/index.js';
-import type { SurfaceServiceShape } from '../../environment/index.js';
-import { getConversationHistory as readConversationHistory } from '../../harnesses/conversation.js';
-import type { HarnessConversationTurn } from '../../harnesses/definition-types.js';
-import type { AgentSessionArtifactsService } from '../../harnesses/ledger.js';
+import type { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import {
+  getConversationHistory as readConversationHistory,
   HarnessLedgerObserver,
-  type HarnessLedgerObserverService,
-} from '../../harnesses/observer.service.js';
-import { diagnosticPhase } from '../../platform/diagnostics/phase.js';
-import type { PtyServiceShape } from '../../pty-processes/index.js';
+  type AgentSessionArtifacts,
+} from '../../harnesses/index.js';
+import type { HarnessConversationTurn } from '../../harnesses/index.js';
+import { diagnosticPhase } from '../../platform/diagnostics/index.js';
+import type { PtyService } from '../../pty-processes/index.js';
 import type { AgentPort } from '../engine/runtime.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import { hasInFlightTurn } from '../waits/latest-turn.js';
@@ -28,11 +26,11 @@ import { hasInFlightTurn } from '../waits/latest-turn.js';
  */
 
 export interface AgentDeps {
-  readonly agents: AgentSessionServiceShape;
-  readonly surfaces: SurfaceServiceShape;
-  readonly pty: PtyServiceShape;
-  readonly artifacts: AgentSessionArtifactsService;
-  readonly observer: HarnessLedgerObserverService;
+  readonly agents: AgentSessionService['Service'];
+  readonly surfaces: SurfaceService['Service'];
+  readonly pty: PtyService['Service'];
+  readonly artifacts: AgentSessionArtifacts['Service'];
+  readonly observer: HarnessLedgerObserver['Service'];
 }
 
 export const spawnTimeoutMs = 10_000;
@@ -318,7 +316,7 @@ function lastLeafPaneId(layout: SurfaceLayoutNode): number {
   return lastLeafPaneId(last);
 }
 
-function writePromptToPty(pty: PtyServiceShape, ptyProcessId: number, text: string) {
+function writePromptToPty(pty: PtyService['Service'], ptyProcessId: number, text: string) {
   return Effect.gen(function* () {
     const normalized = text.replace(/\r\n/g, '\n');
     yield* pty.writeInput({ ptyProcessId, data: `\x1b[200~${normalized}\x1b[201~` });
@@ -327,12 +325,12 @@ function writePromptToPty(pty: PtyServiceShape, ptyProcessId: number, text: stri
   });
 }
 
-function isTurnInFlight(observer: HarnessLedgerObserverService, agentSessionId: number) {
+function isTurnInFlight(observer: HarnessLedgerObserver['Service'], agentSessionId: number) {
   return Effect.map(observer.getTurnEdges(agentSessionId), hasInFlightTurn);
 }
 
 function waitForObserverInitialization(
-  observer: HarnessLedgerObserverService,
+  observer: HarnessLedgerObserver['Service'],
   agentSessionId: number,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
@@ -343,7 +341,7 @@ function waitForObserverInitialization(
 }
 
 function waitForPtyStartupOutput(
-  pty: PtyServiceShape,
+  pty: PtyService['Service'],
   ptyProcessId: number,
 ): Effect.Effect<void, unknown> {
   return Effect.gen(function* () {
@@ -363,7 +361,7 @@ function waitForPtyStartupOutput(
   });
 }
 
-function harnessSessionIdOf(artifacts: AgentSessionArtifactsService, agentSessionId: number) {
+function harnessSessionIdOf(artifacts: AgentSessionArtifacts['Service'], agentSessionId: number) {
   return artifacts
     .readMetadata(agentSessionId)
     .pipe(

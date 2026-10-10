@@ -41,7 +41,7 @@ export class EditorInstallIoError extends Data.TaggedError('EditorInstallIoError
    * Bounded stderr from a tool this runtime invoked with arguments this runtime
    * authored. It is surfaced to the user in a provisioning diagnostic, the same
    * way `git` stderr already reaches the workspace API — a different trust class
-   * from the foreign error internals `diagnostics/operational-cause.ts` refuses
+   * from the foreign error internals `platform/diagnostics/operational-cause.ts` refuses
    * to render.
    */
   readonly output: string | null;
@@ -53,47 +53,6 @@ export interface EditorSharedStatePaths {
   readonly extensionsPath: string;
   readonly sessionSocketDirectory: string;
   readonly configPath: string;
-}
-
-export interface EditorInstallIoService {
-  /**
-   * Streams `url` to `destination`, hashing as it goes, and returns the
-   * lowercase hex sha-256 of what was actually written.
-   *
-   * Hashing the bytes on their way to disk rather than re-reading the file
-   * afterwards is what makes the digest a statement about the artifact that was
-   * installed, not about a file that happened to be at that path later.
-   *
-   * Cancellation is Effect interruption: the attempt deadline interrupts the
-   * fiber, which aborts the request. There is deliberately no second
-   * caller-supplied `AbortSignal` — one deadline, one cancellation mechanism.
-   */
-  readonly downloadTo: (input: {
-    readonly url: string;
-    readonly destination: string;
-  }) => Effect.Effect<{ readonly sha256: string }, EditorInstallIoError>;
-  /** `tar -xzf <archive> -C <into> --strip-components <n>`, the system-`tar`
-   *  precedent already set by `git/git.command.ts` and `pty-processes/adapters/tmux.ts`. */
-  readonly extractTarGz: (input: {
-    readonly archive: string;
-    readonly into: string;
-    readonly stripComponents: number;
-  }) => Effect.Effect<void, EditorInstallIoError>;
-  /** `access(path, X_OK)` — proves the extracted tree is usable *before* a
-   *  receipt claims it is. */
-  readonly assertExecutable: (path: string) => Effect.Effect<void, EditorInstallIoError>;
-  /**
-   * Creates the shared editor-state directories and writes `config.yaml` if it
-   * is absent.
-   *
-   * It belongs to provisioning rather than to launch because "the editor is
-   * ready to launch" should be one fact with one owner. A missing extensions
-   * directory discovered at launch time would surface as a mysterious editor
-   * failure; discovered here it is an honest `install_unusable`.
-   */
-  readonly prepareEditorState: (input: {
-    readonly editorsPath: string;
-  }) => Effect.Effect<EditorSharedStatePaths, EditorInstallIoError>;
 }
 
 /**
@@ -119,8 +78,6 @@ export interface EditorInstallIoService {
 export function runtimeSessionSocketDirectory(): string {
   return join(tmpdir(), `isagi-editor-${randomBytes(6).toString('hex')}`);
 }
-
-export const EditorInstallIo = Context.Service<EditorInstallIoService>('isagi/EditorInstallIo');
 
 const maxToolOutputBytes = 2_048;
 
@@ -155,9 +112,9 @@ const codeServerUserSettings = `${JSON.stringify({ 'chat.disableAIFeatures': tru
  * chosen once by the caller rather than per call: every incarnation of every
  * editor context in this process shares it, and a caller that asked twice must
  * be told the same place both times. Its *lifetime* belongs to the caller too —
- * see `EditorInstallIoLive`, which is where the runtime's directory is released.
+ * see `EditorInstallIo.layer`, which is where the runtime's directory is released.
  */
-export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInstallIoService {
+export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInstallIo['Service'] {
   return {
     downloadTo: ({ url, destination }) =>
       Effect.tryPromise({
@@ -272,6 +229,16 @@ export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInsta
   };
 }
 
+const make = Effect.gen(function* () {
+  const sessionSocketDirectory = runtimeSessionSocketDirectory();
+  yield* Effect.addFinalizer(() =>
+    Effect.ignore(
+      Effect.tryPromise(() => rm(sessionSocketDirectory, { recursive: true, force: true })),
+    ),
+  );
+  return makeEditorInstallIo(sessionSocketDirectory);
+});
+
 /**
  * Scoped, because the session socket directory is a real resource with a real
  * owner: it lives outside the data directory, so nothing else in Isagi's
@@ -283,18 +250,51 @@ export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInsta
  * removal is best-effort: a temporary directory that resists deletion is not a
  * reason to fail a shutdown that has otherwise completed.
  */
-export const EditorInstallIoLive: Layer.Layer<EditorInstallIoService> = Layer.effect(
+export class EditorInstallIo extends Context.Service<
   EditorInstallIo,
-  Effect.gen(function* () {
-    const sessionSocketDirectory = runtimeSessionSocketDirectory();
-    yield* Effect.addFinalizer(() =>
-      Effect.ignore(
-        Effect.tryPromise(() => rm(sessionSocketDirectory, { recursive: true, force: true })),
-      ),
-    );
-    return makeEditorInstallIo(sessionSocketDirectory);
-  }),
-);
+  {
+    /**
+     * Streams `url` to `destination`, hashing as it goes, and returns the
+     * lowercase hex sha-256 of what was actually written.
+     *
+     * Hashing the bytes on their way to disk rather than re-reading the file
+     * afterwards is what makes the digest a statement about the artifact that was
+     * installed, not about a file that happened to be at that path later.
+     *
+     * Cancellation is Effect interruption: the attempt deadline interrupts the
+     * fiber, which aborts the request. There is deliberately no second
+     * caller-supplied `AbortSignal` — one deadline, one cancellation mechanism.
+     */
+    readonly downloadTo: (input: {
+      readonly url: string;
+      readonly destination: string;
+    }) => Effect.Effect<{ readonly sha256: string }, EditorInstallIoError>;
+    /** `tar -xzf <archive> -C <into> --strip-components <n>`, the system-`tar`
+     *  precedent already set by `git/git.command.ts` and `pty-processes/adapters/tmux.ts`. */
+    readonly extractTarGz: (input: {
+      readonly archive: string;
+      readonly into: string;
+      readonly stripComponents: number;
+    }) => Effect.Effect<void, EditorInstallIoError>;
+    /** `access(path, X_OK)` — proves the extracted tree is usable *before* a
+     *  receipt claims it is. */
+    readonly assertExecutable: (path: string) => Effect.Effect<void, EditorInstallIoError>;
+    /**
+     * Creates the shared editor-state directories and writes `config.yaml` if it
+     * is absent.
+     *
+     * It belongs to provisioning rather than to launch because "the editor is
+     * ready to launch" should be one fact with one owner. A missing extensions
+     * directory discovered at launch time would surface as a mysterious editor
+     * failure; discovered here it is an honest `install_unusable`.
+     */
+    readonly prepareEditorState: (input: {
+      readonly editorsPath: string;
+    }) => Effect.Effect<EditorSharedStatePaths, EditorInstallIoError>;
+  }
+>()('isagi/runtime/editor/EditorInstallIo') {
+  static readonly layer = Layer.effect(EditorInstallIo, make);
+}
 
 // Local to this module: it exists only to carry a status out of the `try` block
 // and is never seen by a caller.

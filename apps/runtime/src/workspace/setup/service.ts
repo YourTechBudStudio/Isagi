@@ -7,9 +7,8 @@ import type {
 } from '@isagi/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import type { WorktreeHooksConfig } from '../../projects/config/config-schema.js';
-import { ProjectConfigError, loadWorktreeHooks } from '../../projects/config/service.js';
-import type { ProjectRow } from '../../projects/types.js';
+import type { WorktreeHooksConfig, ProjectRow } from '../../projects/index.js';
+import { ProjectConfigError, loadWorktreeHooks } from '../../projects/index.js';
 import { WorktreeSetupRepository } from './repository.js';
 
 export class WorktreeSetupError extends Data.TaggedError('WorktreeSetupError')<{
@@ -26,142 +25,139 @@ export class WorktreeSetupError extends Data.TaggedError('WorktreeSetupError')<{
 
 export type WorktreeSetupServiceError = DatabaseError | ProjectConfigError | WorktreeSetupError;
 
-export interface WorktreeSetupService {
-  readonly preflight: (
-    project: ProjectRow,
-  ) => Effect.Effect<WorktreeSetupPreflightOutput, WorktreeSetupServiceError>;
-  readonly updateTrust: (input: {
-    readonly project: ProjectRow;
-    readonly request: WorktreeSetupTrustInput;
-  }) => Effect.Effect<WorktreeSetupTrustOutput, WorktreeSetupServiceError>;
-  readonly validateTrustForOpen: (project: ProjectRow) => Effect.Effect<
-    | { readonly status: 'disabled' }
-    | { readonly status: 'not_configured' }
-    | {
-        readonly status: 'configured';
-        readonly hash: string;
-        readonly config: WorktreeHooksConfig;
-      },
-    WorktreeSetupServiceError
-  >;
-}
-
-export const WorktreeSetupService = Context.Service<WorktreeSetupService>(
-  'isagi/WorktreeSetupService',
-);
-
-export const WorktreeSetupServiceLive = Layer.effect(
-  WorktreeSetupService,
-  Effect.gen(function* () {
-    const repository = yield* WorktreeSetupRepository;
-    return {
-      preflight: (project) =>
-        Effect.gen(function* () {
-          const trust = yield* repository.findTrust({
-            projectId: project.id,
-            scope: 'post_create',
-          });
-          if (trust?.hooksDisabled) {
-            return {
-              projectId: project.id,
-              status: 'disabled',
-              summary: [],
-            } satisfies WorktreeSetupPreflightOutput;
-          }
-          const hooks = yield* loadWorktreeHooks({
-            projectId: project.id,
-            rootPath: project.rootPath,
-          });
-          if (hooks.status === 'not_configured') {
-            return {
-              projectId: project.id,
-              status: 'not_configured',
-              summary: [],
-            } satisfies WorktreeSetupPreflightOutput;
-          }
+const make = Effect.gen(function* () {
+  const repository = yield* WorktreeSetupRepository;
+  return WorktreeSetupService.of({
+    preflight: (project) =>
+      Effect.gen(function* () {
+        const trust = yield* repository.findTrust({
+          projectId: project.id,
+          scope: 'post_create',
+        });
+        if (trust?.hooksDisabled) {
           return {
             projectId: project.id,
-            status: trustStatus(trust, hooks.hash),
-            hash: hooks.hash,
-            summary: hooks.summary,
+            status: 'disabled',
+            summary: [],
           } satisfies WorktreeSetupPreflightOutput;
-        }),
-      updateTrust: (input) =>
-        Effect.gen(function* () {
-          if (input.request.action === 'disable_hooks') {
-            yield* repository.disableHooks({ projectId: input.project.id, scope: 'post_create' });
-            return {
-              projectId: input.project.id,
-              status: 'disabled',
-            } satisfies WorktreeSetupTrustOutput;
-          }
-          const hooks = yield* loadWorktreeHooks({
-            projectId: input.project.id,
-            rootPath: input.project.rootPath,
-          });
-          if (hooks.status === 'not_configured') {
-            return yield* Effect.fail(
-              new WorktreeSetupError({
-                code: 'setup_not_configured',
-                message: 'This project does not have worktree setup hooks configured.',
-                projectId: input.project.id,
-              }),
-            );
-          }
-          if (hooks.hash !== input.request.hash) {
-            return yield* Effect.fail(
-              new WorktreeSetupError({
-                code: 'setup_trust_mismatch',
-                message: 'The worktree setup hooks changed before trust could be saved.',
-                hash: hooks.hash,
-                projectId: input.project.id,
-              }),
-            );
-          }
-          yield* repository.setTrustedHash({
-            alwaysTrustProject: input.request.action === 'always_trust_project',
-            hash: hooks.hash,
-            projectId: input.project.id,
-            scope: 'post_create',
-          });
+        }
+        const hooks = yield* loadWorktreeHooks({
+          projectId: project.id,
+          rootPath: project.rootPath,
+        });
+        if (hooks.status === 'not_configured') {
+          return {
+            projectId: project.id,
+            status: 'not_configured',
+            summary: [],
+          } satisfies WorktreeSetupPreflightOutput;
+        }
+        return {
+          projectId: project.id,
+          status: trustStatus(trust, hooks.hash),
+          hash: hooks.hash,
+          summary: hooks.summary,
+        } satisfies WorktreeSetupPreflightOutput;
+      }),
+    updateTrust: (input) =>
+      Effect.gen(function* () {
+        if (input.request.action === 'disable_hooks') {
+          yield* repository.disableHooks({ projectId: input.project.id, scope: 'post_create' });
           return {
             projectId: input.project.id,
-            status: input.request.action === 'always_trust_project' ? 'always_trusted' : 'trusted',
-            hash: hooks.hash,
+            status: 'disabled',
           } satisfies WorktreeSetupTrustOutput;
-        }),
-      validateTrustForOpen: (project) =>
-        Effect.gen(function* () {
-          const trust = yield* repository.findTrust({
-            projectId: project.id,
-            scope: 'post_create',
-          });
-          if (trust?.hooksDisabled) {
-            return { status: 'disabled' as const };
-          }
-          const hooks = yield* loadWorktreeHooks({
-            projectId: project.id,
-            rootPath: project.rootPath,
-          });
-          if (hooks.status === 'not_configured') {
-            return { status: 'not_configured' as const };
-          }
-          if (!trust?.alwaysTrustProject && trust?.trustedHash !== hooks.hash) {
-            return yield* Effect.fail(
-              new WorktreeSetupError({
-                code: 'setup_trust_required',
-                message:
-                  'Approve this project’s worktree setup hooks before creating the worktree.',
-                hash: hooks.hash,
-                projectId: project.id,
-              }),
-            );
-          }
-          return { status: 'configured' as const, hash: hooks.hash, config: hooks.config };
-        }),
-    } satisfies WorktreeSetupService;
-  }),
-);
+        }
+        const hooks = yield* loadWorktreeHooks({
+          projectId: input.project.id,
+          rootPath: input.project.rootPath,
+        });
+        if (hooks.status === 'not_configured') {
+          return yield* Effect.fail(
+            new WorktreeSetupError({
+              code: 'setup_not_configured',
+              message: 'This project does not have worktree setup hooks configured.',
+              projectId: input.project.id,
+            }),
+          );
+        }
+        if (hooks.hash !== input.request.hash) {
+          return yield* Effect.fail(
+            new WorktreeSetupError({
+              code: 'setup_trust_mismatch',
+              message: 'The worktree setup hooks changed before trust could be saved.',
+              hash: hooks.hash,
+              projectId: input.project.id,
+            }),
+          );
+        }
+        yield* repository.setTrustedHash({
+          alwaysTrustProject: input.request.action === 'always_trust_project',
+          hash: hooks.hash,
+          projectId: input.project.id,
+          scope: 'post_create',
+        });
+        return {
+          projectId: input.project.id,
+          status: input.request.action === 'always_trust_project' ? 'always_trusted' : 'trusted',
+          hash: hooks.hash,
+        } satisfies WorktreeSetupTrustOutput;
+      }),
+    validateTrustForOpen: (project) =>
+      Effect.gen(function* () {
+        const trust = yield* repository.findTrust({
+          projectId: project.id,
+          scope: 'post_create',
+        });
+        if (trust?.hooksDisabled) {
+          return { status: 'disabled' as const };
+        }
+        const hooks = yield* loadWorktreeHooks({
+          projectId: project.id,
+          rootPath: project.rootPath,
+        });
+        if (hooks.status === 'not_configured') {
+          return { status: 'not_configured' as const };
+        }
+        if (!trust?.alwaysTrustProject && trust?.trustedHash !== hooks.hash) {
+          return yield* Effect.fail(
+            new WorktreeSetupError({
+              code: 'setup_trust_required',
+              message: 'Approve this project’s worktree setup hooks before creating the worktree.',
+              hash: hooks.hash,
+              projectId: project.id,
+            }),
+          );
+        }
+        return { status: 'configured' as const, hash: hooks.hash, config: hooks.config };
+      }),
+  });
+});
+
+export class WorktreeSetupService extends Context.Service<
+  WorktreeSetupService,
+  {
+    readonly preflight: (
+      project: ProjectRow,
+    ) => Effect.Effect<WorktreeSetupPreflightOutput, WorktreeSetupServiceError>;
+    readonly updateTrust: (input: {
+      readonly project: ProjectRow;
+      readonly request: WorktreeSetupTrustInput;
+    }) => Effect.Effect<WorktreeSetupTrustOutput, WorktreeSetupServiceError>;
+    readonly validateTrustForOpen: (project: ProjectRow) => Effect.Effect<
+      | { readonly status: 'disabled' }
+      | { readonly status: 'not_configured' }
+      | {
+          readonly status: 'configured';
+          readonly hash: string;
+          readonly config: WorktreeHooksConfig;
+        },
+      WorktreeSetupServiceError
+    >;
+  }
+>()('isagi/runtime/workspace/WorktreeSetupService') {
+  static readonly layer = Layer.effect(WorktreeSetupService, make);
+}
 
 function trustStatus(
   trust: { readonly alwaysTrustProject: boolean; readonly trustedHash: string | null } | null,

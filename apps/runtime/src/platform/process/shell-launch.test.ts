@@ -5,15 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { backendLaunchCommand } from './shell-launch.js';
+import { shellLaunchCommand } from './shell-launch.js';
 
 test('direct launch mode preserves the original command and structured args', () => {
   assert.deepEqual(
-    backendLaunchCommand({
+    shellLaunchCommand({
       launch: {
         command: 'git',
         args: ['status', '--short'],
-        cwd: '/repo/isagi',
       },
       env: { SHELL: '/bin/zsh', PATH: '/bin' },
     }),
@@ -26,11 +25,10 @@ test('direct launch mode preserves the original command and structured args', ()
 
 test('user shell launch mode runs simple commands through zsh login interactive rc files', () => {
   assert.deepEqual(
-    backendLaunchCommand({
+    shellLaunchCommand({
       launch: {
         command: 'codex',
         args: ['--model', 'gpt-5.4', 'resume', 'session-123'],
-        cwd: '/repo/isagi',
         launchMode: 'user_shell',
       },
       env: { SHELL: '/bin/zsh', PATH: '/bin' },
@@ -44,11 +42,10 @@ test('user shell launch mode runs simple commands through zsh login interactive 
 
 test('user shell launch mode preserves structured args with shell-sensitive bytes', () => {
   assert.deepEqual(
-    backendLaunchCommand({
+    shellLaunchCommand({
       launch: {
         command: 'claude',
         args: ['--settings', '/tmp/isagi settings.json', "quote'arg", '`ticks`', 'abc$(nope)'],
-        cwd: '/repo/isagi',
         launchMode: 'user_shell',
       },
       env: { SHELL: '/bin/bash', PATH: '/bin' },
@@ -71,11 +68,10 @@ test('user shell launch mode preserves structured args with shell-sensitive byte
 
 test('user shell launch mode uses fish argv syntax', () => {
   assert.deepEqual(
-    backendLaunchCommand({
+    shellLaunchCommand({
       launch: {
         command: 'opencode',
         args: ['run', '--format', 'json', 'judge this'],
-        cwd: '/repo/isagi',
         launchMode: 'user_shell',
       },
       env: { SHELL: '/opt/homebrew/bin/fish', PATH: '/bin' },
@@ -98,11 +94,10 @@ test('user shell launch mode uses fish argv syntax', () => {
 
 test('user shell launch mode falls back to direct for unsafe command names', () => {
   assert.deepEqual(
-    backendLaunchCommand({
+    shellLaunchCommand({
       launch: {
         command: 'codex --danger',
         args: ['prompt'],
-        cwd: '/repo/isagi',
         launchMode: 'user_shell',
       },
       env: { SHELL: '/bin/zsh', PATH: '/bin' },
@@ -121,11 +116,10 @@ test(
     const root = mkdtempSync(join(tmpdir(), 'isagi-user-shell-zsh-'));
     try {
       writeFileSync(join(root, '.zshrc'), 'alias codex=\'printf "alias:%s:%s\\\\n"\'\n', 'utf8');
-      const launch = backendLaunchCommand({
+      const launch = shellLaunchCommand({
         launch: {
           command: 'codex',
           args: ['one', 'two'],
-          cwd: '/repo/isagi',
           launchMode: 'user_shell',
         },
         env: { SHELL: '/bin/zsh', ZDOTDIR: root, PATH: '/bin:/usr/bin' },
@@ -151,11 +145,10 @@ test(
     const root = mkdtempSync(join(tmpdir(), 'isagi-user-shell-bash-'));
     try {
       writeFileSync(join(root, '.bashrc'), 'alias codex=\'printf "alias:%s:%s\\\\n"\'\n', 'utf8');
-      const launch = backendLaunchCommand({
+      const launch = shellLaunchCommand({
         launch: {
           command: 'codex',
           args: ['one', 'two'],
-          cwd: '/repo/isagi',
           launchMode: 'user_shell',
         },
         env: { SHELL: '/bin/bash', HOME: root, PATH: '/bin:/usr/bin' },

@@ -1,11 +1,6 @@
 import { Effect, Layer } from 'effect';
 
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-  type InternalRuntimeEvent,
-  type InternalRuntimeEventBusService,
-} from './internal-events.js';
+import { InternalRuntimeEventBus, type InternalRuntimeEvent } from './internal-events.js';
 
 /**
  * Two deliberately different recording buses.
@@ -20,8 +15,8 @@ import {
 
 export interface RecordingEventBus {
   readonly events: InternalRuntimeEvent[];
-  readonly service: InternalRuntimeEventBusService;
-  readonly layer: Layer.Layer<InternalRuntimeEventBusService>;
+  readonly service: InternalRuntimeEventBus['Service'];
+  readonly layer: Layer.Layer<InternalRuntimeEventBus>;
 }
 
 /**
@@ -34,7 +29,7 @@ export interface RecordingEventBus {
  */
 export function publishOnlyRecordingEventBus(reason: string): RecordingEventBus {
   const events: InternalRuntimeEvent[] = [];
-  const service: InternalRuntimeEventBusService = {
+  const service: InternalRuntimeEventBus['Service'] = {
     publish: (event) =>
       Effect.sync(() => {
         events.push(event);
@@ -51,7 +46,7 @@ export function publishOnlyRecordingEventBus(reason: string): RecordingEventBus 
 /**
  * The real bus, with every publication also recorded.
  *
- * Decorating `InternalRuntimeEventBusLive` rather than reimplementing it keeps
+ * Decorating `InternalRuntimeEventBus.layer` rather than reimplementing it keeps
  * the type filters, the unbounded queues, unsubscribe, and the scoped shutdown
  * exactly as production has them. That matters for any unit that both publishes
  * and runs a subscriber loop of its own: a hand-written fake would be asserting
@@ -68,7 +63,7 @@ export function recordingInternalEventBusLayer(events: InternalRuntimeEvent[]) {
             events.push(event);
           }).pipe(Effect.andThen(bus.publish(event))),
         subscribe: bus.subscribe,
-      } satisfies InternalRuntimeEventBusService;
+      } satisfies InternalRuntimeEventBus['Service'];
     }),
-  ).pipe(Layer.provide(InternalRuntimeEventBusLive));
+  ).pipe(Layer.provide(InternalRuntimeEventBus.layer));
 }

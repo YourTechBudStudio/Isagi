@@ -6,9 +6,9 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { DataDirectory } from '../platform/persistence/data-directory.js';
+import { DataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { StateFile, StateFileLive, stateFromActiveContext } from './state-file.js';
+import { StateFile, stateFromActiveContext } from './state-file.js';
 
 test('malformed state file recovery is logged and stays out of the returned state', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-state-'));
@@ -26,7 +26,7 @@ test('malformed state file recovery is logged and stays out of the returned stat
       Effect.gen(function* () {
         const stateFile = yield* StateFile;
         return yield* stateFile.read;
-      }).pipe(Effect.provide(StateFileLive), Effect.provideService(DataDirectory, { paths })),
+      }).pipe(Effect.provide(StateFile.layer), Effect.provideService(DataDirectory, { paths })),
     );
 
     assert.deepEqual(state, {
@@ -64,7 +64,7 @@ test('active context writes keep the highest revision durable', async () => {
           activeWorktreeId: 10,
           revision: 1,
         });
-      }).pipe(Effect.provide(StateFileLive), Effect.provideService(DataDirectory, { paths })),
+      }).pipe(Effect.provide(StateFile.layer), Effect.provideService(DataDirectory, { paths })),
     );
 
     assert.deepEqual(state, stateFromActiveContext(2, 20, 2));

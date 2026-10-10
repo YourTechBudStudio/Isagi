@@ -3,13 +3,13 @@ import test from 'node:test';
 
 import { Effect, Layer, Result } from 'effect';
 
-import { EntityLockLive } from '../../platform/locks/entity-lock.js';
-import { SessionLifecycle, SessionLifecycleLive } from '../../session-lifecycle/index.js';
+import { EntityLock } from '../../platform/locks/index.js';
+import { SessionLifecycle } from './lifecycle.js';
 
 // Restore exclusion is delegated to the shared per-entity lock, so the layer
 // under test needs one. Every test builds its own; nothing here depends on the
 // instance being shared with another domain.
-const lifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
+const lifecycleLayer = SessionLifecycle.layer.pipe(Layer.provide(EntityLock.layer));
 
 const agentKey = { kind: 'agent_session' as const, sessionId: 10 };
 const otherAgentKey = { kind: 'agent_session' as const, sessionId: 11 };

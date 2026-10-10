@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ResolvedEditorInstallation } from '../../provisioning/index.js';
+import type { ResolvedEditorInstallation } from '../../provisioning/install.js';
 import {
   editorLaunchSpec,
   editorLoopbackHost,

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
-import { PtyKillError } from '../../../pty-processes/types.js';
+import { PtyKillError } from '../../../pty-processes/index.js';
 import {
   awaitProbeSettled,
   editorBackendStub,

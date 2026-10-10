@@ -4,12 +4,12 @@ import { Effect } from 'effect';
 
 import type { EditorAttemptFailureReason } from '@isagi/contracts';
 
-import { describeOperationalCause } from '../../platform/diagnostics/operational-cause.js';
-import type { LoopbackPortProbeService } from '../../platform/net/loopback-port-probe.js';
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
+import type { LoopbackPortProbe } from '../../platform/net/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { ProjectRepository } from '../../projects/index.js';
 import type { PtyService } from '../../pty-processes/index.js';
-import type { WorkspaceRepositoryService } from '../../workspace/index.js';
-import type { ResolvedEditorInstallation } from '../provisioning/index.js';
+import type { ResolvedEditorInstallation } from '../provisioning/install.js';
 import { EditorError, EditorLaunchFailed } from './errors.js';
 import {
   editorLaunchSpec,
@@ -17,7 +17,7 @@ import {
   editorSessionSocketPath,
   maxSessionSocketPathBytes,
 } from './launch-spec.js';
-import type { EditorContextRepositoryService } from './repository.js';
+import type { EditorContextRepository } from './repository.js';
 import type { EditorContextRow } from './types.js';
 
 /**
@@ -55,10 +55,10 @@ export interface EditorLaunchCapabilities {
 }
 
 export interface EditorLaunchDependencies extends EditorLaunchCapabilities {
-  readonly repository: EditorContextRepositoryService;
-  readonly workspace: WorkspaceRepositoryService;
-  readonly pty: PtyService;
-  readonly portProbe: LoopbackPortProbeService;
+  readonly repository: EditorContextRepository['Service'];
+  readonly workspace: ProjectRepository['Service'];
+  readonly pty: PtyService['Service'];
+  readonly portProbe: LoopbackPortProbe['Service'];
 }
 
 /**

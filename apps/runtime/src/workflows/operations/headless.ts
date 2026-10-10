@@ -2,10 +2,12 @@ import { readFileSync } from 'node:fs';
 
 import { Effect } from 'effect';
 
-import type { HarnessControlPlaneService } from '../../harnesses/control-plane/index.js';
-import { harnessDefinition } from '../../harnesses/definitions.js';
-import type { HarnessAdapterRegistryService } from '../../harnesses/index.js';
-import type { PtyServiceShape } from '../../pty-processes/index.js';
+import {
+  harnessDefinition,
+  type HarnessControlPlane,
+  type HarnessAdapterRegistry,
+} from '../../harnesses/index.js';
+import type { PtyService } from '../../pty-processes/index.js';
 import type { EngineRuntime, HeadlessExit, HeadlessPort } from '../engine/runtime.js';
 import { errorMessage } from '../state/pure.js';
 import { getOperation, settleOperation } from '../store/operations.js';
@@ -231,9 +233,9 @@ function stopTracked(rt: EngineRuntime, ptyProcessId: number): Effect.Effect<voi
 
 /** The live port: harness launch envelopes, PTY processes and their logs. */
 export function makeHeadlessPort(deps: {
-  readonly harnesses: HarnessAdapterRegistryService;
-  readonly controlPlane: HarnessControlPlaneService;
-  readonly pty: PtyServiceShape;
+  readonly harnesses: HarnessAdapterRegistry['Service'];
+  readonly controlPlane: HarnessControlPlane['Service'];
+  readonly pty: PtyService['Service'];
 }): HeadlessPort {
   return {
     start: (input) =>

@@ -2,124 +2,126 @@ import { Effect, Layer } from 'effect';
 
 import type { AttentionSource } from '@isagi/contracts';
 
-import { describeOperationalCause } from '../platform/diagnostics/operational-cause.js';
-import { InternalRuntimeEventBus } from '../platform/events/internal-events.js';
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import {
+  InternalRuntimeEventBus,
   nextRuntimeEventEnvelope,
   RuntimeEventBus,
-  type RuntimeEventBusService,
-} from '../platform/events/runtime-events.js';
+} from '../platform/events/index.js';
 import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
-import { AgentSessionRepository } from './agent-sessions/index.js';
+import { AgentSessionRepository } from './agent-sessions/repository.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './sessions/status.js';
-import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces/repository.js';
-import type { AgentSessionRow, TerminalSessionRow } from './surfaces/types.js';
-import { TerminalSessionRepository } from './terminal-sessions/index.js';
+import type { AgentSessionRow, TerminalSessionRow } from './sessions/types.js';
+import { SurfaceRepository } from './surfaces/repository.js';
+import { TerminalSessionRepository } from './terminal-sessions/repository.js';
 
-export const RuntimeEventProjectionLive = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const internalBus = yield* InternalRuntimeEventBus;
-    const publicBus = yield* RuntimeEventBus;
-    const agents = yield* AgentSessionRepository;
-    const terminals = yield* TerminalSessionRepository;
-    const surfaces = yield* SurfaceRepository;
-    const attention = yield* AgentSessionAttentionProjection;
-    const subscription = yield* internalBus.subscribe({
-      types: [
-        'durable_session_deleted',
-        'agent_session_changed',
-        'terminal_session_changed',
-        'surface_changed',
-        'editor_context_changed',
-        'pty_process_started',
-        'pty_process_exited',
-        'pty_process_failed',
-        'pty_process_killed',
-        'pty_foreground_command_started',
-        'pty_foreground_command_ended',
-      ],
-    });
+/** Background work with no service: projects internal events onto public runtime events. The composition root starts `RuntimeEventProjection.layer`. */
+export const RuntimeEventProjection = {
+  layer: Layer.effectDiscard(
+    Effect.gen(function* () {
+      const internalBus = yield* InternalRuntimeEventBus;
+      const publicBus = yield* RuntimeEventBus;
+      const agents = yield* AgentSessionRepository;
+      const terminals = yield* TerminalSessionRepository;
+      const surfaces = yield* SurfaceRepository;
+      const attention = yield* AgentSessionAttentionProjection;
+      const subscription = yield* internalBus.subscribe({
+        types: [
+          'durable_session_deleted',
+          'agent_session_changed',
+          'terminal_session_changed',
+          'surface_changed',
+          'editor_context_changed',
+          'pty_process_started',
+          'pty_process_exited',
+          'pty_process_failed',
+          'pty_process_killed',
+          'pty_foreground_command_started',
+          'pty_foreground_command_ended',
+        ],
+      });
 
-    yield* Effect.addFinalizer(() => subscription.unsubscribe);
-    yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.gen(function* () {
-          const event = yield* subscription.take;
-          if (event.type === 'durable_session_deleted') {
-            yield* publicBus.publish({
-              ...nextRuntimeEventEnvelope(),
-              type: 'durable_session_deleted',
-              payload: event.identity,
-            });
-            return;
-          }
-          if (event.type === 'agent_session_changed') {
-            const agent = yield* resolveLookup(agents.find(event.agentSessionId), {
-              lookup: 'agent_session_row',
-              entityId: event.agentSessionId,
-            });
-            if (agent.outcome === 'failed') return;
-            if (agent.outcome === 'absent') {
-              yield* publishAttentionSourceRemoved(publicBus, {
-                kind: 'agent_session',
-                id: event.agentSessionId,
+      yield* Effect.addFinalizer(() => subscription.unsubscribe);
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.gen(function* () {
+            const event = yield* subscription.take;
+            if (event.type === 'durable_session_deleted') {
+              yield* publicBus.publish({
+                ...nextRuntimeEventEnvelope(),
+                type: 'durable_session_deleted',
+                payload: event.identity,
               });
               return;
             }
-            yield* publishAgentSessionChanged(publicBus, surfaces, attention, agent.value);
-            return;
-          }
-          if (event.type === 'terminal_session_changed') {
-            const terminal = yield* resolveLookup(terminals.find(event.terminalSessionId), {
-              lookup: 'terminal_session_row',
-              entityId: event.terminalSessionId,
-            });
-            if (terminal.outcome === 'failed') return;
-            if (terminal.outcome === 'absent') {
-              yield* publishAttentionSourceRemoved(publicBus, {
-                kind: 'terminal_session',
-                id: event.terminalSessionId,
+            if (event.type === 'agent_session_changed') {
+              const agent = yield* resolveLookup(agents.find(event.agentSessionId), {
+                lookup: 'agent_session_row',
+                entityId: event.agentSessionId,
+              });
+              if (agent.outcome === 'failed') return;
+              if (agent.outcome === 'absent') {
+                yield* publishAttentionSourceRemoved(publicBus, {
+                  kind: 'agent_session',
+                  id: event.agentSessionId,
+                });
+                return;
+              }
+              yield* publishAgentSessionChanged(publicBus, surfaces, attention, agent.value);
+              return;
+            }
+            if (event.type === 'terminal_session_changed') {
+              const terminal = yield* resolveLookup(terminals.find(event.terminalSessionId), {
+                lookup: 'terminal_session_row',
+                entityId: event.terminalSessionId,
+              });
+              if (terminal.outcome === 'failed') return;
+              if (terminal.outcome === 'absent') {
+                yield* publishAttentionSourceRemoved(publicBus, {
+                  kind: 'terminal_session',
+                  id: event.terminalSessionId,
+                });
+                return;
+              }
+              yield* publishTerminalSessionChanged(publicBus, surfaces, attention, terminal.value);
+              return;
+            }
+            if (event.type === 'editor_context_changed') {
+              yield* publishEditorContextChanged(publicBus, surfaces, event.editorContextId);
+              return;
+            }
+            if (event.type === 'surface_changed') {
+              yield* publicBus.publish({
+                ...nextRuntimeEventEnvelope(),
+                type: 'surface_changed',
+                payload: event.payload,
               });
               return;
             }
-            yield* publishTerminalSessionChanged(publicBus, surfaces, attention, terminal.value);
-            return;
-          }
-          if (event.type === 'editor_context_changed') {
-            yield* publishEditorContextChanged(publicBus, surfaces, event.editorContextId);
-            return;
-          }
-          if (event.type === 'surface_changed') {
-            yield* publicBus.publish({
-              ...nextRuntimeEventEnvelope(),
-              type: 'surface_changed',
-              payload: event.payload,
-            });
-            return;
-          }
-          if (
-            event.type !== 'pty_process_started' &&
-            event.type !== 'pty_process_exited' &&
-            event.type !== 'pty_process_failed' &&
-            event.type !== 'pty_process_killed' &&
-            event.type !== 'pty_foreground_command_started' &&
-            event.type !== 'pty_foreground_command_ended'
-          ) {
-            return;
-          }
-          // No `attention_source_removed` here in any outcome: a PTY process with
-          // no owning session names no attention source to remove.
-          const terminal = yield* resolveLookup(
-            terminals.findByActivePtyProcessId(event.ptyProcessId),
-            { lookup: 'terminal_session_by_active_pty_process', entityId: event.ptyProcessId },
-          );
-          if (terminal.outcome === 'found')
-            yield* publishTerminalSessionChanged(publicBus, surfaces, attention, terminal.value);
-        }),
-      ),
-    );
-  }),
-);
+            if (
+              event.type !== 'pty_process_started' &&
+              event.type !== 'pty_process_exited' &&
+              event.type !== 'pty_process_failed' &&
+              event.type !== 'pty_process_killed' &&
+              event.type !== 'pty_foreground_command_started' &&
+              event.type !== 'pty_foreground_command_ended'
+            ) {
+              return;
+            }
+            // No `attention_source_removed` here in any outcome: a PTY process with
+            // no owning session names no attention source to remove.
+            const terminal = yield* resolveLookup(
+              terminals.findByActivePtyProcessId(event.ptyProcessId),
+              { lookup: 'terminal_session_by_active_pty_process', entityId: event.ptyProcessId },
+            );
+            if (terminal.outcome === 'found')
+              yield* publishTerminalSessionChanged(publicBus, surfaces, attention, terminal.value);
+          }),
+        ),
+      );
+    }),
+  ),
+} as const;
 
 /**
  * A projection lookup has three outcomes, and the projection must keep them
@@ -173,9 +175,9 @@ function resolveLookup<A>(
 }
 
 function publishAgentSessionChanged(
-  publicBus: RuntimeEventBusService,
-  surfaces: SurfaceRepositoryService,
-  attention: import('./agent-sessions/index.js').AgentSessionAttentionProjectionService,
+  publicBus: RuntimeEventBus['Service'],
+  surfaces: SurfaceRepository['Service'],
+  attention: import('./agent-sessions/attention.js').AgentSessionAttentionProjection['Service'],
   agent: AgentSessionRow,
 ) {
   return Effect.gen(function* () {
@@ -212,9 +214,9 @@ function publishAgentSessionChanged(
 }
 
 function publishTerminalSessionChanged(
-  publicBus: RuntimeEventBusService,
-  surfaces: SurfaceRepositoryService,
-  attention: import('./agent-sessions/index.js').AgentSessionAttentionProjectionService,
+  publicBus: RuntimeEventBus['Service'],
+  surfaces: SurfaceRepository['Service'],
+  attention: import('./agent-sessions/attention.js').AgentSessionAttentionProjection['Service'],
   terminal: TerminalSessionRow,
 ) {
   return Effect.gen(function* () {
@@ -268,8 +270,8 @@ function publishTerminalSessionChanged(
  * is what the client acts on.
  */
 function publishEditorContextChanged(
-  publicBus: RuntimeEventBusService,
-  surfaces: SurfaceRepositoryService,
+  publicBus: RuntimeEventBus['Service'],
+  surfaces: SurfaceRepository['Service'],
   editorContextId: number,
 ) {
   return Effect.gen(function* () {
@@ -289,7 +291,10 @@ function publishEditorContextChanged(
   });
 }
 
-function publishAttentionSourceChanged(publicBus: RuntimeEventBusService, source: AttentionSource) {
+function publishAttentionSourceChanged(
+  publicBus: RuntimeEventBus['Service'],
+  source: AttentionSource,
+) {
   return publicBus.publish({
     ...nextRuntimeEventEnvelope(),
     type: 'attention_source_changed',
@@ -298,7 +303,7 @@ function publishAttentionSourceChanged(publicBus: RuntimeEventBusService, source
 }
 
 function publishAttentionSourceRemoved(
-  publicBus: RuntimeEventBusService,
+  publicBus: RuntimeEventBus['Service'],
   source: AttentionSource['source'],
 ) {
   return publicBus.publish({

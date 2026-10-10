@@ -4,9 +4,9 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import { projects, worktrees } from '../../persistence/schema.js';
 import { RuntimeDatabase } from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../repository.js';
+import { ProjectRepository } from '../repository.js';
+import { projects, worktrees } from '../tables.js';
 import { runWithDatabase } from '../testing.js';
 
 /**
@@ -20,7 +20,7 @@ import { runWithDatabase } from '../testing.js';
 
 function insertProjects(names: readonly string[]) {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     const ids: number[] = [];
     for (const name of names) {
       ids.push(
@@ -33,7 +33,7 @@ function insertProjects(names: readonly string[]) {
 
 function listProjectIds() {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     return (yield* repository.listProjects).map((project) => project.id);
   });
 }
@@ -98,7 +98,7 @@ function stampProjectUpdatedAt(when: string) {
 /** A project whose root checkout plus two linked worktrees are all discovered. */
 function insertProjectWithWorktrees(name: string, linkedNames: readonly string[]) {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     const rootPath = `/repo/${name}`;
     const { id: projectId } = yield* repository.createProject({ name, rootPath, kind: 'git' });
     yield* repository.reconcileProjectWorktrees({
@@ -127,7 +127,7 @@ function insertProjectWithWorktrees(name: string, linkedNames: readonly string[]
 
 function listProjectWorktreeIds(projectId: number) {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     return (yield* repository.listWorktrees)
       .filter((worktree) => worktree.projectId === projectId)
       .map((worktree) => worktree.id);
@@ -138,7 +138,7 @@ test('moving a project before an earlier sibling reorders the present list', asy
   const ids = await runWithDatabase(
     'reorder-project-before',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo, charlie] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       const result = yield* repository.moveProjectOrder({
         projectId: charlie!,
@@ -157,7 +157,7 @@ test('a null anchor appends the project to the end of the present list', async (
   const ids = await runWithDatabase(
     'reorder-project-append',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       yield* repository.moveProjectOrder({ projectId: alpha!, beforeProjectId: null });
       return yield* listProjectIds();
@@ -171,7 +171,7 @@ test('a project reorder renumbers present siblings to a compact sequence', async
   const ranks = await runWithDatabase(
     'reorder-project-compaction',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo, charlie] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       // Scattered ranks stand in for a database that migrated onto DEFAULT 0 and
       // then took a few appends.
@@ -194,7 +194,7 @@ test('a migrated block tied at zero is repaired by an otherwise no-op move', asy
   const result = await runWithDatabase(
     'reorder-project-tie-repair',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo, charlie] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       for (const id of [alpha!, bravo!, charlie!]) {
         yield* setProjectRank(id, 0);
@@ -222,7 +222,7 @@ test('an already-effective project move writes no rows at all', async () => {
   const timestamps = await runWithDatabase(
     'reorder-project-noop',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       // Compact the ranks first so nothing is left to repair.
       yield* repository.moveProjectOrder({ projectId: alpha!, beforeProjectId: bravo! });
@@ -242,7 +242,7 @@ test('a project reorder timestamps only the rows whose rank actually moved', asy
   const timestamps = await runWithDatabase(
     'reorder-project-timestamps',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo, charlie] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       yield* repository.moveProjectOrder({ projectId: alpha!, beforeProjectId: bravo! });
       yield* stampProjectUpdatedAt('2020-01-01T00:00:00.000Z');
@@ -261,7 +261,7 @@ test('missing projects are neither reorderable nor renumbered by a reorder', asy
   const result = await runWithDatabase(
     'reorder-project-missing-untouched',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo, charlie] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       yield* repository.setProjectStatus({ id: bravo!, status: 'missing' });
       yield* setProjectRank(bravo!, 97);
@@ -283,7 +283,7 @@ test('project reorder rejects an unknown source and leaves ranks unchanged', asy
   const result = await runWithDatabase(
     'reorder-project-source-missing',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       yield* insertProjects(['alpha', 'bravo']);
       const before = yield* readProjectRanks();
       const rejected = yield* repository.moveProjectOrder({
@@ -302,7 +302,7 @@ test('project reorder rejects a missing source before it can be ranked', async (
   const result = await runWithDatabase(
     'reorder-project-source-not-present',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha] = yield* insertProjects(['alpha', 'bravo']);
       yield* repository.setProjectStatus({ id: alpha!, status: 'missing' });
       const before = yield* readProjectRanks();
@@ -322,7 +322,7 @@ test('project reorder rejects an unknown anchor and leaves ranks unchanged', asy
   const result = await runWithDatabase(
     'reorder-project-anchor-missing',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha] = yield* insertProjects(['alpha', 'bravo']);
       const before = yield* readProjectRanks();
       const rejected = yield* repository.moveProjectOrder({
@@ -341,7 +341,7 @@ test('project reorder rejects a missing project as an anchor', async () => {
   const result = await runWithDatabase(
     'reorder-project-anchor-not-present',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo] = yield* insertProjects(['alpha', 'bravo']);
       yield* repository.setProjectStatus({ id: bravo!, status: 'missing' });
       const before = yield* readProjectRanks();
@@ -361,7 +361,7 @@ test('a worktree reorder moves a non-root sibling and never touches the root ran
   const result = await runWithDatabase(
     'reorder-worktree-basic',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const project = yield* insertProjectWithWorktrees('isagi', ['one', 'two', 'three']);
       const [one, two, three] = project.linkedWorktreeIds;
       const moved = yield* repository.moveProjectWorktreeOrder({
@@ -395,7 +395,7 @@ test('a null anchor appends a worktree after its non-root siblings', async () =>
   const ids = await runWithDatabase(
     'reorder-worktree-append',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const project = yield* insertProjectWithWorktrees('isagi', ['one', 'two', 'three']);
       const [one] = project.linkedWorktreeIds;
       yield* repository.moveProjectWorktreeOrder({
@@ -414,7 +414,7 @@ test('worktree reorder refuses to move the root worktree', async () => {
   const result = await runWithDatabase(
     'reorder-worktree-root-source',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const project = yield* insertProjectWithWorktrees('isagi', ['one', 'two']);
       const before = yield* readWorktreeRanks();
       const rejected = yield* repository.moveProjectWorktreeOrder({
@@ -434,7 +434,7 @@ test('worktree reorder refuses to place anything above the root worktree', async
   const result = await runWithDatabase(
     'reorder-worktree-root-anchor',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const project = yield* insertProjectWithWorktrees('isagi', ['one', 'two']);
       const [, two] = project.linkedWorktreeIds;
       const before = yield* readWorktreeRanks();
@@ -455,7 +455,7 @@ test('worktree reorder reports a cross-project source as a mismatch, not as miss
   const result = await runWithDatabase(
     'reorder-worktree-source-mismatch',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const first = yield* insertProjectWithWorktrees('alpha', ['one']);
       const second = yield* insertProjectWithWorktrees('bravo', ['two']);
       const before = yield* readWorktreeRanks();
@@ -476,7 +476,7 @@ test('worktree reorder reports a cross-project anchor as a mismatch', async () =
   const result = await runWithDatabase(
     'reorder-worktree-anchor-mismatch',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const first = yield* insertProjectWithWorktrees('alpha', ['one']);
       const second = yield* insertProjectWithWorktrees('bravo', ['two']);
       const before = yield* readWorktreeRanks();
@@ -500,7 +500,7 @@ test('worktree reorder rejects unknown sources, unknown anchors, and unknown pro
   const result = await runWithDatabase(
     'reorder-worktree-not-found',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const project = yield* insertProjectWithWorktrees('isagi', ['one']);
       const before = yield* readWorktreeRanks();
       const unknownProject = yield* repository.moveProjectWorktreeOrder({
@@ -541,7 +541,7 @@ test('worktree reorder rejects a project that is not present', async () => {
   const result = await runWithDatabase(
     'reorder-worktree-project-not-present',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const project = yield* insertProjectWithWorktrees('isagi', ['one']);
       yield* repository.setProjectStatus({ id: project.projectId, status: 'missing' });
       const before = yield* readWorktreeRanks();
@@ -562,7 +562,7 @@ test('a project with no root checkout treats every worktree as reorderable', asy
   const ids = await runWithDatabase(
     'reorder-worktree-rootless',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
@@ -597,7 +597,7 @@ test('a project with no root checkout treats every worktree as reorderable', asy
  */
 function insertFolderProject(name: string) {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     const rootPath = `/repo/${name}`;
     const { id: projectId } = yield* repository.createProject({ name, rootPath, kind: 'folder' });
     const owned = (yield* repository.listWorktrees).filter(
@@ -612,7 +612,7 @@ test('worktree reorder reports unsupported kind rather than the root guard for a
   const result = await runWithDatabase(
     'reorder-worktree-folder-root',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const folder = yield* insertFolderProject('notes');
       const before = yield* readWorktreeRanks();
       const rejected = yield* repository.moveProjectWorktreeOrder({
@@ -634,7 +634,7 @@ test('worktree reorder reports unsupported kind ahead of an unknown folder targe
   const result = await runWithDatabase(
     'reorder-worktree-folder-unknown-target',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const folder = yield* insertFolderProject('notes');
       const before = yield* readWorktreeRanks();
       const rejected = yield* repository.moveProjectWorktreeOrder({
@@ -656,7 +656,7 @@ test('worktree reorder reports presence before kind for a missing folder project
   const result = await runWithDatabase(
     'reorder-worktree-folder-missing',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const folder = yield* insertFolderProject('notes');
       yield* repository.setProjectStatus({ id: folder.projectId, status: 'missing' });
       const before = yield* readWorktreeRanks();
@@ -677,7 +677,7 @@ test('project reorder stays available for folder projects', async () => {
   const ids = await runWithDatabase(
     'reorder-project-folder-available',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const first = yield* insertFolderProject('notes');
       const second = yield* insertFolderProject('scratch');
       const moved = yield* repository.moveProjectOrder({

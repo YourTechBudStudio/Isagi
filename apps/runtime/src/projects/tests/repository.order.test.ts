@@ -4,9 +4,9 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import { projects, worktrees } from '../../persistence/schema.js';
 import { RuntimeDatabase } from '../../platform/persistence/index.js';
-import { WorkspaceRepository } from '../repository.js';
+import { ProjectRepository } from '../repository.js';
+import { projects, worktrees } from '../tables.js';
 import { runWithDatabase } from '../testing.js';
 
 /**
@@ -71,7 +71,7 @@ function stampProjectSeenAt(projectId: number, when: string) {
 
 function insertProjects(names: readonly string[]) {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     const ids: number[] = [];
     for (const name of names) {
       ids.push(
@@ -84,7 +84,7 @@ function insertProjects(names: readonly string[]) {
 
 function listProjectIds() {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     return (yield* repository.listProjects).map((project) => project.id);
   });
 }
@@ -124,7 +124,7 @@ test('present projects precede missing projects, which keep identifier order', a
   const ids = await runWithDatabase(
     'project-sections',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha, bravo, charlie, delta] = yield* insertProjects([
         'alpha',
         'bravo',
@@ -166,7 +166,7 @@ test('repeated present status writes refresh metadata without moving the project
   const result = await runWithDatabase(
     'project-present-idempotent',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       const before = yield* readProjectRow(alpha!);
       yield* stampProjectSeenAt(alpha!, '2000-01-01T00:00:00.000Z');
@@ -196,7 +196,7 @@ test('a project restored to present appends exactly once', async () => {
   const result = await runWithDatabase(
     'project-restore-appends-once',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
 
       yield* repository.setProjectStatus({
@@ -231,7 +231,7 @@ test('relocation restores a project to the end of the present section', async ()
   const ids = await runWithDatabase(
     'project-relocation-appends',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const [alpha] = yield* insertProjects(['alpha', 'bravo', 'charlie']);
       yield* repository.setProjectStatus({ id: alpha!, status: 'missing' });
 
@@ -252,7 +252,7 @@ test('newly discovered worktrees append in discovery order and consume no rank w
   const result = await runWithDatabase(
     'worktree-append',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
@@ -290,7 +290,7 @@ test('reconciliation cannot reclaim ownership of a reordered worktree list', asy
   const result = await runWithDatabase(
     'worktree-reconcile-preserves-order',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
@@ -353,7 +353,7 @@ test('worktree order honors explicit ranks and falls back to identifiers when ti
   const result = await runWithDatabase(
     'worktree-ranks',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
@@ -392,7 +392,7 @@ test('worktree order is grouped by project', async () => {
   const paths = await runWithDatabase(
     'worktree-project-grouping',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const { id: first } = yield* repository.createProject({
         name: 'alpha',
         rootPath: '/repo/alpha',

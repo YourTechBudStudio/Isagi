@@ -1,14 +1,3 @@
-import {
-  PtyInspectError,
-  PtyKillError,
-  PtyResizeError,
-  PtyServiceError,
-  PtyStartError,
-  PtyTerminationInProgressError,
-  PtyWriteError,
-} from '../../pty-processes/types.js';
-import { DatabaseError } from '../persistence/index.js';
-
 // The trust boundary between an operational failure and anything a user can
 // read.
 //
@@ -18,11 +7,11 @@ import { DatabaseError } from '../persistence/index.js';
 // That makes the rule strict: a rendered failure is *composed* from fields this
 // codebase authored, never copied from an error's own text.
 //
-// This module sits at runtime altitude rather than in `lib/` on purpose: it
-// recognizes the runtime's own error classes, so it imports `persistence` and
-// `pty-processes`. Putting it below them would hand a low-level adapter a
-// transitive dependency on two runtime domains. Domains that need to name their
-// own error types wrap this instead — see `commands.diagnostics.ts`.
+// This module names no error class. An error class that may be rendered opts
+// in by implementing the `SafeDiagnostic` protocol below: it composes its own
+// label from authored fields (stable codes, operation names, identifiers) and
+// hands back the cause to walk next. That keeps platform code free of domain
+// vocabulary, and puts each label next to the class whose fields it reads.
 //
 // The reason is concrete rather than theoretical. A PTY backend ref is decoded
 // with Effect Schema, and a schema mismatch renders the offending value —
@@ -56,98 +45,51 @@ const knownForeignErrorNames: ReadonlySet<string> = new Set([
   'SchemaError',
 ]);
 
-export interface RecognizedError {
+/**
+ * The key of the `SafeDiagnostic` method.
+ *
+ * Module-local on purpose (`Symbol`, never `Symbol.for`): only code that imports
+ * this module can implement the protocol, so an arbitrary value — a decoded
+ * payload, a foreign error, an object that sets `_tag` or `name` to anything it
+ * likes — can never claim to be one of ours. That is the property recognition by
+ * class used to provide, without platform code importing every domain's classes.
+ */
+export const describeSafely: unique symbol = Symbol('isagi.describeSafely');
+
+export interface SafeDescription {
+  /** Composed only from fields this codebase authored. Never an error's `message`. */
   readonly label: string;
-  // Followed only because the value above was recognized. A foreign error's own
-  // cause chain is never walked.
+  /** Walked next, because the value above was recognized. `null`/`undefined` ends the walk. */
   readonly cause: unknown;
 }
 
-export type CauseRecognizer = (value: unknown) => RecognizedError | null;
+/** An error class whose failures may be rendered into user-visible diagnostics and logs. */
+export interface SafeDiagnostic {
+  readonly [describeSafely]: () => SafeDescription;
+}
 
-/** The runtime-wide classifier: every error class this repository owns below
- *  the domain layer, and nothing that names one particular domain. */
-export function describeOperationalCause(cause: unknown, depth = 0): string {
-  return describeCause(cause, recognizeError, depth);
+/** Renders an operational failure for a user or a log, under the rules above. */
+export function describeOperationalCause(cause: unknown): string {
+  return describeCause(cause, 0);
 }
 
 /**
- * The walk itself, over a caller-supplied recognizer.
- *
- * A domain that owns an error class of its own composes a recognizer that tries
- * its class first and falls back to `recognizeError`, then walks with this — so
- * the depth bound, the unrecognized-value fallback, and the two allowlists stay
- * defined exactly once. Recursing through `describeOperationalCause` instead
- * would silently stop recognizing the domain's own class the moment one appeared
- * beneath a runtime error rather than above it.
+ * The walk: a recognized value contributes its label and, below the depth bound,
+ * its cause; the first unrecognized value ends the chain with a foreign label. A
+ * foreign error's own cause chain is never walked.
  */
-export function describeCause(value: unknown, recognize: CauseRecognizer, depth = 0): string {
+function describeCause(value: unknown, depth: number): string {
   const recognized = recognize(value);
   if (!recognized) return foreignErrorLabel(value);
   if (depth >= maxCauseDepth) return recognized.label;
   if (recognized.cause === undefined || recognized.cause === null) return recognized.label;
-  return `${recognized.label}: ${describeCause(recognized.cause, recognize, depth + 1)}`;
+  return `${recognized.label}: ${describeCause(recognized.cause, depth + 1)}`;
 }
 
-// Recognition is by class, never by a `_tag` or `name` field: an arbitrary
-// object can set `_tag` to any string it likes, which would reintroduce exactly
-// the leak this module prevents.
-export function recognizeError(value: unknown): RecognizedError | null {
-  if (value instanceof DatabaseError) {
-    return { label: `Database operation ${value.operation} failed`, cause: value.cause };
-  }
-  if (value instanceof PtyServiceError) {
-    return {
-      label: `PTY service error ${value.code}${coordinates({
-        ptyProcess: value.ptyProcessId,
-        worktree: value.worktreeId,
-      })}`,
-      cause: value.cause,
-    };
-  }
-  if (value instanceof PtyStartError) {
-    // `command` and `cwd` are deliberately omitted: a resolved command line and
-    // a filesystem path are process data, not coordinates.
-    return {
-      label: `PTY start error${value.reason ? ` ${value.reason}` : ''}${coordinates({
-        ptyProcess: value.ptyProcessId,
-      })}`,
-      cause: value.cause,
-    };
-  }
-  if (value instanceof PtyKillError) {
-    return {
-      label: `PTY kill error${coordinates({ ptyProcess: value.ptyProcessId })}`,
-      cause: value.cause,
-    };
-  }
-  if (value instanceof PtyInspectError) {
-    return {
-      label: `PTY inspect error${coordinates({ ptyProcess: value.ptyProcessId })}`,
-      cause: value.cause,
-    };
-  }
-  if (value instanceof PtyWriteError) {
-    return {
-      label: `PTY write error${coordinates({ ptyProcess: value.ptyProcessId })}`,
-      cause: value.cause,
-    };
-  }
-  if (value instanceof PtyResizeError) {
-    return {
-      label: `PTY resize error${coordinates({ ptyProcess: value.ptyProcessId })}`,
-      cause: value.cause,
-    };
-  }
-  if (value instanceof PtyTerminationInProgressError) {
-    return {
-      label: `PTY termination already in progress${coordinates({
-        ptyProcess: value.ptyProcessId,
-      })}`,
-      cause: null,
-    };
-  }
-  return null;
+function recognize(value: unknown): SafeDescription | null {
+  if (typeof value !== 'object' || value === null || !(describeSafely in value)) return null;
+  const describe: unknown = (value as Partial<SafeDiagnostic>)[describeSafely];
+  return typeof describe === 'function' ? (describe as () => SafeDescription).call(value) : null;
 }
 
 // System-call error codes are operating-system enum constants, not payloads,

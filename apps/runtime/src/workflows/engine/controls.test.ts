@@ -17,14 +17,9 @@ import {
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import {
-  workflowEvents,
-  workflowExecutions,
-  workflowOperations,
-  workflowRuns,
-} from '../../persistence/schema.js';
 import { WorkflowEngineError } from '../errors.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowEvents, workflowExecutions, workflowOperations, workflowRuns } from '../tables.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
 /** Pause, Resume, Retry, Cancel, Dismiss and Advance, and the code reload behind Resume and Retry. */

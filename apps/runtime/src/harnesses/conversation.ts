@@ -1,16 +1,25 @@
 import { Effect } from 'effect';
 
-import type { AgentSessionRow } from '../environment/surfaces/types.js';
+import type { AgentHarness } from '@isagi/contracts';
+
 import type { HarnessConversationTurn } from './definition-types.js';
 import { harnessDefinition } from './definitions.js';
-import { HarnessLedgerObserver, type HarnessLedgerObserverService } from './observer.service.js';
+import { HarnessLedgerObserver } from './observer.service.js';
 import type { HarnessObservationRecord } from './projection.js';
 import type { ConversationMessage } from './types.js';
 
+/** The agent session facts a conversation read needs; the environment's session row satisfies it. */
+export interface ConversationSession {
+  readonly id: number;
+  readonly harness: AgentHarness;
+  readonly cwd: string;
+  readonly harnessSessionId: string | null;
+}
+
 export function getConversationHistory(
-  session: Pick<AgentSessionRow, 'id' | 'harness' | 'cwd' | 'harnessSessionId'>,
+  session: ConversationSession,
   turn?: HarnessConversationTurn,
-): Effect.Effect<readonly ConversationMessage[], never, HarnessLedgerObserverService> {
+): Effect.Effect<readonly ConversationMessage[], never, HarnessLedgerObserver> {
   return Effect.gen(function* () {
     const observer = yield* HarnessLedgerObserver;
     const projection = yield* observer.getProjection(session.id);
@@ -31,7 +40,7 @@ export function getConversationHistory(
 
 function targetedHarnessStreams(
   streams: readonly [harnessSessionId: string, records: readonly HarnessObservationRecord[]][],
-  harness: AgentSessionRow['harness'],
+  harness: AgentHarness,
   harnessSessionId: string | null,
 ) {
   return streams.filter(([streamHarnessSessionId, records]) => {

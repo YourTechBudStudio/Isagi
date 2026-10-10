@@ -2,10 +2,10 @@ import type { Effect } from 'effect';
 
 import type { AgentHarness, WorkflowOperationUsage } from '@isagi/contracts';
 
-import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
+import type { LaunchPtyProcessInput } from '../pty-processes/index.js';
 import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
 import type { CodexRolloutPath } from './codex/native-artifacts.js';
-import type { AgentSessionArtifactsService } from './ledger.js';
+import type { AgentSessionArtifacts } from './ledger.js';
 import type { HarnessLifecycleResult } from './lifecycle.js';
 import type { HarnessObservationRecord } from './projection.js';
 import type {
@@ -50,7 +50,7 @@ export interface HarnessProbeDefinition {
 
 export interface HarnessDefinitionDependencies {
   readonly dataRoot: string;
-  readonly artifacts: AgentSessionArtifactsService;
+  readonly artifacts: AgentSessionArtifacts['Service'];
 }
 
 export interface HarnessTurnReference {

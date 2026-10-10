@@ -5,7 +5,7 @@ import { apiEndpoints, type ClientSettingsOutput } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../app/layer.js';
 import { registerApiEndpoint } from '../platform/http/index.js';
-import { RuntimeConfig } from './index.js';
+import { RuntimeConfig } from './service.js';
 
 export function registerClientSettingsApi(
   fastify: FastifyInstance,

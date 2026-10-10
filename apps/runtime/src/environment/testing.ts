@@ -3,76 +3,50 @@ import { mkdirSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
-import { EditorContextRepositoryLive } from '../editor/contexts/index.js';
-import { EditorContextService } from '../editor/contexts/index.js';
-import type { EditorContextServiceShape } from '../editor/contexts/index.js';
+import { EditorContextService } from '../editor/index.js';
 import {
+  EditorContextRepository,
   NotApplicableEditorProvisioningLayer,
   readyEditorProvisioningLayer,
-} from '../editor/provisioning/tests/shared-support.js';
-import {
   editorContextServiceLayer,
   testInstallation,
   testSessionSocketDirectory,
 } from '../editor/testing.js';
-import {
-  agentSessions,
-  ptyProcesses,
-  surfacePanes,
-  terminalSessions,
-  worktreeSurfaces,
-} from '../persistence/schema.js';
-import { InternalRuntimeEventBusLive } from '../platform/events/index.js';
-import { EntityLockLive } from '../platform/locks/entity-lock.js';
-import { LoopbackPortProbeLive } from '../platform/net/loopback-port-probe.js';
-import {
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../platform/persistence/index.js';
+import { AgentSessionArtifacts, HarnessLedgerObserver } from '../harnesses/index.js';
+import { InternalRuntimeEventBus } from '../platform/events/index.js';
+import { EntityLock } from '../platform/locks/index.js';
+import { LoopbackPortProbe } from '../platform/net/index.js';
+import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import {
-  PtyForegroundStateLive,
-  PtyService,
-  type PtyServiceShape,
-} from '../pty-processes/index.js';
-import { SessionLifecycleLive } from '../session-lifecycle/index.js';
-import { WorkspaceRepository, WorkspaceRepositoryLive } from '../workspace/index.js';
-import {
-  AgentSessionAttentionProjectionLive,
-  AgentSessionArtifacts,
-  AgentSessionArtifactsLive,
-  AgentSessionService,
-  HarnessLedgerObserverLive,
-  type AgentSessionServiceShape,
-} from './agent-sessions/index.js';
-import {
-  SurfaceRepository,
-  SurfaceRepositoryLive,
-  SurfaceServiceLive,
-  type SurfaceRepositoryService,
-} from './index.js';
-import {
-  TerminalSessionRepositoryLive,
-  TerminalSessionService,
-  TerminalSessionServiceLive,
-  type TerminalSessionServiceShape,
-} from './terminal-sessions/index.js';
+import { ProjectRepository } from '../projects/index.js';
+import { PtyForegroundState, PtyService } from '../pty-processes/index.js';
+import { ptyProcesses } from '../pty-processes/tables.js';
+import { fakeTerminateMany } from '../pty-processes/testing.js';
+import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
+import { HarnessObservationTargetsLayer } from './agent-sessions/observation-targets.js';
+import { AgentSessionService } from './agent-sessions/service.js';
+import { SurfaceRepository, SurfaceService } from './index.js';
+import { SessionLifecycle } from './sessions/lifecycle.js';
+import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from './tables.js';
+import { TerminalSessionRepository } from './terminal-sessions/repository.js';
+import { TerminalSessionService } from './terminal-sessions/service.js';
+
+/** The durable session inventory over a real database, for other modules' live fixtures. */
+export { listDurableSessionInventory } from './sessions/inventory.js';
 
 export function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
-    const workspaceRepository = yield* WorkspaceRepository;
-    const { id: projectId } = yield* workspaceRepository.createProject({
+    const projectRepository = yield* ProjectRepository;
+    const { id: projectId } = yield* projectRepository.createProject({
       name: 'isagi',
       rootPath,
       kind: 'git',
     });
-    yield* workspaceRepository.reconcileProjectWorktrees({
+    yield* projectRepository.reconcileProjectWorktrees({
       projectId,
       discovered: [{ path: rootPath, branch: 'main', head: 'abcdef0' }],
     });
-    const worktrees = yield* workspaceRepository.listWorktrees;
+    const worktrees = yield* projectRepository.listWorktrees;
     const worktree = worktrees.find((candidate) => candidate.projectId === projectId);
     if (!worktree) {
       return yield* Effect.die('Expected test worktree to be inserted.');
@@ -261,9 +235,9 @@ export function insertPtyProcess(input: {
 export function testLayer(
   dataRoot: string,
   options: {
-    readonly agentService?: Partial<AgentSessionServiceShape> | undefined;
-    readonly terminalService?: Partial<TerminalSessionServiceShape> | undefined;
-    readonly ptyService?: Partial<PtyServiceShape> | undefined;
+    readonly agentService?: Partial<AgentSessionService['Service']> | undefined;
+    readonly terminalService?: Partial<TerminalSessionService['Service']> | undefined;
+    readonly ptyService?: Partial<PtyService['Service']> | undefined;
     /**
      * Whether the editor is provisioned. `ready` by default so placement tests
      * exercise the operation rather than its Class C guard; `unavailable` is for
@@ -277,7 +251,7 @@ export function testLayer(
      * interleave and the assertion would hold with or without the lock.
      */
     readonly decorateEditorService?:
-      | ((inner: EditorContextServiceShape) => EditorContextServiceShape)
+      | ((inner: EditorContextService['Service']) => EditorContextService['Service'])
       | undefined;
     /**
      * Use the *real* terminal session service over this harness's database,
@@ -286,7 +260,7 @@ export function testLayer(
      * Replaces `terminalService`.
      */
     readonly decorateTerminalService?:
-      | ((inner: TerminalSessionServiceShape) => TerminalSessionServiceShape)
+      | ((inner: TerminalSessionService['Service']) => TerminalSessionService['Service'])
       | undefined;
     /**
      * Wrap the real surfaces repository. Race tests use it to hand the service
@@ -294,7 +268,7 @@ export function testLayer(
      * read and its transaction — a window synchronous SQLite never opens here.
      */
     readonly decorateSurfaceRepository?:
-      | ((inner: SurfaceRepositoryService) => SurfaceRepositoryService)
+      | ((inner: SurfaceRepository['Service']) => SurfaceRepository['Service'])
       | undefined;
   } = {},
 ) {
@@ -302,22 +276,22 @@ export function testLayer(
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
-  const internalRuntimeEventBus = InternalRuntimeEventBusLive;
-  const agentSessionArtifacts = AgentSessionArtifactsLive.pipe(Layer.provide(dataDirectoryLayer));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
-  const harnessLedgerObserver = HarnessLedgerObserverLive.pipe(
+  const internalRuntimeEventBus = InternalRuntimeEventBus.layer;
+  const agentSessionArtifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(dataDirectoryLayer));
+  const database = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
+  const harnessLedgerObserver = HarnessLedgerObserver.layer.pipe(
     Layer.provide(dataDirectoryLayer),
-    Layer.provide(database),
+    Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(internalRuntimeEventBus),
   );
-  const attentionProjection = AgentSessionAttentionProjectionLive.pipe(
+  const attentionProjection = AgentSessionAttentionProjection.layer.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
-    Layer.provide(PtyForegroundStateLive),
+    Layer.provide(PtyForegroundState.layer),
     Layer.provide(harnessLedgerObserver),
   );
-  const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
+  const projectRepository = ProjectRepository.layer.pipe(Layer.provide(database));
   const agentService = Layer.effect(
     AgentSessionService,
     Effect.map(RuntimeDatabase, (db) =>
@@ -325,7 +299,7 @@ export function testLayer(
     ),
   ).pipe(Layer.provide(database));
   const ptyService = Layer.succeed(PtyService, fakePtyService(options.ptyService));
-  const baseSurfaceRepository = SurfaceRepositoryLive.pipe(
+  const baseSurfaceRepository = SurfaceRepository.layer.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(attentionProjection),
@@ -339,8 +313,8 @@ export function testLayer(
   // One lock value, shared by session lifecycle, the editor service, and the
   // placement path, exactly as `runtime.layer.ts` shares it. Two would make the
   // per-worktree serialization these tests assert vacuous.
-  const entityLock = EntityLockLive;
-  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(entityLock));
+  const entityLock = EntityLock.layer;
+  const sessionLifecycle = SessionLifecycle.layer.pipe(Layer.provide(entityLock));
   const decorateTerminal = options.decorateTerminalService;
   const terminalService = decorateTerminal
     ? Layer.effect(
@@ -348,8 +322,8 @@ export function testLayer(
         Effect.map(TerminalSessionService, decorateTerminal),
       ).pipe(
         Layer.provide(
-          TerminalSessionServiceLive.pipe(
-            Layer.provide(TerminalSessionRepositoryLive.pipe(Layer.provide(database))),
+          TerminalSessionService.layer.pipe(
+            Layer.provide(TerminalSessionRepository.layer.pipe(Layer.provide(database))),
             Layer.provide(ptyService),
             Layer.provide(internalRuntimeEventBus),
             Layer.provide(sessionLifecycle),
@@ -364,21 +338,21 @@ export function testLayer(
       ).pipe(Layer.provide(database));
   // The editor domain owns creating a context; the surfaces repository only
   // reads and places one. Tests need the former to exercise the latter.
-  const editorRepository = EditorContextRepositoryLive.pipe(Layer.provide(database));
+  const editorRepository = EditorContextRepository.layer.pipe(Layer.provide(database));
   // The real service, over this harness's own already-bound dependencies. The
-  // PTY double is the same value `SurfaceServiceLive` receives, so the two
+  // PTY double is the same value `SurfaceService.layer` receives, so the two
   // services genuinely observe one process world; `editorServiceLayer` is
   // deliberately not reused here because it would construct a second database,
   // bus, lock, and PTY service.
   const baseEditorService = editorContextServiceLayer({
     database: editorRepository,
-    workspace: workspaceRepository,
+    workspace: projectRepository,
     pty: ptyService,
     provisioning:
       options.editorProvisioning === 'unavailable'
         ? NotApplicableEditorProvisioningLayer
         : readyEditorProvisioningLayer(testInstallation(dataRoot)),
-    portProbe: LoopbackPortProbeLive,
+    portProbe: LoopbackPortProbe.layer,
     entityLock,
     bus: internalRuntimeEventBus,
   });
@@ -388,7 +362,7 @@ export function testLayer(
         Layer.provide(baseEditorService),
       )
     : baseEditorService;
-  const surfaceService = SurfaceServiceLive.pipe(
+  const surfaceService = SurfaceService.layer.pipe(
     Layer.provide(surfaceRepository),
     Layer.provide(agentService),
     Layer.provide(terminalService),
@@ -406,7 +380,7 @@ export function testLayer(
     agentSessionArtifacts,
     attentionProjection,
     internalRuntimeEventBus,
-    workspaceRepository,
+    projectRepository,
     surfaceRepository,
     surfaceService,
     sessionLifecycle,
@@ -420,9 +394,9 @@ export function testLayer(
  * foreign key, so the claim checks it), and tests keep choosing their own ids.
  */
 function recordingAgentSessions(
-  database: RuntimeDatabaseService,
-  service: AgentSessionServiceShape,
-): AgentSessionServiceShape {
+  database: RuntimeDatabase['Service'],
+  service: AgentSessionService['Service'],
+): AgentSessionService['Service'] {
   return {
     ...service,
     startFresh: (input) =>
@@ -450,9 +424,9 @@ function recordingAgentSessions(
 }
 
 function recordingTerminalSessions(
-  database: RuntimeDatabaseService,
-  service: TerminalSessionServiceShape,
-): TerminalSessionServiceShape {
+  database: RuntimeDatabase['Service'],
+  service: TerminalSessionService['Service'],
+): TerminalSessionService['Service'] {
   return {
     ...service,
     startFresh: (input) =>
@@ -480,8 +454,8 @@ function recordingTerminalSessions(
 }
 
 function fakeAgentSessionService(
-  overrides: Partial<AgentSessionServiceShape> = {},
-): AgentSessionServiceShape {
+  overrides: Partial<AgentSessionService['Service']> = {},
+): AgentSessionService['Service'] {
   return {
     startFresh: () => Effect.die('agent startFresh is not used by surface service tests'),
     get: () => Effect.die('agent get is not used by surface service tests'),
@@ -492,12 +466,12 @@ function fakeAgentSessionService(
     stopUnlessPlaced: () =>
       Effect.die('agent stopUnlessPlaced is not used by surface service tests'),
     ...overrides,
-  } satisfies AgentSessionServiceShape;
+  } satisfies AgentSessionService['Service'];
 }
 
 function fakeTerminalSessionService(
-  overrides: Partial<TerminalSessionServiceShape> = {},
-): TerminalSessionServiceShape {
+  overrides: Partial<TerminalSessionService['Service']> = {},
+): TerminalSessionService['Service'] {
   return {
     startFresh: () => Effect.die('terminal startFresh is not used by surface service tests'),
     get: () => Effect.die('terminal get is not used by surface service tests'),
@@ -506,10 +480,12 @@ function fakeTerminalSessionService(
     activePtyProcessId: () =>
       Effect.die('terminal activePtyProcessId is not used by surface service tests'),
     ...overrides,
-  } satisfies TerminalSessionServiceShape;
+  } satisfies TerminalSessionService['Service'];
 }
 
-function fakePtyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
+function fakePtyService(overrides: Partial<PtyService['Service']> = {}): PtyService['Service'] {
+  const terminate: PtyService['Service']['terminate'] =
+    overrides.terminate ?? (() => Effect.succeed('terminated_live' as const));
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     readLogTail: () => Effect.die('readLogTail is not used'),
@@ -522,13 +498,15 @@ function fakePtyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceSha
     writeInput: () => Effect.die('pty writeInput is not used by surface service tests'),
     resize: () => Effect.die('pty resize is not used by surface service tests'),
     kill: () => Effect.die('pty kill is not used by surface service tests'),
-    terminate: () => Effect.succeed('terminated_live' as const),
+    terminate,
+    terminateMany: fakeTerminateMany(terminate),
+    findProcess: () => Effect.die('pty findProcess is not used by surface service tests'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
     ...overrides,
-  } satisfies PtyServiceShape;
+  } satisfies PtyService['Service'];
 }
 
 export function agentSessionRowForTest(input: {
@@ -550,3 +528,16 @@ export function agentSessionRowForTest(input: {
     activePtyProcess: null,
   };
 }
+
+// Internals and builders other modules' tests use; never imported by production code.
+export { AgentSessionError } from './agent-sessions/service.js';
+export type { StopUnlessPlacedOutcome } from './agent-sessions/service.js';
+export { StartupSessionRestoreLayer } from './sessions/restore.js';
+export { TerminalSessionError } from './terminal-sessions/service.js';
+export {
+  captureStartupLogs,
+  realRestoreLayer,
+  realSessionCreationLayer,
+  sessionDataLayer,
+} from './tests/restore-support.js';
+export type { HarnessLaunchRecord } from './tests/restore-support.js';

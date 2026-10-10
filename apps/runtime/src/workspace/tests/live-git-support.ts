@@ -4,19 +4,19 @@ import { join } from 'node:path';
 import { Effect } from 'effect';
 
 import { createFixtureWorkspace, type FixtureWorkspace } from '../../platform/git/testing.js';
-import type { RuntimeDatabaseService } from '../../platform/persistence/index.js';
-import type { WorkspaceRepositoryService } from '../../projects/repository.js';
+import type { RuntimeDatabase } from '../../platform/persistence/index.js';
+import type { ProjectRepository } from '../../projects/index.js';
 import { WorkspaceService } from '../service.js';
 import { type LiveWorkspaceOptions, runWithLiveWorkspace } from '../testing.js';
 
 /**
  * A real Git repository, registered as a real project, driven through the real workspace service.
  *
- * `live-workspace-support.ts` already gives the service a real database and a real `GitLive`, and
+ * `live-workspace-support.ts` already gives the service a real database and a real `Git.layer`, and
  * `git/tests/fixtures.ts` already builds isolated real repositories. What was missing is the pair
  * of them: everything worktree creation decides — whether a branch exists, what a ref resolves to,
  * whether `git worktree add` succeeds — is a question only Git can answer, and a hand-written
- * `GitService` double answers it by restating the assumption under test.
+ * `Git` double answers it by restating the assumption under test.
  *
  * Trust and hook outcomes are the deliberate exception. They live in trust rows and hook config,
  * not in the repository, so they arrive through `LiveWorkspaceOptions.worktreeSetup`.
@@ -70,7 +70,7 @@ export function withRegisteredGitProject<A, E>(
   options: LiveWorkspaceOptions,
   build: (
     projectId: number,
-  ) => Effect.Effect<A, E, RuntimeDatabaseService | WorkspaceRepositoryService | WorkspaceService>,
+  ) => Effect.Effect<A, E, RuntimeDatabase | ProjectRepository | WorkspaceService>,
 ) {
   return runWithLiveWorkspace(
     label,

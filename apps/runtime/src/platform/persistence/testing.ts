@@ -1,11 +1,11 @@
 import {
   isagiDataDirectoryPaths,
-  type DataDirectoryService,
   type IsagiDataDirectory,
+  type DataDirectory,
 } from './data-directory.js';
 
 /**
- * Builds a {@link DataDirectoryService} stub rooted at `root`, deriving the standard child paths
+ * Builds a {@link DataDirectory} stub rooted at `root`, deriving the standard child paths
  * through the **product's own** derivation. Pass `overrides` to point an individual path elsewhere
  * (e.g. a custom worktrees parent).
  *
@@ -18,6 +18,6 @@ import {
 export function makeTestDataDirectory(
   root: string,
   overrides: Partial<IsagiDataDirectory> = {},
-): DataDirectoryService {
+): DataDirectory['Service'] {
   return { paths: { ...isagiDataDirectoryPaths(root), ...overrides } };
 }

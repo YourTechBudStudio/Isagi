@@ -11,7 +11,7 @@ import {
   type ApiError,
 } from '@isagi/contracts';
 
-import { logDiagnosticEvent } from '../diagnostics/phase.js';
+import { logDiagnosticEvent } from '../diagnostics/index.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';
 import {
   decodeParams,

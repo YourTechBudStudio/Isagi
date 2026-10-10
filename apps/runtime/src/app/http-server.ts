@@ -5,21 +5,19 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { CliAccess } from '../cli-access/index.js';
 import { registerCommandsApi } from '../commands/index.js';
-import { registerEditorApi } from '../editor/index.js';
-import { EditorProvisioning } from '../editor/provisioning/index.js';
-import { registerAgentSessionsApi } from '../environment/agent-sessions/index.js';
-import { registerSurfacesApi } from '../environment/index.js';
-import { registerControlPlaneApi } from '../harnesses/api.js';
-import { HarnessControlPlane } from '../harnesses/control-plane/index.js';
-import { sendApiError } from '../platform/http/index.js';
-import { isAllowedRuntimeOrigin } from '../platform/http/origin.js';
-import { registerPtyApi } from '../pty-processes/index.js';
-import { registerClientSettingsApi } from '../runtime-config/api.js';
-import { registerRuntimeEventsApi } from '../runtime-events/api.js';
-import { restoreStartupSessions } from '../session-restore/index.js';
+import { registerEditorApi, EditorProvisioning } from '../editor/index.js';
+import {
+  registerAgentSessionsApi,
+  registerPtyApi,
+  registerSurfacesApi,
+  SurfaceService,
+} from '../environment/index.js';
+import { registerControlPlaneApi, HarnessControlPlane } from '../harnesses/index.js';
+import { sendApiError, isAllowedRuntimeOrigin } from '../platform/http/index.js';
+import { registerClientSettingsApi } from '../runtime-config/index.js';
+import { registerRuntimeEventsApi } from '../runtime-events/index.js';
 import { registerWorkflowApi } from '../workflows/index.js';
-import { registerWorkspaceApi } from '../workspace/api.js';
-import { registerPathsApi } from '../workspace/path-suggestions-api.js';
+import { registerWorkspaceApi, registerPathsApi } from '../workspace/index.js';
 import { registerHealthApi } from './health-api.js';
 import { RuntimeLayer } from './layer.js';
 
@@ -97,7 +95,10 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
         runtime,
         Effect.flatMap(EditorProvisioning, (provisioning) => provisioning.start),
       );
-      yield* runInRuntime(runtime, restoreStartupSessions);
+      yield* runInRuntime(
+        runtime,
+        Effect.flatMap(SurfaceService, (surfaces) => surfaces.restorePaneBoundSessions),
+      );
 
       startupOwnsResources = false;
       return { server: fastify, url };

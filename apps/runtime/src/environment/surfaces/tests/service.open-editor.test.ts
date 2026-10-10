@@ -6,14 +6,11 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
-import {
-  editorContexts,
-  ptyProcesses,
-  surfacePanes,
-  worktreeSurfaces,
-} from '../../../persistence/schema.js';
+import { editorContexts } from '../../../editor/tables.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
+import { ptyProcesses } from '../../../pty-processes/tables.js';
 import { SurfaceService } from '../../index.js';
+import { surfacePanes, worktreeSurfaces } from '../../tables.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
 /** Durable state, read directly. The three open branches are deliberately

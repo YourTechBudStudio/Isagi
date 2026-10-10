@@ -16,15 +16,15 @@ import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import { DataDirectory } from '../platform/persistence/index.js';
 import {
+  DataDirectory,
   emptyOrphanSweepStats,
   isIdName,
   listOrphanCandidates,
   openCollectorRoot,
   sweepOrphans,
   type OrphanSweepStats,
-} from '../platform/persistence/orphan-files.js';
+} from '../platform/persistence/index.js';
 
 // Below the data root; the folder writer and the orphan-folder collector share it.
 const artifactRootSegments = ['sessions', 'agent-sessions'] as const;
@@ -78,178 +78,176 @@ export class AgentSessionArtifactError extends Data.TaggedError('AgentSessionArt
   readonly cause: unknown;
 }> {}
 
-export interface AgentSessionArtifactsService {
-  readonly paths: (input: {
-    readonly agentSessionId: number;
-    readonly ptyProcessId?: number | null | undefined;
-  }) => AgentSessionArtifactPaths;
-  readonly initializeMetadata: (
-    agentSessionId: number,
-  ) => Effect.Effect<void, AgentSessionArtifactError>;
-  readonly prepareProcessArtifacts: (input: {
-    readonly agentSessionId: number;
-    readonly ptyProcessId: number;
-  }) => Effect.Effect<AgentSessionArtifactPaths, AgentSessionArtifactError>;
-  readonly readMetadata: (agentSessionId: number) => Effect.Effect<AgentSessionHarnessMetadataRead>;
-  readonly listAgentSessionIds: Effect.Effect<readonly number[]>;
-  readonly writeHarnessSessionId: (input: {
-    readonly agentSessionId: number;
-    readonly harnessSessionId: string;
-  }) => Effect.Effect<void, AgentSessionArtifactError>;
-  /**
-   * Deletes session folders that no `agent_sessions` row references once they are older than
-   * `minAgeMs`. Deleting a session removes its row only; this collector reclaims the folder later.
-   */
-  readonly collectOrphanFolders: (input: {
-    readonly liveIds: ReadonlySet<number>;
-    readonly minAgeMs: number;
-    readonly nowMs: number;
-  }) => Effect.Effect<OrphanSweepStats>;
-}
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const root = join(directory.paths.root, ...artifactRootSegments);
+  try {
+    ensureSecureArtifactDirectory(root);
+  } catch {
+    console.warn('[runtime] Harness artifact root could not be secured; observation will degrade.');
+  }
 
-export const AgentSessionArtifacts = Context.Service<AgentSessionArtifactsService>(
-  'isagi/AgentSessionArtifacts',
-);
-
-export const AgentSessionArtifactsLive = Layer.effect(
-  AgentSessionArtifacts,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const root = join(directory.paths.root, ...artifactRootSegments);
-    try {
-      ensureSecureArtifactDirectory(root);
-    } catch {
-      console.warn(
-        '[runtime] Harness artifact root could not be secured; observation will degrade.',
-      );
-    }
-
-    const service = {
-      paths: (input) => artifactPaths(root, input),
-      initializeMetadata: (agentSessionId) =>
-        Effect.try({
-          try: () => {
-            const paths = artifactPaths(root, { agentSessionId });
-            ensureSecureArtifactDirectory(root);
-            ensureSecureArtifactDirectory(paths.directory);
-            writeSecureArtifactFile(
-              paths.metadataPath,
-              `${JSON.stringify(initialMetadata(), null, 2)}\n`,
-            );
-          },
-          catch: (cause) =>
-            new AgentSessionArtifactError({
-              code: 'metadata_init_failed',
-              agentSessionId,
-              path: artifactPaths(root, { agentSessionId }).metadataPath,
-              cause,
-            }),
-        }),
-      prepareProcessArtifacts: (input) =>
-        Effect.try({
-          try: () => {
-            const paths = artifactPaths(root, input);
-            ensureSecureArtifactDirectory(root);
-            ensureSecureArtifactDirectory(paths.directory);
-            return paths;
-          },
-          catch: (cause) =>
-            new AgentSessionArtifactError({
-              code: 'jsonl_init_failed',
-              agentSessionId: input.agentSessionId,
-              path: artifactPaths(root, input).directory,
-              cause,
-            }),
-        }),
-      readMetadata: (agentSessionId) =>
-        Effect.sync(() => {
+  const service = AgentSessionArtifacts.of({
+    paths: (input) => artifactPaths(root, input),
+    initializeMetadata: (agentSessionId) =>
+      Effect.try({
+        try: () => {
           const paths = artifactPaths(root, { agentSessionId });
-          try {
-            assertSecureArtifactPath(paths.directory, 'directory');
-            assertSecureArtifactPath(paths.metadataPath, 'file');
-            return {
-              status: 'valid',
-              metadata: parseMetadata(readFileSync(paths.metadataPath, 'utf8')),
-              metadataPath: paths.metadataPath,
-            } satisfies AgentSessionHarnessMetadataRead;
-          } catch (error) {
-            if (isMissingFileError(error))
-              return {
-                status: 'missing',
-                metadataPath: paths.metadataPath,
-              } satisfies AgentSessionHarnessMetadataRead;
-            return {
-              status: 'invalid',
-              metadataPath: paths.metadataPath,
-              diagnostic: diagnosticForInvalidMetadata(error),
-            } satisfies AgentSessionHarnessMetadataRead;
-          }
-        }),
-      listAgentSessionIds: Effect.sync(() => {
+          ensureSecureArtifactDirectory(root);
+          ensureSecureArtifactDirectory(paths.directory);
+          writeSecureArtifactFile(
+            paths.metadataPath,
+            `${JSON.stringify(initialMetadata(), null, 2)}\n`,
+          );
+        },
+        catch: (cause) =>
+          new AgentSessionArtifactError({
+            code: 'metadata_init_failed',
+            agentSessionId,
+            path: artifactPaths(root, { agentSessionId }).metadataPath,
+            cause,
+          }),
+      }),
+    prepareProcessArtifacts: (input) =>
+      Effect.try({
+        try: () => {
+          const paths = artifactPaths(root, input);
+          ensureSecureArtifactDirectory(root);
+          ensureSecureArtifactDirectory(paths.directory);
+          return paths;
+        },
+        catch: (cause) =>
+          new AgentSessionArtifactError({
+            code: 'jsonl_init_failed',
+            agentSessionId: input.agentSessionId,
+            path: artifactPaths(root, input).directory,
+            cause,
+          }),
+      }),
+    readMetadata: (agentSessionId) =>
+      Effect.sync(() => {
+        const paths = artifactPaths(root, { agentSessionId });
         try {
-          assertSecureArtifactPath(root, 'directory');
-          return readdirSync(root, { withFileTypes: true })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => Number(entry.name))
-            .filter((id) => Number.isSafeInteger(id) && id > 0);
+          assertSecureArtifactPath(paths.directory, 'directory');
+          assertSecureArtifactPath(paths.metadataPath, 'file');
+          return {
+            status: 'valid',
+            metadata: parseMetadata(readFileSync(paths.metadataPath, 'utf8')),
+            metadataPath: paths.metadataPath,
+          } satisfies AgentSessionHarnessMetadataRead;
         } catch (error) {
-          if (isMissingFileError(error)) return [];
-          console.warn('[runtime] Harness artifact inventory is unavailable', {
-            root,
-            error,
-          });
-          return [];
+          if (isMissingFileError(error))
+            return {
+              status: 'missing',
+              metadataPath: paths.metadataPath,
+            } satisfies AgentSessionHarnessMetadataRead;
+          return {
+            status: 'invalid',
+            metadataPath: paths.metadataPath,
+            diagnostic: diagnosticForInvalidMetadata(error),
+          } satisfies AgentSessionHarnessMetadataRead;
         }
       }),
-      writeHarnessSessionId: (input) =>
-        Effect.try({
-          try: () => {
-            const paths = artifactPaths(root, { agentSessionId: input.agentSessionId });
-            ensureSecureArtifactDirectory(root);
-            ensureSecureArtifactDirectory(paths.directory);
-            writeSecureArtifactFile(
-              paths.metadataPath,
-              `${JSON.stringify(
-                {
-                  schemaVersion: 1,
-                  harnessSessionId: input.harnessSessionId,
-                  updatedAt: new Date().toISOString(),
-                } satisfies AgentSessionHarnessMetadata,
-                null,
-                2,
-              )}\n`,
-            );
-          },
-          catch: (cause) =>
-            new AgentSessionArtifactError({
-              code: 'metadata_write_failed',
-              agentSessionId: input.agentSessionId,
-              path: artifactPaths(root, { agentSessionId: input.agentSessionId }).metadataPath,
-              cause,
-            }),
-        }),
-      collectOrphanFolders: (input) =>
-        Effect.gen(function* () {
-          const label = 'agent session folder';
-          const opened = openCollectorRoot(directory.paths.root, artifactRootSegments, label);
-          if (opened.status !== 'ready') return emptyOrphanSweepStats;
-          const listing = listOrphanCandidates(opened.directory, 'directory', isIdName, label);
-          if (listing.status !== 'listed') return emptyOrphanSweepStats;
-          return yield* Effect.promise(() =>
-            sweepOrphans({
-              label,
-              candidates: listing.candidates,
-              isLive: (candidate) => input.liveIds.has(Number(candidate.name)),
-              minAgeMs: input.minAgeMs,
-              nowMs: input.nowMs,
-            }),
+    listAgentSessionIds: Effect.sync(() => {
+      try {
+        assertSecureArtifactPath(root, 'directory');
+        return readdirSync(root, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => Number(entry.name))
+          .filter((id) => Number.isSafeInteger(id) && id > 0);
+      } catch (error) {
+        if (isMissingFileError(error)) return [];
+        console.warn('[runtime] Harness artifact inventory is unavailable', {
+          root,
+          error,
+        });
+        return [];
+      }
+    }),
+    writeHarnessSessionId: (input) =>
+      Effect.try({
+        try: () => {
+          const paths = artifactPaths(root, { agentSessionId: input.agentSessionId });
+          ensureSecureArtifactDirectory(root);
+          ensureSecureArtifactDirectory(paths.directory);
+          writeSecureArtifactFile(
+            paths.metadataPath,
+            `${JSON.stringify(
+              {
+                schemaVersion: 1,
+                harnessSessionId: input.harnessSessionId,
+                updatedAt: new Date().toISOString(),
+              } satisfies AgentSessionHarnessMetadata,
+              null,
+              2,
+            )}\n`,
           );
-        }),
-    } satisfies AgentSessionArtifactsService;
+        },
+        catch: (cause) =>
+          new AgentSessionArtifactError({
+            code: 'metadata_write_failed',
+            agentSessionId: input.agentSessionId,
+            path: artifactPaths(root, { agentSessionId: input.agentSessionId }).metadataPath,
+            cause,
+          }),
+      }),
+    collectOrphanFolders: (input) =>
+      Effect.gen(function* () {
+        const label = 'agent session folder';
+        const opened = openCollectorRoot(directory.paths.root, artifactRootSegments, label);
+        if (opened.status !== 'ready') return emptyOrphanSweepStats;
+        const listing = listOrphanCandidates(opened.directory, 'directory', isIdName, label);
+        if (listing.status !== 'listed') return emptyOrphanSweepStats;
+        return yield* Effect.promise(() =>
+          sweepOrphans({
+            label,
+            candidates: listing.candidates,
+            isLive: (candidate) => input.liveIds.has(Number(candidate.name)),
+            minAgeMs: input.minAgeMs,
+            nowMs: input.nowMs,
+          }),
+        );
+      }),
+  });
 
-    return service;
-  }),
-);
+  return service;
+});
+
+export class AgentSessionArtifacts extends Context.Service<
+  AgentSessionArtifacts,
+  {
+    readonly paths: (input: {
+      readonly agentSessionId: number;
+      readonly ptyProcessId?: number | null | undefined;
+    }) => AgentSessionArtifactPaths;
+    readonly initializeMetadata: (
+      agentSessionId: number,
+    ) => Effect.Effect<void, AgentSessionArtifactError>;
+    readonly prepareProcessArtifacts: (input: {
+      readonly agentSessionId: number;
+      readonly ptyProcessId: number;
+    }) => Effect.Effect<AgentSessionArtifactPaths, AgentSessionArtifactError>;
+    readonly readMetadata: (
+      agentSessionId: number,
+    ) => Effect.Effect<AgentSessionHarnessMetadataRead>;
+    readonly listAgentSessionIds: Effect.Effect<readonly number[]>;
+    readonly writeHarnessSessionId: (input: {
+      readonly agentSessionId: number;
+      readonly harnessSessionId: string;
+    }) => Effect.Effect<void, AgentSessionArtifactError>;
+    /**
+     * Deletes session folders that no `agent_sessions` row references once they are older than
+     * `minAgeMs`. Deleting a session removes its row only; this collector reclaims the folder later.
+     */
+    readonly collectOrphanFolders: (input: {
+      readonly liveIds: ReadonlySet<number>;
+      readonly minAgeMs: number;
+      readonly nowMs: number;
+    }) => Effect.Effect<OrphanSweepStats>;
+  }
+>()('isagi/runtime/harnesses/AgentSessionArtifacts') {
+  static readonly layer = Layer.effect(AgentSessionArtifacts, make);
+}
 
 function artifactPaths(
   root: string,

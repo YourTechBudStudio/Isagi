@@ -4,7 +4,8 @@ import type { FastifyInstance } from 'fastify';
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../../app/layer.js';
-import { HarnessLaunchBlocked } from '../../harnesses/control-plane/index.js';
+import { editorApiError } from '../../editor/index.js';
+import { HarnessLaunchBlocked } from '../../harnesses/index.js';
 import {
   registerApiEndpoint,
   type ApiRouteContext,
@@ -163,6 +164,50 @@ export function registerSurfacesApi(
     mapError: (error, context) => toSurfaceApiError(error, context),
     run,
   });
+
+  // Opening an editor is a placement: the surfaces service resolves (or creates) the pane and
+  // asks the editor domain for the context it binds there.
+  registerApiEndpoint(fastify, apiEndpoints.editor.open, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.openEditor({
+          worktreeId: params.worktreeId,
+          intoSurfaceId: input.intoSurfaceId,
+        });
+      }),
+    mapError: toEditorOpenApiError,
+    run,
+  });
+}
+
+/**
+ * `editor.open` answers in the editor's error vocabulary. Its surface failures are mapped here;
+ * every other failure (the editor's own, the database) goes to the editor mapper, which is total
+ * over the editor error union.
+ */
+function toEditorOpenApiError(error: unknown, context: ApiRouteContext): ApiError {
+  if (error instanceof SurfaceError) {
+    // Translated rather than delegated, because the editor's own refusal
+    // vocabulary already names it and the palette reads one reason set. The
+    // target-surface refusals (`surface_not_found`, `surface_not_empty`) are
+    // surfaces conditions and delegate as such; the rest are unreachable from
+    // `openEditor` in practice, but the type channel carries them, so
+    // delegation keeps this mapper total.
+    if (error.code === 'worktree_not_found')
+      return {
+        code: 'editor_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: 'worktree_not_found',
+          ...(error.worktreeId === undefined ? {} : { worktreeId: error.worktreeId }),
+        },
+      };
+    return toSurfaceApiError(error, context);
+  }
+  return editorApiError(error, context);
 }
 
 export function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {

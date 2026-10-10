@@ -6,7 +6,6 @@ import type * as nodePty from 'node-pty';
 
 import {
   NodePtyBackend,
-  NodePtyBackendLive,
   nodePtyLaunchCommand,
   spawnNodePty,
   terminalProbeResponses,
@@ -107,7 +106,7 @@ test('node-pty terminate reports absence rather than a kill it did not perform',
         ref: { schemaVersion: 1, backend: 'node_pty', ptyProcessId: 4_242, pid: null },
         gracefulTimeoutMs: 10,
       });
-    }).pipe(Effect.provide(NodePtyBackendLive)),
+    }).pipe(Effect.provide(NodePtyBackend.layer)),
   );
 
   assert.deepEqual(result, { terminated: false });
@@ -123,7 +122,7 @@ test('node-pty kill reports absence rather than a kill it did not perform', asyn
         ptyProcessId: 4_243,
         pid: null,
       });
-    }).pipe(Effect.provide(NodePtyBackendLive)),
+    }).pipe(Effect.provide(NodePtyBackend.layer)),
   );
 
   assert.deepEqual(result, { terminated: false });
@@ -150,7 +149,7 @@ test('node-pty terminate affirms a kill when it signalled a live handle', async 
       // The handle is gone afterwards, so a second attempt is honest absence.
       const again = yield* backend.terminate({ ref, gracefulTimeoutMs: 20 });
       return { terminated, again, inspection: yield* backend.inspect(ref) };
-    }).pipe(Effect.provide(NodePtyBackendLive)),
+    }).pipe(Effect.provide(NodePtyBackend.layer)),
   );
 
   assert.deepEqual(result.terminated, { terminated: true });

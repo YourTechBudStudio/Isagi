@@ -4,14 +4,14 @@ import type { OpenEditorInput, OpenEditorOutput } from '@isagi/contracts';
 
 import {
   editorLockKey,
-  type EditorContextServiceShape,
   type EditorUnavailable,
-} from '../../editor/contexts/index.js';
-import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
-import type { EntityLockService } from '../../platform/locks/entity-lock.js';
+  type EditorContextService,
+} from '../../editor/index.js';
+import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
+import type { EntityLock } from '../../platform/locks/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { SurfaceError } from './errors.js';
-import type { SurfaceRepositoryService } from './repository.js';
+import type { SurfaceRepository } from './repository.js';
 
 /**
  * Placement for the durable editor context: one idempotent, per-worktree locked
@@ -21,7 +21,7 @@ import type { SurfaceRepositoryService } from './repository.js';
  * is cohesive and unlike anything else in `SurfaceService` — it is the only
  * operation that reconciles a durable entity owned by another domain with this
  * domain's placement, and the only one that holds a cross-domain lock. It is
- * deliberately absent from the surfaces barrel: `SurfaceServiceLive` is its only
+ * deliberately absent from the surfaces barrel: `SurfaceService.layer` is its only
  * caller.
  *
  * It starts no process. The pane's `ensureRuntime` call is the on-demand half.
@@ -31,10 +31,10 @@ import type { SurfaceRepositoryService } from './repository.js';
  * editor is never moved; opening it answers with where it already is.
  */
 export interface OpenEditorDependencies {
-  readonly repository: SurfaceRepositoryService;
-  readonly editors: EditorContextServiceShape;
-  readonly entityLock: EntityLockService;
-  readonly eventBus: InternalRuntimeEventBusService;
+  readonly repository: SurfaceRepository['Service'];
+  readonly editors: EditorContextService['Service'];
+  readonly entityLock: EntityLock['Service'];
+  readonly eventBus: InternalRuntimeEventBus['Service'];
 }
 
 export function openEditor(

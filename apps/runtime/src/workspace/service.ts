@@ -34,12 +34,9 @@ import type {
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
-import { SurfaceRepository } from '../environment/index.js';
-import { diagnosticPhase, logDiagnosticEvent } from '../platform/diagnostics/phase.js';
-import {
-  InternalRuntimeEventBus,
-  type InternalRuntimeEventBusService,
-} from '../platform/events/index.js';
+import { SurfaceService } from '../environment/index.js';
+import { diagnosticPhase, logDiagnosticEvent } from '../platform/diagnostics/index.js';
+import { InternalRuntimeEventBus } from '../platform/events/index.js';
 import {
   branchPathHash,
   classifyProjectRoot,
@@ -51,26 +48,21 @@ import {
   type ProjectPathValidationError,
   validateProjectRoot,
 } from '../platform/git/index.js';
+import { DataDirectory, type DatabaseError } from '../platform/persistence/index.js';
 import {
-  DataDirectory,
-  type DatabaseError,
-  StateFile,
-  type StateFileError,
-} from '../platform/persistence/index.js';
-import { ProjectConfigError } from '../projects/config/service.js';
-import {
-  WorkspaceRepository,
-  type WorktreeDeleteDiagnostics,
+  ProjectConfigError,
+  ProjectRepository,
+  type DiscoveredWorktree,
+  type ProjectRow,
   type WorkspaceReconcileProjectWorktreesResult,
-} from '../projects/repository.js';
-import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from '../projects/types.js';
+  type WorktreeRow,
+} from '../projects/index.js';
+import { PtyService } from '../pty-processes/index.js';
 import {
-  activePtyProcessIds,
-  PtyService,
-  terminatePtyProcessIds,
-  type PtyServiceShape,
-} from '../pty-processes/index.js';
-import { WorkflowRunErasure } from '../workflows/erasure.js';
+  sessionPtyProcessIds,
+  WorktreeDeleteDiagnosticsReader,
+  type WorktreeDeleteDiagnostics,
+} from './delete-diagnostics.js';
 import {
   createDetachedWorktree,
   type DetachedWorktree,
@@ -79,14 +71,12 @@ import {
 } from './detached-worktree.js';
 import { directoryAvailability } from './directory-availability.js';
 import { checkNewDirectory, type NewDirectoryRejected } from './new-directory.js';
-import {
-  runPostCreateSetup,
-  WorktreeSetupError,
-  WorktreeSetupRepository,
-  WorktreeSetupRunError,
-  WorktreeSetupService,
-} from './setup/index.js';
+import { ProjectDeletionParticipant } from './project-deletion-participant.js';
+import { WorktreeSetupRepository } from './setup/repository.js';
+import { runPostCreateSetup, WorktreeSetupRunError } from './setup/runner.js';
+import { WorktreeSetupError, WorktreeSetupService } from './setup/service.js';
 import { buildWorkspaceSnapshot } from './snapshot.js';
+import { StateFile, type StateFileError } from './state-file.js';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
   readonly code:
@@ -163,8 +153,781 @@ export type WorkspaceServiceError =
 export type MoveProjectOrderServiceError = WorkspaceServiceError | ProjectOrderError;
 export type MoveWorktreeOrderServiceError = WorkspaceServiceError | WorktreeOrderError;
 
-export interface WorkspaceService {
+const make = Effect.gen(function* () {
+  const repository = yield* ProjectRepository;
+  const stateFile = yield* StateFile;
+  const git = yield* Git;
+  const dataDirectory = yield* DataDirectory;
+  const worktreeSetup = yield* WorktreeSetupService;
+  const worktreeSetupRepository = yield* WorktreeSetupRepository;
+  const surfaces = yield* SurfaceService;
+  const deleteDiagnostics = yield* WorktreeDeleteDiagnosticsReader;
+  const commands = yield* CommandService;
+  const pty = yield* PtyService;
+  const internalEvents = yield* InternalRuntimeEventBus;
+  const deletionParticipant = yield* ProjectDeletionParticipant;
+
+  const get = Effect.gen(function* () {
+    const rows = yield* loadWorkspaceRows(repository);
+    const surfaceMetadata = yield* surfaces.listWorkspaceSurfaceMetadata;
+    const environmentFocus = yield* surfaces.listEnvironmentFocusStates;
+    return buildWorkspaceSnapshot(rows.projects, rows.worktrees, surfaceMetadata, environmentFocus);
+  });
+
+  const getActiveContext = stateFile.read.pipe(
+    Effect.map((state) => ({ activeContext: activeContextFromState(state) })),
+  );
+
+  const durableSessions = surfaces.listDurableSessions;
+
+  /**
+   * The durable identities a worktree owns, read before its row is deleted. The DB
+   * cascade removes those rows silently, so any client that is not the one issuing the
+   * delete would otherwise never learn its cached terminals are gone.
+   */
+  const durableSessionsInWorktrees = (worktreeIds: ReadonlySet<number>) =>
+    surfaces.listDurableSessions.pipe(
+      Effect.map((inventory) =>
+        inventory.sessions.filter((session) => worktreeIds.has(session.worktreeId)),
+      ),
+    );
+
+  const publishDurableSessionDeletions = (
+    identities: readonly DurableSessionIdentity[],
+  ): Effect.Effect<void> =>
+    Effect.forEach(
+      identities,
+      (identity) => internalEvents.publish({ type: 'durable_session_deleted', identity }),
+      { discard: true },
+    );
+
+  const publishRestoredActivation = Effect.gen(function* () {
+    const state = yield* stateFile.read;
+    const worktreeId = state.workspace.activeWorktreeId;
+    if (worktreeId === null) return;
+    const worktree = yield* repository.findWorktree(worktreeId);
+    if (!worktree) return;
+    yield* internalEvents.publish({
+      type: 'worktree_activation_change',
+      previousWorktreeId: null,
+      nextWorktreeId: worktree.id,
+      cause: 'startup_restored',
+    });
+  });
+
+  return WorkspaceService.of({
+    get,
+    publishRestoredActivation,
+    durableSessions,
+    deleteProject: (projectId) =>
+      Effect.gen(function* () {
+        // Do not clear persisted active context here. Active context is
+        // frontend-owned restoration state; stale project/worktree references
+        // are intentionally reconciled by the frontend during startup and
+        // workspace refresh.
+        const worktrees = (yield* repository.listWorktrees).filter(
+          (worktree) => worktree.projectId === projectId,
+        );
+        for (const worktree of worktrees) {
+          yield* commandCleanup(
+            commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
+            worktree.id,
+            projectId,
+          );
+        }
+        const doomed = yield* durableSessionsInWorktrees(
+          new Set(worktrees.map((worktree) => worktree.id)),
+        );
+        // Read *before* the delete: `worktrees.project_id` cascades from `projects`, so after the
+        // commit there is no way to enumerate which worktrees went with it, and the
+        // `project_deleted` event names exactly those ids.
+        const doomedWorktreeIds = worktrees.map((worktree) => worktree.id);
+        // The project's workflow runs are erased in the same transaction as its row, through the
+        // `ProjectDeletionParticipant` port. On the runtime's single SQLite connection, a launch
+        // commits wholly before this transaction (so its run is erased here) or wholly after it
+        // (so launch admission refuses it): a deleted project has no runs and can never gain
+        // one. The workflows domain owns the erasure SQL (ADR 0008); this service only owns the
+        // transaction boundary.
+        let erasedRuns = 0;
+        const deleted = yield* repository.deleteProject(projectId, (db) => {
+          erasedRuns = deletionParticipant.eraseInTransaction(db, projectId);
+        });
+        if (deleted) {
+          yield* publishDurableSessionDeletions(doomed);
+          yield* internalEvents.publish({
+            type: 'project_deleted',
+            projectId,
+            worktreeIds: doomedWorktreeIds,
+          });
+          console.info(
+            `[runtime] Deleted project projectId=${projectId} worktrees=${doomedWorktreeIds.length} workflowRuns=${erasedRuns}`,
+          );
+        }
+        return { projectId, deleted };
+      }),
+    getActiveContext,
+    listProjectBranches: (input) =>
+      Effect.gen(function* () {
+        const project = yield* requirePresentProject(repository, input.projectId);
+        yield* requireGitProject(project);
+        yield* ensureProjectPathAvailable(repository, project);
+        const branches = yield* listLocalBranches(project.rootPath).pipe(
+          Effect.provideService(Git, git),
+        );
+        const worktrees = yield* repository.listWorktrees;
+        const worktreeIdByBranch = new Map(
+          worktrees
+            .filter((worktree) => worktree.projectId === project.id && worktree.branch)
+            .map((worktree) => [worktree.branch as string, worktree.id] as const),
+        );
+
+        return {
+          branches: branches.map((branch) => ({
+            name: branch,
+            worktreeId: worktreeIdByBranch.get(branch) ?? null,
+          })),
+        } satisfies ListProjectBranchesOutput;
+      }),
+    preflightWorktreeSetup: (input) =>
+      Effect.gen(function* () {
+        const project = yield* requirePresentProject(repository, input.projectId);
+        yield* requireGitProject(project);
+        yield* ensureProjectPathAvailable(repository, project);
+        return yield* worktreeSetup.preflight(project);
+      }),
+    trustWorktreeSetup: (input) =>
+      Effect.gen(function* () {
+        const project = yield* requirePresentProject(repository, input.projectId);
+        yield* requireGitProject(project);
+        yield* ensureProjectPathAvailable(repository, project);
+        return yield* worktreeSetup.updateTrust({ project, request: input.request });
+      }),
+    openWorktree: (input) =>
+      diagnosticPhase(
+        'workspace.open_worktree',
+        { projectId: input.projectId, branch: input.request.branch.trim() },
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
+          const branch = input.request.branch.trim();
+          const context = {
+            projectId: project.id,
+            rootPath: project.rootPath,
+            branch,
+          } as const;
+          if (!branch) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'branch_not_found',
+                message: 'A branch name is required to open a worktree.',
+                projectId: input.projectId,
+              }),
+            );
+          }
+
+          yield* ensureProjectPathAvailable(repository, project);
+          yield* validateBranchName(git, project, branch);
+          yield* reconcileProject(repository, commands, internalEvents, project).pipe(
+            Effect.provideService(Git, git),
+          );
+          // Both collision checks sit after the service's own reconcile, so they judge what Git
+          // actually holds rather than what the database last remembered.
+          const createNew = input.request.mode === 'create_new';
+          const existing = yield* repository.findProjectWorktreeByBranch({
+            projectId: project.id,
+            branch,
+          });
+          if (existing) {
+            if (createNew) {
+              return yield* Effect.fail(
+                new WorkspaceError({
+                  branch,
+                  code: 'worktree_exists',
+                  message: `Worktree ${existing.id} is already checked out on branch ${branch}.`,
+                  path: existing.path,
+                  projectId: project.id,
+                  worktreeId: existing.id,
+                }),
+              );
+            }
+            return {
+              projectId: project.id,
+              worktreeId: existing.id,
+              branch,
+              status: 'opened_existing',
+              setup: { status: 'not_run', reason: 'existing_worktree' },
+            } satisfies OpenWorktreeOutput;
+          }
+
+          const branches = yield* listLocalBranches(project.rootPath).pipe(
+            Effect.provideService(Git, git),
+          );
+          const branchExists = branches.includes(branch);
+          if (branchExists && createNew) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                branch,
+                code: 'branch_exists',
+                message: `Branch ${branch} already exists in project ${project.id}.`,
+                projectId: project.id,
+              }),
+            );
+          }
+          let baseRef: string | null = null;
+          if (!branchExists) {
+            const base = input.request.base;
+            if (!base) {
+              return yield* Effect.fail(
+                new WorkspaceError({
+                  branch,
+                  code: 'new_branch_requires_base',
+                  message: `Branch ${branch} does not exist. Choose what to create it from.`,
+                  projectId: project.id,
+                }),
+              );
+            }
+            baseRef = yield* validateBaseRef(repository, git, project, base);
+          }
+
+          const setupPlan = yield* worktreeSetup.validateTrustForOpen(project);
+
+          const checkoutPath = checkoutPathForBranch(
+            dataDirectory.paths.worktreesPath,
+            project.id,
+            branch,
+          );
+          const checkoutContext = { ...context, checkoutPath };
+          yield* ensureCheckoutPathAvailable(git, project, branch, checkoutPath);
+          yield* prepareCheckoutParent(project, branch, checkoutPath);
+
+          if (branchExists) {
+            yield* diagnosticPhase(
+              'workspace.open_worktree.git_add_existing_branch',
+              checkoutContext,
+              git.run(['-C', project.rootPath, 'worktree', 'add', checkoutPath, branch]),
+            );
+          } else {
+            if (!baseRef) {
+              return yield* Effect.die('Base ref was validated but not available.');
+            }
+            yield* diagnosticPhase(
+              'workspace.open_worktree.git_add_new_branch',
+              { ...checkoutContext, baseRef },
+              git.run([
+                '-C',
+                project.rootPath,
+                'worktree',
+                'add',
+                '-b',
+                branch,
+                checkoutPath,
+                baseRef,
+              ]),
+            );
+          }
+          yield* diagnosticPhase(
+            'workspace.open_worktree.reconcile_after_git_add',
+            checkoutContext,
+            reconcileProject(repository, commands, internalEvents, project).pipe(
+              Effect.provideService(Git, git),
+            ),
+          );
+          const created = yield* repository.findProjectWorktreeByBranch({
+            projectId: project.id,
+            branch,
+          });
+          if (!created) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                branch,
+                code: 'worktree_not_found',
+                message: `Git created branch ${branch}, but Isagi could not find the new worktree after reconciliation.`,
+                projectId: project.id,
+              }),
+            );
+          }
+
+          const setup = yield* completeWorktreeCreation({
+            commands,
+            worktreeSetupRepository,
+            project,
+            worktree: created,
+            setupPlan,
+            diagnosticContext: checkoutContext,
+          });
+
+          // Branched rather than computed: `status` and `setup` are correlated members of the
+          // output union, and a ternary would leave them independently widened.
+          if (setup.status === 'failed') {
+            return {
+              projectId: project.id,
+              worktreeId: created.id,
+              branch,
+              status: 'created_setup_failed',
+              setup,
+            } satisfies OpenWorktreeOutput;
+          }
+
+          return {
+            projectId: project.id,
+            worktreeId: created.id,
+            branch,
+            status: 'created',
+            setup,
+          } satisfies OpenWorktreeOutput;
+        }),
+      ),
+    createDetachedWorktree: (input) =>
+      createDetachedWorktree(
+        {
+          repository,
+          git,
+          reconcile: (project) =>
+            reconcileProject(repository, commands, internalEvents, project).pipe(
+              Effect.provideService(Git, git),
+            ),
+        },
+        input,
+      ),
+    checkNewDirectory: (path) => checkNewDirectory(repository, path),
+    preflightWorktreeCreation: (input) =>
+      diagnosticPhase(
+        'workspace.preflight_worktree_creation',
+        {
+          projectId: input.projectId,
+          branch: input.branch.trim(),
+          fromRef: input.fromRef,
+        },
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
+          yield* ensureProjectPathAvailable(repository, project);
+          // Trimmed here as well as in `openWorktree`, because the checkout path is derived from
+          // the branch name: an untrimmed name would hash to a different path than the creation
+          // this preflight is answering for would use.
+          const branch = input.branch.trim();
+          yield* validateBranchName(git, project, branch);
+          const branches = yield* listLocalBranches(project.rootPath).pipe(
+            Effect.provideService(Git, git),
+          );
+          if (branches.includes(branch)) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                branch,
+                code: 'branch_exists',
+                message: `Branch ${branch} already exists in project ${project.id}.`,
+                projectId: project.id,
+              }),
+            );
+          }
+          const existing = yield* repository.findProjectWorktreeByBranch({
+            projectId: project.id,
+            branch,
+          });
+          if (existing) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                branch,
+                code: 'worktree_exists',
+                message: `Worktree ${existing.id} is already checked out on branch ${branch}.`,
+                path: existing.path,
+                projectId: project.id,
+                worktreeId: existing.id,
+              }),
+            );
+          }
+          const commit = yield* resolveCommit(git, project, input.fromRef);
+          const checkoutPath = checkoutPathForBranch(
+            dataDirectory.paths.worktreesPath,
+            project.id,
+            branch,
+          );
+          yield* ensureCheckoutPathAvailable(git, project, branch, checkoutPath);
+          return { commit, checkoutPath };
+        }),
+      ),
+    runWorktreeSetup: (input) =>
+      diagnosticPhase(
+        'workspace.run_worktree_setup',
+        { projectId: input.projectId, worktreeId: input.worktreeId },
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
+          yield* ensureProjectPathAvailable(repository, project);
+          const worktree = yield* repository.findProjectWorktree({
+            projectId: project.id,
+            worktreeId: input.worktreeId,
+          });
+          if (!worktree) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'worktree_not_found',
+                message: `Worktree ${input.worktreeId} was not found in project ${project.id}.`,
+                projectId: project.id,
+                worktreeId: input.worktreeId,
+              }),
+            );
+          }
+          const setupPlan = yield* worktreeSetup.validateTrustForOpen(project);
+          return yield* completeWorktreeCreation({
+            commands,
+            worktreeSetupRepository,
+            project,
+            worktree,
+            setupPlan,
+            diagnosticContext: {
+              projectId: project.id,
+              rootPath: project.rootPath,
+              branch: worktree.branch,
+            },
+          });
+        }),
+      ),
+    preflightDeleteWorktree: (input) =>
+      Effect.gen(function* () {
+        const project = yield* requirePresentProject(repository, input.projectId);
+        yield* requireGitProject(project);
+        yield* ensureProjectPathAvailable(repository, project);
+        const worktree = yield* requireProjectWorktree(repository, {
+          projectId: project.id,
+          worktreeId: input.worktreeId,
+        });
+        const dirty = yield* checkoutIsDirty(git, worktree.path);
+        return {
+          projectId: project.id,
+          worktreeId: worktree.id,
+          path: worktree.path,
+          branch: worktree.branch,
+          isRoot: isRootWorktree(project, worktree),
+          dirty,
+        } satisfies DeleteWorktreePreflightOutput;
+      }),
+    deleteWorktree: (input) =>
+      diagnosticPhase(
+        'workspace.delete_worktree',
+        {
+          projectId: input.projectId,
+          worktreeId: input.worktreeId,
+          checkoutRemovalMode: input.request.checkoutRemovalMode,
+          branchRemovalMode: input.request.branchRemovalMode,
+        },
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
+          yield* ensureProjectPathAvailable(repository, project);
+          const worktree = yield* requireProjectWorktree(repository, {
+            projectId: project.id,
+            worktreeId: input.worktreeId,
+          });
+          const rootWorktree = yield* requireProjectRootWorktree(repository, project);
+          const context = {
+            projectId: project.id,
+            worktreeId: worktree.id,
+            path: worktree.path,
+            branch: worktree.branch,
+            checkoutRemovalMode: input.request.checkoutRemovalMode,
+            branchRemovalMode: input.request.branchRemovalMode,
+          } as const;
+
+          if (isRootWorktree(project, worktree)) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'root_worktree_not_deletable',
+                message: `Root worktree ${worktree.id} cannot be deleted.`,
+                projectId: project.id,
+                worktreeId: worktree.id,
+                path: worktree.path,
+              }),
+            );
+          }
+
+          const dirty = yield* checkoutIsDirty(git, worktree.path);
+          if (dirty && input.request.checkoutRemovalMode === 'normal') {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'dirty_checkout_requires_force',
+                message: `Worktree ${worktree.id} has uncommitted or untracked changes.`,
+                projectId: project.id,
+                worktreeId: worktree.id,
+                path: worktree.path,
+              }),
+            );
+          }
+
+          // Destructive sequencing is deliberate: the worktree was already
+          // validated above; stop command processes, terminate active session
+          // processes, remove the Git worktree, delete the DB row so dependent
+          // state cascades, then optionally safe-delete the branch.
+          // `checkoutRemovalMode: "force"` does not force branch deletion.
+          const diagnostics = yield* deleteDiagnostics.read(worktree.id);
+          const doomedSessions = yield* durableSessionsInWorktrees(new Set([worktree.id]));
+          logDiagnosticEvent('workspace.delete_worktree.delete_diagnostics', {
+            ...context,
+            agentSessionCount: diagnostics.agentSessionCount,
+            agentSessionActivePtyProcessIds: diagnostics.agentSessionActivePtyProcessIds,
+            commandRunCount: diagnostics.commandRunCount,
+            commandRunPtyProcessIds: diagnostics.commandRunPtyProcessIds,
+            commandStateCount: diagnostics.commandStateCount,
+            commandStateActivePtyProcessIds: diagnostics.commandStateActivePtyProcessIds,
+            paneCount: diagnostics.paneCount,
+            surfaceCount: diagnostics.surfaceCount,
+            terminalSessionCount: diagnostics.terminalSessionCount,
+            terminalSessionActivePtyProcessIds: diagnostics.terminalSessionActivePtyProcessIds,
+          });
+          yield* diagnosticPhase(
+            'workspace.delete_worktree.command_cleanup',
+            context,
+            commandCleanup(
+              commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
+              worktree.id,
+              project.id,
+            ),
+          );
+          yield* diagnosticPhase(
+            'workspace.delete_worktree.pty_teardown',
+            context,
+            terminateWorktreeSessionPtys(pty, diagnostics, {
+              projectId: project.id,
+              worktreeId: worktree.id,
+            }),
+          );
+          yield* diagnosticPhase(
+            'workspace.delete_worktree.git_remove',
+            context,
+            git.run(
+              input.request.checkoutRemovalMode === 'force'
+                ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
+                : ['-C', project.rootPath, 'worktree', 'remove', worktree.path],
+            ),
+          );
+          yield* diagnosticPhase(
+            'workspace.delete_worktree.db_delete',
+            context,
+            repository.deleteWorktree(worktree.id),
+          );
+          // Announced only after the cascade commits: every connected client — not just
+          // the one that asked — drops the terminals these identities backed.
+          yield* publishDurableSessionDeletions(doomedSessions);
+          yield* internalEvents.publish({
+            type: 'worktree_deleted',
+            worktreeId: worktree.id,
+            projectId: project.id,
+          });
+          const branchRemoval = yield* diagnosticPhase(
+            'workspace.delete_worktree.branch_delete',
+            context,
+            deleteBranchIfRequested(git, project, worktree, input.request),
+          );
+
+          return {
+            projectId: project.id,
+            deletedWorktreeId: worktree.id,
+            selectedWorktreeId: rootWorktree.id,
+            branchRemoval,
+          } satisfies DeleteWorktreeOutput;
+        }),
+      ),
+    registerProject: (input) =>
+      Effect.gen(function* () {
+        // Canonicalize first, then look for an existing registration, and only
+        // classify a path that has none. Stored kind wins: a folder project
+        // someone has since run `git init` inside comes back as the same
+        // folder project with the same id, and re-adding a registered Git
+        // project whose Git has broken returns its id and lets reconciliation
+        // report it missing, rather than refusing the add outright.
+        const root = yield* normalizeExistingDirectory(input.path);
+        const existing = yield* repository.findProjectByRootPath(root.rootPath);
+        // Classification is the only thing that can reject a new path, and it
+        // runs before the single write on this path, so a refused or
+        // inconclusive answer leaves no project and no environment behind.
+        // `createProject` returns the row it inserted, so there is no
+        // follow-up lookup that could come back null and silently skip
+        // reconciliation.
+        const project =
+          existing ??
+          (yield* classifyProjectRoot(root).pipe(
+            Effect.provideService(Git, git),
+            Effect.flatMap((classified) =>
+              repository.createProject({
+                name: classified.name,
+                rootPath: classified.rootPath,
+                kind: classified.kind,
+              }),
+            ),
+          ));
+
+        yield* reconcileProject(repository, commands, internalEvents, project).pipe(
+          Effect.provideService(Git, git),
+        );
+
+        return { projectId: project.id, alreadyExisted: Boolean(existing) };
+      }),
+    relocateProject: (input) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(repository, input.projectId);
+        // Kind is the more fundamental fact, so this precedes the missing
+        // check: a folder project is told relocation is unsupported whether
+        // it is present or missing. A folder project recovers at its own path
+        // through reconciliation, never by being pointed somewhere else.
+        if (project.kind !== 'git') {
+          return yield* Effect.fail(
+            new WorkspaceError({
+              code: 'relocation_not_supported',
+              message: `Project ${input.projectId} is a folder project and cannot be relocated.`,
+              projectId: input.projectId,
+            }),
+          );
+        }
+        if (project.status !== 'missing') {
+          return yield* Effect.fail(
+            new WorkspaceError({
+              code: 'project_not_missing',
+              message: `Project ${input.projectId} is not missing.`,
+              projectId: input.projectId,
+            }),
+          );
+        }
+
+        const projectRoot = yield* validateProjectRoot(input.path).pipe(
+          Effect.provideService(Git, git),
+        );
+        const existing = yield* repository.findProjectByRootPath(projectRoot.rootPath);
+        if (existing && existing.id !== input.projectId) {
+          return yield* Effect.fail(
+            new WorkspaceError({
+              code: 'project_path_already_registered',
+              message: `Project path ${projectRoot.rootPath} is already registered.`,
+              conflictingProjectId: existing.id,
+              path: projectRoot.rootPath,
+              projectId: input.projectId,
+            }),
+          );
+        }
+
+        const discovered = yield* discoverWorktrees({
+          ...project,
+          rootPath: projectRoot.rootPath,
+        }).pipe(Effect.provideService(Git, git));
+        const worktrees = yield* repository.restoreProjectAtRootPath({
+          discovered,
+          projectId: input.projectId,
+          rootPath: projectRoot.rootPath,
+        });
+        yield* pruneMissingWorktrees(
+          repository,
+          commands,
+          internalEvents,
+          input.projectId,
+          worktrees.missing,
+        );
+
+        return {
+          projectId: input.projectId,
+          findings: [
+            { kind: 'project_restored', projectId: input.projectId, path: projectRoot.rootPath },
+            ...reconciliationFindingsFromWorktreeResult(input.projectId, worktrees),
+          ],
+        };
+      }),
+    reconcileWorkspace: (input) =>
+      Effect.gen(function* () {
+        const projects = input.projectId
+          ? [yield* requireProject(repository, input.projectId)]
+          : yield* repository.listProjects;
+        const findings: ReconciliationFinding[] = [];
+
+        for (const project of projects) {
+          findings.push(
+            ...(yield* reconcileProject(repository, commands, internalEvents, project).pipe(
+              Effect.provideService(Git, git),
+            )),
+          );
+        }
+
+        return { findings };
+      }),
+    setActiveContext: (input) =>
+      Effect.gen(function* () {
+        const state = yield* stateFile.read;
+        if (input.revision <= state.workspace.activeContextRevision) {
+          return { activeContext: activeContextFromState(state) };
+        }
+
+        const accepted = yield* validateActiveContextPersistenceTarget(
+          repository,
+          input.activeContext,
+        );
+
+        const nextState = yield* stateFile.writeActiveContextIfFresh({
+          activeProjectId: accepted.projectId,
+          activeWorktreeId: accepted.worktreeId,
+          revision: input.revision,
+        });
+        const previousWorktreeId = state.workspace.activeWorktreeId;
+        const nextWorktreeId = nextState.workspace.activeWorktreeId;
+        if (
+          nextState.workspace.activeContextRevision === input.revision &&
+          previousWorktreeId !== nextWorktreeId
+        ) {
+          yield* internalEvents.publish({
+            type: 'worktree_activation_change',
+            previousWorktreeId,
+            nextWorktreeId,
+            cause: 'active_context_changed',
+          });
+        }
+        return { activeContext: activeContextFromState(nextState) };
+      }),
+    // No pre-read: the repository transaction is the only validation site, so
+    // there is no window in which the service's view and the stored rows can
+    // disagree. These methods only translate a rejection into a tagged error.
+    moveProjectOrder: (input) =>
+      repository.moveProjectOrder(input).pipe(
+        Effect.flatMap((result) =>
+          result.status === 'moved'
+            ? Effect.succeed({ projectId: input.projectId })
+            : Effect.fail(
+                new ProjectOrderError({
+                  reason: result.reason,
+                  message: projectOrderMessage(result.reason),
+                  projectId: input.projectId,
+                  ...(input.beforeProjectId === null
+                    ? {}
+                    : { beforeProjectId: input.beforeProjectId }),
+                }),
+              ),
+        ),
+      ),
+    moveWorktreeOrder: (input) =>
+      repository.moveProjectWorktreeOrder(input).pipe(
+        Effect.flatMap((result) =>
+          result.status === 'moved'
+            ? Effect.succeed({ projectId: input.projectId, worktreeId: input.worktreeId })
+            : Effect.fail(
+                new WorktreeOrderError({
+                  reason: result.reason,
+                  message: worktreeOrderMessage(result.reason),
+                  projectId: input.projectId,
+                  worktreeId: input.worktreeId,
+                  ...(input.beforeWorktreeId === null
+                    ? {}
+                    : { beforeWorktreeId: input.beforeWorktreeId }),
+                }),
+              ),
+        ),
+      ),
+  });
+});
+
+interface WorkspaceServiceShape {
   readonly get: Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
+  /**
+   * Startup: announces the persisted active worktree, if it still exists, as a
+   * `worktree_activation_change` with cause `startup_restored`, so subscribers that act on the
+   * active worktree (command lifecycle) converge on it before the first request. Run once, before
+   * routes are registered.
+   */
+  readonly publishRestoredActivation: Effect.Effect<void, StateFileError | DatabaseError>;
   readonly durableSessions: Effect.Effect<DurableSessionInventory, WorkspaceServiceError>;
   readonly deleteProject: (
     projectId: number,
@@ -254,759 +1017,11 @@ export interface WorkspaceService {
   }) => Effect.Effect<MoveWorktreeOrderOutput, MoveWorktreeOrderServiceError>;
 }
 
-export const WorkspaceService = Context.Service<WorkspaceService>('isagi/WorkspaceService');
-
-export const WorkspaceServiceLive = Layer.effect(
-  WorkspaceService,
-  Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
-    const stateFile = yield* StateFile;
-    const git = yield* Git;
-    const dataDirectory = yield* DataDirectory;
-    const worktreeSetup = yield* WorktreeSetupService;
-    const worktreeSetupRepository = yield* WorktreeSetupRepository;
-    const surfaceRepository = yield* SurfaceRepository;
-    const commands = yield* CommandService;
-    const pty = yield* PtyService;
-    const internalEvents = yield* InternalRuntimeEventBus;
-    const runErasure = yield* WorkflowRunErasure;
-
-    const get = Effect.gen(function* () {
-      const rows = yield* loadWorkspaceRows(repository);
-      const surfaces = yield* surfaceRepository.listWorkspaceSurfaceMetadata;
-      const environmentFocus = yield* surfaceRepository.listEnvironmentFocusStates;
-      return buildWorkspaceSnapshot(rows.projects, rows.worktrees, surfaces, environmentFocus);
-    });
-
-    const getActiveContext = stateFile.read.pipe(
-      Effect.map((state) => ({ activeContext: activeContextFromState(state) })),
-    );
-
-    const durableSessions = repository.listDurableSessions;
-
-    /**
-     * The durable identities a worktree owns, read before its row is deleted. The DB
-     * cascade removes those rows silently, so any client that is not the one issuing the
-     * delete would otherwise never learn its cached terminals are gone.
-     */
-    const durableSessionsInWorktrees = (worktreeIds: ReadonlySet<number>) =>
-      repository.listDurableSessions.pipe(
-        Effect.map((inventory) =>
-          inventory.sessions.filter((session) => worktreeIds.has(session.worktreeId)),
-        ),
-      );
-
-    const publishDurableSessionDeletions = (
-      identities: readonly DurableSessionIdentity[],
-    ): Effect.Effect<void> =>
-      Effect.forEach(
-        identities,
-        (identity) => internalEvents.publish({ type: 'durable_session_deleted', identity }),
-        { discard: true },
-      );
-
-    return {
-      get,
-      durableSessions,
-      deleteProject: (projectId) =>
-        Effect.gen(function* () {
-          // Do not clear persisted active context here. Active context is
-          // frontend-owned restoration state; stale project/worktree references
-          // are intentionally reconciled by the frontend during startup and
-          // workspace refresh.
-          const worktrees = (yield* repository.listWorktrees).filter(
-            (worktree) => worktree.projectId === projectId,
-          );
-          for (const worktree of worktrees) {
-            yield* commandCleanup(
-              commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
-              worktree.id,
-              projectId,
-            );
-          }
-          const doomed = yield* durableSessionsInWorktrees(
-            new Set(worktrees.map((worktree) => worktree.id)),
-          );
-          // Read *before* the delete: `worktrees.project_id` cascades from `projects`, so after the
-          // commit there is no way to enumerate which worktrees went with it, and the
-          // `project_deleted` event names exactly those ids.
-          const doomedWorktreeIds = worktrees.map((worktree) => worktree.id);
-          // The project's workflow runs are erased in the same transaction as its row. On the
-          // runtime's single SQLite connection, a launch commits wholly before this transaction
-          // (so its run is erased here) or wholly after it (so launch admission refuses it): a
-          // deleted project has no runs and can never gain one. The workflows domain owns the
-          // erasure SQL (ADR 0008); this service only owns the transaction boundary.
-          let erasedRuns = 0;
-          const deleted = yield* repository.deleteProject(projectId, (db) => {
-            erasedRuns = runErasure.eraseProjectRunsInTransaction(db, projectId);
-          });
-          if (deleted) {
-            yield* publishDurableSessionDeletions(doomed);
-            yield* internalEvents.publish({
-              type: 'project_deleted',
-              projectId,
-              worktreeIds: doomedWorktreeIds,
-            });
-            console.info(
-              `[runtime] Deleted project projectId=${projectId} worktrees=${doomedWorktreeIds.length} workflowRuns=${erasedRuns}`,
-            );
-          }
-          return { projectId, deleted };
-        }),
-      getActiveContext,
-      listProjectBranches: (input) =>
-        Effect.gen(function* () {
-          const project = yield* requirePresentProject(repository, input.projectId);
-          yield* requireGitProject(project);
-          yield* ensureProjectPathAvailable(repository, project);
-          const branches = yield* listLocalBranches(project.rootPath).pipe(
-            Effect.provideService(Git, git),
-          );
-          const worktrees = yield* repository.listWorktrees;
-          const worktreeIdByBranch = new Map(
-            worktrees
-              .filter((worktree) => worktree.projectId === project.id && worktree.branch)
-              .map((worktree) => [worktree.branch as string, worktree.id] as const),
-          );
-
-          return {
-            branches: branches.map((branch) => ({
-              name: branch,
-              worktreeId: worktreeIdByBranch.get(branch) ?? null,
-            })),
-          } satisfies ListProjectBranchesOutput;
-        }),
-      preflightWorktreeSetup: (input) =>
-        Effect.gen(function* () {
-          const project = yield* requirePresentProject(repository, input.projectId);
-          yield* requireGitProject(project);
-          yield* ensureProjectPathAvailable(repository, project);
-          return yield* worktreeSetup.preflight(project);
-        }),
-      trustWorktreeSetup: (input) =>
-        Effect.gen(function* () {
-          const project = yield* requirePresentProject(repository, input.projectId);
-          yield* requireGitProject(project);
-          yield* ensureProjectPathAvailable(repository, project);
-          return yield* worktreeSetup.updateTrust({ project, request: input.request });
-        }),
-      openWorktree: (input) =>
-        diagnosticPhase(
-          'workspace.open_worktree',
-          { projectId: input.projectId, branch: input.request.branch.trim() },
-          Effect.gen(function* () {
-            const project = yield* requirePresentProject(repository, input.projectId);
-            yield* requireGitProject(project);
-            const branch = input.request.branch.trim();
-            const context = {
-              projectId: project.id,
-              rootPath: project.rootPath,
-              branch,
-            } as const;
-            if (!branch) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  code: 'branch_not_found',
-                  message: 'A branch name is required to open a worktree.',
-                  projectId: input.projectId,
-                }),
-              );
-            }
-
-            yield* ensureProjectPathAvailable(repository, project);
-            yield* validateBranchName(git, project, branch);
-            yield* reconcileProject(repository, commands, internalEvents, project).pipe(
-              Effect.provideService(Git, git),
-            );
-            // Both collision checks sit after the service's own reconcile, so they judge what Git
-            // actually holds rather than what the database last remembered.
-            const createNew = input.request.mode === 'create_new';
-            const existing = yield* repository.findProjectWorktreeByBranch({
-              projectId: project.id,
-              branch,
-            });
-            if (existing) {
-              if (createNew) {
-                return yield* Effect.fail(
-                  new WorkspaceError({
-                    branch,
-                    code: 'worktree_exists',
-                    message: `Worktree ${existing.id} is already checked out on branch ${branch}.`,
-                    path: existing.path,
-                    projectId: project.id,
-                    worktreeId: existing.id,
-                  }),
-                );
-              }
-              return {
-                projectId: project.id,
-                worktreeId: existing.id,
-                branch,
-                status: 'opened_existing',
-                setup: { status: 'not_run', reason: 'existing_worktree' },
-              } satisfies OpenWorktreeOutput;
-            }
-
-            const branches = yield* listLocalBranches(project.rootPath).pipe(
-              Effect.provideService(Git, git),
-            );
-            const branchExists = branches.includes(branch);
-            if (branchExists && createNew) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  branch,
-                  code: 'branch_exists',
-                  message: `Branch ${branch} already exists in project ${project.id}.`,
-                  projectId: project.id,
-                }),
-              );
-            }
-            let baseRef: string | null = null;
-            if (!branchExists) {
-              const base = input.request.base;
-              if (!base) {
-                return yield* Effect.fail(
-                  new WorkspaceError({
-                    branch,
-                    code: 'new_branch_requires_base',
-                    message: `Branch ${branch} does not exist. Choose what to create it from.`,
-                    projectId: project.id,
-                  }),
-                );
-              }
-              baseRef = yield* validateBaseRef(repository, git, project, base);
-            }
-
-            const setupPlan = yield* worktreeSetup.validateTrustForOpen(project);
-
-            const checkoutPath = checkoutPathForBranch(
-              dataDirectory.paths.worktreesPath,
-              project.id,
-              branch,
-            );
-            const checkoutContext = { ...context, checkoutPath };
-            yield* ensureCheckoutPathAvailable(git, project, branch, checkoutPath);
-            yield* prepareCheckoutParent(project, branch, checkoutPath);
-
-            if (branchExists) {
-              yield* diagnosticPhase(
-                'workspace.open_worktree.git_add_existing_branch',
-                checkoutContext,
-                git.run(['-C', project.rootPath, 'worktree', 'add', checkoutPath, branch]),
-              );
-            } else {
-              if (!baseRef) {
-                return yield* Effect.die('Base ref was validated but not available.');
-              }
-              yield* diagnosticPhase(
-                'workspace.open_worktree.git_add_new_branch',
-                { ...checkoutContext, baseRef },
-                git.run([
-                  '-C',
-                  project.rootPath,
-                  'worktree',
-                  'add',
-                  '-b',
-                  branch,
-                  checkoutPath,
-                  baseRef,
-                ]),
-              );
-            }
-            yield* diagnosticPhase(
-              'workspace.open_worktree.reconcile_after_git_add',
-              checkoutContext,
-              reconcileProject(repository, commands, internalEvents, project).pipe(
-                Effect.provideService(Git, git),
-              ),
-            );
-            const created = yield* repository.findProjectWorktreeByBranch({
-              projectId: project.id,
-              branch,
-            });
-            if (!created) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  branch,
-                  code: 'worktree_not_found',
-                  message: `Git created branch ${branch}, but Isagi could not find the new worktree after reconciliation.`,
-                  projectId: project.id,
-                }),
-              );
-            }
-
-            const setup = yield* completeWorktreeCreation({
-              commands,
-              worktreeSetupRepository,
-              project,
-              worktree: created,
-              setupPlan,
-              diagnosticContext: checkoutContext,
-            });
-
-            // Branched rather than computed: `status` and `setup` are correlated members of the
-            // output union, and a ternary would leave them independently widened.
-            if (setup.status === 'failed') {
-              return {
-                projectId: project.id,
-                worktreeId: created.id,
-                branch,
-                status: 'created_setup_failed',
-                setup,
-              } satisfies OpenWorktreeOutput;
-            }
-
-            return {
-              projectId: project.id,
-              worktreeId: created.id,
-              branch,
-              status: 'created',
-              setup,
-            } satisfies OpenWorktreeOutput;
-          }),
-        ),
-      createDetachedWorktree: (input) =>
-        createDetachedWorktree(
-          {
-            repository,
-            git,
-            reconcile: (project) =>
-              reconcileProject(repository, commands, internalEvents, project).pipe(
-                Effect.provideService(Git, git),
-              ),
-          },
-          input,
-        ),
-      checkNewDirectory: (path) => checkNewDirectory(repository, path),
-      preflightWorktreeCreation: (input) =>
-        diagnosticPhase(
-          'workspace.preflight_worktree_creation',
-          {
-            projectId: input.projectId,
-            branch: input.branch.trim(),
-            fromRef: input.fromRef,
-          },
-          Effect.gen(function* () {
-            const project = yield* requirePresentProject(repository, input.projectId);
-            yield* requireGitProject(project);
-            yield* ensureProjectPathAvailable(repository, project);
-            // Trimmed here as well as in `openWorktree`, because the checkout path is derived from
-            // the branch name: an untrimmed name would hash to a different path than the creation
-            // this preflight is answering for would use.
-            const branch = input.branch.trim();
-            yield* validateBranchName(git, project, branch);
-            const branches = yield* listLocalBranches(project.rootPath).pipe(
-              Effect.provideService(Git, git),
-            );
-            if (branches.includes(branch)) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  branch,
-                  code: 'branch_exists',
-                  message: `Branch ${branch} already exists in project ${project.id}.`,
-                  projectId: project.id,
-                }),
-              );
-            }
-            const existing = yield* repository.findProjectWorktreeByBranch({
-              projectId: project.id,
-              branch,
-            });
-            if (existing) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  branch,
-                  code: 'worktree_exists',
-                  message: `Worktree ${existing.id} is already checked out on branch ${branch}.`,
-                  path: existing.path,
-                  projectId: project.id,
-                  worktreeId: existing.id,
-                }),
-              );
-            }
-            const commit = yield* resolveCommit(git, project, input.fromRef);
-            const checkoutPath = checkoutPathForBranch(
-              dataDirectory.paths.worktreesPath,
-              project.id,
-              branch,
-            );
-            yield* ensureCheckoutPathAvailable(git, project, branch, checkoutPath);
-            return { commit, checkoutPath };
-          }),
-        ),
-      runWorktreeSetup: (input) =>
-        diagnosticPhase(
-          'workspace.run_worktree_setup',
-          { projectId: input.projectId, worktreeId: input.worktreeId },
-          Effect.gen(function* () {
-            const project = yield* requirePresentProject(repository, input.projectId);
-            yield* requireGitProject(project);
-            yield* ensureProjectPathAvailable(repository, project);
-            const worktree = yield* repository.findProjectWorktree({
-              projectId: project.id,
-              worktreeId: input.worktreeId,
-            });
-            if (!worktree) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  code: 'worktree_not_found',
-                  message: `Worktree ${input.worktreeId} was not found in project ${project.id}.`,
-                  projectId: project.id,
-                  worktreeId: input.worktreeId,
-                }),
-              );
-            }
-            const setupPlan = yield* worktreeSetup.validateTrustForOpen(project);
-            return yield* completeWorktreeCreation({
-              commands,
-              worktreeSetupRepository,
-              project,
-              worktree,
-              setupPlan,
-              diagnosticContext: {
-                projectId: project.id,
-                rootPath: project.rootPath,
-                branch: worktree.branch,
-              },
-            });
-          }),
-        ),
-      preflightDeleteWorktree: (input) =>
-        Effect.gen(function* () {
-          const project = yield* requirePresentProject(repository, input.projectId);
-          yield* requireGitProject(project);
-          yield* ensureProjectPathAvailable(repository, project);
-          const worktree = yield* requireProjectWorktree(repository, {
-            projectId: project.id,
-            worktreeId: input.worktreeId,
-          });
-          const dirty = yield* checkoutIsDirty(git, worktree.path);
-          return {
-            projectId: project.id,
-            worktreeId: worktree.id,
-            path: worktree.path,
-            branch: worktree.branch,
-            isRoot: isRootWorktree(project, worktree),
-            dirty,
-          } satisfies DeleteWorktreePreflightOutput;
-        }),
-      deleteWorktree: (input) =>
-        diagnosticPhase(
-          'workspace.delete_worktree',
-          {
-            projectId: input.projectId,
-            worktreeId: input.worktreeId,
-            checkoutRemovalMode: input.request.checkoutRemovalMode,
-            branchRemovalMode: input.request.branchRemovalMode,
-          },
-          Effect.gen(function* () {
-            const project = yield* requirePresentProject(repository, input.projectId);
-            yield* requireGitProject(project);
-            yield* ensureProjectPathAvailable(repository, project);
-            const worktree = yield* requireProjectWorktree(repository, {
-              projectId: project.id,
-              worktreeId: input.worktreeId,
-            });
-            const rootWorktree = yield* requireProjectRootWorktree(repository, project);
-            const context = {
-              projectId: project.id,
-              worktreeId: worktree.id,
-              path: worktree.path,
-              branch: worktree.branch,
-              checkoutRemovalMode: input.request.checkoutRemovalMode,
-              branchRemovalMode: input.request.branchRemovalMode,
-            } as const;
-
-            if (isRootWorktree(project, worktree)) {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  code: 'root_worktree_not_deletable',
-                  message: `Root worktree ${worktree.id} cannot be deleted.`,
-                  projectId: project.id,
-                  worktreeId: worktree.id,
-                  path: worktree.path,
-                }),
-              );
-            }
-
-            const dirty = yield* checkoutIsDirty(git, worktree.path);
-            if (dirty && input.request.checkoutRemovalMode === 'normal') {
-              return yield* Effect.fail(
-                new WorkspaceError({
-                  code: 'dirty_checkout_requires_force',
-                  message: `Worktree ${worktree.id} has uncommitted or untracked changes.`,
-                  projectId: project.id,
-                  worktreeId: worktree.id,
-                  path: worktree.path,
-                }),
-              );
-            }
-
-            // Destructive sequencing is deliberate: the worktree was already
-            // validated above; stop command processes, terminate active session
-            // processes, remove the Git worktree, delete the DB row so dependent
-            // state cascades, then optionally safe-delete the branch.
-            // `checkoutRemovalMode: "force"` does not force branch deletion.
-            const diagnostics = yield* repository.readWorktreeDeleteDiagnostics(worktree.id);
-            const doomedSessions = yield* durableSessionsInWorktrees(new Set([worktree.id]));
-            logDiagnosticEvent('workspace.delete_worktree.delete_diagnostics', {
-              ...context,
-              agentSessionCount: diagnostics.agentSessionCount,
-              agentSessionActivePtyProcessIds: diagnostics.agentSessionActivePtyProcessIds,
-              commandRunCount: diagnostics.commandRunCount,
-              commandRunPtyProcessIds: diagnostics.commandRunPtyProcessIds,
-              commandStateCount: diagnostics.commandStateCount,
-              commandStateActivePtyProcessIds: diagnostics.commandStateActivePtyProcessIds,
-              paneCount: diagnostics.paneCount,
-              surfaceCount: diagnostics.surfaceCount,
-              terminalSessionCount: diagnostics.terminalSessionCount,
-              terminalSessionActivePtyProcessIds: diagnostics.terminalSessionActivePtyProcessIds,
-            });
-            yield* diagnosticPhase(
-              'workspace.delete_worktree.command_cleanup',
-              context,
-              commandCleanup(
-                commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
-                worktree.id,
-                project.id,
-              ),
-            );
-            yield* diagnosticPhase(
-              'workspace.delete_worktree.pty_teardown',
-              context,
-              terminateWorktreeSessionPtys(pty, diagnostics, {
-                projectId: project.id,
-                worktreeId: worktree.id,
-              }),
-            );
-            yield* diagnosticPhase(
-              'workspace.delete_worktree.git_remove',
-              context,
-              git.run(
-                input.request.checkoutRemovalMode === 'force'
-                  ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
-                  : ['-C', project.rootPath, 'worktree', 'remove', worktree.path],
-              ),
-            );
-            yield* diagnosticPhase(
-              'workspace.delete_worktree.db_delete',
-              context,
-              repository.deleteWorktree(worktree.id),
-            );
-            // Announced only after the cascade commits: every connected client — not just
-            // the one that asked — drops the terminals these identities backed.
-            yield* publishDurableSessionDeletions(doomedSessions);
-            yield* internalEvents.publish({
-              type: 'worktree_deleted',
-              worktreeId: worktree.id,
-              projectId: project.id,
-            });
-            const branchRemoval = yield* diagnosticPhase(
-              'workspace.delete_worktree.branch_delete',
-              context,
-              deleteBranchIfRequested(git, project, worktree, input.request),
-            );
-
-            return {
-              projectId: project.id,
-              deletedWorktreeId: worktree.id,
-              selectedWorktreeId: rootWorktree.id,
-              branchRemoval,
-            } satisfies DeleteWorktreeOutput;
-          }),
-        ),
-      registerProject: (input) =>
-        Effect.gen(function* () {
-          // Canonicalize first, then look for an existing registration, and only
-          // classify a path that has none. Stored kind wins: a folder project
-          // someone has since run `git init` inside comes back as the same
-          // folder project with the same id, and re-adding a registered Git
-          // project whose Git has broken returns its id and lets reconciliation
-          // report it missing, rather than refusing the add outright.
-          const root = yield* normalizeExistingDirectory(input.path);
-          const existing = yield* repository.findProjectByRootPath(root.rootPath);
-          // Classification is the only thing that can reject a new path, and it
-          // runs before the single write on this path, so a refused or
-          // inconclusive answer leaves no project and no environment behind.
-          // `createProject` returns the row it inserted, so there is no
-          // follow-up lookup that could come back null and silently skip
-          // reconciliation.
-          const project =
-            existing ??
-            (yield* classifyProjectRoot(root).pipe(
-              Effect.provideService(Git, git),
-              Effect.flatMap((classified) =>
-                repository.createProject({
-                  name: classified.name,
-                  rootPath: classified.rootPath,
-                  kind: classified.kind,
-                }),
-              ),
-            ));
-
-          yield* reconcileProject(repository, commands, internalEvents, project).pipe(
-            Effect.provideService(Git, git),
-          );
-
-          return { projectId: project.id, alreadyExisted: Boolean(existing) };
-        }),
-      relocateProject: (input) =>
-        Effect.gen(function* () {
-          const project = yield* requireProject(repository, input.projectId);
-          // Kind is the more fundamental fact, so this precedes the missing
-          // check: a folder project is told relocation is unsupported whether
-          // it is present or missing. A folder project recovers at its own path
-          // through reconciliation, never by being pointed somewhere else.
-          if (project.kind !== 'git') {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'relocation_not_supported',
-                message: `Project ${input.projectId} is a folder project and cannot be relocated.`,
-                projectId: input.projectId,
-              }),
-            );
-          }
-          if (project.status !== 'missing') {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'project_not_missing',
-                message: `Project ${input.projectId} is not missing.`,
-                projectId: input.projectId,
-              }),
-            );
-          }
-
-          const projectRoot = yield* validateProjectRoot(input.path).pipe(
-            Effect.provideService(Git, git),
-          );
-          const existing = yield* repository.findProjectByRootPath(projectRoot.rootPath);
-          if (existing && existing.id !== input.projectId) {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'project_path_already_registered',
-                message: `Project path ${projectRoot.rootPath} is already registered.`,
-                conflictingProjectId: existing.id,
-                path: projectRoot.rootPath,
-                projectId: input.projectId,
-              }),
-            );
-          }
-
-          const discovered = yield* discoverWorktrees({
-            ...project,
-            rootPath: projectRoot.rootPath,
-          }).pipe(Effect.provideService(Git, git));
-          const worktrees = yield* repository.restoreProjectAtRootPath({
-            discovered,
-            projectId: input.projectId,
-            rootPath: projectRoot.rootPath,
-          });
-          yield* pruneMissingWorktrees(
-            repository,
-            commands,
-            internalEvents,
-            input.projectId,
-            worktrees.missing,
-          );
-
-          return {
-            projectId: input.projectId,
-            findings: [
-              { kind: 'project_restored', projectId: input.projectId, path: projectRoot.rootPath },
-              ...reconciliationFindingsFromWorktreeResult(input.projectId, worktrees),
-            ],
-          };
-        }),
-      reconcileWorkspace: (input) =>
-        Effect.gen(function* () {
-          const projects = input.projectId
-            ? [yield* requireProject(repository, input.projectId)]
-            : yield* repository.listProjects;
-          const findings: ReconciliationFinding[] = [];
-
-          for (const project of projects) {
-            findings.push(
-              ...(yield* reconcileProject(repository, commands, internalEvents, project).pipe(
-                Effect.provideService(Git, git),
-              )),
-            );
-          }
-
-          return { findings };
-        }),
-      setActiveContext: (input) =>
-        Effect.gen(function* () {
-          const state = yield* stateFile.read;
-          if (input.revision <= state.workspace.activeContextRevision) {
-            return { activeContext: activeContextFromState(state) };
-          }
-
-          const accepted = yield* validateActiveContextPersistenceTarget(
-            repository,
-            input.activeContext,
-          );
-
-          const nextState = yield* stateFile.writeActiveContextIfFresh({
-            activeProjectId: accepted.projectId,
-            activeWorktreeId: accepted.worktreeId,
-            revision: input.revision,
-          });
-          const previousWorktreeId = state.workspace.activeWorktreeId;
-          const nextWorktreeId = nextState.workspace.activeWorktreeId;
-          if (
-            nextState.workspace.activeContextRevision === input.revision &&
-            previousWorktreeId !== nextWorktreeId
-          ) {
-            yield* internalEvents.publish({
-              type: 'worktree_activation_change',
-              previousWorktreeId,
-              nextWorktreeId,
-              cause: 'active_context_changed',
-            });
-          }
-          return { activeContext: activeContextFromState(nextState) };
-        }),
-      // No pre-read: the repository transaction is the only validation site, so
-      // there is no window in which the service's view and the stored rows can
-      // disagree. These methods only translate a rejection into a tagged error.
-      moveProjectOrder: (input) =>
-        repository.moveProjectOrder(input).pipe(
-          Effect.flatMap((result) =>
-            result.status === 'moved'
-              ? Effect.succeed({ projectId: input.projectId })
-              : Effect.fail(
-                  new ProjectOrderError({
-                    reason: result.reason,
-                    message: projectOrderMessage(result.reason),
-                    projectId: input.projectId,
-                    ...(input.beforeProjectId === null
-                      ? {}
-                      : { beforeProjectId: input.beforeProjectId }),
-                  }),
-                ),
-          ),
-        ),
-      moveWorktreeOrder: (input) =>
-        repository.moveProjectWorktreeOrder(input).pipe(
-          Effect.flatMap((result) =>
-            result.status === 'moved'
-              ? Effect.succeed({ projectId: input.projectId, worktreeId: input.worktreeId })
-              : Effect.fail(
-                  new WorktreeOrderError({
-                    reason: result.reason,
-                    message: worktreeOrderMessage(result.reason),
-                    projectId: input.projectId,
-                    worktreeId: input.worktreeId,
-                    ...(input.beforeWorktreeId === null
-                      ? {}
-                      : { beforeWorktreeId: input.beforeWorktreeId }),
-                  }),
-                ),
-          ),
-        ),
-    } satisfies WorkspaceService;
-  }),
-);
+export class WorkspaceService extends Context.Service<WorkspaceService, WorkspaceServiceShape>()(
+  'isagi/runtime/workspace/WorkspaceService',
+) {
+  static readonly layer = Layer.effect(WorkspaceService, make);
+}
 
 /**
  * Diagnostic only. The line a person reads is written by the web app from the
@@ -1048,7 +1063,7 @@ function worktreeOrderMessage(reason: WorktreeOrderRejectionReason) {
   }
 }
 
-function requireProject(repository: WorkspaceRepositoryService, projectId: number) {
+function requireProject(repository: ProjectRepository['Service'], projectId: number) {
   return Effect.gen(function* () {
     const project = yield* repository.findProject(projectId);
     if (!project) {
@@ -1065,7 +1080,7 @@ function requireProject(repository: WorkspaceRepositoryService, projectId: numbe
 }
 
 function requireProjectWorktree(
-  repository: WorkspaceRepositoryService,
+  repository: ProjectRepository['Service'],
   input: { readonly projectId: number; readonly worktreeId: number },
 ) {
   return Effect.gen(function* () {
@@ -1084,7 +1099,7 @@ function requireProjectWorktree(
   });
 }
 
-function requireProjectRootWorktree(repository: WorkspaceRepositoryService, project: ProjectRow) {
+function requireProjectRootWorktree(repository: ProjectRepository['Service'], project: ProjectRow) {
   return Effect.gen(function* () {
     const rootWorktree = yield* repository.findProjectRootWorktree({
       projectId: project.id,
@@ -1104,7 +1119,7 @@ function requireProjectRootWorktree(repository: WorkspaceRepositoryService, proj
   });
 }
 
-function requirePresentProject(repository: WorkspaceRepositoryService, projectId: number) {
+function requirePresentProject(repository: ProjectRepository['Service'], projectId: number) {
   return Effect.gen(function* () {
     const project = yield* requireProject(repository, projectId);
     if (project.status !== 'present') {
@@ -1142,14 +1157,14 @@ function isRootWorktree(project: ProjectRow, worktree: WorktreeRow) {
   return worktree.path === project.rootPath;
 }
 
-function checkoutIsDirty(git: GitServiceShape, checkoutPath: string) {
+function checkoutIsDirty(git: Git['Service'], checkoutPath: string) {
   return git
     .run(['-C', checkoutPath, 'status', '--porcelain'])
     .pipe(Effect.map(({ stdout }) => stdout.trim().length > 0));
 }
 
 function deleteBranchIfRequested(
-  git: GitServiceShape,
+  git: Git['Service'],
   project: ProjectRow,
   worktree: WorktreeRow,
   request: DeleteWorktreeInput,
@@ -1181,7 +1196,7 @@ function gitBranchDeleteDiagnostic(error: GitCommandError) {
   return `git ${error.args.join(' ')} failed`;
 }
 
-function ensureProjectPathAvailable(repository: WorkspaceRepositoryService, project: ProjectRow) {
+function ensureProjectPathAvailable(repository: ProjectRepository['Service'], project: ProjectRow) {
   return Effect.gen(function* () {
     const availability = directoryAvailability(project.rootPath);
     if (availability.available) {
@@ -1227,33 +1242,32 @@ function commandCleanup<A>(
 }
 
 function terminateWorktreeSessionPtys(
-  pty: PtyServiceShape,
+  pty: PtyService['Service'],
   diagnostics: WorktreeDeleteDiagnostics,
   context: {
     readonly projectId: number;
     readonly worktreeId: number;
   },
 ) {
-  return terminatePtyProcessIds(pty, {
-    failurePolicy: 'required',
-    gracefulTimeoutMs: 1_000,
-    operation: 'worktree_delete',
-    ptyProcessIds: activePtyProcessIds({
-      agentSessionActivePtyProcessIds: diagnostics.agentSessionActivePtyProcessIds,
-      terminalSessionActivePtyProcessIds: diagnostics.terminalSessionActivePtyProcessIds,
-    }),
-  }).pipe(
-    Effect.mapError(
-      (error) =>
-        new WorkspaceError({
-          code: 'pty_teardown_failed',
-          message: `Could not stop active sessions for worktree ${context.worktreeId}.`,
-          projectId: context.projectId,
-          worktreeId: context.worktreeId,
-          cause: error,
-        }),
-    ),
-  );
+  return pty
+    .terminateMany({
+      failurePolicy: 'required',
+      gracefulTimeoutMs: 1_000,
+      operation: 'worktree_delete',
+      ptyProcessIds: sessionPtyProcessIds(diagnostics),
+    })
+    .pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceError({
+            code: 'pty_teardown_failed',
+            message: `Could not stop active sessions for worktree ${context.worktreeId}.`,
+            projectId: context.projectId,
+            worktreeId: context.worktreeId,
+            cause: error,
+          }),
+      ),
+    );
 }
 
 function activeContextFromState(state: {
@@ -1275,7 +1289,7 @@ function activeContextFromState(state: {
 }
 
 function validateActiveContextPersistenceTarget(
-  repository: WorkspaceRepositoryService,
+  repository: ProjectRepository['Service'],
   requested: ActiveContextPersistenceInput['activeContext'],
 ) {
   return Effect.gen(function* () {
@@ -1327,9 +1341,9 @@ function validateActiveContextPersistenceTarget(
  * discover and nothing to prune — only whether the directory is still there.
  */
 function reconcileProject(
-  repository: WorkspaceRepositoryService,
-  commands: import('../commands/index.js').CommandServiceShape,
-  internalEvents: InternalRuntimeEventBusService,
+  repository: ProjectRepository['Service'],
+  commands: import('../commands/index.js').CommandService['Service'],
+  internalEvents: InternalRuntimeEventBus['Service'],
   project: ProjectRow,
 ) {
   return project.kind === 'folder'
@@ -1348,7 +1362,7 @@ function reconcileProject(
  * recreate it could only ever paper over database corruption, which the
  * architecture puts out of scope.
  */
-function reconcileFolderProject(repository: WorkspaceRepositoryService, project: ProjectRow) {
+function reconcileFolderProject(repository: ProjectRepository['Service'], project: ProjectRow) {
   return Effect.gen(function* () {
     const findings: ReconciliationFinding[] = [];
     const availability = directoryAvailability(project.rootPath);
@@ -1374,9 +1388,9 @@ function reconcileFolderProject(repository: WorkspaceRepositoryService, project:
 }
 
 function reconcileGitProject(
-  repository: WorkspaceRepositoryService,
-  commands: import('../commands/index.js').CommandServiceShape,
-  internalEvents: InternalRuntimeEventBusService,
+  repository: ProjectRepository['Service'],
+  commands: import('../commands/index.js').CommandService['Service'],
+  internalEvents: InternalRuntimeEventBus['Service'],
   project: ProjectRow,
 ) {
   return Effect.gen(function* () {
@@ -1441,9 +1455,9 @@ function reconcileGitProject(
 }
 
 function pruneMissingWorktrees(
-  repository: WorkspaceRepositoryService,
-  commands: import('../commands/index.js').CommandServiceShape,
-  internalEvents: InternalRuntimeEventBusService,
+  repository: ProjectRepository['Service'],
+  commands: import('../commands/index.js').CommandService['Service'],
+  internalEvents: InternalRuntimeEventBus['Service'],
   projectId: number,
   worktrees: readonly Pick<WorktreeRow, 'id'>[],
 ) {
@@ -1506,7 +1520,7 @@ function discoverWorktrees(project: ProjectRow) {
   );
 }
 
-function loadWorkspaceRows(repository: WorkspaceRepositoryService) {
+function loadWorkspaceRows(repository: ProjectRepository['Service']) {
   return Effect.gen(function* () {
     const projects = yield* repository.listProjects;
     const worktrees = yield* repository.listWorktrees;
@@ -1525,7 +1539,7 @@ function describeWorktreeDiscoveryFailure(rootPath: string, error: GitCommandErr
   return `Could not read Git worktrees for ${rootPath} using ${command} in ${cwd}.${detail}`;
 }
 
-function validateBranchName(git: GitServiceShape, project: ProjectRow, branch: string) {
+function validateBranchName(git: Git['Service'], project: ProjectRow, branch: string) {
   return git.run(['-C', project.rootPath, 'check-ref-format', '--branch', branch]).pipe(
     Effect.asVoid,
     Effect.catch(() =>
@@ -1542,8 +1556,8 @@ function validateBranchName(git: GitServiceShape, project: ProjectRow, branch: s
 }
 
 function validateBaseRef(
-  repository: WorkspaceRepositoryService,
-  git: GitServiceShape,
+  repository: ProjectRepository['Service'],
+  git: Git['Service'],
   project: ProjectRow,
   base: WorktreeBaseRef,
 ) {
@@ -1632,7 +1646,7 @@ function validateBaseRef(
  * by the creation preflight and by `validateBaseRef`'s commit branch so the two cannot disagree
  * about what a ref resolves to, or about which refs resolve at all.
  */
-function resolveCommit(git: GitServiceShape, project: ProjectRow, ref: string) {
+function resolveCommit(git: Git['Service'], project: ProjectRow, ref: string) {
   return git
     .run(['-C', project.rootPath, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])
     .pipe(
@@ -1705,7 +1719,7 @@ function checkoutPathForBranch(worktreesPath: string, projectId: number, branch:
 }
 
 function ensureCheckoutPathAvailable(
-  git: GitServiceShape,
+  git: Git['Service'],
   project: ProjectRow,
   branch: string,
   checkoutPath: string,
@@ -1769,6 +1783,3 @@ function pathExists(path: string) {
     return true;
   }
 }
-
-type WorkspaceRepositoryService = (typeof WorkspaceRepository)['Service'];
-type GitServiceShape = (typeof Git)['Service'];

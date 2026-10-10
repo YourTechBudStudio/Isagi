@@ -14,7 +14,7 @@ import { WorkspaceService } from '../service.js';
  *
  * The layer is supplied rather than the service value so a suite can hand over
  * either a fake (`Layer.succeed(WorkspaceService, double)`) or the real
- * `WorkspaceServiceLive` graph. Requests go through `fastify.inject`, so nothing
+ * `WorkspaceService.layer` graph. Requests go through `fastify.inject`, so nothing
  * ever listens on a port.
  */
 export async function withWorkspaceApi<A>(

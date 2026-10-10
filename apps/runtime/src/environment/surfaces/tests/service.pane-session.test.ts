@@ -7,10 +7,10 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Result } from 'effect';
 
-import { surfacePanes, terminalSessions } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
-import { type AgentSessionServiceShape } from '../../agent-sessions/index.js';
+import type { AgentSessionService } from '../../agent-sessions/service.js';
 import { SurfaceError, SurfaceRepository, SurfaceService } from '../../index.js';
+import { surfacePanes, terminalSessions } from '../../tables.js';
 import {
   addPaneToSurface,
   agentSessionRowForTest,
@@ -22,7 +22,7 @@ import {
 
 test('create pane session assigns a new agent session to the pane', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-claim-start-fresh-'));
-  let startFreshInput: Parameters<AgentSessionServiceShape['startFresh']>[0] | null = null;
+  let startFreshInput: Parameters<AgentSessionService['Service']['startFresh']>[0] | null = null;
   try {
     const output = await Effect.runPromise(
       Effect.gen(function* () {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { HarnessLaunchBlocked } from '../../harnesses/control-plane/index.js';
+import { HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { websocketError } from '../sessions/attach-route.js';
 import { toSurfaceApiError } from '../surfaces/api.js';
 

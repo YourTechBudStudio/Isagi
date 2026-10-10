@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Option } from 'effect';
 
-import { Git, GitCommandError, GitLive, type GitService } from '../command.js';
+import { Git, GitCommandError } from '../command.js';
 import {
   classifyProjectRoot,
   normalizeExistingDirectory,
@@ -31,7 +31,7 @@ type Request =
 
 const request = JSON.parse(process.argv[2] ?? '{}') as Request;
 
-const program: Effect.Effect<unknown, unknown, GitService> =
+const program: Effect.Effect<unknown, unknown, Git> =
   request.op === 'run'
     ? Effect.gen(function* () {
         const git = yield* Git;
@@ -42,7 +42,7 @@ const program: Effect.Effect<unknown, unknown, GitService> =
         return yield* classifyProjectRoot(root);
       });
 
-const exit = await Effect.runPromiseExit(program.pipe(Effect.provide(GitLive)));
+const exit = await Effect.runPromiseExit(program.pipe(Effect.provide(Git.layer)));
 
 if (Exit.isSuccess(exit)) {
   process.stdout.write(`${JSON.stringify({ ok: true, value: exit.value })}\n`);

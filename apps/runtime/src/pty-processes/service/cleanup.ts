@@ -1,9 +1,9 @@
 import { Effect } from 'effect';
 
-import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyRepositoryService } from '../repository.js';
+import type { PtyBackendCatalog } from '../backend.js';
+import type { PtyRepository } from '../repository.js';
 import {
   isTerminalPtyProcessStatus,
   missingStatusReasonForBackend,
@@ -36,9 +36,9 @@ export type PtyProcessCleanupError =
   | PtyTerminationInProgressError;
 
 export interface PtyCleanupDependencies {
-  readonly repository: PtyRepositoryService;
-  readonly catalog: PtyBackendCatalogService;
-  readonly eventBus: InternalRuntimeEventBusService;
+  readonly repository: PtyRepository['Service'];
+  readonly catalog: PtyBackendCatalog['Service'];
+  readonly eventBus: InternalRuntimeEventBus['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
   readonly retry: PtyRetryScheduler;

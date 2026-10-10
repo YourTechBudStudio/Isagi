@@ -6,7 +6,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { Cause, Effect, Exit, Layer, Option } from 'effect';
 
-import { Git, GitCommandError, type GitCommandFailure, type GitService } from './command.js';
+import { Git, GitCommandError, type GitCommandFailure } from './command.js';
 import {
   classifyProjectRoot,
   normalizeExistingDirectory,
@@ -45,7 +45,7 @@ function recordingGit(
   stderrFor: Readonly<Record<string, string>> = {},
 ) {
   const calls: ProbeCall[] = [];
-  const service: GitService = {
+  const service: Git['Service'] = {
     run: (args, options = {}) => {
       calls.push({ args, env: options.env });
       const key = args[args.length - 1] ?? '';
@@ -81,7 +81,7 @@ function directory(name: string, withGitDirectory = false) {
   return path;
 }
 
-async function classifyWith(path: string, layer: Layer.Layer<GitService>) {
+async function classifyWith(path: string, layer: Layer.Layer<Git>) {
   const target = await Effect.runPromise(normalizeExistingDirectory(path));
   return Effect.runPromiseExit(classifyProjectRoot(target).pipe(Effect.provide(layer)));
 }

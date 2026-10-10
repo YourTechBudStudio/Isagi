@@ -9,12 +9,7 @@ import { Effect, Result } from 'effect';
 import { DataDirectory, type IsagiDataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
 import { disabledHarnessPolicy } from './policy.js';
-import {
-  RuntimeConfig,
-  RuntimeConfigConflict,
-  RuntimeConfigError,
-  RuntimeConfigLive,
-} from './service.js';
+import { RuntimeConfig, RuntimeConfigConflict, RuntimeConfigError } from './service.js';
 function paths(root: string): IsagiDataDirectory {
   return makeTestDataDirectory(root).paths;
 }
@@ -22,7 +17,7 @@ function program(root: string) {
   return Effect.gen(function* () {
     return yield* RuntimeConfig;
   }).pipe(
-    Effect.provide(RuntimeConfigLive),
+    Effect.provide(RuntimeConfig.layer),
     Effect.provideService(DataDirectory, { paths: paths(root) }),
   );
 }

@@ -8,29 +8,23 @@ import { Deferred, Effect, Fiber, Layer, Ref } from 'effect';
 
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
-import type { EditorProvisioningService } from '../../editor/provisioning/index.js';
+import type { EditorProvisioning } from '../../editor/index.js';
 import {
   NotApplicableEditorProvisioningLayer,
   editorProvisioningStateLayer,
-} from '../../editor/provisioning/tests/shared-support.js';
+} from '../../editor/testing.js';
 import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import {
-  harnessPolicyRevision,
   RuntimeConfig,
-  type RuntimeConfigService,
   type RuntimeHarnessPolicy,
   type RuntimeHarnessPolicyState,
 } from '../../runtime-config/index.js';
-import { HostInventory, type HostInventoryService } from '../inventory/index.js';
+import { harnessPolicyRevision } from '../../runtime-config/testing.js';
+import { HostInventory } from '../inventory/service.js';
 import type { ExecutableProbeResult, HostInventoryState } from '../inventory/types.js';
-import {
-  ControlPlaneNotReady,
-  HarnessControlPlane,
-  HarnessControlPlaneLive,
-  HarnessLaunchBlocked,
-} from './index.js';
 import { harnessLaunchDecision } from './launch-decision.js';
+import { ControlPlaneNotReady, HarnessControlPlane, HarnessLaunchBlocked } from './service.js';
 
 const available = { _tag: 'Available', command: 'agent', version: '1.0.0' } as const;
 const missing = { _tag: 'Missing', command: 'agent' } as const;
@@ -133,10 +127,10 @@ test('start does not complete until initial host inventory is ready', async () =
           getCached: Ref.get(state),
           startRefresh: Effect.asVoid(refresh),
           refresh,
-        } satisfies HostInventoryService;
+        } satisfies HostInventory['Service'];
       }),
     );
-    const layer = HarnessControlPlaneLive.pipe(
+    const layer = HarnessControlPlane.layer.pipe(
       Layer.provide(inventoryLayer),
       Layer.provide(
         Layer.succeed(RuntimeConfig, {
@@ -147,7 +141,7 @@ test('start does not complete until initial host inventory is ready', async () =
             terminal: terminalSettingsDefaults,
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
-        } satisfies RuntimeConfigService),
+        } satisfies RuntimeConfig['Service']),
       ),
       Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),
       Layer.provide(NotApplicableEditorProvisioningLayer),
@@ -330,7 +324,7 @@ test('the snapshot carries the provisioning state verbatim, whatever it is', asy
 
 test('acceptPolicy rejects with control_plane_not_ready before committing when inventory stays pending', async () => {
   let committed = false;
-  const config: RuntimeConfigService = {
+  const config: RuntimeConfig['Service'] = {
     get: Effect.succeed({
       pty: { backend: 'node-pty' },
       harnesses: policyState('missing', disabledPolicy),
@@ -346,8 +340,8 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
     getCached: Effect.succeed<HostInventoryState>({ _tag: 'Pending' }),
     startRefresh: Effect.void,
     refresh: Effect.succeed(ready(available).inventory),
-  } satisfies HostInventoryService);
-  const layer = HarnessControlPlaneLive.pipe(
+  } satisfies HostInventory['Service']);
+  const layer = HarnessControlPlane.layer.pipe(
     Layer.provide(stuckInventory),
     Layer.provide(Layer.succeed(RuntimeConfig, config)),
     Layer.provide(
@@ -377,7 +371,9 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
 function runControlPlane<A>(
   state: RuntimeHarnessPolicyState,
   initialInventory: HostInventoryState,
-  use: (service: import('./index.js').HarnessControlPlaneService) => Effect.Effect<A, unknown>,
+  use: (
+    service: import('./service.js').HarnessControlPlane['Service'],
+  ) => Effect.Effect<A, unknown>,
   root = resolve(tmpdir(), 'isagi-control-plane-test'),
   provisioning = NotApplicableEditorProvisioningLayer,
 ) {
@@ -395,9 +391,9 @@ function controlPlaneLayer(
   state: RuntimeHarnessPolicyState,
   initialInventory: HostInventoryState,
   root: string,
-  provisioning: Layer.Layer<EditorProvisioningService> = NotApplicableEditorProvisioningLayer,
+  provisioning: Layer.Layer<EditorProvisioning> = NotApplicableEditorProvisioningLayer,
 ) {
-  const config: RuntimeConfigService = {
+  const config: RuntimeConfig['Service'] = {
     get: Effect.succeed({
       pty: { backend: 'node-pty' },
       harnesses: state,
@@ -424,10 +420,10 @@ function controlPlaneLayer(
             return current.inventory;
           }),
         ),
-      } satisfies HostInventoryService;
+      } satisfies HostInventory['Service'];
     }),
   );
-  return HarnessControlPlaneLive.pipe(
+  return HarnessControlPlane.layer.pipe(
     Layer.provide(inventory),
     Layer.provide(Layer.succeed(RuntimeConfig, config)),
     Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),

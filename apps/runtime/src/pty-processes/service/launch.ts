@@ -2,13 +2,13 @@ import { existsSync } from 'node:fs';
 
 import { Effect, Result } from 'effect';
 
-import type { CliAccessService } from '../../cli-access/index.js';
-import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
+import type { CliAccess } from '../../cli-access/index.js';
+import type { InternalRuntimeEventBus } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
-import { backendLaunchCommand } from '../../platform/process/shell-launch.js';
-import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyForegroundStateService } from '../foreground-state.js';
-import { appendLog, type PtyRepositoryService } from '../repository.js';
+import { shellLaunchCommand } from '../../platform/process/index.js';
+import type { PtyBackendCatalog } from '../backend.js';
+import type { PtyForegroundState } from '../foreground-state.js';
+import { appendLog, type PtyRepository } from '../repository.js';
 import {
   type BackendSessionRef,
   type LaunchPtyProcessInput,
@@ -31,17 +31,17 @@ const defaultCols = 100;
 const defaultRows = 30;
 
 export interface PtyLaunchDependencies {
-  readonly repository: PtyRepositoryService;
-  readonly catalog: PtyBackendCatalogService;
-  readonly eventBus: InternalRuntimeEventBusService;
-  readonly foreground: PtyForegroundStateService;
+  readonly repository: PtyRepository['Service'];
+  readonly catalog: PtyBackendCatalog['Service'];
+  readonly eventBus: InternalRuntimeEventBus['Service'];
+  readonly foreground: PtyForegroundState['Service'];
   readonly retry: PtyRetryScheduler;
   readonly reservations: PtyReservations;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly userProcessEnvironment: NodeJS.ProcessEnv;
-  readonly cliAccess: CliAccessService;
+  readonly cliAccess: CliAccess['Service'];
 }
 
 type PtyAllocationPhase = 'allocated' | 'starting' | 'settled' | 'abandoned';
@@ -251,7 +251,7 @@ function prepareLaunch(
       ...input.envOverrides,
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };
-    const backendCommand = backendLaunchCommand({ launch: input, env: processEnvironment });
+    const backendCommand = shellLaunchCommand({ launch: input, env: processEnvironment });
     const shell = prepareShellIntegration({
       launch: {
         ...input,

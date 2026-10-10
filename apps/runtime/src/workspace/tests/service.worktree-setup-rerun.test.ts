@@ -4,7 +4,7 @@ import test, { after as afterAll, describe } from 'node:test';
 import { Effect } from 'effect';
 
 import { WorkspaceError, WorkspaceService } from '../service.js';
-import { WorktreeSetupError } from '../setup/index.js';
+import { WorktreeSetupError } from '../setup/service.js';
 import type { WorktreeSetupService } from '../setup/service.js';
 import type { LiveWorkspaceOptions } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
@@ -24,7 +24,9 @@ afterAll(() => {
   fixture.cleanup();
 });
 
-type TrustPlan = Effect.Success<ReturnType<WorktreeSetupService['validateTrustForOpen']>>;
+type TrustPlan = Effect.Success<
+  ReturnType<WorktreeSetupService['Service']['validateTrustForOpen']>
+>;
 type TrustAnswer = Effect.Effect<TrustPlan, WorktreeSetupError>;
 
 /**

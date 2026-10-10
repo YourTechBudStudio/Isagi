@@ -46,6 +46,17 @@ export interface WorkflowDiscoverySnapshot {
   readonly find: (workflowKey: string) => DiscoveredWorkflowEntry | undefined;
 }
 
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const config = yield* RuntimeConfig;
+  const startupConfig = yield* config.get;
+  return createFilesystemWorkflowRegistry(
+    directory.paths.workflowsPath,
+    join(directory.paths.root, 'workflow-artifacts'),
+    { additionalDirectories: startupConfig.workflows.additionalDirectories },
+  );
+});
+
 /**
  * Where workflows come from and how their verified builds are loaded.
  *
@@ -53,31 +64,20 @@ export interface WorkflowDiscoverySnapshot {
  * its artifact to the content-addressed cache, and `loadPinned` imports an artifact already in the
  * cache by its hash. Tests supply their own implementation.
  */
-export interface WorkflowRegistryService {
-  readonly discover: (
-    context?: WorkflowRegistryContext,
-  ) => Effect.Effect<WorkflowDiscoverySnapshot, WorkflowRegistryError>;
-  readonly loadPinned: (
-    artifactHash: string,
-    workflowKey?: string,
-  ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
-}
-
-export const WorkflowRegistry = Context.Service<WorkflowRegistryService>('isagi/WorkflowRegistry');
-
-export const WorkflowRegistryLive = Layer.effect(
+export class WorkflowRegistry extends Context.Service<
   WorkflowRegistry,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const config = yield* RuntimeConfig;
-    const startupConfig = yield* config.get;
-    return createFilesystemWorkflowRegistry(
-      directory.paths.workflowsPath,
-      join(directory.paths.root, 'workflow-artifacts'),
-      { additionalDirectories: startupConfig.workflows.additionalDirectories },
-    );
-  }),
-);
+  {
+    readonly discover: (
+      context?: WorkflowRegistryContext,
+    ) => Effect.Effect<WorkflowDiscoverySnapshot, WorkflowRegistryError>;
+    readonly loadPinned: (
+      artifactHash: string,
+      workflowKey?: string,
+    ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
+  }
+>()('isagi/runtime/workflows/WorkflowRegistry') {
+  static readonly layer = Layer.effect(WorkflowRegistry, make);
+}
 
 export interface FilesystemWorkflowRegistryOptions {
   readonly additionalDirectories?: readonly string[] | undefined;
@@ -88,7 +88,7 @@ export function createFilesystemWorkflowRegistry(
   workflowsPath: string,
   cacheRoot: string,
   options: FilesystemWorkflowRegistryOptions = {},
-): WorkflowRegistryService {
+): WorkflowRegistry['Service'] {
   const shadowLogKeys = new Set<string>();
   const missingWarningPaths = new Set<string>();
   const definitionCache: WorkflowDefinitionCache = new Map();

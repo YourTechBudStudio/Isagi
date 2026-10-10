@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect, Fiber } from 'effect';
 
 import type { BackendSessionRef, PtyBackend } from '../types.js';
-import { NodePtyBackend, NodePtyBackendLive } from './node-pty.js';
+import { NodePtyBackend } from './node-pty.js';
 import { leakyRootScript, leakyTreeFixture, waitUntilGone } from './process-tree-test-support.js';
 import {
   parseProcessTable,
@@ -123,7 +123,7 @@ for (const operation of ['terminate', 'kill'] as const) {
             const helperPid = yield* Effect.promise(fixture.waitForHelperPid);
             const stopped = yield* stopWith(backend, operation, ref);
             return { stopped, helperPid };
-          }).pipe(Effect.provide(NodePtyBackendLive)),
+          }).pipe(Effect.provide(NodePtyBackend.layer)),
         );
 
         assert.deepEqual(result.stopped, { terminated: true });
@@ -154,7 +154,7 @@ test(
           yield* Effect.sleep(100);
           yield* Fiber.interrupt(fiber);
           return pid;
-        }).pipe(Effect.provide(NodePtyBackendLive)),
+        }).pipe(Effect.provide(NodePtyBackend.layer)),
       );
 
       assert.equal(await waitUntilGone(helperPid), true);

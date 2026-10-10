@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { PtyKillError, PtyServiceError } from '../../../pty-processes/types.js';
+import { PtyKillError, PtyServiceError } from '../../../pty-processes/index.js';
 import {
   awaitProbeSettled,
   editorBackendStub,

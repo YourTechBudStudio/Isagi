@@ -1,7 +1,9 @@
 import { Effect } from 'effect';
 
-import type { PtyBackendCatalogService } from './backend.js';
+import type { PtyBackendCatalog } from './backend.js';
+import type { PtyService } from './service.js';
 import type { PtyRetryScheduler } from './service/retry.js';
+import { terminatePtyProcesses } from './service/termination.js';
 import type {
   PtyBackendName,
   PtyProcessAllocation,
@@ -21,7 +23,7 @@ export function fakeBackendCatalog(input: {
   readonly configured: PtyBackendName;
   readonly nodePty: PtyBackendShape;
   readonly tmux: PtyBackendShape;
-}): PtyBackendCatalogService {
+}): PtyBackendCatalog['Service'] {
   const backends = {
     node_pty: input.nodePty,
     tmux: input.tmux,
@@ -116,3 +118,27 @@ export function fakePtyAllocation(input: {
     }),
   };
 }
+
+/**
+ * The repository, its owner discovery and the GC pass, for the cross-module ownership test in
+ * `app/tests/pty-gc-ownership.test.ts`: only there can owner rows from other modules be seeded.
+ */
+export { PtyRepository, ptyProcessOwnerColumns } from './repository.js';
+export { collectPtyGarbage } from './service/gc.js';
+
+/**
+ * `terminateMany` for a fake `PtyService`: the production fan-out (concurrency, logging, failure
+ * policy) over the fake's own `terminate`, so a test that records or fails `terminate` observes
+ * multi-process teardown exactly as the real service performs it.
+ */
+export function fakeTerminateMany(
+  terminate: PtyService['Service']['terminate'],
+): PtyService['Service']['terminateMany'] {
+  return (input) => terminatePtyProcesses(terminate, input);
+}
+
+// Internals and builders other modules' tests use; never imported by production code.
+export type { PtyAttachment } from './service.js';
+export { decodeBackendRef } from './service/backend-ref.js';
+export { isTerminalPtyProcessStatus } from './types.js';
+export type { PtyBackendName, PtyProcessLaunchMetadata } from './types.js';

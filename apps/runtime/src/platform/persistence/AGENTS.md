@@ -10,6 +10,7 @@ Persistence support for runtime-owned project, worktree, and worktree-environmen
 - Use Drizzle ORM with SQLite through `better-sqlite3`; prefer Drizzle-supported drivers over hand-written SQL driver adapters.
 - Use Drizzle Kit-generated migrations from the start.
 - Do not edit generated migration artifacts by hand; change the Drizzle schema and regenerate migrations instead.
+- Tables live in the owning module's `tables.ts`; only that module writes them; `drizzle.config.ts` globs `src/*/tables.ts`; `RuntimeDatabase` has no schema object.
 - Prefer incremental integer primary keys.
 - Do not use composite primary keys. Use unique indexes for natural uniqueness such as project/worktree path constraints.
 - Worktree-dependent state must reference `worktrees.id` with `onDelete: 'cascade'` so deleting a worktree row removes its dependent environment state.

@@ -1,10 +1,6 @@
 import { Clock, Context, Deferred, Effect, Layer, Ref } from 'effect';
 
-import {
-  UserShell,
-  type UserShellCommandResult,
-  type UserShellService,
-} from '../../platform/process/user-shell.js';
+import { UserShell, type UserShellCommandResult } from '../../platform/process/index.js';
 import {
   approvedHostEnvironmentKeys,
   type ApprovedHostEnvironment,
@@ -21,88 +17,85 @@ import type {
 const probeTimeoutMs = 5_000;
 const probeOutputLimitBytes = 16 * 1024;
 
-export interface HostInventoryService {
-  readonly getCached: Effect.Effect<HostInventoryState>;
-  readonly startRefresh: Effect.Effect<void>;
-  readonly refresh: Effect.Effect<HostInventorySnapshot>;
+const make = Effect.gen(function* () {
+  const shell = yield* UserShell;
+  const scope = yield* Effect.scope;
+  const state = yield* Ref.make<HostInventoryState>({ _tag: 'Pending' });
+  const activeRefresh = yield* Ref.make<Deferred.Deferred<HostInventorySnapshot> | null>(null);
+  const generation = yield* Ref.make(0);
+
+  const collect = collectHostInventory(shell);
+  const beginRefresh = Effect.uninterruptibleMask(() =>
+    Effect.gen(function* () {
+      const candidate = yield* Deferred.make<HostInventorySnapshot>();
+      const selected = yield* Ref.modify(
+        activeRefresh,
+        (
+          active,
+        ): readonly [
+          (
+            | {
+                readonly owner: false;
+                readonly deferred: Deferred.Deferred<HostInventorySnapshot>;
+              }
+            | {
+                readonly owner: true;
+                readonly deferred: Deferred.Deferred<HostInventorySnapshot>;
+              }
+          ),
+          Deferred.Deferred<HostInventorySnapshot>,
+        ] =>
+          active
+            ? [{ owner: false, deferred: active }, active]
+            : [{ owner: true, deferred: candidate }, candidate],
+      );
+      if (selected.owner) {
+        yield* Effect.forkIn(
+          Effect.interruptible(
+            collect.pipe(
+              Effect.tap((inventory) =>
+                Effect.gen(function* () {
+                  const now = yield* Clock.currentTimeMillis;
+                  const nextGeneration = yield* Ref.updateAndGet(generation, (value) => value + 1);
+                  yield* Ref.set(state, {
+                    _tag: 'Ready',
+                    generation: nextGeneration,
+                    inventory,
+                    refreshedAt: new Date(now).toISOString(),
+                  });
+                  yield* Deferred.succeed(selected.deferred, inventory);
+                }),
+              ),
+              Effect.ensuring(Ref.set(activeRefresh, null)),
+            ),
+          ),
+          scope,
+        );
+      }
+      return selected.deferred;
+    }),
+  );
+  const refresh = Effect.flatMap(beginRefresh, Deferred.await);
+
+  return HostInventory.of({
+    getCached: Ref.get(state),
+    startRefresh: Effect.asVoid(beginRefresh),
+    refresh,
+  });
+});
+
+export class HostInventory extends Context.Service<
+  HostInventory,
+  {
+    readonly getCached: Effect.Effect<HostInventoryState>;
+    readonly startRefresh: Effect.Effect<void>;
+    readonly refresh: Effect.Effect<HostInventorySnapshot>;
+  }
+>()('isagi/runtime/harnesses/HostInventory') {
+  static readonly layer = Layer.effect(HostInventory, make);
 }
 
-export const HostInventory = Context.Service<HostInventoryService>('isagi/HostInventory');
-
-export const HostInventoryLive = Layer.effect(
-  HostInventory,
-  Effect.gen(function* () {
-    const shell = yield* UserShell;
-    const scope = yield* Effect.scope;
-    const state = yield* Ref.make<HostInventoryState>({ _tag: 'Pending' });
-    const activeRefresh = yield* Ref.make<Deferred.Deferred<HostInventorySnapshot> | null>(null);
-    const generation = yield* Ref.make(0);
-
-    const collect = collectHostInventory(shell);
-    const beginRefresh = Effect.uninterruptibleMask(() =>
-      Effect.gen(function* () {
-        const candidate = yield* Deferred.make<HostInventorySnapshot>();
-        const selected = yield* Ref.modify(
-          activeRefresh,
-          (
-            active,
-          ): readonly [
-            (
-              | {
-                  readonly owner: false;
-                  readonly deferred: Deferred.Deferred<HostInventorySnapshot>;
-                }
-              | {
-                  readonly owner: true;
-                  readonly deferred: Deferred.Deferred<HostInventorySnapshot>;
-                }
-            ),
-            Deferred.Deferred<HostInventorySnapshot>,
-          ] =>
-            active
-              ? [{ owner: false, deferred: active }, active]
-              : [{ owner: true, deferred: candidate }, candidate],
-        );
-        if (selected.owner) {
-          yield* Effect.forkIn(
-            Effect.interruptible(
-              collect.pipe(
-                Effect.tap((inventory) =>
-                  Effect.gen(function* () {
-                    const now = yield* Clock.currentTimeMillis;
-                    const nextGeneration = yield* Ref.updateAndGet(
-                      generation,
-                      (value) => value + 1,
-                    );
-                    yield* Ref.set(state, {
-                      _tag: 'Ready',
-                      generation: nextGeneration,
-                      inventory,
-                      refreshedAt: new Date(now).toISOString(),
-                    });
-                    yield* Deferred.succeed(selected.deferred, inventory);
-                  }),
-                ),
-                Effect.ensuring(Ref.set(activeRefresh, null)),
-              ),
-            ),
-            scope,
-          );
-        }
-        return selected.deferred;
-      }),
-    );
-    const refresh = Effect.flatMap(beginRefresh, Deferred.await);
-
-    return {
-      getCached: Ref.get(state),
-      startRefresh: Effect.asVoid(beginRefresh),
-      refresh,
-    } satisfies HostInventoryService;
-  }),
-);
-
-function collectHostInventory(shell: UserShellService) {
+function collectHostInventory(shell: UserShell['Service']) {
   return Effect.gen(function* () {
     const [pi, opencode, claude, codex] = yield* Effect.all(
       [
@@ -120,7 +113,7 @@ function collectHostInventory(shell: UserShellService) {
   });
 }
 
-function probeVersion(shell: UserShellService, probe: HarnessProbeDefinition) {
+function probeVersion(shell: UserShell['Service'], probe: HarnessProbeDefinition) {
   return runProbe(shell, probe).pipe(
     Effect.map((result): ExecutableProbeResult => {
       const failure = probeFailure(probe.command, result);
@@ -132,7 +125,7 @@ function probeVersion(shell: UserShellService, probe: HarnessProbeDefinition) {
   );
 }
 
-function runProbe(shell: UserShellService, probe: HarnessProbeDefinition) {
+function runProbe(shell: UserShell['Service'], probe: HarnessProbeDefinition) {
   return shell.run({ ...probe, timeoutMs: probeTimeoutMs, maxOutputBytes: probeOutputLimitBytes });
 }
 
@@ -189,7 +182,7 @@ function approvedEnvironment(environment: NodeJS.ProcessEnv): ApprovedHostEnviro
 }
 
 function approvedEnvironmentResult(
-  environment: UserShellService['environment'],
+  environment: UserShell['Service']['environment'],
 ): HostEnvironmentResult {
   const values = approvedEnvironment(environment.values);
   return environment._tag === 'Available'

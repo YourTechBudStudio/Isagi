@@ -8,8 +8,8 @@ import type { EditorProvisioningFailureReason } from '@isagi/contracts';
 
 import type {
   EditorInstallIoError,
-  EditorInstallIoService,
   EditorSharedStatePaths,
+  EditorInstallIo,
 } from './install-io.js';
 import type { CodeServerArtifact, EditorPlatformKey } from './manifest.js';
 import {
@@ -42,7 +42,7 @@ export interface ResolvedEditorInstallation extends EditorSharedStatePaths {
 export type EditorInstallPhase = 'downloading' | 'verifying' | 'extracting';
 
 export interface ProvisionCodeServerInput {
-  readonly io: EditorInstallIoService;
+  readonly io: EditorInstallIo['Service'];
   readonly paths: { readonly toolsPath: string; readonly editorsPath: string };
   readonly artifact: CodeServerArtifact;
   readonly platformKey: EditorPlatformKey;
@@ -212,7 +212,7 @@ function publish(input: {
   );
 }
 
-function prepareShared(io: EditorInstallIoService, editorsPath: string) {
+function prepareShared(io: EditorInstallIo['Service'], editorsPath: string) {
   return io
     .prepareEditorState({ editorsPath })
     .pipe(
@@ -232,7 +232,7 @@ function downloadFailure(error: EditorInstallIoError, version: string) {
   }
   // No foreign text. `fetch` reports transport faults as an opaque wrapper whose
   // own cause chain this runtime does not walk (see
-  // `diagnostics/operational-cause.ts`), so the honest diagnostic names the
+  // `platform/diagnostics/operational-cause.ts`), so the honest diagnostic names the
   // stage and, when the server answered at all, its status.
   return new EditorProvisioningFailure({
     reason: 'download_failed',

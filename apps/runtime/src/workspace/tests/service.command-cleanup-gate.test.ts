@@ -6,17 +6,20 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CommandError, CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { SurfaceService, SurfaceRepository } from '../../environment/index.js';
+import { CommandError, CommandService } from '../../commands/index.js';
+import { SurfaceService } from '../../environment/index.js';
 import { InternalRuntimeEventBus } from '../../platform/events/index.js';
-import { Git, type GitService } from '../../platform/git/index.js';
-import { DataDirectory, StateFile } from '../../platform/persistence/index.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../projects/repository.js';
-import type { ProjectRow } from '../../projects/types.js';
+import { Git } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { ProjectRow } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../service.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../setup/index.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   project,
   repositoryWith,
@@ -25,7 +28,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  testWorktreeDeleteDiagnostics,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -57,7 +60,7 @@ const cleanupFailure = (worktreeId: number) =>
     worktreeId,
   });
 
-function failingPruneCommandService(record: string[]): CommandServiceShape {
+function failingPruneCommandService(record: string[]): CommandService['Service'] {
   return {
     ...testCommandService,
     cleanupBeforeWorktreePrune: (input: { readonly worktreeId: number }) =>
@@ -65,12 +68,12 @@ function failingPruneCommandService(record: string[]): CommandServiceShape {
         record.push(`prune:${input.worktreeId}`);
         return yield* Effect.fail(cleanupFailure(input.worktreeId));
       }),
-  } satisfies CommandServiceShape;
+  } satisfies CommandService['Service'];
 }
 
 // Git discovery that reports the project root and nothing else, so the persisted
 // worktree becomes "missing" and reaches the prune path.
-function discoveryGit(projectRoot: string, record: string[]): GitService {
+function discoveryGit(projectRoot: string, record: string[]): Git['Service'] {
   return {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -94,7 +97,7 @@ function discoveryGit(projectRoot: string, record: string[]): GitService {
         record.push(`git:${command}`);
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 }
 
 function withProjectRoot(label: string, run: (projectRoot: string) => Promise<void>) {
@@ -111,7 +114,7 @@ function withProjectRoot(label: string, run: (projectRoot: string) => Promise<vo
 
 interface Harness {
   readonly record: string[];
-  readonly repository: WorkspaceRepositoryService;
+  readonly repository: ProjectRepository['Service'];
   readonly deletedWorktreeIds: number[];
 }
 
@@ -128,26 +131,26 @@ function harness(projectRow: ProjectRow): Harness {
         deletedWorktreeIds.push(worktreeId);
         return true;
       }),
-  } as unknown as WorkspaceRepositoryService;
+  } as unknown as ProjectRepository['Service'];
   return { record, repository, deletedWorktreeIds };
 }
 
 function provide<A, E>(
   effect: Effect.Effect<A, E, WorkspaceService>,
   input: {
-    readonly repository: WorkspaceRepositoryService;
-    readonly git: GitService;
-    readonly commands: CommandServiceShape;
+    readonly repository: ProjectRepository['Service'];
+    readonly git: Git['Service'];
+    readonly commands: CommandService['Service'];
   },
 ) {
   return effect.pipe(
-    Effect.provide(WorkspaceServiceLive),
-    Effect.provide(WorkflowRunErasureLive),
+    Effect.provide(WorkspaceService.layer),
+    Effect.provide(NoProjectDeletionParticipant),
     Effect.provideService(CommandService, input.commands),
     Effect.provideService(PtyService, testPtyService),
     Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-    Effect.provideService(WorkspaceRepository, input.repository),
-    Effect.provideService(SurfaceRepository, testSurfaceRepository),
+    Effect.provideService(ProjectRepository, input.repository),
+    Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
     Effect.provideService(SurfaceService, testSurfaceService),
     Effect.provideService(
       StateFile,

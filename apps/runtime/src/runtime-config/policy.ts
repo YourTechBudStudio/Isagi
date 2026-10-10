@@ -8,8 +8,8 @@ import {
   type TerminalSettings,
 } from '@isagi/contracts';
 
-import { boundedDiagnostic } from '../platform/diagnostics/bounded.js';
-import { normalizeAbsoluteHomePath } from '../platform/fs/paths.js';
+import { boundedDiagnostic } from '../platform/diagnostics/index.js';
+import { normalizeAbsoluteHomePath } from '../platform/fs/index.js';
 import {
   runtimeConfigPtyBackendSchema,
   runtimeHarnessPolicySchema,

@@ -3,10 +3,8 @@ import test from 'node:test';
 
 import { Effect, Fiber } from 'effect';
 
-import {
-  defaultCommandLifecycle,
-  type WorktreeCommandConfig,
-} from '../../projects/config/config-schema.js';
+import { type WorktreeCommandConfig } from '../../projects/index.js';
+import { defaultCommandLifecycle } from '../../projects/testing.js';
 import { buildActivationPlan } from '../lifecycle.js';
 import type { CommandStateRow } from '../repository.js';
 import {
@@ -16,6 +14,7 @@ import {
   createFixture,
   fakePtyProcessRow,
   runCommandScenario,
+  systemError,
   type CommandRepositoryOptions,
   type CommandScenarioRecorder,
   waitForLog,
@@ -633,7 +632,7 @@ commands:
   // `port_allocation_failed` actually means: not brief contention — the resolver
   // would have taken a different port for that — but a persistent operational
   // problem such as descriptor exhaustion or a permissions refusal.
-  const probe = commandPortProbe({ assignFailure: 'System error EMFILE' });
+  const probe = commandPortProbe({ assignFailure: systemError('EMFILE') });
 
   const first = await switchWorktrees({ config, states: [suspended], portProbe: probe.service });
 

@@ -11,11 +11,14 @@ import {
 } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../app/layer.js';
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../platform/http/index.js';
 import { DatabaseError } from '../platform/persistence/index.js';
-import { PtyServiceError } from '../pty-processes/index.js';
-import { registerPtyStreamRoute, type PtyStreamStrategy } from '../pty-processes/stream-route.js';
-import { describeCommandCause } from './diagnostics.js';
+import {
+  PtyServiceError,
+  registerPtyStreamRoute,
+  type PtyStreamStrategy,
+} from '../pty-processes/index.js';
 import { CommandError } from './errors.js';
 import { CommandService } from './service.js';
 
@@ -231,7 +234,7 @@ function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {
   // boundary can still be a decode failure carrying persisted ref content. The
   // cost — no stack trace for genuine bugs — is recorded as follow-up debt.
   console.error(
-    `[runtime] Unhandled command API handler error during ${context.endpointId} cause=${describeCommandCause(error)}`,
+    `[runtime] Unhandled command API handler error during ${context.endpointId} cause=${describeOperationalCause(error)}`,
   );
 
   return {

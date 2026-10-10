@@ -12,7 +12,6 @@ import {
   WorkspaceError,
   WorkspaceService,
   WorktreeOrderError,
-  type WorkspaceServiceShape,
 } from '../index.js';
 import { withWorkspaceApi as withWorkspaceApiLayer } from './api-test-support.js';
 
@@ -455,7 +454,7 @@ const commandCleanupGatedRoutes = [
     method: 'POST' as const,
     url: '/api/v1/projects/1/worktrees/open',
     payload: { branch: 'feature/new' },
-    service: (error: WorkspaceError): Partial<WorkspaceServiceShape> => ({
+    service: (error: WorkspaceError): Partial<WorkspaceService['Service']> => ({
       openWorktree: () => Effect.fail(error),
     }),
     code: 'worktree_open_rejected',
@@ -465,7 +464,7 @@ const commandCleanupGatedRoutes = [
     method: 'POST' as const,
     url: '/api/v1/projects',
     payload: { path: '/repo/isagi' },
-    service: (error: WorkspaceError): Partial<WorkspaceServiceShape> => ({
+    service: (error: WorkspaceError): Partial<WorkspaceService['Service']> => ({
       registerProject: () => Effect.fail(error),
     }),
     code: 'project_operation_rejected',
@@ -475,7 +474,7 @@ const commandCleanupGatedRoutes = [
     method: 'POST' as const,
     url: '/api/v1/workspace/reconcile',
     payload: { projectId: 1 },
-    service: (error: WorkspaceError): Partial<WorkspaceServiceShape> => ({
+    service: (error: WorkspaceError): Partial<WorkspaceService['Service']> => ({
       reconcileWorkspace: () => Effect.fail(error),
     }),
     code: 'workspace_reconcile_rejected',
@@ -509,17 +508,20 @@ for (const route of commandCleanupGatedRoutes) {
 }
 
 function withWorkspaceApi<A>(
-  service: WorkspaceServiceShape,
+  service: WorkspaceService['Service'],
   run: (fastify: Fastify.FastifyInstance) => Promise<A>,
 ) {
   return withWorkspaceApiLayer(Layer.succeed(WorkspaceService, service), run);
 }
 
 function fakeWorkspaceService(
-  overrides: Partial<WorkspaceServiceShape> = {},
-): WorkspaceServiceShape {
+  overrides: Partial<WorkspaceService['Service']> = {},
+): WorkspaceService['Service'] {
   return {
     get: Effect.succeed(workspaceSnapshot),
+    publishRestoredActivation: Effect.die(
+      'publishRestoredActivation is not used by workspace API tests',
+    ),
     durableSessions: Effect.succeed({ sessions: [] }),
     deleteProject: () => Effect.die('deleteProject is not used by workspace API tests'),
     getActiveContext: Effect.succeed({ activeContext: { projectId: null, worktreeId: null } }),

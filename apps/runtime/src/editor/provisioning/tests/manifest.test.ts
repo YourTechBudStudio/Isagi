@@ -4,8 +4,12 @@ import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { codeServerManifestSource } from '../../../platform/assets/index.js';
-import { artifactForPlatform, codeServerManifest, editorPlatformKey } from '../manifest.js';
+import {
+  artifactForPlatform,
+  codeServerManifest,
+  codeServerManifestSource,
+  editorPlatformKey,
+} from '../manifest.js';
 
 const repositorySource = resolve(
   dirname(fileURLToPath(import.meta.url)),

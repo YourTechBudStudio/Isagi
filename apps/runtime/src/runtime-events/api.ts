@@ -11,9 +11,9 @@ import {
 } from '@isagi/contracts';
 
 import type { RuntimeServices } from '../app/layer.js';
-import { AgentSessionAttentionProjection } from '../environment/agent-sessions/index.js';
-import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../platform/events/runtime-events.js';
-import { enforceRuntimeWebSocketOrigin } from '../platform/http/origin.js';
+import { AgentSessionAttentionProjection } from '../environment/index.js';
+import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../platform/events/index.js';
+import { enforceRuntimeWebSocketOrigin } from '../platform/http/index.js';
 import { WorkflowEngine } from '../workflows/index.js';
 
 const runWithRuntime =

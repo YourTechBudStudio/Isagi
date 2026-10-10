@@ -4,11 +4,45 @@ import {
   workflowVerifierVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
 
-import {
-  configSchemaReferenceSources,
-  isagiDocsContentSources,
-  workflowScaffoldSources,
-} from '../platform/assets/index.js';
+import { readTextAsset, readTextAssetTree } from '../platform/assets/index.js';
+
+// The shipped skill's sources, read from the runtime asset root at module load
+// (a missing asset is a build defect). The build copies them from
+// `harnesses/skill-content/`, the two config schema sources, and the verifier's
+// canonical workflow fixture (`scripts/sync-runtime-assets.mjs`).
+
+export const configSchemaReferenceSources = {
+  'runtime-config.schema.ts': readTextAsset('config-schemas/runtime-config.schema.ts'),
+  'project-config.schema.ts': readTextAsset('config-schemas/project-config.schema.ts'),
+} as const;
+
+export const isagiDocsContentSources = {
+  'SKILL.md': readTextAsset('isagi-docs/SKILL.md'),
+  'config-global.md': readTextAsset('isagi-docs/config-global.md'),
+  'config-project.md': readTextAsset('isagi-docs/config-project.md'),
+  'workflows.md': readTextAsset('isagi-docs/workflows.md'),
+  'workflow-environments.md': readTextAsset('isagi-docs/workflow-environments.md'),
+  'workflow-agents.md': readTextAsset('isagi-docs/workflow-agents.md'),
+  'workflow-recovery.md': readTextAsset('isagi-docs/workflow-recovery.md'),
+  'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
+  'cli-investigate-runs.md': readTextAsset('isagi-docs/cli-investigate-runs.md'),
+  'cli-reconstruct-and-launch.md': readTextAsset('isagi-docs/cli-reconstruct-and-launch.md'),
+} as const;
+
+/**
+ * The canonical workflow scaffold, copied verbatim from the verifier fixture at build time and
+ * keyed by POSIX-relative path (e.g. `src/index.ts`). The shipped skill emits these as reference
+ * files, and an anti-drift test asserts the emitted bytes equal these source bytes.
+ */
+export const workflowScaffoldSources: ReadonlyMap<string, string> = readWorkflowScaffoldSources();
+
+function readWorkflowScaffoldSources(): ReadonlyMap<string, string> {
+  const { directory, files } = readTextAssetTree('minimal-workflow');
+  if (files.size === 0) {
+    throw new Error(`No workflow scaffold assets found under ${directory}.`);
+  }
+  return files;
+}
 
 /** The skill's directory name and its `name:` frontmatter field. Must match `skill-content/SKILL.md`. */
 export const isagiDocsName = 'isagi-docs';

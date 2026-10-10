@@ -2,7 +2,7 @@ import type { Effect } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
+import type { LaunchPtyProcessInput } from '../pty-processes/index.js';
 
 export type ConversationRole = 'system' | 'user' | 'assistant';
 export type PartState = 'streaming' | 'done';

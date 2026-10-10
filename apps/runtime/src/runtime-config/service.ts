@@ -25,71 +25,73 @@ export class RuntimeConfigConflict extends Data.TaggedError('RuntimeConfigConfli
 export class RuntimeHarnessConfigInvalid extends Data.TaggedError('RuntimeHarnessConfigInvalid')<{
   readonly diagnostic: string;
 }> {}
-export interface RuntimeConfigService {
-  readonly get: Effect.Effect<RuntimeConfigShape>;
-  readonly acceptHarnessPolicy: (input: {
-    readonly expectedPolicyRevision: string;
-    readonly policy: RuntimeHarnessPolicy;
-  }) => Effect.Effect<
-    RuntimeConfigShape,
-    RuntimeConfigError | RuntimeConfigConflict | RuntimeHarnessConfigInvalid
-  >;
-}
-export const RuntimeConfig = Context.Service<RuntimeConfigService>('isagi/RuntimeConfig');
-export const RuntimeConfigLive = Layer.effect(
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const path = resolve(directory.paths.root, 'config.yaml');
+  const initial = yield* readOrCreateRuntimeConfig(path);
+  const state = yield* Ref.make(initial);
+  const semaphore = yield* Semaphore.make(1);
+  return RuntimeConfig.of({
+    get: Ref.get(state),
+    acceptHarnessPolicy: (input) =>
+      semaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const bytes = yield* readBytes(path);
+          const sourceIdentity = identity(bytes);
+          const document = yield* parseYamlDocument(path, bytes);
+          const current = yield* decodeRuntimeConfig(path, document.toJS());
+          if (current.harnesses.status === 'invalid')
+            return yield* Effect.fail(
+              new RuntimeHarnessConfigInvalid({
+                diagnostic: current.harnesses.diagnostic ?? 'Invalid harnesses configuration.',
+              }),
+            );
+          if (current.harnesses.revision !== input.expectedPolicyRevision)
+            return yield* Effect.fail(
+              new RuntimeConfigConflict({
+                expectedRevision: input.expectedPolicyRevision,
+                actualRevision: current.harnesses.revision,
+              }),
+            );
+          patchHarnessPolicy(document, input.policy);
+          const nextBytes = document.toString();
+          // Preserve edits made by an external YAML editor after this mutation read its source.
+          // This narrows the unavoidable check-to-rename race without exposing persistence tokens.
+          const latest = yield* readBytes(path);
+          if (identity(latest) !== sourceIdentity) {
+            const latestDoc = yield* parseYamlDocument(path, latest);
+            const latestConfig = yield* decodeRuntimeConfig(path, latestDoc.toJS());
+            return yield* Effect.fail(
+              new RuntimeConfigConflict({
+                expectedRevision: input.expectedPolicyRevision,
+                actualRevision: latestConfig.harnesses.revision,
+              }),
+            );
+          }
+          const next = yield* decodeRuntimeConfig(path, document.toJS());
+          yield* atomicWrite(path, nextBytes);
+          yield* Ref.set(state, next);
+          return next;
+        }),
+      ),
+  });
+});
+
+export class RuntimeConfig extends Context.Service<
   RuntimeConfig,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const path = resolve(directory.paths.root, 'config.yaml');
-    const initial = yield* readOrCreateRuntimeConfig(path);
-    const state = yield* Ref.make(initial);
-    const semaphore = yield* Semaphore.make(1);
-    return {
-      get: Ref.get(state),
-      acceptHarnessPolicy: (input) =>
-        semaphore.withPermits(1)(
-          Effect.gen(function* () {
-            const bytes = yield* readBytes(path);
-            const sourceIdentity = identity(bytes);
-            const document = yield* parseYamlDocument(path, bytes);
-            const current = yield* decodeRuntimeConfig(path, document.toJS());
-            if (current.harnesses.status === 'invalid')
-              return yield* Effect.fail(
-                new RuntimeHarnessConfigInvalid({
-                  diagnostic: current.harnesses.diagnostic ?? 'Invalid harnesses configuration.',
-                }),
-              );
-            if (current.harnesses.revision !== input.expectedPolicyRevision)
-              return yield* Effect.fail(
-                new RuntimeConfigConflict({
-                  expectedRevision: input.expectedPolicyRevision,
-                  actualRevision: current.harnesses.revision,
-                }),
-              );
-            patchHarnessPolicy(document, input.policy);
-            const nextBytes = document.toString();
-            // Preserve edits made by an external YAML editor after this mutation read its source.
-            // This narrows the unavoidable check-to-rename race without exposing persistence tokens.
-            const latest = yield* readBytes(path);
-            if (identity(latest) !== sourceIdentity) {
-              const latestDoc = yield* parseYamlDocument(path, latest);
-              const latestConfig = yield* decodeRuntimeConfig(path, latestDoc.toJS());
-              return yield* Effect.fail(
-                new RuntimeConfigConflict({
-                  expectedRevision: input.expectedPolicyRevision,
-                  actualRevision: latestConfig.harnesses.revision,
-                }),
-              );
-            }
-            const next = yield* decodeRuntimeConfig(path, document.toJS());
-            yield* atomicWrite(path, nextBytes);
-            yield* Ref.set(state, next);
-            return next;
-          }),
-        ),
-    } satisfies RuntimeConfigService;
-  }),
-);
+  {
+    readonly get: Effect.Effect<RuntimeConfigShape>;
+    readonly acceptHarnessPolicy: (input: {
+      readonly expectedPolicyRevision: string;
+      readonly policy: RuntimeHarnessPolicy;
+    }) => Effect.Effect<
+      RuntimeConfigShape,
+      RuntimeConfigError | RuntimeConfigConflict | RuntimeHarnessConfigInvalid
+    >;
+  }
+>()('isagi/runtime/runtime-config/RuntimeConfig') {
+  static readonly layer = Layer.effect(RuntimeConfig, make);
+}
 function readOrCreateRuntimeConfig(path: string) {
   return Effect.try({
     try: () => {

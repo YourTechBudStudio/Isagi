@@ -2,19 +2,19 @@ import { Effect } from 'effect';
 
 import type { CommandActionOutput } from '@isagi/contracts';
 
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
 import type {
   WorktreeCommandCatalogConfig,
   WorktreeCommandConfig,
-} from '../projects/config/config-schema.js';
-import { loadWorktreeCommandCatalog } from '../projects/config/service.js';
+  ProjectRepository,
+} from '../projects/index.js';
+import { loadWorktreeCommandCatalog } from '../projects/index.js';
 import type { DurablePtyTerminationReason } from '../pty-processes/index.js';
-import type { WorkspaceRepositoryService } from '../workspace/index.js';
 import type { CommandCleanupFailure, CommandCleanupResult, CommandTarget } from './convergence.js';
-import { describeCommandCause } from './diagnostics.js';
 import { CommandError, type CommandServiceError } from './errors.js';
 import type { CommandStopCause, CommandStopResult } from './outcomes.js';
-import type { CommandRepositoryService, CommandStateRow } from './repository.js';
+import type { CommandStateRow, CommandRepository } from './repository.js';
 import { loadCommandTarget } from './targets.js';
 
 // The worktree-level command passes: what happens to a worktree's commands when
@@ -42,8 +42,8 @@ export interface ActivationPlanEntry {
 type ActivationEntryOutcome = 'executed' | 'discarded';
 
 export interface CommandLifecycleDependencies {
-  readonly workspaceRepository: WorkspaceRepositoryService;
-  readonly commandRepository: CommandRepositoryService;
+  readonly projectRepository: ProjectRepository['Service'];
+  readonly commandRepository: CommandRepository['Service'];
   readonly runCommand: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
@@ -82,12 +82,12 @@ export interface CommandLifecycleDependencies {
 }
 
 export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
-  const { workspaceRepository, commandRepository, runCommand, stopCommand, stopManagedCommand } =
+  const { projectRepository, commandRepository, runCommand, stopCommand, stopManagedCommand } =
     deps;
 
   const worktreeCatalog = (worktreeId: number) =>
     Effect.gen(function* () {
-      const target = yield* loadCommandTarget(workspaceRepository, worktreeId);
+      const target = yield* loadCommandTarget(projectRepository, worktreeId);
       const catalog = yield* loadWorktreeCommandCatalog({
         worktreeRootPath: target.worktree.path,
       });
@@ -469,7 +469,7 @@ function logLifecycleError(operation: string) {
   return (error: unknown) =>
     Effect.sync(() => {
       console.warn(
-        `[runtime] Command lifecycle ${operation} failed cause=${describeCommandCause(error)}`,
+        `[runtime] Command lifecycle ${operation} failed cause=${describeOperationalCause(error)}`,
       );
     });
 }

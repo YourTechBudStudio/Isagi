@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Cause, Effect, Exit } from 'effect';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
-import { PtyKillError } from '../../pty-processes/types.js';
+import { PtyKillError } from '../../pty-processes/index.js';
 import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
   commandRun,
@@ -282,7 +282,7 @@ test('a failed stop keeps the command running and records why', async () => {
     recorder.readopted[0]?.diagnostic?.detail,
     // Composed from fields, never from the error's own text: the diagnostic is
     // durable and user-visible, so it carries coordinates rather than whatever a
-    // backend or schema decoder happened to say. See `commands.diagnostics.ts`.
+    // backend or schema decoder happened to say. See `platform/diagnostics/operational-cause.ts`.
     'Could not stop the process: PTY kill error (ptyProcess=123): Error',
   );
   // Reactivity: the unchanged `running` status is republished so the client

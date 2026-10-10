@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Option } from 'effect';
 
-import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
+import { PtyKillError, PtyServiceError } from '../../pty-processes/index.js';
 import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
   commandRun,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { delimiter, dirname } from 'node:path';
 import test from 'node:test';
 
-import { launchEnv, userShellBaseEnv } from './runtime-namespace.js';
+import { launchEnv, userShellBaseEnv } from './shell-env.js';
 
 const nodeBin = dirname(process.execPath);
 

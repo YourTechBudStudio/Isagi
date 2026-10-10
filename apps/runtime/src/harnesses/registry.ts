@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from 'effect';
 
 import { DataDirectory } from '../platform/persistence/index.js';
-import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
+import type { LaunchPtyProcessInput } from '../pty-processes/index.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
 import { harnessDefinition } from './definitions.js';
 import { AgentSessionArtifacts } from './ledger.js';
@@ -11,33 +11,31 @@ import {
   type HarnessLaunchContext,
 } from './types.js';
 
-export interface HarnessAdapterRegistryService {
-  readonly buildLaunch: (
-    input: HarnessLaunchContext,
-  ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
-  readonly buildHeadlessLaunch: (
-    input: HarnessHeadlessLaunchContext,
-  ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
-}
+const make = Effect.gen(function* () {
+  const directory = yield* DataDirectory;
+  const sessionArtifacts = yield* AgentSessionArtifacts;
+  yield* prepareHarnessIntegrationArtifacts(directory.paths.root);
 
-export const HarnessAdapterRegistry = Context.Service<HarnessAdapterRegistryService>(
-  'isagi/HarnessAdapterRegistry',
-);
+  return HarnessAdapterRegistry.of({
+    buildLaunch: (input) =>
+      harnessDefinition(input.harness).launch.interactive(input, {
+        dataRoot: directory.paths.root,
+        artifacts: sessionArtifacts,
+      }),
+    buildHeadlessLaunch: (input) => harnessDefinition(input.harness).launch.headless(input),
+  });
+});
 
-export const HarnessAdapterRegistryLive = Layer.effect(
+export class HarnessAdapterRegistry extends Context.Service<
   HarnessAdapterRegistry,
-  Effect.gen(function* () {
-    const directory = yield* DataDirectory;
-    const sessionArtifacts = yield* AgentSessionArtifacts;
-    yield* prepareHarnessIntegrationArtifacts(directory.paths.root);
-
-    return {
-      buildLaunch: (input) =>
-        harnessDefinition(input.harness).launch.interactive(input, {
-          dataRoot: directory.paths.root,
-          artifacts: sessionArtifacts,
-        }),
-      buildHeadlessLaunch: (input) => harnessDefinition(input.harness).launch.headless(input),
-    } satisfies HarnessAdapterRegistryService;
-  }),
-);
+  {
+    readonly buildLaunch: (
+      input: HarnessLaunchContext,
+    ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
+    readonly buildHeadlessLaunch: (
+      input: HarnessHeadlessLaunchContext,
+    ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
+  }
+>()('isagi/runtime/harnesses/HarnessAdapterRegistry') {
+  static readonly layer = Layer.effect(HarnessAdapterRegistry, make);
+}

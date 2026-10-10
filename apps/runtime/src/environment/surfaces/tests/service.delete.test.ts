@@ -6,8 +6,10 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
-import { EditorContextRepository } from '../../../editor/contexts/index.js';
-import { insertPtyProcess as insertEditorPtyProcess } from '../../../editor/testing.js';
+import {
+  EditorContextRepository,
+  insertPtyProcess as insertEditorPtyProcess,
+} from '../../../editor/testing.js';
 import { InternalRuntimeEventBus } from '../../../platform/events/index.js';
 import { DatabaseError } from '../../../platform/persistence/index.js';
 import { PtyServiceError } from '../../../pty-processes/index.js';

@@ -6,15 +6,10 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import {
-  agentSessions,
-  ptyProcesses,
-  surfacePanes,
-  terminalSessions,
-  worktreeSurfaces,
-} from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { PtyForegroundState } from '../../../pty-processes/index.js';
+import { ptyProcesses } from '../../../pty-processes/tables.js';
+import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from '../../tables.js';
 import { AgentSessionAttentionProjection } from '../attention.js';
 import {
   agentSession,

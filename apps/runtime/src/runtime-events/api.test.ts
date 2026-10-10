@@ -7,18 +7,14 @@ import Fastify from 'fastify';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import { AgentSessionAttentionProjection } from '../environment/agent-sessions/index.js';
-import {
-  RuntimeEventBus,
-  RuntimeEventBusLive,
-  type RuntimeEventSubscription,
-} from '../platform/events/runtime-events.js';
+import { AgentSessionAttentionProjection } from '../environment/index.js';
+import { RuntimeEventBus, type RuntimeEventSubscription } from '../platform/events/index.js';
 import { registerRuntimeEventsApi } from './api.js';
 
 test('runtime events websocket streams published events through the contract path', async () => {
   const event = agentSessionChangedEvent();
   const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(RuntimeEventBusLive);
+  const runtime = ManagedRuntime.make(RuntimeEventBus.layer);
 
   try {
     await fastify.register(websocket);
@@ -48,7 +44,7 @@ test('runtime events websocket answers explicit attention snapshot requests', as
   const fastify = Fastify({ logger: false });
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      RuntimeEventBusLive,
+      RuntimeEventBus.layer,
       Layer.succeed(AgentSessionAttentionProjection, {
         agentSessionAttention: () => Effect.succeed('idle' as const),
         terminalSessionAttention: () => 'idle' as const,
@@ -130,7 +126,7 @@ test('runtime events websocket accepts the explicitly configured packaged file o
   const previous = process.env.ISAGI_ALLOWED_ORIGINS;
   process.env.ISAGI_ALLOWED_ORIGINS = 'file://';
   const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(RuntimeEventBusLive);
+  const runtime = ManagedRuntime.make(RuntimeEventBus.layer);
 
   try {
     await fastify.register(websocket);
@@ -205,7 +201,7 @@ test('runtime events websocket streams a suspended command_changed through the c
     payload: { worktreeId: 10, commandName: 'dev', status: 'suspended' },
   } satisfies RuntimeEvent;
   const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(RuntimeEventBusLive);
+  const runtime = ManagedRuntime.make(RuntimeEventBus.layer);
 
   try {
     await fastify.register(websocket);

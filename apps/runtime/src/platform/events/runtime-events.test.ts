@@ -5,7 +5,7 @@ import { Effect } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import { RuntimeEventBus, RuntimeEventBusLive } from './runtime-events.js';
+import { RuntimeEventBus } from './runtime-events.js';
 
 test('runtime event bus publishes events to subscribers', async () => {
   const event = agentSessionChangedEvent();
@@ -18,7 +18,7 @@ test('runtime event bus publishes events to subscribers', async () => {
       const next = yield* subscription.take;
       yield* subscription.unsubscribe;
       return next;
-    }).pipe(Effect.provide(RuntimeEventBusLive)),
+    }).pipe(Effect.provide(RuntimeEventBus.layer)),
   );
 
   assert.deepEqual(received, event);

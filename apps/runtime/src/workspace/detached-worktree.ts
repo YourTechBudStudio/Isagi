@@ -5,16 +5,10 @@ import { Data, Effect } from 'effect';
 
 import type { WorktreeDestinationIssue } from '@isagi/contracts';
 
-import { diagnosticPhase } from '../platform/diagnostics/phase.js';
-import {
-  Git,
-  type GitCommandError,
-  type GitService,
-  listGitWorktrees,
-} from '../platform/git/index.js';
+import { diagnosticPhase } from '../platform/diagnostics/index.js';
+import { Git, type GitCommandError, listGitWorktrees } from '../platform/git/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
-import type { WorkspaceRepositoryService } from '../projects/repository.js';
-import type { ProjectRow } from '../projects/types.js';
+import type { ProjectRow, ProjectRepository } from '../projects/index.js';
 import { directoryAvailability } from './directory-availability.js';
 import { checkNewDirectory } from './new-directory.js';
 
@@ -60,8 +54,8 @@ export interface DetachedWorktree {
 }
 
 export interface DetachedWorktreeDependencies {
-  readonly repository: WorkspaceRepositoryService;
-  readonly git: GitService;
+  readonly repository: ProjectRepository['Service'];
+  readonly git: Git['Service'];
   /** The service's own post-create reconciliation, passed in so it stays private and single. */
   readonly reconcile: (project: ProjectRow) => Effect.Effect<unknown, unknown>;
 }
@@ -156,7 +150,7 @@ function requireRepository(
  * this project counted as a checkout too, including worktrees Isagi has not reconciled yet.
  */
 function checkDestination(
-  repository: WorkspaceRepositoryService,
+  repository: ProjectRepository['Service'],
   input: DetachedWorktreeInput,
   listedPaths: readonly string[],
 ) {
@@ -178,7 +172,12 @@ function checkDestination(
  * or success naming some other object. Anything else means Git could not answer and passes through
  * as `GitCommandError`, so a broken repository is never reported as a discarded commit.
  */
-function verifyCommit(git: GitService, project: ProjectRow, commit: string, destination: string) {
+function verifyCommit(
+  git: Git['Service'],
+  project: ProjectRow,
+  commit: string,
+  destination: string,
+) {
   const notFound = new DetachedWorktreeError({
     reason: 'commit_not_found',
     message: `Commit ${commit} is not in the repository at ${project.rootPath}.`,
@@ -220,7 +219,12 @@ function createParent(projectId: number, destination: string) {
 }
 
 /** Step 6. Git refuses a non-empty or registered path itself, which covers a race with the preflight. */
-function addWorktree(git: GitService, project: ProjectRow, destination: string, commit: string) {
+function addWorktree(
+  git: Git['Service'],
+  project: ProjectRow,
+  destination: string,
+  commit: string,
+) {
   return git.run(['-C', project.rootPath, 'worktree', 'add', '--detach', destination, commit]).pipe(
     Effect.catch((cause) =>
       Effect.fail(

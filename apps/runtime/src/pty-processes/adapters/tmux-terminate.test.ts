@@ -9,7 +9,7 @@ import { Effect, Fiber, Result } from 'effect';
 
 import { PtyKillError } from '../types.js';
 import { leakyRootScript, leakyTreeFixture, waitUntilGone } from './process-tree-test-support.js';
-import { TmuxBackend, TmuxBackendLive } from './tmux.js';
+import { TmuxBackend } from './tmux.js';
 
 // tmux reports an already-gone session on stderr rather than through a
 // distinguishable exit code, so these message shapes are the whole classifier.
@@ -33,7 +33,7 @@ async function killWithFakeTmux(script: string) {
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
         return yield* backend.kill(ref).pipe(Effect.result);
-      }).pipe(Effect.provide(TmuxBackendLive)),
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
@@ -92,7 +92,7 @@ test('an unusable tmux binary is a control failure, never verified absence', asy
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
         return yield* backend.kill(ref).pipe(Effect.result);
-      }).pipe(Effect.provide(TmuxBackendLive)),
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
 
     assert.equal(Result.isFailure(result), true);
@@ -159,7 +159,7 @@ for (const operation of ['terminate', 'kill'] as const) {
             if (operation === 'kill') return yield* backend.kill(ref);
             assert.ok(backend.terminate);
             return yield* backend.terminate({ ref, gracefulTimeoutMs: 100 });
-          }).pipe(Effect.provide(TmuxBackendLive)),
+          }).pipe(Effect.provide(TmuxBackend.layer)),
         );
 
         assert.deepEqual(result, { terminated: true });
@@ -182,7 +182,7 @@ test(
           // in flight — the window in which the sweep used to be skipped.
           yield* Effect.promise(() => waitForFile(killedMarker));
           yield* Fiber.interrupt(fiber);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
       assert.equal(await waitUntilGone(helperPid), true);
@@ -203,7 +203,7 @@ test(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
           return yield* backend.kill(ref).pipe(Effect.result);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
       assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);
@@ -223,7 +223,7 @@ test(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
           return yield* backend.kill(ref).pipe(Effect.result);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
       assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);
@@ -245,7 +245,7 @@ test(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
           return yield* backend.kill(ref);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
       assert.deepEqual(result, { terminated: true });

@@ -16,13 +16,8 @@ import {
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import {
-  workflowEvents,
-  workflowExecutions,
-  workflowOperations,
-  workflowRuns,
-} from '../../persistence/schema.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowEvents, workflowExecutions, workflowOperations, workflowRuns } from '../tables.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
 /** What an app restart does to active runs, and how they continue afterwards. */

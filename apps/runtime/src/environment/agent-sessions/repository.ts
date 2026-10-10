@@ -3,162 +3,164 @@ import { Context, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import { AgentSessionArtifacts } from '../../harnesses/ledger.js';
-import { agentSessions, ptyProcesses, surfacePanes } from '../../persistence/schema.js';
+import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
-import type { AgentSessionRow } from '../index.js';
-import { agentSessionRow } from '../surfaces/row-mappers.js';
+import { ptyProcesses } from '../../pty-processes/tables.js';
+import { agentSessionRow } from '../sessions/row-mappers.js';
+import type { AgentSessionRow } from '../sessions/types.js';
+import { agentSessions, surfacePanes } from '../tables.js';
 
-export interface AgentSessionRepositoryService {
-  readonly create: (input: {
-    readonly worktreeId: number;
-    readonly harness: AgentHarness;
-    readonly cwd: string;
-  }) => Effect.Effect<number, DatabaseError>;
-  readonly setActivePtyProcess: (input: {
-    readonly agentSessionId: number;
-    readonly ptyProcessId: number;
-  }) => Effect.Effect<void, DatabaseError>;
-  readonly find: (agentSessionId: number) => Effect.Effect<AgentSessionRow | null, DatabaseError>;
-  readonly findByActivePtyProcessId: (
-    ptyProcessId: number,
-  ) => Effect.Effect<AgentSessionRow | null, DatabaseError>;
-  readonly listOrphans: (input: {
-    readonly updatedBefore: string;
-  }) => Effect.Effect<AgentSessionRow[], DatabaseError>;
-  readonly listIds: Effect.Effect<ReadonlySet<number>, DatabaseError>;
-  readonly delete: (agentSessionId: number) => Effect.Effect<void, DatabaseError>;
-  /** The pane holding the session, or null. Read the way `listOrphans` reads it. */
-  readonly findPlacement: (
-    agentSessionId: number,
-  ) => Effect.Effect<{ readonly surfaceId: number; readonly paneId: number } | null, DatabaseError>;
-}
-
-export const AgentSessionRepository = Context.Service<AgentSessionRepositoryService>(
-  'isagi/AgentSessionRepository',
-);
-
-export const AgentSessionRepositoryLive = Layer.effect(
-  AgentSessionRepository,
-  Effect.gen(function* () {
-    const database = yield* RuntimeDatabase;
-    const artifacts = yield* AgentSessionArtifacts;
-    return {
-      create: (input) =>
-        Effect.gen(function* () {
-          const agentSessionId = yield* database.use('create_agent_session', (db) => {
-            const now = new Date().toISOString();
-            return db
-              .insert(agentSessions)
-              .values({
-                worktreeId: input.worktreeId,
-                harness: input.harness,
-                cwd: input.cwd,
-                activePtyProcessId: null,
-                createdAt: now,
-                updatedAt: now,
-                lastSeenAt: null,
-              })
-              .returning({ id: agentSessions.id })
-              .get().id;
-          });
-          yield* artifacts.initializeMetadata(agentSessionId).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                console.warn('[runtime] Agent session metadata initialization failed', {
-                  agentSessionId,
-                  path: error.path,
-                  code: error.code,
-                  cause: error.cause,
-                });
-              }),
-            ),
-          );
-          return agentSessionId;
-        }),
-      setActivePtyProcess: (input) =>
-        database.use('set_agent_session_active_process', (db) => {
-          db.update(agentSessions)
-            .set({ activePtyProcessId: input.ptyProcessId, updatedAt: new Date().toISOString() })
-            .where(eq(agentSessions.id, input.agentSessionId))
-            .run();
-        }),
-      find: (agentSessionId) =>
-        Effect.gen(function* () {
-          const row = yield* database.use('find_agent_session', (db) =>
-            db
-              .select({ session: agentSessions, process: ptyProcesses })
-              .from(agentSessions)
-              .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
-              .where(eq(agentSessions.id, agentSessionId))
-              .get(),
-          );
-          return row ? yield* agentSessionRow(artifacts, row.session, row.process) : null;
-        }),
-      findByActivePtyProcessId: (ptyProcessId) =>
-        Effect.gen(function* () {
-          const row = yield* database.use('find_agent_session_by_active_process', (db) =>
-            db
-              .select({ session: agentSessions, process: ptyProcesses })
-              .from(agentSessions)
-              .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
-              .where(eq(agentSessions.activePtyProcessId, ptyProcessId))
-              .get(),
-          );
-          return row ? yield* agentSessionRow(artifacts, row.session, row.process) : null;
-        }),
-      listOrphans: (input) =>
-        Effect.gen(function* () {
-          const rows = yield* database.use('list_orphan_agent_sessions', (db) =>
-            db
-              .select({ session: agentSessions, process: ptyProcesses })
-              .from(agentSessions)
-              .leftJoin(
-                surfacePanes,
-                and(
-                  eq(surfacePanes.sessionKind, 'agent_session'),
-                  eq(surfacePanes.sessionId, agentSessions.id),
-                ),
-              )
-              .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
-              .where(and(isNull(surfacePanes.id), lt(agentSessions.updatedAt, input.updatedBefore)))
-              .all(),
-          );
-          return yield* Effect.all(
-            rows.map((row) => agentSessionRow(artifacts, row.session, row.process)),
-          );
-        }),
-      listIds: database.use(
-        'list_agent_session_ids',
-        (db) =>
-          new Set(
-            db
-              .select({ id: agentSessions.id })
-              .from(agentSessions)
-              .all()
-              .map((row) => row.id),
+const make = Effect.gen(function* () {
+  const database = yield* RuntimeDatabase;
+  const artifacts = yield* AgentSessionArtifacts;
+  return AgentSessionRepository.of({
+    create: (input) =>
+      Effect.gen(function* () {
+        const agentSessionId = yield* database.use('create_agent_session', (db) => {
+          const now = new Date().toISOString();
+          return db
+            .insert(agentSessions)
+            .values({
+              worktreeId: input.worktreeId,
+              harness: input.harness,
+              cwd: input.cwd,
+              activePtyProcessId: null,
+              createdAt: now,
+              updatedAt: now,
+              lastSeenAt: null,
+            })
+            .returning({ id: agentSessions.id })
+            .get().id;
+        });
+        yield* artifacts.initializeMetadata(agentSessionId).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              console.warn('[runtime] Agent session metadata initialization failed', {
+                agentSessionId,
+                path: error.path,
+                code: error.code,
+                cause: error.cause,
+              });
+            }),
           ),
-      ),
-      // Row only: the session folder is reclaimed later by the orphan-folder collector on the
-      // SessionGc tick, which also covers rows removed by worktree and project cascades.
-      delete: (agentSessionId) =>
-        database.use('delete_agent_session', (db) => {
-          db.delete(agentSessions).where(eq(agentSessions.id, agentSessionId)).run();
-        }),
-      findPlacement: (agentSessionId) =>
-        database.use('find_agent_session_placement', (db) => {
-          const pane = db
-            .select({ surfaceId: surfacePanes.surfaceId, paneId: surfacePanes.id })
-            .from(surfacePanes)
-            .where(
+        );
+        return agentSessionId;
+      }),
+    setActivePtyProcess: (input) =>
+      database.use('set_agent_session_active_process', (db) => {
+        db.update(agentSessions)
+          .set({ activePtyProcessId: input.ptyProcessId, updatedAt: new Date().toISOString() })
+          .where(eq(agentSessions.id, input.agentSessionId))
+          .run();
+      }),
+    find: (agentSessionId) =>
+      Effect.gen(function* () {
+        const row = yield* database.use('find_agent_session', (db) =>
+          db
+            .select({ session: agentSessions, process: ptyProcesses })
+            .from(agentSessions)
+            .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+            .where(eq(agentSessions.id, agentSessionId))
+            .get(),
+        );
+        return row ? yield* agentSessionRow(artifacts, row.session, row.process) : null;
+      }),
+    findByActivePtyProcessId: (ptyProcessId) =>
+      Effect.gen(function* () {
+        const row = yield* database.use('find_agent_session_by_active_process', (db) =>
+          db
+            .select({ session: agentSessions, process: ptyProcesses })
+            .from(agentSessions)
+            .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+            .where(eq(agentSessions.activePtyProcessId, ptyProcessId))
+            .get(),
+        );
+        return row ? yield* agentSessionRow(artifacts, row.session, row.process) : null;
+      }),
+    listOrphans: (input) =>
+      Effect.gen(function* () {
+        const rows = yield* database.use('list_orphan_agent_sessions', (db) =>
+          db
+            .select({ session: agentSessions, process: ptyProcesses })
+            .from(agentSessions)
+            .leftJoin(
+              surfacePanes,
               and(
                 eq(surfacePanes.sessionKind, 'agent_session'),
-                eq(surfacePanes.sessionId, agentSessionId),
+                eq(surfacePanes.sessionId, agentSessions.id),
               ),
             )
-            .get();
-          return pane ?? null;
-        }),
-    } satisfies AgentSessionRepositoryService;
-  }),
-);
+            .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+            .where(and(isNull(surfacePanes.id), lt(agentSessions.updatedAt, input.updatedBefore)))
+            .all(),
+        );
+        return yield* Effect.all(
+          rows.map((row) => agentSessionRow(artifacts, row.session, row.process)),
+        );
+      }),
+    listIds: database.use(
+      'list_agent_session_ids',
+      (db) =>
+        new Set(
+          db
+            .select({ id: agentSessions.id })
+            .from(agentSessions)
+            .all()
+            .map((row) => row.id),
+        ),
+    ),
+    // Row only: the session folder is reclaimed later by the orphan-folder collector on the
+    // SessionGc tick, which also covers rows removed by worktree and project cascades.
+    delete: (agentSessionId) =>
+      database.use('delete_agent_session', (db) => {
+        db.delete(agentSessions).where(eq(agentSessions.id, agentSessionId)).run();
+      }),
+    findPlacement: (agentSessionId) =>
+      database.use('find_agent_session_placement', (db) => {
+        const pane = db
+          .select({ surfaceId: surfacePanes.surfaceId, paneId: surfacePanes.id })
+          .from(surfacePanes)
+          .where(
+            and(
+              eq(surfacePanes.sessionKind, 'agent_session'),
+              eq(surfacePanes.sessionId, agentSessionId),
+            ),
+          )
+          .get();
+        return pane ?? null;
+      }),
+  });
+});
+
+export class AgentSessionRepository extends Context.Service<
+  AgentSessionRepository,
+  {
+    readonly create: (input: {
+      readonly worktreeId: number;
+      readonly harness: AgentHarness;
+      readonly cwd: string;
+    }) => Effect.Effect<number, DatabaseError>;
+    readonly setActivePtyProcess: (input: {
+      readonly agentSessionId: number;
+      readonly ptyProcessId: number;
+    }) => Effect.Effect<void, DatabaseError>;
+    readonly find: (agentSessionId: number) => Effect.Effect<AgentSessionRow | null, DatabaseError>;
+    readonly findByActivePtyProcessId: (
+      ptyProcessId: number,
+    ) => Effect.Effect<AgentSessionRow | null, DatabaseError>;
+    readonly listOrphans: (input: {
+      readonly updatedBefore: string;
+    }) => Effect.Effect<AgentSessionRow[], DatabaseError>;
+    readonly listIds: Effect.Effect<ReadonlySet<number>, DatabaseError>;
+    readonly delete: (agentSessionId: number) => Effect.Effect<void, DatabaseError>;
+    /** The pane holding the session, or null. Read the way `listOrphans` reads it. */
+    readonly findPlacement: (
+      agentSessionId: number,
+    ) => Effect.Effect<
+      { readonly surfaceId: number; readonly paneId: number } | null,
+      DatabaseError
+    >;
+  }
+>()('isagi/runtime/environment/AgentSessionRepository') {
+  static readonly layer = Layer.effect(AgentSessionRepository, make);
+}

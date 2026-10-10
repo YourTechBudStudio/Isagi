@@ -6,7 +6,7 @@ import { apiEndpoints, type ApiError } from '@isagi/contracts';
 import type { RuntimeServices } from '../app/layer.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../platform/http/index.js';
 import { RuntimeConfigConflict, RuntimeHarnessConfigInvalid } from '../runtime-config/index.js';
-import { ControlPlaneNotReady, HarnessControlPlane } from './control-plane/index.js';
+import { ControlPlaneNotReady, HarnessControlPlane } from './control-plane/service.js';
 export function registerControlPlaneApi(
   fastify: FastifyInstance,
   runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,

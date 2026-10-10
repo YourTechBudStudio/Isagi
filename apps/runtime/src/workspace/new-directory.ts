@@ -5,9 +5,9 @@ import { Data, Effect } from 'effect';
 
 import type { WorktreeDestinationIssue } from '@isagi/contracts';
 
-import { canonicalizeProspectivePath } from '../paths/index.js';
+import { canonicalizeProspectivePath } from '../platform/fs/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
-import type { WorkspaceRepositoryService } from '../projects/repository.js';
+import type { ProjectRepository } from '../projects/index.js';
 
 /**
  * Whether a caller-chosen path can become a new directory Isagi creates: a detached worktree, or a
@@ -31,7 +31,7 @@ export class NewDirectoryRejected extends Data.TaggedError('NewDirectoryRejected
  * symlink is refused, not followed.
  */
 export function checkNewDirectory(
-  repository: Pick<WorkspaceRepositoryService, 'listProjects' | 'listWorktrees'>,
+  repository: Pick<ProjectRepository['Service'], 'listProjects' | 'listWorktrees'>,
   path: string,
   extraCheckouts: readonly string[] = [],
 ): Effect.Effect<string, NewDirectoryRejected | DatabaseError> {

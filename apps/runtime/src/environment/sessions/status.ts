@@ -6,13 +6,9 @@ import type {
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
-import { exitDetail } from '../../pty-processes/exit-detail.js';
-import type {
-  AgentSessionRow,
-  DerivedAgentSessionState,
-  DerivedTerminalSessionState,
-  TerminalSessionRow,
-} from '../surfaces/types.js';
+import { exitDetail } from '../../pty-processes/index.js';
+import type { DerivedAgentSessionState, DerivedTerminalSessionState } from '../surfaces/types.js';
+import type { AgentSessionRow, TerminalSessionRow } from './types.js';
 
 export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentSessionState {
   const process = session.activePtyProcess;

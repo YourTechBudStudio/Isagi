@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Cause } from 'effect';
 
-import { DatabaseError } from '../../platform/persistence/database.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
 import { formatStartupFailure } from '../startup-diagnostics.js';
 
 test('startup diagnostics include the typed failure and raw native cause', () => {

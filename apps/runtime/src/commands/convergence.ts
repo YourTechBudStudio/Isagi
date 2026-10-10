@@ -2,10 +2,9 @@ import { Effect, Result } from 'effect';
 
 import type { CommandStatus } from '@isagi/contracts';
 
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
-import type { DurablePtyTerminationReason, PtyServiceShape } from '../pty-processes/index.js';
-import type { PtyRepositoryService } from '../pty-processes/repository.js';
-import { describeCommandCause } from './diagnostics.js';
+import type { DurablePtyTerminationReason, PtyService } from '../pty-processes/index.js';
 import {
   runtimeStoppedDiagnosticDetail,
   terminalPtyFactsForRow,
@@ -14,8 +13,8 @@ import {
 import type {
   CommandFinalizeResult,
   CommandPtyLink,
-  CommandRepositoryService,
   CommandStateRow,
+  CommandRepository,
 } from './repository.js';
 
 // Process accounting for durable command ownership.
@@ -33,9 +32,8 @@ import type {
 // `running` would manufacture liveness out of an unverifiable negative.
 
 export interface CommandConvergenceDependencies {
-  readonly commandRepository: CommandRepositoryService;
-  readonly ptyRepository: PtyRepositoryService;
-  readonly pty: PtyServiceShape;
+  readonly commandRepository: CommandRepository['Service'];
+  readonly pty: PtyService['Service'];
   readonly publishCommandChanged: (
     worktreeId: number,
     commandName: string,
@@ -136,10 +134,10 @@ export function cleanupCommandIncarnations(
       // would misread a row that went terminal in between: the gating kill
       // would be skipped on one side, and a terminal incarnation would become a
       // repair candidate on the other.
-      const classified = yield* classifyCleanupFailure(deps.ptyRepository, ptyProcessId);
+      const classified = yield* classifyCleanupFailure(deps.pty, ptyProcessId);
       failures.push({ ptyProcessId, error: outcome.failure, ...classified });
       console.warn(
-        `[runtime] Command incarnation cleanup failed operation=${input.operation} worktree=${input.target.worktreeId} command=${input.target.commandName} ptyProcessId=${ptyProcessId} backend=${classified.backend ?? 'unknown'} classification=${classified.kind} cause=${describeCommandCause(outcome.failure)}`,
+        `[runtime] Command incarnation cleanup failed operation=${input.operation} worktree=${input.target.worktreeId} command=${input.target.commandName} ptyProcessId=${ptyProcessId} backend=${classified.backend ?? 'unknown'} classification=${classified.kind} cause=${describeOperationalCause(outcome.failure)}`,
       );
     }
 
@@ -180,7 +178,7 @@ export function cleanupCommandIncarnations(
       ptyProcessId: survivor.ptyProcessId,
       diagnostic: {
         reason: 'process_control_failed',
-        detail: input.readoptDetail(describeCommandCause(survivor.error)),
+        detail: input.readoptDetail(describeOperationalCause(survivor.error)),
       },
     });
     // Always published, even though the status did not change: the web client's
@@ -200,13 +198,13 @@ export function cleanupCommandIncarnations(
 }
 
 function classifyCleanupFailure(
-  ptyRepository: PtyRepositoryService,
+  pty: Pick<PtyService['Service'], 'findProcess'>,
   ptyProcessId: number,
 ): Effect.Effect<
   { readonly kind: CommandCleanupFailureKind; readonly backend: string | null },
   never
 > {
-  return ptyRepository.findProcess(ptyProcessId).pipe(
+  return pty.findProcess(ptyProcessId).pipe(
     Effect.map((row) => {
       if (!row) return { kind: 'unclassified' as const, backend: null };
       return {
@@ -247,7 +245,7 @@ export function reconcileCommandsAtBoot(deps: CommandConvergenceDependencies) {
         Effect.catch((error) =>
           Effect.sync(() => {
             console.warn(
-              `[runtime] Command boot convergence failed worktree=${entry.target.worktreeId} command=${entry.target.commandName} cause=${describeCommandCause(error)}`,
+              `[runtime] Command boot convergence failed worktree=${entry.target.worktreeId} command=${entry.target.commandName} cause=${describeOperationalCause(error)}`,
             );
           }),
         ),
@@ -298,7 +296,7 @@ function buildBootWorkset(deps: CommandConvergenceDependencies) {
     // not something this pass encodes.
     const links = yield* deps.commandRepository.listCommandPtyLinks;
     for (const link of links) {
-      if (!(yield* isNonterminalLink(deps.ptyRepository, link))) continue;
+      if (!(yield* isNonterminalLink(deps.pty, link))) continue;
       entryFor({ worktreeId: link.worktreeId, commandName: link.commandName }).candidates.push(
         link.ptyProcessId,
       );
@@ -308,8 +306,8 @@ function buildBootWorkset(deps: CommandConvergenceDependencies) {
   });
 }
 
-function isNonterminalLink(ptyRepository: PtyRepositoryService, link: CommandPtyLink) {
-  return ptyRepository.findProcess(link.ptyProcessId).pipe(
+function isNonterminalLink(pty: Pick<PtyService['Service'], 'findProcess'>, link: CommandPtyLink) {
+  return pty.findProcess(link.ptyProcessId).pipe(
     Effect.map((row) => row !== null && terminalPtyFactsForRow(row) === null),
     // An unreadable row is not a finished process. Including it costs one
     // cleanup attempt that will report its own failure honestly; excluding it
@@ -317,7 +315,7 @@ function isNonterminalLink(ptyRepository: PtyRepositoryService, link: CommandPty
     Effect.catch((error) =>
       Effect.sync(() => {
         console.warn(
-          `[runtime] Command boot could not read a linked incarnation worktree=${link.worktreeId} command=${link.commandName} ptyProcessId=${link.ptyProcessId}; treating it as unresolved cause=${describeCommandCause(error)}`,
+          `[runtime] Command boot could not read a linked incarnation worktree=${link.worktreeId} command=${link.commandName} ptyProcessId=${link.ptyProcessId}; treating it as unresolved cause=${describeOperationalCause(error)}`,
         );
         return true;
       }),
@@ -442,7 +440,7 @@ function sweepLinklessRunningRuns(deps: CommandConvergenceDependencies) {
           Effect.catch((error) =>
             Effect.sync(() => {
               console.warn(
-                `[runtime] Command boot run-residue sweep failed worktree=${target.worktreeId} command=${target.commandName} runId=${run.id} cause=${describeCommandCause(error)}`,
+                `[runtime] Command boot run-residue sweep failed worktree=${target.worktreeId} command=${target.commandName} runId=${run.id} cause=${describeOperationalCause(error)}`,
               );
             }),
           ),

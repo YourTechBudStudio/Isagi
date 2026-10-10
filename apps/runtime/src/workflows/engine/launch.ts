@@ -83,7 +83,7 @@ export function launch(
     const parametersJson = yield* storableParameters(parsed, input.workflowKey);
 
     const selection = yield* selectPlacement(
-      { workspace: places.workspace, surfaceRepository: places.surfaceRepository },
+      { workspace: places.workspace, surfaceReads: places.surfaceReads },
       {
         definition,
         workflowKey: input.workflowKey,
@@ -98,7 +98,7 @@ export function launch(
       {
         workspace: places.workspace,
         workspaceService: places.workspaceService,
-        surfaceRepository: places.surfaceRepository,
+        surfaceReads: places.surfaceReads,
       },
       { workflowKey: input.workflowKey, origin, project, selection },
     );
