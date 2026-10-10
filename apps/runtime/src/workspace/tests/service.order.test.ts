@@ -15,7 +15,8 @@ import {
 } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
-import { ProjectOrderError, WorkspaceService, WorktreeOrderError } from '../service.js';
+import { ProjectOrderError, WorktreeOrderError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';

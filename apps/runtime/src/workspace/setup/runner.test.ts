@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { describe } from 'node:test';
 
-import { Effect, Fiber } from 'effect';
+import { Cause, Effect, Exit, Fiber } from 'effect';
+
+import { expectNoProcessMatching, runScoped } from '@isagi/testing';
 
 import { WorktreeSetupRepository } from './repository.js';
 import { runPostCreateSetup } from './runner.js';
@@ -302,4 +305,149 @@ test('command hook failure captures merged, ANSI-stripped output', async () => {
     rmSync(projectRoot, { recursive: true, force: true });
     rmSync(worktreeRoot, { recursive: true, force: true });
   }
+});
+
+/**
+ * Command hooks run as the leader of their own process group. These tests mark the hook's processes with a `sleep`
+ * duration nothing else uses and assert with `pgrep` that none outlive the runner, background children included.
+ */
+const posixOnly = process.platform === 'win32' ? 'process groups are POSIX-only' : false;
+const uniqueSleep = () => `30.${process.pid}${Math.floor(Math.random() * 1_000_000)}`;
+
+const processRunning = (marker: string) => {
+  try {
+    execFileSync('pgrep', ['-f', marker.replace(/\./g, '\\.')]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const waitForProcess = (marker: string) =>
+  Effect.promise(async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (processRunning(marker)) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`no process matching ${marker} started`);
+  });
+
+/** Runs one command hook in fresh temp roots, capturing what the runner persists. */
+const withCommandHook = <A, E>(
+  hook: { readonly run: string; readonly timeout: string; readonly cwd?: string },
+  use: (
+    setup: Effect.Effect<
+      Effect.Success<ReturnType<typeof runPostCreateSetup>>,
+      Effect.Error<ReturnType<typeof runPostCreateSetup>>
+    >,
+    captured: { input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0] },
+  ) => Effect.Effect<A, E>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => ({
+      projectRoot: mkdtempSync(join(tmpdir(), 'isagi-setup-project-')),
+      worktreeRoot: mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-')),
+    })),
+    ({ projectRoot, worktreeRoot }) => {
+      const captured: {
+        input?: Parameters<WorktreeSetupRepository['Service']['createRunWithSteps']>[0];
+      } = {};
+      return use(
+        runPostCreateSetup({
+          config: { postCreate: [{ type: 'command', cwd: '.', env: {}, ...hook }] },
+          hash: 'hash-lifecycle',
+          projectRootPath: projectRoot,
+          worktreeId: 12,
+          worktreePath: worktreeRoot,
+        }).pipe(Effect.provideService(WorktreeSetupRepository, capturingRepository(captured))),
+        captured,
+      );
+    },
+    ({ projectRoot, worktreeRoot }) =>
+      Effect.sync(() => {
+        rmSync(projectRoot, { recursive: true, force: true });
+        rmSync(worktreeRoot, { recursive: true, force: true });
+      }),
+  );
+
+describe('setup runner child lifecycle', { skip: posixOnly }, () => {
+  test('interrupting the setup runner kills its child process', async () => {
+    const marker = uniqueSleep();
+    await runScoped(
+      withCommandHook(
+        { run: `sleep ${marker} & sleep ${marker}`, timeout: '1h' },
+        (setup, captured) =>
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(setup);
+            yield* waitForProcess(marker);
+            yield* Fiber.interrupt(fiber);
+            const exit = yield* Fiber.await(fiber);
+            assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+            yield* expectNoProcessMatching(marker);
+            // An interrupted run is not a result: nothing is recorded.
+            assert.equal(captured.input, undefined);
+          }),
+      ),
+    );
+  });
+
+  test('setup runner timeout fails with the typed timeout error and kills the child', async () => {
+    // A caller's deadline (`Effect.timeout` around the run) interrupts it: the failure is the typed `TimeoutError`,
+    // and the scope that owns the hook's process group kills the whole group.
+    const marker = uniqueSleep();
+    await runScoped(
+      withCommandHook(
+        { run: `sleep ${marker} & sleep ${marker}`, timeout: '1h' },
+        (setup, captured) =>
+          Effect.gen(function* () {
+            const timed = yield* Effect.forkChild(
+              Effect.flip(
+                setup.pipe(
+                  Effect.tap(() => Effect.die('the setup run should not finish')),
+                  Effect.timeout('1 second'),
+                ),
+              ),
+            );
+            // Proves the deadline lands on a live hook rather than on one that never started.
+            yield* waitForProcess(marker);
+            const error = yield* Fiber.join(timed);
+            assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+            yield* expectNoProcessMatching(marker);
+            assert.equal(captured.input, undefined);
+          }),
+      ),
+    );
+  });
+
+  test('a command hook past its own timeout is terminated, escalated to SIGKILL, and recorded as failed', async () => {
+    // The hook's `timeout` is the runner's deadline: SIGTERM to the group, SIGKILL one second later when the group
+    // ignores it, then a failed step that carries the signal and the output written before it.
+    const marker = uniqueSleep();
+    const { result, step } = await runScoped(
+      withCommandHook(
+        { run: `trap '' TERM; echo started; sleep ${marker} & sleep ${marker}`, timeout: '300ms' },
+        (setup, captured) =>
+          setup.pipe(
+            Effect.map((outcome) => ({ result: outcome, step: captured.input?.steps[0] })),
+          ),
+      ),
+    );
+    assert.equal(result.status, 'failed');
+    assert.match(result.status === 'failed' ? result.message : '', /timed out after 300ms/);
+    assert.equal(step?.status, 'failed');
+    assert.equal(step?.signal, 'SIGKILL');
+    assert.equal(step?.outputExcerpt, 'started\n');
+    await runScoped(expectNoProcessMatching(marker));
+  });
+
+  test('a command hook whose shell cannot start is recorded as a failed step with the spawn error', async () => {
+    const { result, step } = await runScoped(
+      withCommandHook({ run: 'true', timeout: '5s', cwd: 'missing-directory' }, (setup, captured) =>
+        setup.pipe(Effect.map((outcome) => ({ result: outcome, step: captured.input?.steps[0] }))),
+      ),
+    );
+    assert.equal(result.status, 'failed');
+    assert.equal(step?.status, 'failed');
+    assert.match(step?.message ?? '', /ENOENT/);
+  });
 });

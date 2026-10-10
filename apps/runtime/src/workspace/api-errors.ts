@@ -1,4 +1,9 @@
-import type { ApiError, WorktreeSetupRejectionReason } from '@isagi/contracts';
+import type {
+  ApiError,
+  runtimeStateFileFailedErrorSchema,
+  WorktreeSetupRejectedError,
+  WorktreeSetupRejectionReason,
+} from '@isagi/contracts';
 
 import { ProjectConfigError } from '../projects/index.js';
 import { WorktreeSetupError } from './setup/service.js';
@@ -7,17 +12,21 @@ import { StateFileError } from './state-file.js';
 /** An API error payload before the boundary stamps the request id onto it. */
 export type WorkspaceRejection = Omit<ApiError, 'requestId'>;
 
+type WorktreeSetupRejection = Omit<WorktreeSetupRejectedError, 'requestId'>;
+type StateFileRejection = Omit<typeof runtimeStateFileFailedErrorSchema.Type, 'requestId'>;
+
 /**
  * How the workspace's endpoint-independent failures reach a client.
  *
  * Project configuration, worktree setup and the state file can fail underneath any workspace or
  * workflow endpoint that touches a project, so each one reads the same whichever route hit it.
  * These are pure builders: each returns today's exact wire payload, minus the request id the
- * boundary owns. `worktrees.open` keeps its own `worktree_open_rejected` mapping for the two setup
- * failures, ahead of these.
+ * boundary owns. Each is typed as the exact contract error it builds, so a typed endpoint's
+ * `request.reject` accepts it only where the contract declares that code. `worktrees.open` keeps its
+ * own `worktree_open_rejected` mapping for the two setup failures.
  */
 export const workspaceRejections = {
-  projectConfig: (error: ProjectConfigError): WorkspaceRejection => ({
+  projectConfig: (error: ProjectConfigError): WorktreeSetupRejection => ({
     code: 'worktree_setup_rejected',
     status: 400,
     message: error.message,
@@ -26,7 +35,7 @@ export const workspaceRejections = {
       ...(error.projectId ? { projectId: error.projectId } : {}),
     },
   }),
-  worktreeSetup: (error: WorktreeSetupError): WorkspaceRejection => ({
+  worktreeSetup: (error: WorktreeSetupError): WorktreeSetupRejection => ({
     code: 'worktree_setup_rejected',
     status: 400,
     message: error.message,
@@ -36,7 +45,7 @@ export const workspaceRejections = {
       ...(error.hash ? { hash: error.hash } : {}),
     },
   }),
-  stateFile: (error: StateFileError): WorkspaceRejection => ({
+  stateFile: (error: StateFileError): StateFileRejection => ({
     code: 'runtime_state_file_failed',
     status: 500,
     message: `State file operation failed: ${error.operation}`,
@@ -49,7 +58,7 @@ export const workspaceRejections = {
  * failures. Returning `null` leaves each boundary to decide what an unrecognised error means there,
  * exactly like the platform's `infrastructureApiError`.
  */
-export function workspaceRejectionFor(error: unknown): WorkspaceRejection | null {
+function workspaceRejectionFor(error: unknown): WorkspaceRejection | null {
   if (error instanceof ProjectConfigError) return workspaceRejections.projectConfig(error);
   if (error instanceof WorktreeSetupError) return workspaceRejections.worktreeSetup(error);
   if (error instanceof StateFileError) return workspaceRejections.stateFile(error);
@@ -57,8 +66,10 @@ export function workspaceRejectionFor(error: unknown): WorkspaceRejection | null
 }
 
 /**
- * `workspaceRejectionFor` stamped with the request id, for the error mappers that build whole
- * `ApiError`s. The field order is the wire order every other mapper uses.
+ * TRANSITIONAL (plan R20): `workspaceRejectionFor` stamped with the request id, for the untyped
+ * `mapError` of routes still on `registerLegacyApiEndpoint` (today: the workflow routes). Typed
+ * endpoints use `workspaceRejections` in their `catchTags`; this goes when the last legacy caller
+ * does. The field order is the wire order every other mapper uses.
  */
 export function workspaceApiError(
   error: unknown,

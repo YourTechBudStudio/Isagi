@@ -9,7 +9,8 @@ import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
 import { ProjectRepository } from '../../projects/index.js';
-import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
 import { runWithLiveWorkspace } from '../testing.js';
 import { directoryTree } from './test-support.js';
 

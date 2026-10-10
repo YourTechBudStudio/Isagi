@@ -1,10 +1,6 @@
-export {
-  ProjectOrderError,
-  WorkspaceError,
-  WorkspaceService,
-  WorktreeOrderError,
-} from './service.js';
-export type { WorkspaceServiceError } from './service.js';
+export { ProjectOrderError, WorkspaceError, WorktreeOrderError } from './errors.js';
+export type { WorkspaceServiceError } from './errors.js';
+export { WorkspaceService } from './service.js';
 export { DetachedWorktreeError } from './detached-worktree.js';
 export { ProjectDeletionParticipant } from './project-deletion-participant.js';
 export { workspaceApiError, workspaceRejections, type WorkspaceRejection } from './api-errors.js';

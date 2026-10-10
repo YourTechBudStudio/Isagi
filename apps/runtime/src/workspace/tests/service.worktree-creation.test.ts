@@ -8,7 +8,8 @@ import { Effect } from 'effect';
 import { branchPathHash } from '../../platform/git/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { ProjectRepository } from '../../projects/index.js';
-import { WorkspaceError, WorkspaceService } from '../service.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
 import type { LiveWorkspaceOptions } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
 
