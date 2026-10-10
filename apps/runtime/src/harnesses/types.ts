@@ -1,4 +1,4 @@
-import type { Effect } from 'effect';
+import { Data, type Effect } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
@@ -51,13 +51,22 @@ export interface HarnessAdapter {
   ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
 }
 
-export class HarnessAdapterError extends Error {
-  readonly _tag = 'HarnessAdapterError';
+/**
+ * A harness launch could not be prepared. `code` is the reason the agent-session and surface API
+ * boundaries map to a contract error.
+ *
+ * The constructor stays positional (`code`, `message`, `cause`) so callers read as they always have.
+ */
+export class HarnessAdapterError extends Data.TaggedError('HarnessAdapterError')<{
+  readonly code: 'unsupported_harness' | 'artifact_write_failed';
+  readonly message: string;
+  readonly cause?: unknown;
+}> {
   constructor(
-    readonly code: 'unsupported_harness' | 'artifact_write_failed',
+    code: 'unsupported_harness' | 'artifact_write_failed',
     message: string,
-    readonly cause?: unknown,
+    cause?: unknown,
   ) {
-    super(message);
+    super({ code, message, cause });
   }
 }

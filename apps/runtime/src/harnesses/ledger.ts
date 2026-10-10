@@ -12,10 +12,11 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-import { Context, Data, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer, Result, Schema, SchemaIssue } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import {
   DataDirectory,
   emptyOrphanSweepStats,
@@ -81,118 +82,112 @@ export class AgentSessionArtifactError extends Data.TaggedError('AgentSessionArt
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
   const root = join(directory.paths.root, ...artifactRootSegments);
-  try {
-    ensureSecureArtifactDirectory(root);
-  } catch {
-    console.warn('[runtime] Harness artifact root could not be secured; observation will degrade.');
-  }
+  yield* Effect.try(() => ensureSecureArtifactDirectory(root)).pipe(
+    Effect.catchTag('UnknownError', (error) =>
+      Effect.logWarning(
+        'Harness artifact root could not be secured; observation will degrade.',
+      ).pipe(Effect.annotateLogs({ root, cause: describeOperationalCause(error.cause) })),
+    ),
+  );
 
   const service = AgentSessionArtifacts.of({
     paths: (input) => artifactPaths(root, input),
-    initializeMetadata: (agentSessionId) =>
-      Effect.try({
-        try: () => {
-          const paths = artifactPaths(root, { agentSessionId });
-          ensureSecureArtifactDirectory(root);
-          ensureSecureArtifactDirectory(paths.directory);
-          writeSecureArtifactFile(
-            paths.metadataPath,
-            `${JSON.stringify(initialMetadata(), null, 2)}\n`,
-          );
-        },
-        catch: (cause) =>
-          new AgentSessionArtifactError({
-            code: 'metadata_init_failed',
-            agentSessionId,
-            path: artifactPaths(root, { agentSessionId }).metadataPath,
-            cause,
-          }),
-      }),
-    prepareProcessArtifacts: (input) =>
-      Effect.try({
-        try: () => {
-          const paths = artifactPaths(root, input);
-          ensureSecureArtifactDirectory(root);
-          ensureSecureArtifactDirectory(paths.directory);
-          return paths;
-        },
-        catch: (cause) =>
-          new AgentSessionArtifactError({
-            code: 'jsonl_init_failed',
-            agentSessionId: input.agentSessionId,
-            path: artifactPaths(root, input).directory,
-            cause,
-          }),
-      }),
-    readMetadata: (agentSessionId) =>
-      Effect.sync(() => {
+    initializeMetadata: Effect.fn('AgentSessionArtifacts.initializeMetadata')(
+      function* (agentSessionId) {
         const paths = artifactPaths(root, { agentSessionId });
-        try {
-          assertSecureArtifactPath(paths.directory, 'directory');
-          assertSecureArtifactPath(paths.metadataPath, 'file');
-          return {
-            status: 'valid',
-            metadata: parseMetadata(readFileSync(paths.metadataPath, 'utf8')),
-            metadataPath: paths.metadataPath,
-          } satisfies AgentSessionHarnessMetadataRead;
-        } catch (error) {
-          if (isMissingFileError(error))
-            return {
-              status: 'missing',
-              metadataPath: paths.metadataPath,
-            } satisfies AgentSessionHarnessMetadataRead;
-          return {
-            status: 'invalid',
-            metadataPath: paths.metadataPath,
-            diagnostic: diagnosticForInvalidMetadata(error),
-          } satisfies AgentSessionHarnessMetadataRead;
-        }
-      }),
-    listAgentSessionIds: Effect.sync(() => {
-      try {
+        return yield* Effect.try({
+          try: () => {
+            ensureSecureArtifactDirectory(root);
+            ensureSecureArtifactDirectory(paths.directory);
+            writeSecureArtifactFile(
+              paths.metadataPath,
+              `${JSON.stringify(initialMetadata(), null, 2)}\n`,
+            );
+          },
+          catch: (cause) =>
+            new AgentSessionArtifactError({
+              code: 'metadata_init_failed',
+              agentSessionId,
+              path: paths.metadataPath,
+              cause,
+            }),
+        });
+      },
+    ),
+    prepareProcessArtifacts: Effect.fn('AgentSessionArtifacts.prepareProcessArtifacts')(
+      function* (input) {
+        const paths = artifactPaths(root, input);
+        return yield* Effect.try({
+          try: () => {
+            ensureSecureArtifactDirectory(root);
+            ensureSecureArtifactDirectory(paths.directory);
+            return paths;
+          },
+          catch: (cause) =>
+            new AgentSessionArtifactError({
+              code: 'jsonl_init_failed',
+              agentSessionId: input.agentSessionId,
+              path: paths.directory,
+              cause,
+            }),
+        });
+      },
+    ),
+    // Read on every observer poll of every live agent session, so it is not traced.
+    readMetadata: (agentSessionId) =>
+      Effect.sync(() => readMetadataFile(artifactPaths(root, { agentSessionId }))),
+    listAgentSessionIds: Effect.try({
+      try: () => {
         assertSecureArtifactPath(root, 'directory');
         return readdirSync(root, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
           .map((entry) => Number(entry.name))
           .filter((id) => Number.isSafeInteger(id) && id > 0);
-      } catch (error) {
-        if (isMissingFileError(error)) return [];
-        console.warn('[runtime] Harness artifact inventory is unavailable', {
-          root,
-          error,
+      },
+      catch: (cause) => cause,
+    }).pipe(
+      // Inventory is best effort: a missing root is an empty inventory, anything else degrades to one too.
+      Effect.catch((error) =>
+        isMissingFileError(error)
+          ? Effect.succeed([])
+          : Effect.logWarning('Harness artifact inventory is unavailable').pipe(
+              Effect.annotateLogs({ root, cause: describeOperationalCause(error) }),
+              Effect.as([]),
+            ),
+      ),
+    ),
+    writeHarnessSessionId: Effect.fn('AgentSessionArtifacts.writeHarnessSessionId')(
+      function* (input) {
+        const paths = artifactPaths(root, { agentSessionId: input.agentSessionId });
+        return yield* Effect.try({
+          try: () => {
+            ensureSecureArtifactDirectory(root);
+            ensureSecureArtifactDirectory(paths.directory);
+            writeSecureArtifactFile(
+              paths.metadataPath,
+              `${JSON.stringify(
+                {
+                  schemaVersion: 1,
+                  harnessSessionId: input.harnessSessionId,
+                  updatedAt: new Date().toISOString(),
+                } satisfies AgentSessionHarnessMetadata,
+                null,
+                2,
+              )}\n`,
+            );
+          },
+          catch: (cause) =>
+            new AgentSessionArtifactError({
+              code: 'metadata_write_failed',
+              agentSessionId: input.agentSessionId,
+              path: paths.metadataPath,
+              cause,
+            }),
         });
-        return [];
-      }
-    }),
-    writeHarnessSessionId: (input) =>
-      Effect.try({
-        try: () => {
-          const paths = artifactPaths(root, { agentSessionId: input.agentSessionId });
-          ensureSecureArtifactDirectory(root);
-          ensureSecureArtifactDirectory(paths.directory);
-          writeSecureArtifactFile(
-            paths.metadataPath,
-            `${JSON.stringify(
-              {
-                schemaVersion: 1,
-                harnessSessionId: input.harnessSessionId,
-                updatedAt: new Date().toISOString(),
-              } satisfies AgentSessionHarnessMetadata,
-              null,
-              2,
-            )}\n`,
-          );
-        },
-        catch: (cause) =>
-          new AgentSessionArtifactError({
-            code: 'metadata_write_failed',
-            agentSessionId: input.agentSessionId,
-            path: artifactPaths(root, { agentSessionId: input.agentSessionId }).metadataPath,
-            cause,
-          }),
-      }),
-    collectOrphanFolders: (input) =>
-      Effect.gen(function* () {
+      },
+    ),
+    collectOrphanFolders: Effect.fn('AgentSessionArtifacts.collectOrphanFolders')(
+      function* (input) {
         const label = 'agent session folder';
         const opened = yield* openCollectorRoot(directory.paths.root, artifactRootSegments, label);
         if (opened.status !== 'ready') return emptyOrphanSweepStats;
@@ -205,7 +200,8 @@ const make = Effect.gen(function* () {
           minAgeMs: input.minAgeMs,
           nowMs: input.nowMs,
         });
-      }),
+      },
+    ),
   });
 
   return service;
@@ -359,25 +355,80 @@ function initialMetadata(): AgentSessionHarnessMetadata {
   };
 }
 
-function parseMetadata(raw: string): AgentSessionHarnessMetadata {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!parsed || typeof parsed !== 'object') throw new Error('Metadata must be an object.');
-  const record = parsed as Record<string, unknown>;
-  if (record.schemaVersion !== 1) throw new Error('Unsupported metadata schema version.');
-  if (
-    record.harnessSessionId !== null &&
-    (typeof record.harnessSessionId !== 'string' || record.harnessSessionId.length === 0)
-  ) {
-    throw new Error('Invalid harnessSessionId.');
+/**
+ * `harness.json`. Unknown keys are accepted and dropped; `harnessSessionId` is required and is
+ * `null` until the harness reports a session.
+ */
+const harnessMetadataSchema = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  harnessSessionId: Schema.NullOr(Schema.NonEmptyString),
+  updatedAt: Schema.NonEmptyString,
+});
+
+const formatMetadataIssue = SchemaIssue.makeFormatterStandardSchemaV1();
+
+function readMetadataFile(paths: AgentSessionArtifactPaths): AgentSessionHarnessMetadataRead {
+  let raw: string;
+  try {
+    assertSecureArtifactPath(paths.directory, 'directory');
+    assertSecureArtifactPath(paths.metadataPath, 'file');
+    raw = readFileSync(paths.metadataPath, 'utf8');
+  } catch (error) {
+    if (isMissingFileError(error)) return { status: 'missing', metadataPath: paths.metadataPath };
+    return {
+      status: 'invalid',
+      metadataPath: paths.metadataPath,
+      diagnostic: diagnosticForInvalidMetadata(error),
+    };
   }
-  if (typeof record.updatedAt !== 'string' || !record.updatedAt) {
-    throw new Error('Invalid updatedAt.');
+  const decoded = decodeHarnessMetadata(raw);
+  return decoded.status === 'valid'
+    ? { status: 'valid', metadata: decoded.metadata, metadataPath: paths.metadataPath }
+    : { status: 'invalid', metadataPath: paths.metadataPath, diagnostic: decoded.diagnostic };
+}
+
+/**
+ * Decodes the text of a `harness.json`.
+ *
+ * It accepts exactly what the hand-written parser it replaced accepted, and words each rejection
+ * the same way, because the diagnostic is persisted and shown as the session's status reason. The
+ * schema checks its keys in declaration order and stops at the first problem, which is the order
+ * the old parser checked them in.
+ */
+export function decodeHarnessMetadata(
+  raw: string,
+):
+  | { readonly status: 'valid'; readonly metadata: AgentSessionHarnessMetadata }
+  | { readonly status: 'invalid'; readonly diagnostic: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return { status: 'invalid', diagnostic: diagnosticForInvalidMetadata(error) };
   }
+  const decoded = Schema.decodeUnknownResult(harnessMetadataSchema)(parsed);
+  if (Result.isSuccess(decoded)) return { status: 'valid', metadata: decoded.success };
+  const [key] = formatMetadataIssue(decoded.failure.issue).issues[0]?.path ?? [];
   return {
-    schemaVersion: 1,
-    harnessSessionId: record.harnessSessionId,
-    updatedAt: record.updatedAt,
+    status: 'invalid',
+    diagnostic: `Invalid harness metadata: ${metadataProblem(parsed, key)}`,
   };
+}
+
+function metadataProblem(parsed: unknown, key: unknown) {
+  switch (key) {
+    case 'harnessSessionId':
+      return 'Invalid harnessSessionId.';
+    case 'updatedAt':
+      return 'Invalid updatedAt.';
+    case 'schemaVersion':
+      return 'Unsupported metadata schema version.';
+    default:
+      // The schema rejects an array as a whole; the old parser saw an object without a schema version.
+      return parsed !== null && typeof parsed === 'object'
+        ? 'Unsupported metadata schema version.'
+        : 'Metadata must be an object.';
+  }
 }
 
 function isMissingFileError(error: unknown) {

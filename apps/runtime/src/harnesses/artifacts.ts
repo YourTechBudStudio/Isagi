@@ -6,22 +6,21 @@ import { Effect } from 'effect';
 import { supportedHarnesses, harnessDefinition } from './definitions.js';
 import { HarnessAdapterError } from './types.js';
 
-export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
-  return Effect.try({
+export const prepareHarnessIntegrationArtifacts = Effect.fn(
+  'harnesses.prepareHarnessIntegrationArtifacts',
+)(function* (dataRoot: string) {
+  const retiredSharedSkillRoot = resolve(dataRoot, 'skills', 'shared');
+  const artifactPaths = yield* Effect.try({
     try: () => {
-      const retiredSharedSkillRoot = resolve(dataRoot, 'skills', 'shared');
       rmSync(retiredSharedSkillRoot, { recursive: true, force: true });
-      const artifactPaths: string[] = [];
+      const written: string[] = [];
       for (const harness of supportedHarnesses) {
         for (const artifact of harnessDefinition(harness).observation.runtimeArtifacts(dataRoot)) {
           writeArtifact(artifact.path, artifact.content);
-          artifactPaths.push(artifact.path);
+          written.push(artifact.path);
         }
       }
-      console.info('[runtime] Harness integration artifacts prepared', {
-        artifactPaths,
-        retiredSharedSkillRoot,
-      });
+      return written;
     },
     catch: (cause) =>
       new HarnessAdapterError(
@@ -30,7 +29,10 @@ export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
         cause,
       ),
   });
-}
+  yield* Effect.logInfo('Harness integration artifacts prepared').pipe(
+    Effect.annotateLogs({ artifactPaths, retiredSharedSkillRoot }),
+  );
+});
 
 function writeArtifact(path: string, source: string) {
   mkdirSync(dirname(path), { recursive: true });

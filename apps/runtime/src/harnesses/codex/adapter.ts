@@ -5,65 +5,67 @@ import { shellQuote } from '../ledger.common.js';
 import type { AgentSessionArtifacts } from '../ledger.js';
 import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
-export function buildCodexLaunch(
+export const buildCodexLaunch = Effect.fn('harnesses.buildCodexLaunch')(function* (
   input: HarnessLaunchContext,
   dependencies: {
     readonly hookPath: string;
     readonly artifacts: AgentSessionArtifacts['Service'];
   },
 ) {
-  return Effect.sync(() => {
-    console.info('[runtime] Codex harness launch envelope prepared', {
+  yield* Effect.logInfo('Codex harness launch envelope prepared').pipe(
+    Effect.annotateLogs({
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
       model: input.model,
       effort: input.effort,
       hookPath: dependencies.hookPath,
-    });
-    return {
-      command: 'codex',
-      args: [
-        ...codexHookArgs(dependencies.hookPath),
-        ...(input.model ? ['--model', input.model] : []),
-        ...(input.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.effort)}`] : []),
-        ...(input.latestHarnessSessionId ? ['resume', input.latestHarnessSessionId] : []),
-      ],
-      cwd: input.cwd,
-      launchMode: 'user_shell' as const,
-      envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
-        harnessEnvForProcess({
-          agentSessionId: input.agentSessionId,
-          ptyProcessId,
-          artifacts: dependencies.artifacts,
-        }),
-    };
-  });
-}
+    }),
+  );
+  return {
+    command: 'codex',
+    args: [
+      ...codexHookArgs(dependencies.hookPath),
+      ...(input.model ? ['--model', input.model] : []),
+      ...(input.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.effort)}`] : []),
+      ...(input.latestHarnessSessionId ? ['resume', input.latestHarnessSessionId] : []),
+    ],
+    cwd: input.cwd,
+    launchMode: 'user_shell' as const,
+    envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
+      harnessEnvForProcess({
+        agentSessionId: input.agentSessionId,
+        ptyProcessId,
+        artifacts: dependencies.artifacts,
+      }),
+  };
+});
 
-export function buildCodexHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
-  return Effect.sync(() => {
-    console.info('[runtime] Codex headless launch envelope prepared', {
+export const buildCodexHeadlessLaunch = Effect.fn('harnesses.buildCodexHeadlessLaunch')(function* (
+  input: HarnessHeadlessLaunchContext,
+) {
+  yield* Effect.logInfo('Codex headless launch envelope prepared').pipe(
+    Effect.annotateLogs({
       cwd: input.cwd,
       model: input.model,
       effort: input.effort,
-    });
-    return {
-      command: 'codex',
-      args: [
-        'exec',
-        '--json',
-        '-C',
-        input.cwd,
-        ...(input.model ? ['--model', input.model] : []),
-        ...(input.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.effort)}`] : []),
-        input.prompt,
-      ],
-      cwd: input.cwd,
-      launchMode: 'user_shell' as const,
-    };
-  });
-}
+    }),
+  );
+  return {
+    command: 'codex',
+    args: [
+      'exec',
+      '--json',
+      '-C',
+      input.cwd,
+      ...(input.model ? ['--model', input.model] : []),
+      ...(input.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.effort)}`] : []),
+      input.prompt,
+    ],
+    cwd: input.cwd,
+    launchMode: 'user_shell' as const,
+  };
+});
 
 function codexHookArgs(hookPath: string) {
   const command = `node ${shellQuote(hookPath)}`;

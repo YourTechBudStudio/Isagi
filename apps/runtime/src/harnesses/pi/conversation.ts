@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { Effect } from 'effect';
 
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { HarnessConversationTurn } from '../definition-types.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
@@ -211,16 +212,17 @@ function readTranscriptFile(input: {
     catch: (error) => error,
   }).pipe(
     Effect.catch((error) =>
-      Effect.sync(() => {
-        if (input.missingIsExpected && isMissingFileError(error)) return null;
-        console.warn('[runtime] Pi transcript could not be read', {
-          agentSessionId: input.agentSessionId,
-          harnessSessionId: input.harnessSessionId,
-          transcriptPath: input.transcriptPath,
-          error,
-        });
-        return null;
-      }),
+      input.missingIsExpected && isMissingFileError(error)
+        ? Effect.succeed(null)
+        : Effect.logWarning('Pi transcript could not be read').pipe(
+            Effect.annotateLogs({
+              agentSessionId: input.agentSessionId,
+              harnessSessionId: input.harnessSessionId,
+              transcriptPath: input.transcriptPath,
+              cause: describeOperationalCause(error),
+            }),
+            Effect.as(null),
+          ),
     ),
   );
 }

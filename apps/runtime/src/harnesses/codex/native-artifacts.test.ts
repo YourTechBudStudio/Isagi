@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
+import { makeLogCapture, runScoped } from '@isagi/testing';
+
 import { locateCodexRolloutPaths, readCodexConversationEntries } from './native-artifacts.js';
 
 test('Codex index-only lookup does not recursively scan native session storage', async () => {
@@ -117,9 +119,7 @@ test('Codex conversation reading follows nested byte-bounded history without imp
 
 test('Codex conversation reading degrades to the child page for missing, unrelated, or cyclic ancestry', async () => {
   const codexDirectory = mkdtempSync(join(tmpdir(), 'isagi-codex-history-degraded-'));
-  const warnings: unknown[][] = [];
-  const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => warnings.push(args);
+  const logs = makeLogCapture();
   try {
     const unrelatedBaseId = 'codex-unrelated-base-redacted';
     writeRollout(
@@ -154,21 +154,21 @@ test('Codex conversation reading degrades to the child page for missing, unrelat
       ]),
     );
 
-    const degraded = await Effect.runPromise(
+    const degraded = await runScoped(
       readCodexConversationEntries({
         agentSessionId: 12,
         paths: [{ harnessSessionId: childId, path: childPath }],
         codexDirectory,
         missingIsExpected: false,
-      }),
+      }).pipe(Effect.provide(logs.layer)),
     );
-    const cyclic = await Effect.runPromise(
+    const cyclic = await runScoped(
       readCodexConversationEntries({
         agentSessionId: 12,
         paths: [{ harnessSessionId: cyclicId, path: cyclicPath }],
         codexDirectory,
         missingIsExpected: false,
-      }),
+      }).pipe(Effect.provide(logs.layer)),
     );
 
     assert.deepEqual(
@@ -180,14 +180,15 @@ test('Codex conversation reading degrades to the child page for missing, unrelat
       [0, 1],
     );
     assert.deepEqual(
-      warnings.flatMap((warning) => {
-        const details = record(warning[1]);
-        return typeof details.code === 'string' ? [details.code] : [];
-      }),
+      logs.lines.flatMap((line) =>
+        line.message === 'Codex paginated conversation history is degraded' &&
+        typeof line.annotations.code === 'string'
+          ? [line.annotations.code]
+          : [],
+      ),
       ['history_base_unavailable', 'history_cycle'],
     );
   } finally {
-    console.warn = originalWarn;
     rmSync(codexDirectory, { recursive: true, force: true });
   }
 });
