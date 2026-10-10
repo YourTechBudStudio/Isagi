@@ -4,7 +4,7 @@ import test, { describe } from 'node:test';
 
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
-import { expectNoProcessMatching, runScoped } from '@isagi/testing';
+import { expectNoProcessMatching, makeLogCapture, runScoped } from '@isagi/testing';
 
 import {
   resolveUserShellEnvironment,
@@ -28,6 +28,28 @@ test('user-shell runner preserves arguments containing spaces', async () => {
   );
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, 'path with spaces');
+});
+
+test('a command name the shell cannot take runs directly and logs why', async () => {
+  const logs = makeLogCapture();
+  const result = await runScoped(
+    runUserShellCommand(
+      { command: 'printf %s', args: ['x'], timeoutMs: 2_000, maxOutputBytes: 1024 },
+      environment,
+    ).pipe(Effect.provide(logs.layer)),
+  );
+  // Run directly, `printf %s` is not an executable name, so it cannot start.
+  assert.equal(typeof result.spawnError, 'string');
+  assert.deepEqual(
+    logs.lines.map((line) => [line.level, line.message, line.annotations]),
+    [
+      [
+        'Warn',
+        'User-shell command fell back to a direct command',
+        { command: 'printf %s', reason: 'unsupported_command_name' },
+      ],
+    ],
+  );
 });
 
 test('user-shell runner bounds output and command duration', async () => {

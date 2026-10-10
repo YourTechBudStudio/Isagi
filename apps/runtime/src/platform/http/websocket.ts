@@ -21,13 +21,21 @@ export interface WebSocketLike {
 
 /** A WebSocket adapted once into Effect values; every socket callback ends in a queue or a deferred. */
 export interface WsConnection {
-  /** Text frames from the client, in arrival order. Ends when the socket closes. */
+  /** Text frames from the client, in arrival order. Ends when `closed` completes. */
   readonly incoming: Stream.Stream<string>;
   /** Sends `JSON.stringify(message)`; a no-op unless the socket is open. */
   readonly send: (message: unknown) => Effect.Effect<void>;
-  /** Closes the socket unless it is already closing or closed. */
+  /**
+   * Closes the socket unless it is already closing or closed, and completes `closed` at once: the
+   * server is done with the connection, so it does not wait for the client to finish the close
+   * handshake (or for `ws`'s 30 s close timeout when the client never answers).
+   */
   readonly close: Effect.Effect<void>;
-  /** Completes when the socket closes, whoever closed it, or when the connection's scope closes. */
+  /**
+   * Completes when the client closes the socket, when `close` runs, or when the connection's scope
+   * closes, whichever is first. A route that waits on it therefore ends, and releases what its scope
+   * holds, as soon as either side closes.
+   */
   readonly closed: Effect.Effect<void>;
 }
 
@@ -51,6 +59,8 @@ export const acquireWsConnection = Effect.fn('http.acquireWsConnection')(functio
   };
   const close = Effect.sync(() => {
     if (socket.readyState !== CLOSING && socket.readyState !== CLOSED) socket.close();
+    // `ws` emits `close` only once the handshake ends; the connection is over now.
+    onClose();
   });
 
   yield* Effect.acquireRelease(
@@ -64,7 +74,6 @@ export const acquireWsConnection = Effect.fn('http.acquireWsConnection')(functio
       Effect.sync(() => {
         socket.off('message', onMessage);
         socket.off('close', onClose);
-        onClose();
       }).pipe(Effect.andThen(close)),
   );
 

@@ -602,11 +602,13 @@ const graceMs = 60 * 60_000;
 
 /** A sweep of the harness's content store two grace periods ahead, so only liveness keeps a blob. */
 function sweepContent(harness: EngineHarness, mark: () => ReadonlySet<string> = () => new Set()) {
-  return harness.contentStore.collectGarbage({
-    nowMs: Date.now() + 2 * graceMs,
-    minAgeMs: graceMs,
-    referencedHashes: mark,
-  });
+  return Effect.runPromise(
+    harness.contentStore.collectGarbage({
+      nowMs: Date.now() + 2 * graceMs,
+      minAgeMs: graceMs,
+      referencedHashes: mark,
+    }),
+  );
 }
 
 function sweptStats(result: ContentGcResult | undefined) {

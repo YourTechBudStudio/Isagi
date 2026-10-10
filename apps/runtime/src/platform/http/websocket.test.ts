@@ -16,6 +16,11 @@ class FakeSocket extends EventEmitter {
   readonly sent: string[] = [];
   closeCalls = 0;
 
+  /** With `handshake`, a server `close()` leaves the socket CLOSING until `finishHandshake()`, like real ws. */
+  constructor(private readonly options: { readonly handshake?: boolean } = {}) {
+    super();
+  }
+
   send(data: string) {
     this.sent.push(data);
   }
@@ -23,6 +28,16 @@ class FakeSocket extends EventEmitter {
   close() {
     this.closeCalls++;
     if (this.readyState !== 1) return;
+    if (this.options.handshake) {
+      this.readyState = 2;
+      return;
+    }
+    this.readyState = 3;
+    this.emit('close');
+  }
+
+  /** The client answered the close frame. */
+  finishHandshake() {
     this.readyState = 3;
     this.emit('close');
   }
@@ -91,6 +106,32 @@ describe('acquireWsConnection with a fake socket', () => {
       }),
     );
     assert.equal(socket.closeCalls, 1);
+  });
+
+  test('closed completes as soon as the server closes the socket, before the close handshake ends', async () => {
+    const socket = new FakeSocket({ handshake: true });
+    const frames = await runScoped(
+      Effect.gen(function* () {
+        const connection = yield* acquireWsConnection(socket);
+        socket.receive('before close');
+        const waiter = yield* Effect.forkChild(connection.closed);
+        yield* Effect.yieldNow;
+        assert.equal(waiter.pollUnsafe(), undefined);
+
+        yield* connection.close;
+        yield* Fiber.join(waiter);
+        assert.equal(socket.readyState, 2, 'the handshake is still pending');
+        return yield* Stream.runCollect(connection.incoming);
+      }),
+    );
+    assert.deepEqual(
+      frames,
+      ['before close'],
+      'incoming ends too, after the frames already queued',
+    );
+    assert.equal(socket.closeCalls, 1);
+    socket.finishHandshake();
+    assert.equal(socket.listenerCount('close'), 0, 'the scope already removed its listeners');
   });
 
   test('closing the scope removes the listeners and closes the socket', async () => {

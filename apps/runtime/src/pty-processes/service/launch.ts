@@ -255,6 +255,15 @@ function prepareLaunch(
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };
     const backendCommand = shellLaunchCommand({ launch: input, env: processEnvironment });
+    if (backendCommand.fallback) {
+      yield* Effect.logWarning('User-shell PTY launch fell back to a direct command').pipe(
+        Effect.annotateLogs({
+          ptyProcessId,
+          command: input.command,
+          reason: backendCommand.fallback,
+        }),
+      );
+    }
     const shell = prepareShellIntegration({
       launch: {
         ...input,

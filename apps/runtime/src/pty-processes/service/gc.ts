@@ -104,19 +104,17 @@ function cleanupOrphanShellIntegration(
     const liveIds = new Set((yield* repository.listProcesses()).map((row) => row.id));
     const label = 'shell integration folder';
     // `sessionsPath` is `<data root>/sessions`, so its parent is the canonical data root.
-    const opened = openCollectorRoot(dirname(sessionsPath), shellIntegrationSegments, label);
+    const opened = yield* openCollectorRoot(dirname(sessionsPath), shellIntegrationSegments, label);
     if (opened.status !== 'ready') return;
-    const listing = listOrphanCandidates(opened.directory, 'directory', isIdName, label);
+    const listing = yield* listOrphanCandidates(opened.directory, 'directory', isIdName, label);
     if (listing.status !== 'listed') return;
-    yield* Effect.promise(() =>
-      sweepOrphans({
-        label,
-        candidates: listing.candidates,
-        isLive: (candidate) => liveIds.has(Number(candidate.name)),
-        minAgeMs: options.minAgeMs,
-        nowMs: options.nowMs,
-      }),
-    );
+    yield* sweepOrphans({
+      label,
+      candidates: listing.candidates,
+      isLive: (candidate) => liveIds.has(Number(candidate.name)),
+      minAgeMs: options.minAgeMs,
+      nowMs: options.nowMs,
+    });
   });
 }
 

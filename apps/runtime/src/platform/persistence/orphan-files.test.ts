@@ -14,6 +14,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { Effect } from 'effect';
+
+import { makeLogCapture, runScoped } from '@isagi/testing';
+
 import {
   isIdName,
   lastWriteMs,
@@ -49,12 +53,16 @@ test('lastWriteMs reflects a newer direct child', () => {
   });
 });
 
-test('openCollectorRoot reports absent, unusable and ready roots', () => {
-  withDataRoot((dataRoot) => {
-    assert.deepEqual(openCollectorRoot(dataRoot, ['a', 'b'], 'test'), { status: 'absent' });
+test('openCollectorRoot reports absent, unusable and ready roots', async () => {
+  await withDataRootAsync(async (dataRoot) => {
+    const logs = makeLogCapture();
+    const open = (segments: readonly string[]) =>
+      runScoped(openCollectorRoot(dataRoot, segments, 'test').pipe(Effect.provide(logs.layer)));
+    assert.deepEqual(await open(['a', 'b']), { status: 'absent' });
+    assert.equal(logs.lines.length, 0, 'an absent root is not worth a log line');
 
     mkdirSync(join(dataRoot, 'a', 'b'), { recursive: true });
-    const ready = openCollectorRoot(dataRoot, ['a', 'b'], 'test');
+    const ready = await open(['a', 'b']);
     assert.equal(ready.status, 'ready');
     if (ready.status === 'ready') {
       assert.deepEqual(ready.directory.guards, [join(dataRoot, 'a'), join(dataRoot, 'a', 'b')]);
@@ -63,25 +71,40 @@ test('openCollectorRoot reports absent, unusable and ready roots', () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'isagi-orphan-files-elsewhere-'));
     try {
       symlinkSync(elsewhere, join(dataRoot, 'linked'));
-      assert.deepEqual(openCollectorRoot(dataRoot, ['linked'], 'test'), { status: 'unusable' });
+      assert.deepEqual(await open(['linked']), { status: 'unusable' });
       writeFileSync(join(dataRoot, 'file'), 'x');
-      assert.deepEqual(openCollectorRoot(dataRoot, ['file'], 'test'), { status: 'unusable' });
+      assert.deepEqual(await open(['file']), { status: 'unusable' });
+      assert.deepEqual(
+        logs.lines.map((line) => [line.level, line.message, line.annotations]),
+        [
+          [
+            'Warn',
+            'Skipping orphan collection: not a real directory',
+            { collector: 'test', path: join(dataRoot, 'linked') },
+          ],
+          [
+            'Warn',
+            'Skipping orphan collection: not a real directory',
+            { collector: 'test', path: join(dataRoot, 'file') },
+          ],
+        ],
+      );
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
   });
 });
 
-test('listOrphanCandidates lists only real entries of the requested kind with accepted names', () => {
-  withDataRoot((dataRoot) => {
-    const root = guardedRoot(dataRoot, 'root');
+test('listOrphanCandidates lists only real entries of the requested kind with accepted names', async () => {
+  await withDataRootAsync(async (dataRoot) => {
+    const root = await guardedRoot(dataRoot, 'root');
     mkdirSync(join(root.path, '1'));
     mkdirSync(join(root.path, 'notes'));
     writeFileSync(join(root.path, '2'), 'x');
     symlinkSync(join(root.path, '1'), join(root.path, '3'));
 
-    const directories = listOrphanCandidates(root, 'directory', isIdName, 'test');
-    const files = listOrphanCandidates(root, 'file', isIdName, 'test');
+    const directories = await list(root, 'directory');
+    const files = await list(root, 'file');
 
     assert.deepEqual(names(directories), ['1']);
     assert.deepEqual(names(files), ['2']);
@@ -90,7 +113,7 @@ test('listOrphanCandidates lists only real entries of the requested kind with ac
 
 test('sweepOrphans removes old unreferenced files and directories by kind', async () => {
   await withDataRootAsync(async (dataRoot) => {
-    const root = guardedRoot(dataRoot, 'root');
+    const root = await guardedRoot(dataRoot, 'root');
     mkdirSync(join(root.path, '1'));
     writeFileSync(join(root.path, '1', 'nested'), 'x');
     writeFileSync(join(root.path, '2'), 'x');
@@ -100,16 +123,17 @@ test('sweepOrphans removes old unreferenced files and directories by kind', asyn
       utimesSync(join(root.path, name), oldDate, oldDate);
     }
 
-    const stats = await sweepOrphans({
-      label: 'test entry',
-      candidates: [
-        ...listed(listOrphanCandidates(root, 'directory', isIdName, 'test')),
-        ...listed(listOrphanCandidates(root, 'file', isIdName, 'test')),
-      ],
-      isLive: (candidate) => candidate.name === '3',
-      minAgeMs,
-      nowMs,
-    });
+    const logs = makeLogCapture();
+    const stats = await sweep(
+      {
+        label: 'test entry',
+        candidates: [...listed(await list(root, 'directory')), ...listed(await list(root, 'file'))],
+        isLive: (candidate) => candidate.name === '3',
+        minAgeMs,
+        nowMs,
+      },
+      logs,
+    );
 
     assert.deepEqual([...stats.deleted].sort(), ['1', '2']);
     assert.equal(stats.kept, 1);
@@ -118,21 +142,25 @@ test('sweepOrphans removes old unreferenced files and directories by kind', asyn
     assert.equal(existsSync(join(root.path, '2')), false);
     assert.equal(existsSync(join(root.path, '3')), true);
     assert.equal(existsSync(join(root.path, '4')), true);
+    assert.deepEqual(
+      logs.lines.map((line) => [line.level, line.message, line.annotations]),
+      [['Info', 'Deleted orphan entries', { collector: 'test entry', count: 2, sample: '1, 2' }]],
+    );
   });
 });
 
 test('sweepOrphans ignores entries that vanished and skips entries of the wrong type', async () => {
   await withDataRootAsync(async (dataRoot) => {
-    const root = guardedRoot(dataRoot, 'root');
+    const root = await guardedRoot(dataRoot, 'root');
     mkdirSync(join(root.path, '1'));
     mkdirSync(join(root.path, '2'));
-    const candidates = listed(listOrphanCandidates(root, 'directory', isIdName, 'test'));
+    const candidates = listed(await list(root, 'directory'));
     rmSync(join(root.path, '1'), { recursive: true });
     rmSync(join(root.path, '2'), { recursive: true });
     writeFileSync(join(root.path, '2'), 'x');
     utimesSync(join(root.path, '2'), oldDate, oldDate);
 
-    const stats = await sweepOrphans({
+    const stats = await sweep({
       label: 'test entry',
       candidates,
       isLive: () => false,
@@ -149,9 +177,9 @@ test('sweepOrphans ignores entries that vanished and skips entries of the wrong 
 
 test('sweepOrphans skips candidates whose guard became a symlink after listing', async () => {
   await withDataRootAsync(async (dataRoot) => {
-    const shard = guardedRoot(dataRoot, 'root', 'shard');
+    const shard = await guardedRoot(dataRoot, 'root', 'shard');
     writeFileSync(join(shard.path, '1'), 'x');
-    const candidates = listed(listOrphanCandidates(shard, 'file', isIdName, 'test'));
+    const candidates = listed(await list(shard, 'file'));
 
     const decoy = mkdtempSync(join(tmpdir(), 'isagi-orphan-files-decoy-'));
     try {
@@ -160,7 +188,7 @@ test('sweepOrphans skips candidates whose guard became a symlink after listing',
       renameSync(shard.path, join(dataRoot, 'root', 'moved'));
       symlinkSync(decoy, shard.path);
 
-      const stats = await sweepOrphans({
+      const stats = await sweep({
         label: 'test entry',
         candidates,
         isLive: () => false,
@@ -178,37 +206,58 @@ test('sweepOrphans skips candidates whose guard became a symlink after listing',
 
 test('sweepOrphans turns a throw into a failed entry and still resolves', async () => {
   await withDataRootAsync(async (dataRoot) => {
-    const root = guardedRoot(dataRoot, 'root');
+    const root = await guardedRoot(dataRoot, 'root');
     writeFileSync(join(root.path, '1'), 'x');
     writeFileSync(join(root.path, '2'), 'x');
     utimesSync(join(root.path, '1'), oldDate, oldDate);
     utimesSync(join(root.path, '2'), oldDate, oldDate);
 
-    const stats = await sweepOrphans({
-      label: 'test entry',
-      candidates: listed(listOrphanCandidates(root, 'file', isIdName, 'test')),
-      isLive: (candidate) => {
-        if (candidate.name === '1') throw new Error('mark unavailable');
-        return false;
+    const logs = makeLogCapture();
+    const stats = await sweep(
+      {
+        label: 'test entry',
+        candidates: listed(await list(root, 'file')),
+        isLive: (candidate) => {
+          if (candidate.name === '1') throw new Error('mark unavailable');
+          return false;
+        },
+        minAgeMs,
+        nowMs,
       },
-      minAgeMs,
-      nowMs,
-    });
+      logs,
+    );
 
     assert.deepEqual(stats.failed, ['1']);
     assert.deepEqual(stats.deleted, ['2']);
     assert.equal(existsSync(join(root.path, '1')), true);
+    // The cause is rendered by the redaction rule: the class name, never the error's own text.
+    assert.deepEqual(
+      logs.lines.map((line) => [line.level, line.message, line.annotations]),
+      [
+        [
+          'Warn',
+          'Could not clean an orphan entry',
+          { collector: 'test entry', name: '1', cause: 'Error' },
+        ],
+        ['Info', 'Deleted orphan entries', { collector: 'test entry', count: 1, sample: '2' }],
+        [
+          'Warn',
+          'Failed to clean orphan entries',
+          { collector: 'test entry', count: 1, sample: '1' },
+        ],
+      ],
+    );
   });
 });
 
 test('sweepOrphans treats anything written after the sweep started as young', async () => {
   await withDataRootAsync(async (dataRoot) => {
-    const root = guardedRoot(dataRoot, 'root');
+    const root = await guardedRoot(dataRoot, 'root');
     writeFileSync(join(root.path, '1'), 'x');
 
-    const stats = await sweepOrphans({
+    const stats = await sweep({
       label: 'test entry',
-      candidates: listed(listOrphanCandidates(root, 'file', isIdName, 'test')),
+      candidates: listed(await list(root, 'file')),
       isLive: () => false,
       minAgeMs,
       // Far in the past: the file's real mtime is after this sweep's fixed clock.
@@ -219,12 +268,21 @@ test('sweepOrphans treats anything written after the sweep started as young', as
   });
 });
 
-function guardedRoot(dataRoot: string, ...segments: string[]): GuardedDirectory {
+async function guardedRoot(dataRoot: string, ...segments: string[]): Promise<GuardedDirectory> {
   mkdirSync(join(dataRoot, ...segments), { recursive: true });
-  const opened = openCollectorRoot(dataRoot, segments, 'test');
+  const opened = await runScoped(openCollectorRoot(dataRoot, segments, 'test'));
   assert.equal(opened.status, 'ready');
   if (opened.status !== 'ready') throw new Error('unreachable');
   return opened.directory;
+}
+
+function list(parent: GuardedDirectory, kind: 'file' | 'directory') {
+  return runScoped(listOrphanCandidates(parent, kind, isIdName, 'test'));
+}
+
+/** Runs a sweep with its log lines captured, so a test can assert on them and nothing is printed. */
+function sweep(input: Parameters<typeof sweepOrphans>[0], logs = makeLogCapture()) {
+  return runScoped(sweepOrphans(input).pipe(Effect.provide(logs.layer)));
 }
 
 function listed(listing: OrphanListing): OrphanCandidate[] {

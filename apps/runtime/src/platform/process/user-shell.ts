@@ -112,6 +112,11 @@ export const runUserShellCommand = Effect.fnUntraced(function* (
     },
     env: environment,
   });
+  if (launch.fallback) {
+    yield* Effect.logWarning('User-shell command fell back to a direct command').pipe(
+      Effect.annotateLogs({ command: input.command, reason: launch.fallback }),
+    );
+  }
   const output = boundedOutput(input.maxOutputBytes);
   let timedOut = false;
 

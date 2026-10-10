@@ -286,6 +286,58 @@ test('an attach socket receives exit and closes when its PTY process exits', asy
   );
 });
 
+test('a log-stream attachment is released as soon as the server closes the socket after exit', async () => {
+  let liveSend: ((message: PtyStreamOutputMessageSet) => void) | null = null;
+  let released = false;
+  const latestRun = {
+    id: 1,
+    startedAt: '2026-06-19T00:00:00.000Z',
+    completedAt: null,
+    status: 'running' as const,
+    ptyProcessId: 20,
+    hasPtyProcess: true,
+    diagnostic: null,
+  };
+
+  await withCommandsApi(
+    commandService({
+      readLogMetadata: () =>
+        Effect.succeed({ worktreeId: 10, commandName: 'dev', status: 'running', latestRun }),
+    }),
+    async (fastify) => {
+      const ws = await fastify.injectWS('/api/v1/worktrees/10/commands/log-stream?commandName=dev');
+      const messagesPromise = receiveMessagesUntilClose(ws);
+      await waitUntil(() => liveSend !== null, 'live attachment');
+      liveSend!({ type: 'exit', exitCode: 0, signal: null });
+      await messagesPromise;
+      // The in-memory socket never finishes the close handshake, so only the server's own close
+      // can end the connection here; ws's 30 s close timeout is far beyond this wait.
+      await waitUntil(() => released, 'attachment release');
+    },
+    {
+      pty: fakeCommandLogPtyService({
+        // Scoped like the real PtyService.attach: released when the connection's scope closes.
+        attach: (input) =>
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              liveSend = input.send;
+              return fakeAttachment({ replayBytes: 0 });
+            }),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+        replay: (input) =>
+          Effect.sync(() => {
+            input.send({ type: 'replay_start', bytes: input.bytes ?? 0 });
+            input.send({ type: 'replay_end' });
+          }),
+      }),
+    },
+  );
+});
+
 test('command log stream falls back to replay-only output after stale live attach failure', async () => {
   let metadataReads = 0;
   let planReads = 0;

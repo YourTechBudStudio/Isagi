@@ -105,6 +105,7 @@ test('user shell launch mode falls back to direct for unsafe command names', () 
     {
       command: 'codex --danger',
       args: ['prompt'],
+      fallback: 'unsupported_command_name',
     },
   );
 });

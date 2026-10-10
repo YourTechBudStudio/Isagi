@@ -194,19 +194,17 @@ const make = Effect.gen(function* () {
     collectOrphanFolders: (input) =>
       Effect.gen(function* () {
         const label = 'agent session folder';
-        const opened = openCollectorRoot(directory.paths.root, artifactRootSegments, label);
+        const opened = yield* openCollectorRoot(directory.paths.root, artifactRootSegments, label);
         if (opened.status !== 'ready') return emptyOrphanSweepStats;
-        const listing = listOrphanCandidates(opened.directory, 'directory', isIdName, label);
+        const listing = yield* listOrphanCandidates(opened.directory, 'directory', isIdName, label);
         if (listing.status !== 'listed') return emptyOrphanSweepStats;
-        return yield* Effect.promise(() =>
-          sweepOrphans({
-            label,
-            candidates: listing.candidates,
-            isLive: (candidate) => input.liveIds.has(Number(candidate.name)),
-            minAgeMs: input.minAgeMs,
-            nowMs: input.nowMs,
-          }),
-        );
+        return yield* sweepOrphans({
+          label,
+          candidates: listing.candidates,
+          isLive: (candidate) => input.liveIds.has(Number(candidate.name)),
+          minAgeMs: input.minAgeMs,
+          nowMs: input.nowMs,
+        });
       }),
   });
 

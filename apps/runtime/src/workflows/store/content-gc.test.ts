@@ -22,6 +22,8 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Scope } from 'effect';
 
+import { runScoped } from '@isagi/testing';
+
 import {
   contentPathFor,
   makeWorkflowContentStore,
@@ -110,11 +112,13 @@ function sweep(
   store: WorkflowContentStoreInstance,
   options: { readonly nowMs?: number; readonly mark?: ReadonlySet<string> } = {},
 ) {
-  return store.collectGarbage({
-    nowMs: options.nowMs ?? Date.now(),
-    minAgeMs: graceMs,
-    referencedHashes: () => options.mark ?? new Set(),
-  });
+  return runScoped(
+    store.collectGarbage({
+      nowMs: options.nowMs ?? Date.now(),
+      minAgeMs: graceMs,
+      referencedHashes: () => options.mark ?? new Set(),
+    }),
+  );
 }
 
 /** Far enough ahead that everything on disk is past the grace period. */
@@ -243,16 +247,18 @@ test(
     const blobPath = contentPathFor(contentRoot, contentRef);
     const references = new Set<string>();
 
-    const first = await store.collectGarbage({
-      nowMs: later(),
-      minAgeMs: graceMs,
-      referencedHashes: () => {
-        const staleMark = new Set(references);
-        references.add(hash); // the checkpoint row commits
-        close(); // and the capture's scope closes, releasing its hold
-        return staleMark;
-      },
-    });
+    const first = await runScoped(
+      store.collectGarbage({
+        nowMs: later(),
+        minAgeMs: graceMs,
+        referencedHashes: () => {
+          const staleMark = new Set(references);
+          references.add(hash); // the checkpoint row commits
+          close(); // and the capture's scope closes, releasing its hold
+          return staleMark;
+        },
+      }),
+    );
     assert.equal(stats(first).kept, 1);
     assert.equal(existsSync(blobPath), true, 'only releasedDuringSweep protected it');
 
@@ -275,13 +281,15 @@ test(
     stats(await running);
 
     await assert.rejects(
-      store.collectGarbage({
-        nowMs: Date.now(),
-        minAgeMs: graceMs,
-        referencedHashes: () => {
-          throw new Error('database unavailable');
-        },
-      }),
+      runScoped(
+        store.collectGarbage({
+          nowMs: Date.now(),
+          minAgeMs: graceMs,
+          referencedHashes: () => {
+            throw new Error('database unavailable');
+          },
+        }),
+      ),
       /database unavailable/,
     );
     assert.equal(existsSync(blob.path), true, 'an aborted sweep removes nothing');
@@ -291,14 +299,16 @@ test(
 
     plantBlob(contentRoot, Buffer.from('young'));
     let markReads = 0;
-    const quiet = await store.collectGarbage({
-      nowMs: Date.now(),
-      minAgeMs: graceMs,
-      referencedHashes: () => {
-        markReads += 1;
-        return new Set();
-      },
-    });
+    const quiet = await runScoped(
+      store.collectGarbage({
+        nowMs: Date.now(),
+        minAgeMs: graceMs,
+        referencedHashes: () => {
+          markReads += 1;
+          return new Set();
+        },
+      }),
+    );
     assert.deepEqual(quiet, { status: 'skipped', reason: 'nothing_old' });
     assert.equal(markReads, 0);
   }),
@@ -450,15 +460,17 @@ test(
     backdate(decoy, 2 * graceMs);
 
     const result = stats(
-      await store.collectGarbage({
-        nowMs: Date.now(),
-        minAgeMs: graceMs,
-        referencedHashes: () => {
-          renameSync(shard, join(outside, 'real-shard'));
-          symlinkSync(decoyShard, shard);
-          return new Set();
-        },
-      }),
+      await runScoped(
+        store.collectGarbage({
+          nowMs: Date.now(),
+          minAgeMs: graceMs,
+          referencedHashes: () => {
+            renameSync(shard, join(outside, 'real-shard'));
+            symlinkSync(decoyShard, shard);
+            return new Set();
+          },
+        }),
+      ),
     );
     assert.equal(existsSync(decoy), true);
     assert.deepEqual(result.skippedUnsafe, [`${blob.hash}.json`]);

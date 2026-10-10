@@ -45,7 +45,8 @@ import { listReferencedContentHashes } from './checkpoints.js';
  *
  * There is no lock. Hold, release, temp registration, "start tracking then read the mark", and the
  * collector's per-candidate decide-and-remove step (`sweepOrphans`) are each synchronous JavaScript
- * on the runtime's single thread, so none can interleave with another. Keep them free of `await`.
+ * on the runtime's single thread, so none can interleave with another. Keep them free of `await`
+ * and `yield*`.
  */
 const refPattern = /^sha256:[a-f0-9]{64}$/;
 
@@ -91,7 +92,7 @@ export interface ContentCapture {
 /** The store plus its collector. The collector is deliberately not on the service tag. */
 export interface WorkflowContentStoreInstance {
   readonly service: WorkflowContentStore['Service'];
-  readonly collectGarbage: (input: ContentGcInput) => Promise<ContentGcResult>;
+  readonly collectGarbage: (input: ContentGcInput) => Effect.Effect<ContentGcResult>;
 }
 
 export interface ContentGcInput {
@@ -99,7 +100,8 @@ export interface ContentGcInput {
   readonly minAgeMs: number;
   /**
    * Synchronous mark read: every hash a checkpoint references. Called inside the sweep right after
-   * release tracking starts. A throw aborts the sweep before anything is removed and rejects it.
+   * release tracking starts. A throw aborts the sweep before anything is removed; the sweep then
+   * dies with that throw as its defect.
    */
   readonly referencedHashes: () => ReadonlySet<string>;
 }
@@ -119,7 +121,8 @@ const make = Effect.gen(function* () {
   const tick = diagnosticPhase(
     'workflow.content_gc',
     {},
-    Effect.promise(() =>
+    // Suspended so every tick reads its own clock.
+    Effect.suspend(() =>
       instance.collectGarbage({
         nowMs: Date.now(),
         minAgeMs: contentGcGraceMs,
@@ -130,8 +133,8 @@ const make = Effect.gen(function* () {
       }),
     ),
   ).pipe(
-    // catchCause, not catch: a rejected promise (a failed mark read included) is a defect
-    // here, and it must be logged and leave the next tick running.
+    // catchCause, not catch: a failed mark read is a defect here, and it must be logged and
+    // leave the next tick running.
     Effect.catchCause((cause) =>
       Effect.sync(() => console.warn('[runtime] Workflow content GC failed', Cause.pretty(cause))),
     ),
@@ -407,23 +410,21 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
    * Blobs (`<hh>/<hash>.json`) and temps (`incoming/<uuid>.tmp`), reached only through real
    * directories. Shard folders and `incoming` itself are never candidates.
    */
-  const listCandidates = async (): Promise<
-    readonly OrphanCandidate[] | 'absent' | 'root_unusable'
-  > => {
-    const opened = openCollectorRoot(dataRoot, ['workflow-content'], gcLabel);
-    if (opened.status === 'absent') return 'absent';
-    if (opened.status === 'unusable') return 'root_unusable';
-    const shards = listOrphanCandidates(
+  const listCandidates = Effect.fnUntraced(function* () {
+    const opened = yield* openCollectorRoot(dataRoot, ['workflow-content'], gcLabel);
+    if (opened.status === 'absent') return 'absent' as const;
+    if (opened.status === 'unusable') return 'root_unusable' as const;
+    const shards = yield* listOrphanCandidates(
       opened.directory,
       'directory',
       (name) => shardPattern.test(name),
       gcLabel,
     );
-    if (shards.status === 'unreadable') return 'root_unusable';
+    if (shards.status === 'unreadable') return 'root_unusable' as const;
 
     const folders: { readonly directory: GuardedDirectory; readonly accept: RegExp }[] = [];
     for (const shard of shards.candidates) {
-      const child = childDirectory(opened.directory, shard.name, gcLabel);
+      const child = yield* childDirectory(opened.directory, shard.name, gcLabel);
       if (child.status === 'ready') {
         folders.push({
           directory: child.directory,
@@ -431,24 +432,24 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
         });
       }
     }
-    const temps = childDirectory(opened.directory, 'incoming', gcLabel);
+    const temps = yield* childDirectory(opened.directory, 'incoming', gcLabel);
     if (temps.status === 'ready')
       folders.push({ directory: temps.directory, accept: temporaryPattern });
 
     const candidates: OrphanCandidate[] = [];
     for (const folder of folders) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      const listed = listOrphanCandidates(
+      yield* Effect.yieldNow;
+      const listed = yield* listOrphanCandidates(
         folder.directory,
         'file',
         (name) => folder.accept.test(name),
         gcLabel,
       );
-      if (listed.status === 'unreadable') return 'root_unusable';
+      if (listed.status === 'unreadable') return 'root_unusable' as const;
       candidates.push(...listed.candidates);
     }
     return candidates;
-  };
+  });
 
   // The one place liveness is decided, inside the collector's synchronous per-candidate step.
   const isLiveContent = (candidate: OrphanCandidate, mark: ReadonlySet<string>) => {
@@ -457,44 +458,57 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
     return held.has(hash) || (releasedDuringSweep?.has(hash) ?? false) || mark.has(hash);
   };
 
-  const collectGarbage = async (input: ContentGcInput): Promise<ContentGcResult> => {
-    if (sweeping) return { status: 'skipped', reason: 'already_running' };
-    sweeping = true;
-    try {
-      const listed = await listCandidates();
-      if (listed === 'absent') return { status: 'skipped', reason: 'nothing_old' };
-      if (listed === 'root_unusable') return { status: 'skipped', reason: 'root_unusable' };
+  const sweepOnce = Effect.fnUntraced(function* (input: ContentGcInput) {
+    const listed = yield* listCandidates();
+    if (listed === 'absent') return nothingOld;
+    if (listed === 'root_unusable') return rootUnusable;
 
-      // Age only. Whether a candidate is held, referenced or live is decided in the sweep step.
-      const old: OrphanCandidate[] = [];
-      for (const candidate of listed) {
-        try {
-          const { mtimeMs } = await lstat(candidate.path);
-          if (input.nowMs - mtimeMs >= input.minAgeMs) old.push(candidate);
-        } catch {
-          // Gone or unreadable: not a candidate this time.
-        }
-      }
-      if (old.length === 0) return { status: 'skipped', reason: 'nothing_old' };
-
-      // Adjacent and synchronous: tracking starts before the mark is read, so a capture that
-      // commits and releases after the read is still kept by this sweep.
-      releasedDuringSweep = new Set();
-      const mark = input.referencedHashes();
-
-      const stats = await sweepOrphans({
-        label: 'workflow content file',
-        candidates: old,
-        isLive: (candidate) => isLiveContent(candidate, mark),
-        minAgeMs: input.minAgeMs,
-        nowMs: input.nowMs,
-      });
-      return { status: 'swept', stats };
-    } finally {
-      releasedDuringSweep = null;
-      sweeping = false;
+    // Age only. Whether a candidate is held, referenced or live is decided in the sweep step.
+    const old: OrphanCandidate[] = [];
+    for (const candidate of listed) {
+      // Gone or unreadable: not a candidate this time.
+      const mtimeMs = yield* Effect.promise(() =>
+        lstat(candidate.path).then(
+          (stat) => stat.mtimeMs,
+          () => null,
+        ),
+      );
+      if (mtimeMs !== null && input.nowMs - mtimeMs >= input.minAgeMs) old.push(candidate);
     }
-  };
+    if (old.length === 0) return nothingOld;
+
+    // Adjacent and synchronous: tracking starts before the mark is read, so a capture that
+    // commits and releases after the read is still kept by this sweep.
+    const mark = yield* Effect.sync(() => {
+      releasedDuringSweep = new Set();
+      return input.referencedHashes();
+    });
+
+    const stats = yield* sweepOrphans({
+      label: 'workflow content file',
+      candidates: old,
+      isLive: (candidate) => isLiveContent(candidate, mark),
+      minAgeMs: input.minAgeMs,
+      nowMs: input.nowMs,
+    });
+    const swept: ContentGcResult = { status: 'swept', stats };
+    return swept;
+  });
+
+  // The check and the claim are one synchronous step, so overlapping sweeps are refused.
+  const collectGarbage = (input: ContentGcInput): Effect.Effect<ContentGcResult> =>
+    Effect.suspend(() => {
+      if (sweeping) return Effect.succeed(alreadyRunning);
+      sweeping = true;
+      return sweepOnce(input).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            releasedDuringSweep = null;
+            sweeping = false;
+          }),
+        ),
+      );
+    });
 
   return {
     service: {
@@ -522,6 +536,10 @@ export function makeWorkflowContentStore(dataRoot: string): WorkflowContentStore
     collectGarbage,
   };
 }
+
+const alreadyRunning: ContentGcResult = { status: 'skipped', reason: 'already_running' };
+const nothingOld: ContentGcResult = { status: 'skipped', reason: 'nothing_old' };
+const rootUnusable: ContentGcResult = { status: 'skipped', reason: 'root_unusable' };
 
 function closedCapture() {
   return new ContentPublishError({

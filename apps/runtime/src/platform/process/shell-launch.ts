@@ -13,9 +13,17 @@ export interface ShellLaunchInput {
   readonly launchMode?: ShellLaunchMode | undefined;
 }
 
+/**
+ * Why a `user_shell` launch ran its command directly instead. The caller logs it: this function is
+ * pure, and only the caller knows what the launch is for.
+ */
+export type ShellLaunchFallback = 'unsupported_command_name';
+
 export interface ShellLaunchCommand {
   readonly command: string;
   readonly args: readonly string[];
+  /** Set when a `user_shell` launch fell back to running the command directly. */
+  readonly fallback?: ShellLaunchFallback | undefined;
 }
 
 const simpleShellCommandName = /^[A-Za-z0-9._-]+$/;
@@ -32,14 +40,12 @@ export function shellLaunchCommand(input: {
     };
   }
 
+  // The shell script names the command unquoted, so only a plain name can go through the shell.
   if (!simpleShellCommandName.test(input.launch.command)) {
-    console.warn('[runtime] User-shell PTY launch fell back to direct command', {
-      command: input.launch.command,
-      reason: 'unsupported_command_name',
-    });
     return {
       command: input.launch.command,
       args: input.launch.args,
+      fallback: 'unsupported_command_name',
     };
   }
 

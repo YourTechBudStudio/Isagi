@@ -1,6 +1,10 @@
 import { lstatSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { Effect } from 'effect';
+
+import { describeOperationalCause } from '../diagnostics/index.js';
+
 // Shared mark-and-sweep helpers for the runtime's file-writing areas. Actions
 // delete rows only; each area collects its own files on its own timer by
 // listing its root and deleting entries no row references once they are old
@@ -11,8 +15,9 @@ import { join } from 'node:path';
 //   a path read from a row, and every directory from the data root down to a
 //   candidate is re-checked with lstat in the same synchronous step that
 //   removes it.
-// - Filesystem conditions never throw or reject. They become statuses and log
-//   lines, so a collector tick always finishes and the next tick retries.
+// - Filesystem conditions never fail the returned effects. They become statuses
+//   and log lines, so a collector tick always finishes and the next tick
+//   retries. Logged causes go through `describeOperationalCause`.
 //
 // The per-candidate decide-and-remove step is one synchronous section on
 // purpose: an in-process writer whose claim is a synchronous update of the
@@ -39,38 +44,66 @@ export type GuardedDirectoryResult =
   | { readonly status: 'unusable' };
 
 /** `dataRoot` is `DataDirectory.paths.root`, already canonical (realpath) by `isagiDataDirectoryPaths`. */
-export function openCollectorRoot(
+export const openCollectorRoot = Effect.fnUntraced(function* (
   dataRoot: string,
   segments: readonly string[],
   label: string,
-): GuardedDirectoryResult {
+) {
   let directory: GuardedDirectory = { path: dataRoot, guards: [] };
   for (const segment of segments) {
-    const next = childDirectory(directory, segment, label);
+    const next = yield* childDirectory(directory, segment, label);
     if (next.status !== 'ready') return next;
     directory = next.directory;
   }
-  return { status: 'ready', directory };
-}
+  const result: GuardedDirectoryResult = { status: 'ready', directory };
+  return result;
+});
 
 /** One more level below a guarded directory, with the same lstat rule. */
-export function childDirectory(
+export const childDirectory = Effect.fnUntraced(function* (
   parent: GuardedDirectory,
   name: string,
   label: string,
-): GuardedDirectoryResult {
+) {
   const path = join(parent.path, name);
-  try {
-    if (!isRealDirectory(path)) {
-      console.warn(`[runtime] Skipping ${label} collection: ${path} is not a real directory`);
-      return { status: 'unusable' };
-    }
-  } catch (error) {
-    if (isMissingFileError(error)) return { status: 'absent' };
-    console.warn(`[runtime] Skipping ${label} collection: could not inspect ${path}`, error);
-    return { status: 'unusable' };
+  const inspection = inspectDirectory(path);
+  if (inspection.status === 'missing') return absentDirectory;
+  if (inspection.status === 'not_real') {
+    yield* Effect.logWarning('Skipping orphan collection: not a real directory').pipe(
+      Effect.annotateLogs({ collector: label, path }),
+    );
+    return unusableDirectory;
   }
-  return { status: 'ready', directory: { path, guards: [...parent.guards, path] } };
+  if (inspection.status === 'failed') {
+    yield* Effect.logWarning('Skipping orphan collection: could not inspect a directory').pipe(
+      Effect.annotateLogs({
+        collector: label,
+        path,
+        cause: describeOperationalCause(inspection.error),
+      }),
+    );
+    return unusableDirectory;
+  }
+  const result: GuardedDirectoryResult = {
+    status: 'ready',
+    directory: { path, guards: [...parent.guards, path] },
+  };
+  return result;
+});
+
+const absentDirectory: GuardedDirectoryResult = { status: 'absent' };
+const unusableDirectory: GuardedDirectoryResult = { status: 'unusable' };
+
+function inspectDirectory(
+  path: string,
+):
+  | { readonly status: 'real' | 'not_real' | 'missing' }
+  | { readonly status: 'failed'; readonly error: unknown } {
+  try {
+    return { status: isRealDirectory(path) ? 'real' : 'not_real' };
+  } catch (error) {
+    return isMissingFileError(error) ? { status: 'missing' } : { status: 'failed', error };
+  }
 }
 
 export interface OrphanCandidate {
@@ -92,18 +125,25 @@ export type OrphanListing =
  * Direct children of `parent` that readdir reports as `kind` (Dirent types use lstat semantics, so
  * a symlink is never a file or directory candidate) and whose name passes `accept`.
  */
-export function listOrphanCandidates(
+export const listOrphanCandidates = Effect.fnUntraced(function* (
   parent: GuardedDirectory,
   kind: 'file' | 'directory',
   accept: (name: string) => boolean,
   label: string,
-): OrphanListing {
+) {
   let entries;
   try {
     entries = readdirSync(parent.path, { withFileTypes: true });
   } catch (error) {
-    console.warn(`[runtime] Could not list ${label} entries under ${parent.path}`, error);
-    return { status: 'unreadable' };
+    yield* Effect.logWarning('Could not list orphan collection entries').pipe(
+      Effect.annotateLogs({
+        collector: label,
+        path: parent.path,
+        cause: describeOperationalCause(error),
+      }),
+    );
+    const unreadable: OrphanListing = { status: 'unreadable' };
+    return unreadable;
   }
   const candidates = entries
     .filter((entry) => (kind === 'file' ? entry.isFile() : entry.isDirectory()))
@@ -119,8 +159,9 @@ export function listOrphanCandidates(
           guards: parent.guards,
         }) satisfies OrphanCandidate,
     );
-  return { status: 'listed', candidates };
-}
+  const listing: OrphanListing = { status: 'listed', candidates };
+  return listing;
+});
 
 /** Canonical positive integer names, such as row ids: `'7'`, never `'07'`, `'1e3'` or `'1.5'`. */
 export function isIdName(name: string): boolean {
@@ -172,15 +213,16 @@ export const emptyOrphanSweepStats: OrphanSweepStats = {
  * ignored; entry not a real `kind` → skippedUnsafe; younger than `minAgeMs` →
  * skippedYoung; else removed → deleted. Any throw in the step becomes `failed`.
  * `nowMs` is fixed for the sweep, so anything touched after it started is young.
- * Never rejects.
+ * The fiber yields between batches so a large sweep does not starve other work.
+ * Never fails.
  */
-export async function sweepOrphans(input: {
+export const sweepOrphans = Effect.fnUntraced(function* (input: {
   readonly label: string;
   readonly candidates: readonly OrphanCandidate[];
   readonly isLive: (candidate: OrphanCandidate) => boolean;
   readonly minAgeMs: number;
   readonly nowMs: number;
-}): Promise<OrphanSweepStats> {
+}) {
   const deleted: string[] = [];
   const skippedYoung: string[] = [];
   const skippedUnsafe: string[] = [];
@@ -188,34 +230,48 @@ export async function sweepOrphans(input: {
   let kept = 0;
 
   for (const [index, candidate] of input.candidates.entries()) {
-    if (index > 0 && index % sweepBatchSize === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    try {
-      const outcome = sweepCandidate(candidate, input);
-      if (outcome === 'kept') kept += 1;
-      else if (outcome === 'deleted') deleted.push(candidate.name);
-      else if (outcome === 'young') skippedYoung.push(candidate.name);
-      else if (outcome === 'unsafe') skippedUnsafe.push(candidate.name);
-    } catch (error) {
+    if (index > 0 && index % sweepBatchSize === 0) yield* Effect.yieldNow;
+    const outcome = sweepCandidateSafely(candidate, input);
+    if (outcome === 'kept') kept += 1;
+    else if (outcome === 'deleted') deleted.push(candidate.name);
+    else if (outcome === 'young') skippedYoung.push(candidate.name);
+    else if (outcome === 'unsafe') skippedUnsafe.push(candidate.name);
+    else if (outcome !== 'missing') {
       failed.push(candidate.name);
-      console.warn(`[runtime] Could not clean orphan ${input.label} ${candidate.name}`, error);
+      yield* Effect.logWarning('Could not clean an orphan entry').pipe(
+        Effect.annotateLogs({
+          collector: input.label,
+          name: candidate.name,
+          cause: describeOperationalCause(outcome.error),
+        }),
+      );
     }
   }
 
-  const stats = {
+  const stats: OrphanSweepStats = {
     inspected: input.candidates.length,
     deleted,
     kept,
     skippedYoung,
     skippedUnsafe,
     failed,
-  } satisfies OrphanSweepStats;
-  logSweepSummary(input.label, stats);
+  };
+  yield* logSweepSummary(input.label, stats);
   return stats;
+});
+
+function sweepCandidateSafely(
+  candidate: OrphanCandidate,
+  input: Parameters<typeof sweepCandidate>[1],
+): ReturnType<typeof sweepCandidate> | { readonly error: unknown } {
+  try {
+    return sweepCandidate(candidate, input);
+  } catch (error) {
+    return { error };
+  }
 }
 
-// Synchronous by contract (see the module comment): no await may be added here.
+// Synchronous by contract (see the module comment): no `yield*` or `await` may be added here.
 function sweepCandidate(
   candidate: OrphanCandidate,
   input: {
@@ -258,21 +314,37 @@ function isRealDirectory(path: string) {
 }
 
 function logSweepSummary(label: string, stats: OrphanSweepStats) {
-  if (stats.deleted.length > 0) {
-    console.info(
-      `[runtime] Deleted ${stats.deleted.length} orphan ${label}(s): ${sample(stats.deleted)}`,
-    );
-  }
-  if (stats.failed.length > 0) {
-    console.warn(
-      `[runtime] Failed to clean ${stats.failed.length} orphan ${label}(s): ${sample(stats.failed)}`,
-    );
-  }
-  if (stats.skippedUnsafe.length > 0) {
-    console.warn(
-      `[runtime] Skipped ${stats.skippedUnsafe.length} orphan ${label}(s) reached through a link or of the wrong type: ${sample(stats.skippedUnsafe)}`,
-    );
-  }
+  return Effect.gen(function* () {
+    if (stats.deleted.length > 0) {
+      yield* Effect.logInfo('Deleted orphan entries').pipe(
+        Effect.annotateLogs({
+          collector: label,
+          count: stats.deleted.length,
+          sample: sample(stats.deleted),
+        }),
+      );
+    }
+    if (stats.failed.length > 0) {
+      yield* Effect.logWarning('Failed to clean orphan entries').pipe(
+        Effect.annotateLogs({
+          collector: label,
+          count: stats.failed.length,
+          sample: sample(stats.failed),
+        }),
+      );
+    }
+    if (stats.skippedUnsafe.length > 0) {
+      yield* Effect.logWarning(
+        'Skipped orphan entries reached through a link or of the wrong type',
+      ).pipe(
+        Effect.annotateLogs({
+          collector: label,
+          count: stats.skippedUnsafe.length,
+          sample: sample(stats.skippedUnsafe),
+        }),
+      );
+    }
+  });
 }
 
 function sample(names: readonly string[]) {
