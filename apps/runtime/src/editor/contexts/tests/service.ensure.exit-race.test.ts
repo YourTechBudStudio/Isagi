@@ -52,14 +52,11 @@ test('a process that fails during start leaves no probe and no observation behin
         const ptyProcessId = facts.activePtyProcessId ?? -1;
 
         // The failure event is published by `start` itself; drain the subscriber.
-        const observations = yield* Effect.iterate(
-          new Map([[ptyProcessId, true]]) as ReadonlyMap<number, unknown>,
-          {
-            while: (map) => map.size > 0,
-            body: () =>
-              Effect.yieldNow().pipe(Effect.zipRight(service.readinessFor([ptyProcessId]))),
-          },
-        );
+        let observations: ReadonlyMap<number, unknown> = new Map([[ptyProcessId, true]]);
+        while (observations.size > 0) {
+          yield* Effect.yieldNow;
+          observations = yield* service.readinessFor([ptyProcessId]);
+        }
 
         return {
           observations,

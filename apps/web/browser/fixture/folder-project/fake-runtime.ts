@@ -2,6 +2,7 @@ import type { ReconciliationFinding, WorkspaceSnapshot } from '@isagi/contracts'
 
 import { queryClient } from '../../../src/lib/query/client.js';
 import { workspaceQueryKey } from '../../../src/lib/workspace/query-keys.js';
+import { requestBodyText } from '../test-support/request-body.js';
 import {
   DEFAULT_SCENARIO,
   FIXTURE_CONTROL_PLANE,
@@ -142,7 +143,7 @@ export function installFakeRuntime() {
     }
 
     if (method === 'POST' && path === '/workspace/reconcile') {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { projectId?: number | null };
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as { projectId?: number | null };
       const projectId = body.projectId ?? null;
       const requestGeneration = generation;
       reconcileCalls.push(projectId);

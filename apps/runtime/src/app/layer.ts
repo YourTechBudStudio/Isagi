@@ -272,7 +272,7 @@ const ApiServicesLayer = Layer.mergeAll(
   EditorContextServiceLayer,
   CliAccessLayer,
 );
-const StartupActivationLayer = Layer.scopedDiscard(
+const StartupActivationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* CommandService;
     const stateFile = yield* StateFile;

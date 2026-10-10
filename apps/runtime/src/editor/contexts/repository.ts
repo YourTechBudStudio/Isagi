@@ -149,7 +149,7 @@ export interface EditorContextRepositoryService {
   readonly failInterruptedAttempts: Effect.Effect<number[], DatabaseError>;
 }
 
-export const EditorContextRepository = Context.GenericTag<EditorContextRepositoryService>(
+export const EditorContextRepository = Context.Service<EditorContextRepositoryService>(
   'isagi/EditorContextRepository',
 );
 

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
-import { Effect, Schema } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -27,10 +27,11 @@ import {
   runtimeEventSchema,
   runtimeEventsWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
-  type ApiEndpoint,
+  type AnyApiEndpoint,
   type ApiEndpointOutput,
   type ApiError,
   type RuntimeEvent,
+  type WireSchema,
 } from '@isagi/contracts';
 
 import { startRuntimeServer } from '../http-server.js';
@@ -380,13 +381,7 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
 
 // --- HTTP ----------------------------------------------------------------------------------------
 
-type AnyEndpoint = ApiEndpoint<
-  Schema.Schema.AnyNoContext | undefined,
-  Schema.Schema.AnyNoContext,
-  Schema.Schema.AnyNoContext,
-  Schema.Schema.AnyNoContext | undefined,
-  Schema.Schema.AnyNoContext | undefined
->;
+type AnyEndpoint = AnyApiEndpoint;
 
 interface CallRequest {
   readonly params?: Readonly<Record<string, string | number>>;
@@ -423,7 +418,7 @@ async function callApi<Endpoint extends AnyEndpoint>(
     };
   }
   const errorSchema = apiErrorResponseSchema(
-    Schema.Union(endpoint.errors, apiInfrastructureErrorSchema),
+    Schema.Union([endpoint.errors, apiInfrastructureErrorSchema]),
   );
   const decoded = Schema.decodeUnknownSync(errorSchema)(body);
   return { ok: false, status: response.statusCode, error: decoded.error as ApiError };
@@ -462,18 +457,18 @@ interface RecordingSocket<Message> {
  * server-initiated close (the attach refusal, shutdown) leaves ws's 30 s close timer behind and
  * would make the handle and shutdown assertions measure the test transport instead of the runtime.
  */
-async function openSocket<MessageSchema extends Schema.Schema.AnyNoContext>(
+async function openSocket<MessageSchema extends WireSchema>(
   runtime: SmokeRuntime,
   path: string,
   schema: MessageSchema,
-): Promise<RecordingSocket<Schema.Schema.Type<MessageSchema>>> {
-  type Message = Schema.Schema.Type<MessageSchema>;
+): Promise<RecordingSocket<MessageSchema['Type']>> {
+  type Message = MessageSchema['Type'];
   const url = new URL(`${apiBasePath}${path}`, runtime.url);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   const messages: Message[] = [];
   const decodeFailures: string[] = [];
   let closed = false;
-  const decode = Schema.decodeUnknownEither(schema);
+  const decode = Schema.decodeUnknownResult(schema);
   const socket = new WebSocket(url);
   socket.addEventListener('message', (event) => {
     const text = String(event.data);
@@ -485,7 +480,7 @@ async function openSocket<MessageSchema extends Schema.Schema.AnyNoContext>(
       return;
     }
     const result = decode(parsed);
-    if (result._tag === 'Right') messages.push(result.right);
+    if (Result.isSuccess(result)) messages.push(result.success);
     else decodeFailures.push(text);
   });
   socket.addEventListener('close', () => {
@@ -513,7 +508,7 @@ async function openSocket<MessageSchema extends Schema.Schema.AnyNoContext>(
 }
 
 interface TerminalAttach {
-  readonly socket: RecordingSocket<Schema.Schema.Type<typeof ptyWebSocketOutputMessageSchema>>;
+  readonly socket: RecordingSocket<typeof ptyWebSocketOutputMessageSchema.Type>;
   readonly output: () => string;
 }
 

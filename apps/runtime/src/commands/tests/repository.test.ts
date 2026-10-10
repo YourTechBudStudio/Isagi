@@ -455,13 +455,13 @@ test('a failed state write rolls the completed run back with it', async () => {
           runStatus: 'stopped',
           stateStatus: 'suspended',
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { finalized, rows: yield* readRows(seeded.worktreeId) };
     }),
     { fault: 'states' },
   );
 
-  assert.equal(result.finalized._tag, 'Left');
+  assert.equal(result.finalized._tag, 'Failure');
   // Nothing partial: the run is not `stopped` under a state that never moved,
   // so a later echo still finds a `running` run to finalize honestly.
   assert.equal(result.rows.run?.status, 'running');
@@ -487,13 +487,13 @@ test('a failed run write leaves the state alone', async () => {
           runStatus: 'failed',
           stateStatus: 'failed',
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { finalized, rows: yield* readRows(seeded.worktreeId) };
     }),
     { fault: 'runs' },
   );
 
-  assert.equal(result.finalized._tag, 'Left');
+  assert.equal(result.finalized._tag, 'Failure');
   assert.equal(result.rows.run?.status, 'running');
   assert.equal(result.rows.state?.status, 'running');
   assert.equal(result.rows.state?.activePtyProcessId, null);
@@ -568,14 +568,14 @@ test('a failed run write rolls the re-adopted state back with it', async () => {
           ptyProcessId: seeded.ptyProcessId,
           diagnostic: { reason: 'process_control_failed', detail: null },
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const rows = yield* readRows(seeded.worktreeId);
       return { outcome, rows };
     }),
     { fault: 'runs' },
   );
 
-  assert.equal(result.outcome._tag, 'Left');
+  assert.equal(result.outcome._tag, 'Failure');
   // Ownership is never half-repaired: the state write went first and was undone.
   assert.equal(result.rows.state?.status, 'stopped');
   assert.equal(result.rows.state?.activePtyProcessId, null);

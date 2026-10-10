@@ -1,4 +1,4 @@
-import { Data, Effect, Either } from 'effect';
+import { Data, Effect, Result } from 'effect';
 
 import type { PtyService as PtyServiceShape } from '../../pty-processes/service.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../index.js';
@@ -48,14 +48,14 @@ export function terminatePtyProcessIds(
     const results = yield* Effect.all(
       input.ptyProcessIds.map((ptyProcessId) =>
         pty.terminate({ ptyProcessId, gracefulTimeoutMs: input.gracefulTimeoutMs }).pipe(
-          Effect.either,
+          Effect.result,
           Effect.map((result) => ({ ptyProcessId, result })),
         ),
       ),
       { concurrency: 'unbounded' },
     );
     const failures = results.flatMap(({ ptyProcessId, result }) =>
-      Either.isLeft(result) ? [{ ptyProcessId, cause: result.left }] : [],
+      Result.isFailure(result) ? [{ ptyProcessId, cause: result.failure }] : [],
     );
     if (failures.length === 0) return;
 

@@ -29,7 +29,7 @@ export interface StateFileService {
   }) => Effect.Effect<WorkspaceState, StateFileError>;
 }
 
-export const StateFile = Context.GenericTag<StateFileService>('isagi/StateFile');
+export const StateFile = Context.Service<StateFileService>('isagi/StateFile');
 
 const defaultState: WorkspaceState = {
   version: 1,

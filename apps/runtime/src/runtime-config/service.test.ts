@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
@@ -78,11 +78,11 @@ test('runtime config rejects unsupported PTY backends', async () => {
   try {
     writeFileSync(join(root, 'config.yaml'), 'pty:\n  backend: imaginary\n', 'utf8');
 
-    const result = await Effect.runPromise(readConfig(root).pipe(Effect.either));
+    const result = await Effect.runPromise(readConfig(root).pipe(Effect.result));
 
-    assert.equal(Either.isLeft(result), true);
-    if (Either.isLeft(result)) {
-      assert.equal(result.left instanceof RuntimeConfigError, true);
+    assert.equal(Result.isFailure(result), true);
+    if (Result.isFailure(result)) {
+      assert.equal(result.failure instanceof RuntimeConfigError, true);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -98,10 +98,10 @@ test('runtime config rejects malformed workflow settings with RuntimeConfigError
       'utf8',
     );
 
-    const result = await Effect.runPromise(readConfig(root).pipe(Effect.either));
+    const result = await Effect.runPromise(readConfig(root).pipe(Effect.result));
 
-    assert.ok(Either.isLeft(result));
-    assert.ok(result.left instanceof RuntimeConfigError);
+    assert.ok(Result.isFailure(result));
+    assert.ok(result.failure instanceof RuntimeConfigError);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -112,10 +112,10 @@ test('runtime config rejects malformed terminal settings at startup', async () =
   try {
     writeFileSync(join(root, 'config.yaml'), 'terminal:\n  scrollbackLines: 1.5\n', 'utf8');
 
-    const result = await Effect.runPromise(readFullConfig(root).pipe(Effect.either));
+    const result = await Effect.runPromise(readFullConfig(root).pipe(Effect.result));
 
-    assert.ok(Either.isLeft(result));
-    assert.ok(result.left instanceof RuntimeConfigError);
+    assert.ok(Result.isFailure(result));
+    assert.ok(result.failure instanceof RuntimeConfigError);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

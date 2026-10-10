@@ -165,3 +165,27 @@ test('worktree hooks preserve loose parse behavior for hook paths and timeout gr
     { type: 'command', run: 'pnpm install', cwd: '/tmp', timeout: 'banana', env: {} },
   ]);
 });
+
+test('worktree hook decode errors name the field, the expectation and the offending value', () => {
+  const failureFor = (hook: unknown) => {
+    try {
+      normalizeWorktreeHooksConfig({ worktrees: { hooks: { postCreate: [hook] } } });
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return assert.fail('expected the hook config to be rejected');
+  };
+
+  assert.equal(
+    failureFor(null),
+    'worktrees.hooks.postCreate[0] Expected a hook object with type copy, symlink, or command, got null',
+  );
+  assert.equal(
+    failureFor({ type: 'command', run: 'pnpm install', env: { CI: 1 } }),
+    'worktrees.hooks.postCreate[0].env.CI Expected string, got 1',
+  );
+  assert.equal(
+    failureFor({ type: 'symlink', src: 'shared' }),
+    'worktrees.hooks.postCreate[0].dest is required.',
+  );
+});

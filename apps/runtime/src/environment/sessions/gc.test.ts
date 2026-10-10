@@ -36,6 +36,7 @@ import {
   AgentSessionRepository,
   AgentSessionRepositoryLive,
   type AgentSessionArtifactsService,
+  type AgentSessionRepositoryService,
 } from '../agent-sessions/index.js';
 import {
   TerminalSessionRepository,
@@ -160,7 +161,7 @@ function runWithSessionGc<E>(
   dataRoot: string,
   body: (input: {
     readonly tick: Effect.Effect<void>;
-    readonly agents: Effect.Effect.Success<typeof AgentSessionRepository>;
+    readonly agents: AgentSessionRepositoryService;
     readonly artifacts: AgentSessionArtifactsService;
   }) => Effect.Effect<void, E, RuntimeDatabaseService>,
   wrapArtifacts: (artifacts: AgentSessionArtifactsService) => AgentSessionArtifactsService = (

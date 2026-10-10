@@ -212,7 +212,7 @@ function persistExit(
   exit: PtyExit,
 ) {
   return persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         console.error(`[runtime] Failed to persist PTY exit for session ${ptyProcessId}`, error);
         scheduleExitRetry(repository, eventBus, retry, activeAttachments, ptyProcessId, exit);

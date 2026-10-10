@@ -44,7 +44,7 @@ interface NodePtyAttachment {
   }) => void;
 }
 
-export const NodePtyBackend = Context.GenericTag<PtyBackendShape>('isagi/NodePtyBackend');
+export const NodePtyBackend = Context.Service<PtyBackendShape>('isagi/NodePtyBackend');
 
 export const NodePtyBackendLive = Layer.effect(
   NodePtyBackend,

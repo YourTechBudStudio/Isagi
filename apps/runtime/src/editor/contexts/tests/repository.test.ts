@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Cause, Effect, Exit, Layer } from 'effect';
+import { Cause, Effect, Exit, Layer, Result } from 'effect';
 
 import { DatabaseError } from '../../../platform/persistence/index.js';
 import {
@@ -17,7 +17,7 @@ import {
 import { EditorContextRepository, EditorContextTransitionRejected } from '../index.js';
 import { EditorContextRowInvariantViolation } from '../row-mapper.js';
 
-type TestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
+type TestServices = Layer.Success<ReturnType<typeof testLayer>>;
 
 function inDatabase<A, E>(effect: Effect.Effect<A, E, TestServices>) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-contexts-'));
@@ -73,7 +73,7 @@ test('one worktree can hold only one editor context', async () => {
 
   assert.equal(Exit.isFailure(exit), true);
   if (Exit.isFailure(exit)) {
-    const failure = Cause.failureOption(exit.cause);
+    const failure = Cause.findErrorOption(exit.cause);
     assert.equal(failure._tag, 'Some');
     assert.ok(failure.value instanceof DatabaseError);
   }
@@ -353,10 +353,11 @@ test('boot converts every interrupted attempt and leaves the other states alone'
 function assertRejectedTransition(exit: Exit.Exit<unknown, unknown>, precondition: string) {
   assert.equal(Exit.isFailure(exit), true);
   if (!Exit.isFailure(exit)) return;
-  const defect = Cause.dieOption(exit.cause);
-  assert.equal(defect._tag, 'Some');
-  assert.ok(defect.value instanceof EditorContextTransitionRejected);
-  assert.equal(defect.value.precondition, precondition);
+  const defect = Cause.findDefect(exit.cause);
+  assert.equal(Result.isSuccess(defect), true);
+  if (!Result.isSuccess(defect)) return;
+  assert.ok(defect.success instanceof EditorContextTransitionRejected);
+  assert.equal(defect.success.precondition, precondition);
 }
 
 test('an attempt cannot be opened on a context that still owns an incarnation', async () => {
@@ -504,12 +505,12 @@ test('an impossible persisted row fails as a defect, not as a database error', a
     // The distinction that matters: had the mapper run inside
     // `RuntimeDatabase.use`, this would arrive as a typed `DatabaseError` and be
     // reported to the user as an ordinary database fault.
-    assert.equal(Cause.failureOption(exit.cause)._tag, 'None');
-    const defect = Cause.dieOption(exit.cause);
-    assert.equal(defect._tag, 'Some');
-    if (defect._tag === 'Some') {
-      assert.ok(defect.value instanceof EditorContextRowInvariantViolation);
-      assert.match(defect.value.message, /in_progress beside a pointer/);
+    assert.equal(Cause.findErrorOption(exit.cause)._tag, 'None');
+    const defect = Cause.findDefect(exit.cause);
+    assert.equal(Result.isSuccess(defect), true);
+    if (Result.isSuccess(defect)) {
+      assert.ok(defect.success instanceof EditorContextRowInvariantViolation);
+      assert.match(defect.success.message, /in_progress beside a pointer/);
     }
   }
 });

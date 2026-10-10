@@ -133,7 +133,7 @@ function readOpenCodeRows(input: {
     },
     catch: (error) => error,
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         if (!isMissingDatabaseError(error)) {
           console.warn('[runtime] OpenCode conversation database could not be read', {

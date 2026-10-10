@@ -221,7 +221,7 @@ export class SurfaceRepositoryInitialSessionRejected extends Error {
 }
 
 export const SurfaceRepository =
-  Context.GenericTag<SurfaceRepositoryService>('isagi/SurfaceRepository');
+  Context.Service<SurfaceRepositoryService>('isagi/SurfaceRepository');
 
 export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,

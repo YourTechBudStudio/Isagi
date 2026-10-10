@@ -177,7 +177,7 @@ export function launchEditorIncarnation(input: {
           }),
           (acquired) => acquired.abandon,
         ).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             fail('launch_allocation_failed', describeOperationalCause(error)),
           ),
         );
@@ -256,11 +256,13 @@ function commitInterruptedAttempt(deps: EditorLaunchCapabilities, editorContextI
         Effect.logWarning(
           `[runtime] editor launch interruption could not be recorded editorContextId=${editorContextId} cause=${describeOperationalCause(error)}`,
         ).pipe(
-          Effect.zipRight(
+          Effect.andThen(
             // Never the error object itself: a later cause renderer could reach
             // its foreign cause.
-            Effect.dieMessage(
-              `Editor context ${editorContextId} could not record an interrupted launch attempt.`,
+            Effect.die(
+              new Error(
+                `Editor context ${editorContextId} could not record an interrupted launch attempt.`,
+              ),
             ),
           ),
         ),

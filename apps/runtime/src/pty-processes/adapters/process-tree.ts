@@ -215,7 +215,7 @@ function readPosixProcessTable() {
     },
     catch: (cause) => cause,
   }).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.sync(() => {
         console.warn(
           '[runtime] Could not read the process table; PTY descendants will not be swept',

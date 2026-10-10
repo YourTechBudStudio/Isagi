@@ -39,7 +39,7 @@ export class TerminalSessionError extends Error {
   }
 }
 
-export const TerminalSessionService = Context.GenericTag<TerminalSessionService>(
+export const TerminalSessionService = Context.Service<TerminalSessionService>(
   'isagi/TerminalSessionService',
 );
 

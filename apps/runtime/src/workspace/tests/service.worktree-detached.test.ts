@@ -159,7 +159,7 @@ function createAgainstFixture(
           commit: request.commit ?? fixture.head(),
           path: request.path,
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { projectId, result, worktrees: yield* repository.listWorktrees };
     }),
   );
@@ -176,8 +176,8 @@ describe('creating a detached worktree', () => {
       path: destination,
     }));
 
-    assert.equal(result._tag, 'Right');
-    const created = result.right;
+    assert.equal(result._tag, 'Success');
+    const created = result.success;
     const canonical = join(
       realpathSync.native(destinations),
       destination.slice(destinations.length + 1),
@@ -207,8 +207,8 @@ describe('creating a detached worktree', () => {
       path: destination,
     }));
 
-    assert.equal(result._tag, 'Right');
-    assert.equal(result.right.path, realpathSync.native(destination));
+    assert.equal(result._tag, 'Success');
+    assert.equal(result.success.path, realpathSync.native(destination));
   });
 
   test('the macOS /tmp spelling is registered as Git reports it', async (t) => {
@@ -221,10 +221,10 @@ describe('creating a detached worktree', () => {
       const { result, worktrees } = await createAgainstFixture('detached-tmp', rec, () => ({
         path: destination,
       }));
-      assert.equal(result._tag, 'Right');
+      assert.equal(result._tag, 'Success');
       const expected = join(realpathSync.native(tmpdir()), destination.slice(tmpdir().length + 1));
-      assert.equal(result.right.path, expected);
-      assert.equal(worktrees.find((row) => row.id === result.right.worktreeId)?.path, expected);
+      assert.equal(result.success.path, expected);
+      assert.equal(worktrees.find((row) => row.id === result.success.worktreeId)?.path, expected);
     } finally {
       rmSync(destination, { recursive: true, force: true });
     }
@@ -279,8 +279,8 @@ describe('a refused destination is refused before any Git mutation and writes no
       const { result } = await createAgainstFixture(`detached-${entry.issue}`, rec, () => ({
         path,
       }));
-      assert.equal(result._tag, 'Left');
-      const error = expectDetached(result.left);
+      assert.equal(result._tag, 'Failure');
+      const error = expectDetached(result.failure);
       assert.equal(error.reason, 'destination_rejected');
       assert.equal(error.destinationIssue, entry.issue);
       assertNothingWritten(rec.state);
@@ -300,7 +300,7 @@ describe('a refused destination is refused before any Git mutation and writes no
       const { result } = await createAgainstFixture('detached-inaccessible', rec, () => ({
         path: join(locked, 'inside'),
       }));
-      const error = expectDetached(result._tag === 'Left' ? result.left : null);
+      const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
       assert.equal(error.destinationIssue, 'inaccessible');
       assertNothingWritten(rec.state);
     } finally {
@@ -317,7 +317,7 @@ describe('a destination inside a checkout is inside_checkout', () => {
       rec,
       () => ({ path: join(fixture.rootPath, 'nested', 'export') }),
     );
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.destinationIssue, 'inside_checkout');
     const root = worktrees.find(
       (row) => row.projectId === projectId && row.path === realpathSync.native(fixture.rootPath),
@@ -334,7 +334,7 @@ describe('a destination inside a checkout is inside_checkout', () => {
     const { result, worktrees } = await createAgainstFixture('detached-in-linked', rec, () => ({
       path: join(linked, 'export'),
     }));
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.destinationIssue, 'inside_checkout');
     assert.equal(error.containingWorktreeId, worktrees.find((row) => row.path === linked)?.id);
     assertNothingWritten(rec.state);
@@ -348,7 +348,7 @@ describe('a destination inside a checkout is inside_checkout', () => {
       fixture.git(['worktree', 'add', '--detach', linked, 'HEAD']);
       return { path: join(linked, 'export') };
     });
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.destinationIssue, 'inside_checkout');
     assert.equal(error.containingWorktreeId, undefined);
     assertNothingWritten(rec.state);
@@ -362,7 +362,7 @@ describe('a destination inside a checkout is inside_checkout', () => {
       rmSync(linked, { recursive: true, force: true });
       return { path: linked };
     });
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.destinationIssue, 'inside_checkout');
     assertNothingWritten(rec.state);
   });
@@ -379,7 +379,7 @@ describe('a destination inside a checkout is inside_checkout', () => {
     const { result } = await createAgainstFixture('detached-case', rec, () => ({
       path: join(typed, 'export'),
     }));
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.destinationIssue, 'inside_checkout');
     assertNothingWritten(rec.state);
   });
@@ -510,7 +510,7 @@ describe('an unusable repository is project_unavailable and leaves its row alone
     const { result } = await createAgainstFixture('detached-spawn', rec, () => ({
       path: freshDestination(),
     }));
-    assert.ok(result._tag === 'Left' && result.left instanceof GitCommandError);
+    assert.ok(result._tag === 'Failure' && result.failure instanceof GitCommandError);
     assertNothingWritten(rec.state);
   });
 });
@@ -527,7 +527,7 @@ describe('the commit probe', () => {
           path: freshDestination(),
         }),
       );
-      const error = expectDetached(result._tag === 'Left' ? result.left : null);
+      const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
       assert.equal(error.reason, 'commit_not_found');
       assertNothingWritten(rec.state);
     });
@@ -551,7 +551,7 @@ describe('the commit probe', () => {
     const { result } = await createAgainstFixture('detached-probe-128', rec, () => ({
       path: freshDestination(),
     }));
-    assert.ok(result._tag === 'Left' && result.left instanceof GitCommandError);
+    assert.ok(result._tag === 'Failure' && result.failure instanceof GitCommandError);
     assertNothingWritten(rec.state);
   });
 
@@ -608,7 +608,7 @@ describe('a failure after the checks is reported with what is on disk', () => {
     const { result } = await createAgainstFixture('detached-add-empty', rec, () => ({
       path: freshDestination('add-failed'),
     }));
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.reason, 'git_add_failed');
     assert.equal(error.created, false);
     assert.deepEqual(rec.state.writes, []);
@@ -619,7 +619,7 @@ describe('a failure after the checks is reported with what is on disk', () => {
       git: (args, inner) =>
         isWorktreeAdd(args)
           ? inner.run(args).pipe(
-              Effect.zipRight(
+              Effect.andThen(
                 Effect.fail(
                   new GitCommandError({
                     args,
@@ -636,7 +636,7 @@ describe('a failure after the checks is reported with what is on disk', () => {
     const { result } = await createAgainstFixture('detached-add-created', rec, () => ({
       path: freshDestination('add-created'),
     }));
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.reason, 'git_add_failed');
     assert.equal(error.created, true);
   });
@@ -650,7 +650,7 @@ describe('a failure after the checks is reported with what is on disk', () => {
     const { result } = await createAgainstFixture('detached-register', rec, () => ({
       path: freshDestination('register-failed'),
     }));
-    const error = expectDetached(result._tag === 'Left' ? result.left : null);
+    const error = expectDetached(result._tag === 'Failure' ? result.failure : null);
     assert.equal(error.reason, 'registration_failed');
     assert.equal(error.created, true);
   });

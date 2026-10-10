@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either, Layer } from 'effect';
+import { Effect, Layer, Result } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
 import { InternalRuntimeEventBusLive } from '../../platform/events/index.js';
@@ -247,14 +247,14 @@ test('PTY process service rejects concurrent websocket attachments for the same 
                 mode: 'interactive',
                 send: () => {},
               })
-              .pipe(Effect.either),
+              .pipe(Effect.result),
             pty
               .attach({
                 ptyProcessId: process.ptyProcessId,
                 mode: 'interactive',
                 send: () => {},
               })
-              .pipe(Effect.either),
+              .pipe(Effect.result),
           ],
           { concurrency: 'unbounded' },
         );
@@ -269,8 +269,8 @@ test('PTY process service rejects concurrent websocket attachments for the same 
     );
 
     assert.equal(attachCalls, 1);
-    const failures = results.filter(Either.isLeft).map((result) => result.left);
-    const successes = results.filter(Either.isRight);
+    const failures = results.filter(Result.isFailure).map((result) => result.failure);
+    const successes = results.filter(Result.isSuccess);
     assert.equal(successes.length, 1);
     assert.equal(failures.length, 1);
     assert.ok(failures[0] instanceof PtyServiceError);
@@ -298,7 +298,7 @@ test('PTY read-only attachments expose no writable attachment id', async () => {
             attachmentId: attachment.attachmentId,
             data: 'nope',
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         return { attachment, writeResult };
       }).pipe(
         Effect.provide(
@@ -311,11 +311,11 @@ test('PTY read-only attachments expose no writable attachment id', async () => {
     );
 
     assert.equal(result.attachment.attachmentId, null);
-    assert.equal(Either.isLeft(result.writeResult), true);
-    if (Either.isLeft(result.writeResult)) {
-      assert.equal(result.writeResult.left instanceof PtyServiceError, true);
-      if (result.writeResult.left instanceof PtyServiceError) {
-        assert.equal(result.writeResult.left.code, 'session_not_running');
+    assert.equal(Result.isFailure(result.writeResult), true);
+    if (Result.isFailure(result.writeResult)) {
+      assert.equal(result.writeResult.failure instanceof PtyServiceError, true);
+      if (result.writeResult.failure instanceof PtyServiceError) {
+        assert.equal(result.writeResult.failure.code, 'session_not_running');
       }
     }
   } finally {
@@ -396,7 +396,7 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
         pid: 1234,
       }),
     attach: () =>
-      Effect.async((resume) => {
+      Effect.callback((resume) => {
         onAttach();
         const timer = setTimeout(() => {
           resume(

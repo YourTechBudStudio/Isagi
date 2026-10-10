@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Deferred, Effect, Either, Fiber } from 'effect';
+import { Deferred, Effect, Fiber, Result } from 'effect';
 
 import { ptyProcesses, surfacePanes, terminalSessions } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
@@ -106,21 +106,21 @@ test('starting a pane is refused on a surface that already has panes, and on a m
         const start = { newPane: { kind: 'terminal_session' } } as const;
         return {
           surface,
-          occupied: yield* Effect.either(
+          occupied: yield* Effect.result(
             surfaces.startPane({ surfaceId: surface.surfaceId, start }),
           ),
-          missing: yield* Effect.either(surfaces.startPane({ surfaceId: 9_999, start })),
+          missing: yield* Effect.result(surfaces.startPane({ surfaceId: 9_999, start })),
           detail: yield* surfaces.getSurfaceDetail(surface.surfaceId),
         };
       }).pipe(Effect.provide(withTerminals(dataRoot))),
     );
 
-    assert.ok(Either.isLeft(output.occupied));
-    assert.ok(output.occupied.left instanceof SurfaceError);
-    assert.equal(output.occupied.left.code, 'surface_not_empty');
-    assert.ok(Either.isLeft(output.missing));
-    assert.ok(output.missing.left instanceof SurfaceError);
-    assert.equal(output.missing.left.code, 'surface_not_found');
+    assert.ok(Result.isFailure(output.occupied));
+    assert.ok(output.occupied.failure instanceof SurfaceError);
+    assert.equal(output.occupied.failure.code, 'surface_not_empty');
+    assert.ok(Result.isFailure(output.missing));
+    assert.ok(output.missing.failure instanceof SurfaceError);
+    assert.equal(output.missing.failure.code, 'surface_not_found');
     assert.equal(output.detail.panes.length, 1);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -200,16 +200,16 @@ test('opening an editor into a surface that has panes is refused and leaves it u
           worktreeId,
           initialPane: { kind: 'terminal_session' },
         });
-        const refused = yield* Effect.either(
+        const refused = yield* Effect.result(
           surfaces.openEditor({ worktreeId, intoSurfaceId: surface.surfaceId }),
         );
         return { refused, detail: yield* surfaces.getSurfaceDetail(surface.surfaceId) };
       }).pipe(Effect.provide(withTerminals(dataRoot))),
     );
 
-    assert.ok(Either.isLeft(output.refused));
-    assert.ok(output.refused.left instanceof SurfaceError);
-    assert.equal(output.refused.left.code, 'surface_not_empty');
+    assert.ok(Result.isFailure(output.refused));
+    assert.ok(output.refused.failure instanceof SurfaceError);
+    assert.equal(output.refused.failure.code, 'surface_not_empty');
     assert.equal(output.detail.panes.length, 1);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -224,7 +224,7 @@ test('a first pane whose session fails to start is removed, leaving the surface 
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
         const created = yield* surfaces.createEmptySurface({ worktreeId, titleBase: 'Review' });
-        const started = yield* Effect.either(
+        const started = yield* Effect.result(
           surfaces.startPane({
             surfaceId: created.surfaceId,
             start: { newPane: { kind: 'terminal_session' } },
@@ -242,7 +242,7 @@ test('a first pane whose session fails to start is removed, leaving the surface 
       ),
     );
 
-    assert.ok(Either.isLeft(output.started));
+    assert.ok(Result.isFailure(output.started));
     assert.deepEqual(output.detail.panes, []);
     assert.equal(output.detail.layout, null);
   } finally {
@@ -368,7 +368,7 @@ test('closing a surface while its first pane starts up leaves the new session un
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createEmptySurface({ worktreeId, titleBase: 'Review' });
-        const starting = yield* Effect.fork(
+        const starting = yield* Effect.forkChild(
           surfaces.startPane({
             surfaceId: surface.surfaceId,
             start: { newPane: { kind: 'terminal_session' } },
@@ -377,7 +377,7 @@ test('closing a surface while its first pane starts up leaves the new session un
         const sessionId = yield* Deferred.await(created);
         const closed = yield* surfaces.deleteSurface(surface.surfaceId);
         yield* Deferred.succeed(resume, undefined);
-        const started = yield* Effect.either(Fiber.join(starting));
+        const started = yield* Effect.result(Fiber.join(starting));
         const database = yield* RuntimeDatabase;
         const rows = yield* database.use('test_close_during_start_rows', (db) => ({
           sessions: db.select().from(terminalSessions).all(),
@@ -396,7 +396,7 @@ test('closing a surface while its first pane starts up leaves the new session un
                   .pipe(
                     Effect.tap((result) =>
                       Deferred.succeed(created, result.terminalSessionId).pipe(
-                        Effect.zipRight(Deferred.await(resume)),
+                        Effect.andThen(Deferred.await(resume)),
                       ),
                     ),
                   ),
@@ -407,9 +407,9 @@ test('closing a surface while its first pane starts up leaves the new session un
     );
 
     assert.equal(output.closed.deletedSurfaceId, output.surfaceId);
-    assert.ok(Either.isLeft(output.started));
-    assert.ok(output.started.left instanceof SurfaceError);
-    assert.equal(output.started.left.code, 'pane_not_found');
+    assert.ok(Result.isFailure(output.started));
+    assert.ok(output.started.failure instanceof SurfaceError);
+    assert.equal(output.started.failure.code, 'pane_not_found');
     assert.ok(output.sessionId > 0);
     assert.deepEqual(
       output.rows.sessions.map((session) => session.id),

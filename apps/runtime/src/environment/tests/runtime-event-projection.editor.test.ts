@@ -61,10 +61,7 @@ function harness(input: {
 async function runProjection(placement: Effect.Effect<Placement | null, DatabaseError>) {
   const published: RuntimeEvent[] = [];
   const logged: string[] = [];
-  const capture = Logger.replace(
-    Logger.defaultLogger,
-    Logger.make(({ message }) => void logged.push(String(message))),
-  );
+  const capture = Logger.layer([Logger.make(({ message }) => void logged.push(String(message)))]);
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

@@ -130,7 +130,7 @@ export type ContentGcResult =
     }
   | { readonly status: 'swept'; readonly stats: OrphanSweepStats };
 
-export const WorkflowContentStore = Context.GenericTag<WorkflowContentStoreService>(
+export const WorkflowContentStore = Context.Service<WorkflowContentStoreService>(
   'isagi/WorkflowContentStore',
 );
 
@@ -138,7 +138,7 @@ export const WorkflowContentStore = Context.GenericTag<WorkflowContentStoreServi
  * The store and its hourly collector. Bind this layer once (`runtime.layer.ts`) so exactly one
  * collector runs over the root. There is no startup pass: the first tick is one interval in.
  */
-export const WorkflowContentStoreLive = Layer.scoped(
+export const WorkflowContentStoreLive = Layer.effect(
   WorkflowContentStore,
   Effect.gen(function* () {
     const directory = yield* DataDirectory;
@@ -159,9 +159,9 @@ export const WorkflowContentStoreLive = Layer.scoped(
         }),
       ),
     ).pipe(
-      // catchAllCause, not catchAll: a rejected promise (a failed mark read included) is a defect
+      // catchCause, not catch: a rejected promise (a failed mark read included) is a defect
       // here, and it must be logged and leave the next tick running.
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.sync(() =>
           console.warn('[runtime] Workflow content GC failed', Cause.pretty(cause)),
         ),

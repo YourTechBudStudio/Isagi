@@ -546,7 +546,7 @@ function assertRegularFile(path, label) {
 }
 
 function runCommand(command, args) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const child = spawn(command, args, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let settled = false;
     let stdout = '';

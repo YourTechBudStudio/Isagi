@@ -36,7 +36,7 @@ export interface CliAccessService {
   ) => Effect.Effect<Readonly<Record<string, string>>>;
 }
 
-export const CliAccess = Context.GenericTag<CliAccessService>('isagi/CliAccess');
+export const CliAccess = Context.Service<CliAccessService>('isagi/CliAccess');
 
 /**
  * Writes the shim for this runtime version and returns the service over it.

@@ -82,7 +82,7 @@ function causeChainMessages(cause: unknown): string[] {
  * rejected" without any rejection having been modelled.
  */
 function expectDatabaseError<A, E>(exit: Exit.Exit<A, E>): DatabaseError {
-  const failure = Cause.failureOption(Exit.isFailure(exit) ? exit.cause : Cause.empty);
+  const failure = Cause.findErrorOption(Exit.isFailure(exit) ? exit.cause : Cause.empty);
   assert.equal(failure._tag, 'Some');
   assert.ok(failure._tag === 'Some' && failure.value instanceof DatabaseError);
   return (failure as { readonly value: DatabaseError }).value;

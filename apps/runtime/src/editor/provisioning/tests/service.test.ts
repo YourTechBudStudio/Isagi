@@ -4,17 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import {
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Schedule,
-  TestClock,
-  TestContext,
-} from 'effect';
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schedule } from 'effect';
+import { TestClock } from 'effect/testing';
 
 import type { EditorProvisioningState } from '@isagi/contracts';
 
@@ -54,7 +45,7 @@ function withService<A, E>(
     readonly capability: EditorCapability;
     readonly directory: DataDirectoryService;
     readonly io: EditorInstallIoService;
-    readonly deadline?: Duration.DurationInput;
+    readonly deadline?: Duration.Input;
   },
   use: (service: EditorProvisioningService) => Effect.Effect<A, E>,
 ) {
@@ -93,7 +84,7 @@ test('an undeclared runtime reports not_applicable, performs no IO, and writes n
           yield* service.start;
           const afterStart = yield* service.state;
           const retried = yield* service.retry;
-          const guard = yield* Effect.either(service.requireReady);
+          const guard = yield* Effect.result(service.requireReady);
           return { afterStart, retried, guard };
         }),
       ),
@@ -103,9 +94,9 @@ test('an undeclared runtime reports not_applicable, performs no IO, and writes n
     // Retry is a report, not an operation that needs an installation, so
     // `not_applicable` is its complete successful answer.
     assert.deepEqual(result.retried, { status: 'not_applicable' });
-    assert.ok(result.guard._tag === 'Left');
+    assert.ok(result.guard._tag === 'Failure');
     assert.equal(
-      result.guard._tag === 'Left' ? result.guard.left.reason : null,
+      result.guard._tag === 'Failure' ? result.guard.failure.reason : null,
       'editor_unsupported_runtime',
     );
 
@@ -174,20 +165,20 @@ test('a ready service hands out the resolved installation; every other state ref
           Effect.gen(function* () {
             // Before any attempt has run the state is `checking`, which is not
             // ready and must refuse.
-            const early = yield* Effect.either(service.requireReady);
+            const early = yield* Effect.result(service.requireReady);
             yield* service.retry;
-            const ready = yield* Effect.either(service.requireReady);
+            const ready = yield* Effect.result(service.requireReady);
             return { early, ready };
           }),
       ),
     );
 
-    assert.ok(resolved.early._tag === 'Left');
+    assert.ok(resolved.early._tag === 'Failure');
     assert.equal(
-      resolved.early._tag === 'Left' ? resolved.early.left.reason : null,
+      resolved.early._tag === 'Failure' ? resolved.early.failure.reason : null,
       'editor_unavailable',
     );
-    assert.ok(resolved.ready._tag === 'Right');
+    assert.ok(resolved.ready._tag === 'Success');
   } finally {
     roots.cleanup();
   }
@@ -209,10 +200,10 @@ test('a failed attempt is terminal, is never retried on a timer, and refuses req
             // rather than an absence of evidence.
             yield* TestClock.adjust(Duration.hours(1));
             const settled = yield* service.state;
-            const guard = yield* Effect.either(service.requireReady);
+            const guard = yield* Effect.result(service.requireReady);
             return { settled, guard, downloads: recorder.calls.filter((c) => c === 'downloadTo') };
           }),
-      ).pipe(Effect.provide(TestContext.TestContext)),
+      ).pipe(Effect.provide(TestClock.layer())),
     );
 
     assert.equal(result.settled.status, 'failed');
@@ -222,11 +213,11 @@ test('a failed attempt is terminal, is never retried on a timer, and refuses req
     );
     assert.equal(result.downloads.length, 1);
     assert.equal(
-      result.guard._tag === 'Left' ? result.guard.left.reason : null,
+      result.guard._tag === 'Failure' ? result.guard.failure.reason : null,
       'editor_unavailable',
     );
     // The refusal carries the settled diagnostic, so a caller can say why.
-    assert.ok(result.guard._tag === 'Left' && result.guard.left.diagnostic?.includes('500'));
+    assert.ok(result.guard._tag === 'Failure' && result.guard.failure.diagnostic?.includes('500'));
   } finally {
     roots.cleanup();
   }
@@ -274,9 +265,9 @@ test('a retry arriving while one is running is refused rather than queued', asyn
         const io: EditorInstallIoService = {
           ...base.io,
           downloadTo: (input) =>
-            Effect.zipRight(
+            Effect.andThen(
               Deferred.succeed(reached, undefined),
-              Effect.zipRight(Deferred.await(release), base.io.downloadTo(input)),
+              Effect.andThen(Deferred.await(release), base.io.downloadTo(input)),
             ),
         };
 
@@ -284,11 +275,11 @@ test('a retry arriving while one is running is refused rather than queued', asyn
           { capability: 'code_server', directory: roots.directory, io },
           (service) =>
             Effect.gen(function* () {
-              const first = yield* Effect.fork(service.retry);
+              const first = yield* Effect.forkChild(service.retry);
               yield* Deferred.await(reached);
               // The second press must not stack another 200 MB download behind
               // the first.
-              const second = yield* Effect.either(service.retry);
+              const second = yield* Effect.result(service.retry);
               yield* Deferred.succeed(release, undefined);
               const settled = yield* Fiber.join(first);
               return { second, settled, downloads: base.calls.filter((c) => c === 'downloadTo') };
@@ -297,9 +288,9 @@ test('a retry arriving while one is running is refused rather than queued', asyn
       }),
     );
 
-    assert.ok(outcome.second._tag === 'Left');
+    assert.ok(outcome.second._tag === 'Failure');
     assert.ok(
-      outcome.second._tag === 'Left' && outcome.second.left instanceof EditorProvisioningBusy,
+      outcome.second._tag === 'Failure' && outcome.second.failure instanceof EditorProvisioningBusy,
     );
     assert.equal(outcome.settled.status, 'ready');
     assert.equal(outcome.downloads.length, 1);
@@ -348,9 +339,9 @@ test('start returns while its attempt is still running', async () => {
         const io: EditorInstallIoService = {
           ...base.io,
           downloadTo: (input) =>
-            Effect.zipRight(
+            Effect.andThen(
               Deferred.succeed(reached, undefined),
-              Effect.zipRight(Deferred.await(release), base.io.downloadTo(input)),
+              Effect.andThen(Deferred.await(release), base.io.downloadTo(input)),
             ),
         };
 
@@ -395,7 +386,7 @@ test('an attempt that outruns its deadline settles as a timeout and leaves no st
           ...base.io,
           // Never completes: the deadline is the only thing that can end this.
           downloadTo: () =>
-            Effect.zipRight(
+            Effect.andThen(
               Deferred.succeed(reached, undefined),
               Effect.never as Effect.Effect<{ readonly sha256: string }, never>,
             ),
@@ -410,14 +401,14 @@ test('an attempt that outruns its deadline settles as a timeout and leaves no st
           },
           (service) =>
             Effect.gen(function* () {
-              const fiber = yield* Effect.fork(service.retry);
+              const fiber = yield* Effect.forkChild(service.retry);
               yield* Deferred.await(reached);
               yield* TestClock.adjust(Duration.minutes(11));
               const exit = yield* Fiber.await(fiber);
               return Exit.isSuccess(exit) ? exit.value : null;
             }),
         );
-      }).pipe(Effect.provide(TestContext.TestContext)),
+      }).pipe(Effect.provide(TestClock.layer())),
     );
 
     assert.equal(settled?.status, 'failed');
@@ -435,7 +426,7 @@ test('a state Ref is not shared between two constructions of the service', async
   const roots = makeRoots();
   try {
     const recorder = recordingInstallIo();
-    const layer = Layer.scoped(
+    const layer = Layer.effect(
       EditorProvisioning,
       makeEditorProvisioning({ capability: 'code_server' }),
     ).pipe(
@@ -482,20 +473,20 @@ test('a failed attempt clears any previously resolved installation', async () =>
       withService({ capability: 'code_server', directory: roots.directory, io }, (service) =>
         Effect.gen(function* () {
           const first = yield* service.retry;
-          const beforeFailure = yield* Effect.either(service.requireReady);
+          const beforeFailure = yield* Effect.result(service.requireReady);
           failing.value = true;
           const second = yield* service.retry;
-          const afterFailure = yield* Effect.either(service.requireReady);
+          const afterFailure = yield* Effect.result(service.requireReady);
           return { first, beforeFailure, second, afterFailure };
         }),
       ),
     );
 
     assert.equal(outcome.first.status, 'ready');
-    assert.ok(outcome.beforeFailure._tag === 'Right');
+    assert.ok(outcome.beforeFailure._tag === 'Success');
     assert.equal(outcome.second.status, 'failed');
     // A stale installation must never survive a failed re-attempt.
-    assert.ok(outcome.afterFailure._tag === 'Left');
+    assert.ok(outcome.afterFailure._tag === 'Failure');
   } finally {
     roots.cleanup();
   }
@@ -512,7 +503,7 @@ test('an interrupted attempt settles as a failure instead of staying transient',
           ...base.io,
           // Blocks forever: only interruption can end this attempt.
           downloadTo: () =>
-            Effect.zipRight(
+            Effect.andThen(
               Deferred.succeed(reached, undefined),
               Effect.never as Effect.Effect<{ readonly sha256: string }, never>,
             ),
@@ -522,7 +513,7 @@ test('an interrupted attempt settles as a failure instead of staying transient',
           { capability: 'code_server', directory: roots.directory, io },
           (service) =>
             Effect.gen(function* () {
-              const fiber = yield* Effect.fork(service.retry);
+              const fiber = yield* Effect.forkChild(service.retry);
               yield* Deferred.await(reached);
               const before = yield* service.state;
               // This is what an aborted `POST /editor/provisioning/retry`
@@ -530,7 +521,7 @@ test('an interrupted attempt settles as a failure instead of staying transient',
               // signal, so a client that disconnects interrupts it.
               yield* Fiber.interrupt(fiber);
               const after = yield* service.state;
-              const guard = yield* Effect.either(service.requireReady);
+              const guard = yield* Effect.result(service.requireReady);
               return { before, after, guard };
             }),
         );
@@ -548,7 +539,7 @@ test('an interrupted attempt settles as a failure instead of staying transient',
     assert.ok(
       outcome.after.status === 'failed' && outcome.after.diagnostic?.includes('interrupted'),
     );
-    assert.ok(outcome.guard._tag === 'Left');
+    assert.ok(outcome.guard._tag === 'Failure');
 
     // And the interrupted attempt left nothing staged behind.
     const stagingRoot = join(roots.directory.paths.toolsPath, '.staging');
@@ -573,9 +564,9 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
           // to block is one that runs on *both* paths.
           assertExecutable: (path) =>
             blocking.value
-              ? Effect.zipRight(
+              ? Effect.andThen(
                   Deferred.succeed(blocked, undefined),
-                  Effect.zipRight(Deferred.await(release), base.io.assertExecutable(path)),
+                  Effect.andThen(Deferred.await(release), base.io.assertExecutable(path)),
                 )
               : base.io.assertExecutable(path),
         };
@@ -586,15 +577,15 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
             Effect.gen(function* () {
               const first = yield* service.retry;
               blocking.value = true;
-              const fiber = yield* Effect.fork(service.retry);
+              const fiber = yield* Effect.forkChild(service.retry);
               yield* Deferred.await(blocked);
               // The projected state and the guard are two views of one fact:
               // while an attempt is in flight, neither says ready.
               const during = yield* service.state;
-              const guard = yield* Effect.either(service.requireReady);
+              const guard = yield* Effect.result(service.requireReady);
               yield* Deferred.succeed(release, undefined);
               const settled = yield* Fiber.join(fiber);
-              const after = yield* Effect.either(service.requireReady);
+              const after = yield* Effect.result(service.requireReady);
               return { first, during, guard, settled, after };
             }),
         );
@@ -605,9 +596,9 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
     assert.equal(outcome.during.status, 'checking');
     // The bug this pins: `requireReady` used to hand out the previous
     // installation while provisioning was already replacing its install root.
-    assert.ok(outcome.guard._tag === 'Left');
+    assert.ok(outcome.guard._tag === 'Failure');
     assert.equal(outcome.settled.status, 'ready');
-    assert.ok(outcome.after._tag === 'Right');
+    assert.ok(outcome.after._tag === 'Success');
   } finally {
     roots.cleanup();
   }

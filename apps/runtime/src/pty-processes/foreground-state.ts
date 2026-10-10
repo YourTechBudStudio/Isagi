@@ -8,7 +8,7 @@ export interface PtyForegroundStateService {
   readonly isWorking: (ptyProcessId: number) => boolean;
 }
 
-export const PtyForegroundState = Context.GenericTag<PtyForegroundStateService>(
+export const PtyForegroundState = Context.Service<PtyForegroundStateService>(
   'isagi/PtyForegroundState',
 );
 

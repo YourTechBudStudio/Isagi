@@ -107,7 +107,7 @@ test('endpoint diagnostic frames the endpoint identifier', () => {
  */
 interface RejectionCase {
   /** The union the owning endpoint actually declares for its errors. */
-  readonly schema: Schema.Schema.AnyNoContext;
+  readonly schema: Schema.Codec<unknown, unknown>;
   readonly error: ApiError;
   readonly copy: string;
 }

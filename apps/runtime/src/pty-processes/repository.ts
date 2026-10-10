@@ -69,7 +69,7 @@ export interface PtyProcessTransitionResult {
   readonly row: PtyProcessRow | null;
 }
 
-export const PtyRepository = Context.GenericTag<PtyRepositoryService>('isagi/PtyProcessRepository');
+export const PtyRepository = Context.Service<PtyRepositoryService>('isagi/PtyProcessRepository');
 
 export const PtyRepositoryLive = Layer.effect(
   PtyRepository,

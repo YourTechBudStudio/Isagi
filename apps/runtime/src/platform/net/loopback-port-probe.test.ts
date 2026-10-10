@@ -66,7 +66,7 @@ function connectHeldClient(
   connected: Deferred.Deferred<void, Error>,
   clients: net.Socket[],
 ) {
-  return Effect.async<void>((resume) => {
+  return Effect.callback<void>((resume) => {
     const socket = net.connect({ host: '127.0.0.1', port });
     clients.push(socket);
     socket.once('connect', () => resume(Effect.asVoid(Deferred.succeed(connected, undefined))));
@@ -174,16 +174,17 @@ test('an interruption while the listener is bound leaves no listener behind', as
           }),
       });
 
-      const fiber = yield* Effect.fork(barriered.probeInactive(port));
+      const fiber = yield* Effect.forkChild(barriered.probeInactive(port));
       // The barrier is what makes this deterministic: by the time it resolves,
       // the real listener is bound, so the interrupt below exercises release
       // rather than a no-op on a resource that never existed.
       yield* Deferred.await(listening);
-      return yield* Fiber.interrupt(fiber);
+      yield* Fiber.interrupt(fiber);
+      return yield* Fiber.await(fiber);
     }),
   );
 
-  assert.ok(Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause));
+  assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
   // Release ran, and it ran to completion — no grace period, no retry.
   await assertImmediatelyRebindable(port);
 });
@@ -217,22 +218,28 @@ test('an interruption before the listener is acquired leaves no listener behind'
 
   const exit = await Effect.runPromise(
     Effect.gen(function* () {
-      const fiber = yield* Effect.fork(barriered.probeInactive(port));
+      const fiber = yield* Effect.forkChild(barriered.probeInactive(port));
       yield* Effect.promise(() => held);
       // Raised from a fiber of its own, and that is the deferral made visible:
       // `Fiber.interrupt` waits for the target to finish interrupting, and the
       // target cannot even observe the interrupt until its uninterruptible
       // acquire completes. Awaiting it here before releasing the hold would
       // deadlock the test — which is the same fact the assertion below states.
-      const interrupting = yield* Effect.fork(Fiber.interrupt(fiber));
+      // `startImmediately` delivers the interrupt request before the hold is
+      // released: Effect v4 otherwise starts a forked fiber on a later scheduler
+      // turn, by which time the whole probe may already have finished.
+      const interrupting = yield* Effect.forkChild(Fiber.interrupt(fiber), {
+        startImmediately: true,
+      });
       yield* Effect.sync(() => releaseAcquisition());
-      return yield* Fiber.join(interrupting);
+      yield* Fiber.join(interrupting);
+      return yield* Fiber.await(fiber);
     }),
   );
 
   await drain();
 
-  assert.ok(Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause));
+  assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
   // The listener existed, was never handed to a live fiber, and is still gone:
   // release ran on the deferred interruption.
   await assertImmediatelyRebindable(port);
@@ -269,15 +276,16 @@ test(
               }),
           });
 
-          const fiber = yield* Effect.fork(barriered.probeInactive(port));
+          const fiber = yield* Effect.forkChild(barriered.probeInactive(port));
           // Fails the whole program if the client never got a connection, so
           // the precondition is enforced rather than assumed.
           yield* Deferred.await(connected);
-          return yield* Fiber.interrupt(fiber);
+          yield* Fiber.interrupt(fiber);
+          return yield* Fiber.await(fiber);
         }),
       );
 
-      assert.ok(Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause));
+      assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
       // The whole claim: interruption ran to completion despite a live client,
       // and the port came back with no grace period.
       await assertImmediatelyRebindable(port);
@@ -359,7 +367,7 @@ test('a close failure is logged with the port and never with its cause', async (
       // its reported outcome is substituted.
       closeListener: ({ close }) =>
         close.pipe(
-          Effect.zipRight(Effect.fail(new LoopbackPortUnavailable({ cause: new Error(SENTINEL) }))),
+          Effect.andThen(Effect.fail(new LoopbackPortUnavailable({ cause: new Error(SENTINEL) }))),
         ),
     });
 

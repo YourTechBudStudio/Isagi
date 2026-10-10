@@ -1,10 +1,8 @@
 import { Schema } from 'effect';
 
+import { nonEmptyString, nonNegativeInteger, positiveInteger } from '../scalars.js';
 import { workflowOperationSchema } from './operations.js';
 import {
-  nonEmptyString,
-  nonNegativeInteger,
-  positiveInteger,
   workflowNodeKindSchema,
   workflowOutcomeKindSchema,
   workflowQuestionSpecSchema,
@@ -24,7 +22,7 @@ import {
  * surface, before any graph runs. A node function cut off by an app restart is an `interrupted`
  * execution whose error stage is `node_function`.
  */
-export const workflowErrorStageSchema = Schema.Literal(
+export const workflowErrorStageSchema = Schema.Literals([
   'environment',
   'graph_init',
   'subgraph_parameters',
@@ -35,7 +33,7 @@ export const workflowErrorStageSchema = Schema.Literal(
   'subgraph_on_result',
   'checkpoint_plan',
   'checkpoint_capture',
-);
+]);
 
 /**
  * `graphKey` and `nodeId` say whose code threw when a pure step failed. The failure is recorded on
@@ -46,8 +44,8 @@ export const workflowErrorStageSchema = Schema.Literal(
 export const workflowErrorSchema = Schema.Struct({
   stage: workflowErrorStageSchema,
   message: Schema.String,
-  graphKey: Schema.optionalWith(nonEmptyString, { exact: true }),
-  nodeId: Schema.optionalWith(nonEmptyString, { exact: true }),
+  graphKey: Schema.optionalKey(nonEmptyString),
+  nodeId: Schema.optionalKey(nonEmptyString),
 });
 
 /** A graph's terminal result. `output` is whatever the outcome produced. */
@@ -55,27 +53,27 @@ export const workflowOutcomeSchema = Schema.Struct({
   outcomeId: nonEmptyString,
   kind: workflowOutcomeKindSchema,
   reason: Schema.NullOr(Schema.String),
-  output: Schema.Unknown,
+  output: Schema.optionalKey(Schema.Unknown),
 });
 
 /**
  * An invocation does not fail: failures belong to executions, and the invocation stays open so a
  * Retry can continue inside it. An authored failure outcome is `completed` with a `failure` outcome.
  */
-export const workflowGraphInvocationStatusSchema = Schema.Literal(
+export const workflowGraphInvocationStatusSchema = Schema.Literals([
   'running',
   'completed',
   'cancelled',
-);
+]);
 
-export const workflowExecutionStatusSchema = Schema.Literal(
+export const workflowExecutionStatusSchema = Schema.Literals([
   'running',
   'waiting',
   'completed',
   'failed',
   'interrupted',
   'cancelled',
-);
+]);
 
 export const workflowGraphInvocationSchema = Schema.Struct({
   invocationId: positiveInteger,
@@ -85,9 +83,9 @@ export const workflowGraphInvocationSchema = Schema.Struct({
   depth: nonNegativeInteger,
   label: Schema.NullOr(Schema.String),
   status: workflowGraphInvocationStatusSchema,
-  parameters: Schema.Unknown,
+  parameters: Schema.optionalKey(Schema.Unknown),
   /** The invocation's current state. Each execution's `stateAfter` holds its history. */
-  state: Schema.Unknown,
+  state: Schema.optionalKey(Schema.Unknown),
   outcome: Schema.NullOr(workflowOutcomeSchema),
   startedAt: nonEmptyString,
   endedAt: Schema.NullOr(nonEmptyString),
@@ -97,7 +95,7 @@ export const workflowGraphInvocationSchema = Schema.Struct({
  * What a suspended node is waiting for, read from the result the node function returned.
  * `headless_agent` names the operations it waits on by their operation ids.
  */
-export const workflowWaitSchema = Schema.Union(
+export const workflowWaitSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal('agent_turn'),
     target: Schema.Struct({ agentSessionId: positiveInteger, sentAt: nonEmptyString }),
@@ -111,7 +109,7 @@ export const workflowWaitSchema = Schema.Union(
     kind: Schema.Literal('headless_agent'),
     operations: Schema.Array(Schema.Struct({ operationId: nonEmptyString })),
   }),
-);
+]);
 
 /** One execution as the trace draws it. Everything a trace row needs, without the JSON values. */
 export const workflowExecutionSummarySchema = Schema.Struct({
@@ -147,16 +145,14 @@ export const workflowExecutionSummarySchema = Schema.Struct({
  *
  * `result` is the only value the runtime ever reuses (a Retry keeps it). The rest is a record.
  */
-export const workflowExecutionDetailSchema = Schema.extend(
-  workflowExecutionSummarySchema,
-  Schema.Struct({
-    result: Schema.Unknown,
-    event: Schema.Unknown,
-    decision: Schema.Unknown,
-    stateAfter: Schema.Unknown,
-    operations: Schema.Array(workflowOperationSchema),
-  }),
-);
+export const workflowExecutionDetailSchema = Schema.Struct({
+  ...workflowExecutionSummarySchema.fields,
+  result: Schema.optionalKey(Schema.Unknown),
+  event: Schema.optionalKey(Schema.Unknown),
+  decision: Schema.optionalKey(Schema.Unknown),
+  stateAfter: Schema.optionalKey(Schema.Unknown),
+  operations: Schema.Array(workflowOperationSchema),
+});
 
 export const workflowExecutionRouteParamsSchema = Schema.Struct({
   executionId: positiveInteger,

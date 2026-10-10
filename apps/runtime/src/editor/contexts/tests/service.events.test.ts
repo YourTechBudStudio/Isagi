@@ -97,13 +97,11 @@ test('a terminal event for an owned incarnation ends its probe and publishes', a
         signal: null,
       });
       // Let the subscriber fiber take the event.
-      const observations = yield* Effect.iterate(
-        new Map([[ptyProcessId, true]]) as ReadonlyMap<number, unknown>,
-        {
-          while: (map) => map.size > 0,
-          body: () => Effect.yieldNow().pipe(Effect.zipRight(service.readinessFor([ptyProcessId]))),
-        },
-      );
+      let observations: ReadonlyMap<number, unknown> = new Map([[ptyProcessId, true]]);
+      while (observations.size > 0) {
+        yield* Effect.yieldNow;
+        observations = yield* service.readinessFor([ptyProcessId]);
+      }
 
       return {
         observations,
@@ -140,8 +138,8 @@ test('a terminal event for another domain’s process is ignored entirely', asyn
         status: 'killed',
         statusReason: 'user_requested',
       });
-      yield* Effect.yieldNow();
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
 
       const observations = yield* service.readinessFor([facts.activePtyProcessId ?? -1]);
       return {
@@ -192,10 +190,13 @@ test('an incarnation whose termination was refused still publishes its terminal 
           signal: null,
         });
         // Let the subscriber fiber take the event, without assuming which turn.
-        yield* Effect.iterate(0, {
-          while: (turns) => turns < 50 && editorContextChangedIds(events).length === before,
-          body: (turns) => Effect.yieldNow().pipe(Effect.as(turns + 1)),
-        });
+        for (
+          let turns = 0;
+          turns < 50 && editorContextChangedIds(events).length === before;
+          turns += 1
+        ) {
+          yield* Effect.yieldNow;
+        }
 
         return { newEvents: editorContextChangedIds(events).length - before };
       }),

@@ -71,7 +71,7 @@ function readInstalledExecutable(packageRoot) {
 
 function runInstaller(packageRoot) {
   const installer = resolve(packageRoot, 'install.js');
-  return Effect.async((resumeEffect) => {
+  return Effect.callback((resumeEffect) => {
     const child = spawn(process.execPath, [installer, '--no'], {
       cwd: packageRoot,
       env: process.env,

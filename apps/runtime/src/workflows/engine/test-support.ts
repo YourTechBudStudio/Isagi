@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import BetterSqlite from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { Effect, Exit, Layer, Scope } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Scope } from 'effect';
 
 import type {
   RuntimeEvent,
@@ -140,7 +140,7 @@ export async function makeEngineHarness(
         const before = beforeWrites.get(operation);
         if (!before) return write;
         beforeWrites.delete(operation);
-        return Effect.promise(before).pipe(Effect.zipRight(write));
+        return Effect.promise(before).pipe(Effect.andThen(write));
       });
     },
   };
@@ -151,10 +151,10 @@ export async function makeEngineHarness(
   const busContext = await Effect.runPromise(
     Layer.buildWithScope(InternalRuntimeEventBusLive, busScope),
   );
-  const internalEvents = busContext.unsafeMap.get(InternalRuntimeEventBus.key) as
-    | InternalRuntimeEventBusService
-    | undefined;
-  if (!internalEvents) throw new Error('The internal event bus did not build.');
+  const internalEvents: InternalRuntimeEventBusService = Context.get(
+    busContext,
+    InternalRuntimeEventBus,
+  );
 
   const events: RuntimeEvent[] = [];
   const publicEvents: RuntimeEventBusService = {
@@ -171,7 +171,7 @@ export async function makeEngineHarness(
   let scope = Effect.runSync(Scope.make());
   const start = () =>
     Effect.runPromise(
-      Scope.extend(
+      Scope.provide(
         startEngine({
           database,
           events: publicEvents,
@@ -213,7 +213,11 @@ export async function makeEngineHarness(
       const exit = await Effect.runPromiseExit(effect);
       await harness.settle();
       if (Exit.isSuccess(exit)) throw new Error('Expected the call to fail, and it succeeded.');
-      const failure = exit.cause._tag === 'Fail' ? exit.cause.error : exit.cause;
+      const [only] = exit.cause.reasons;
+      const failure =
+        exit.cause.reasons.length === 1 && only && Cause.isFailReason(only)
+          ? only.error
+          : exit.cause;
       return failure;
     },
     settle: () => Effect.runPromise(engine.awaitIdle),
@@ -444,7 +448,7 @@ export class FakePlaces {
       workspace: {
         checkNewDirectory: checkNew,
         createDetachedWorktree: (input) =>
-          Effect.gen(this, function* () {
+          Effect.gen({ self: this }, function* () {
             const failure = (
               reason: DetachedWorktreeError['reason'],
               message: string,
@@ -473,8 +477,8 @@ export class FakePlaces {
             );
             const verified = yield* git
               .run(['-C', source, 'cat-file', '-e', `${input.commit}^{commit}`])
-              .pipe(Effect.either);
-            if (verified._tag === 'Left') {
+              .pipe(Effect.result);
+            if (verified._tag === 'Failure') {
               return yield* Effect.fail(
                 failure('commit_not_found', `Commit ${input.commit} is not in the repository.`),
               );
@@ -650,7 +654,7 @@ export class FakeAgents {
   port(): AgentPort {
     return {
       spawn: (input) =>
-        Effect.gen(this, function* () {
+        Effect.gen({ self: this }, function* () {
           const agentSessionId = this.nextSession++;
           this.sessions.set(agentSessionId, {
             harness: input.harness,

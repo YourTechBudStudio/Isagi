@@ -1,4 +1,4 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { CommandStatus } from '@isagi/contracts';
 
@@ -129,17 +129,17 @@ export function cleanupCommandIncarnations(
           reason: input.reason,
           ensureBackendAbsence: input.ensureBackendAbsence,
         })
-        .pipe(Effect.either);
-      if (Either.isRight(outcome)) continue;
+        .pipe(Effect.result);
+      if (Result.isSuccess(outcome)) continue;
 
       // Classify from the row as it stands *now*. Doing this before the attempt
       // would misread a row that went terminal in between: the gating kill
       // would be skipped on one side, and a terminal incarnation would become a
       // repair candidate on the other.
       const classified = yield* classifyCleanupFailure(deps.ptyRepository, ptyProcessId);
-      failures.push({ ptyProcessId, error: outcome.left, ...classified });
+      failures.push({ ptyProcessId, error: outcome.failure, ...classified });
       console.warn(
-        `[runtime] Command incarnation cleanup failed operation=${input.operation} worktree=${input.target.worktreeId} command=${input.target.commandName} ptyProcessId=${ptyProcessId} backend=${classified.backend ?? 'unknown'} classification=${classified.kind} cause=${describeCommandCause(outcome.left)}`,
+        `[runtime] Command incarnation cleanup failed operation=${input.operation} worktree=${input.target.worktreeId} command=${input.target.commandName} ptyProcessId=${ptyProcessId} backend=${classified.backend ?? 'unknown'} classification=${classified.kind} cause=${describeCommandCause(outcome.failure)}`,
       );
     }
 
@@ -244,7 +244,7 @@ export function reconcileCommandsAtBoot(deps: CommandConvergenceDependencies) {
 
     for (const entry of workset) {
       yield* deps.withLock(entry.target, convergeCommandAtBoot(deps, entry)).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             console.warn(
               `[runtime] Command boot convergence failed worktree=${entry.target.worktreeId} command=${entry.target.commandName} cause=${describeCommandCause(error)}`,
@@ -314,7 +314,7 @@ function isNonterminalLink(ptyRepository: PtyRepositoryService, link: CommandPty
     // An unreadable row is not a finished process. Including it costs one
     // cleanup attempt that will report its own failure honestly; excluding it
     // would silently drop a possibly-live incarnation from the workset.
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         console.warn(
           `[runtime] Command boot could not read a linked incarnation worktree=${link.worktreeId} command=${link.commandName} ptyProcessId=${link.ptyProcessId}; treating it as unresolved cause=${describeCommandCause(error)}`,
@@ -439,7 +439,7 @@ function sweepLinklessRunningRuns(deps: CommandConvergenceDependencies) {
           }),
         )
         .pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               console.warn(
                 `[runtime] Command boot run-residue sweep failed worktree=${target.worktreeId} command=${target.commandName} runId=${run.id} cause=${describeCommandCause(error)}`,

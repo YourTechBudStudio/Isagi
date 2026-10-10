@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
-import { Either, Schema } from 'effect';
+import { Result, Schema, SchemaIssue } from 'effect';
 
 import {
   commandHookSchema,
@@ -95,7 +95,7 @@ function normalizePostCreateHook(input: unknown): WorktreePostCreateHook {
   }
 }
 
-function normalizeCopyHook(input: Schema.Schema.Type<typeof copyHookSchema>): CopyHook {
+function normalizeCopyHook(input: typeof copyHookSchema.Type): CopyHook {
   return {
     type: 'copy',
     src: input.src,
@@ -106,7 +106,7 @@ function normalizeCopyHook(input: Schema.Schema.Type<typeof copyHookSchema>): Co
   };
 }
 
-function normalizeSymlinkHook(input: Schema.Schema.Type<typeof symlinkHookSchema>): SymlinkHook {
+function normalizeSymlinkHook(input: typeof symlinkHookSchema.Type): SymlinkHook {
   return {
     type: 'symlink',
     src: input.src,
@@ -115,7 +115,7 @@ function normalizeSymlinkHook(input: Schema.Schema.Type<typeof symlinkHookSchema
   };
 }
 
-function normalizeCommandHook(input: Schema.Schema.Type<typeof commandHookSchema>): CommandHook {
+function normalizeCommandHook(input: typeof commandHookSchema.Type): CommandHook {
   return {
     type: 'command',
     run: input.run,
@@ -399,41 +399,40 @@ function assertKnownFields(
   }
 }
 
-function decode<A, I>(schema: Schema.Schema<A, I>, value: unknown, field: string): A {
-  const decoded = Schema.decodeUnknownEither(schema)(value);
-  if (Either.isRight(decoded)) {
-    return decoded.right;
+function decode<S extends Schema.Decoder<unknown>>(
+  schema: S,
+  value: unknown,
+  field: string,
+): S['Type'] {
+  const decoded = Schema.decodeUnknownResult(schema)(value, { reportInput: true });
+  if (Result.isSuccess(decoded)) {
+    return decoded.success;
   }
-  throw new Error(formatSchemaError(decoded.left, field));
+  throw new Error(formatSchemaError(decoded.failure, field));
 }
 
-function formatSchemaError(cause: unknown, field: string) {
-  const message = cause instanceof Error ? cause.message : '';
-  const leaf = message
-    .split('\n')
-    .map((line) => line.replace(/[└├│─]/g, '').trim())
-    .reverse()
-    .find((line) => line.startsWith('Expected ') && !line.startsWith('Expected undefined'));
-  const detail = leaf?.includes('actual ""')
-    ? 'Expected a non-empty string, actual ""'
-    : leaf?.includes('actual null')
-      ? 'Expected an object, actual null'
-      : leaf;
+const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1({
+  leafHook: (issue) =>
+    issue._tag === 'MissingKey' ? 'is required.' : SchemaIssue.defaultLeafHook(issue),
+});
 
-  return `${field}${fieldDetail(message)} ${detail ?? 'is invalid.'}`;
+// Config errors are shown to the user, so the text is built from the first
+// structured issue (`{ path, message }`) rather than from `SchemaError.message`.
+// Decoding with `reportInput` keeps the offending value in the message
+// (`Expected string, got 5173`).
+function formatSchemaError(error: Schema.SchemaError, field: string) {
+  const [first] = formatIssues(error.issue).issues;
+  if (first === undefined) {
+    return `${field} is invalid.`;
+  }
+  return `${field}${fieldDetail(first.path ?? [])} ${first.message}`;
 }
 
-function fieldDetail(message: string) {
-  const path = message
-    .split('\n')
-    .map((line) => line.replace(/[└├│─]/g, '').trim())
-    .filter((line) => /^\[(?:"[^"]+"|\d+)\]$/.test(line))
-    .map((line) => line.slice(1, -1).replace(/^"|"$/g, ''));
-
-  if (path.length === 0) {
-    return '';
-  }
-  return path.map((part) => (/^\d+$/.test(part) ? `[${part}]` : `.${part}`)).join('');
+function fieldDetail(path: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>) {
+  return path
+    .map((segment) => (typeof segment === 'object' ? segment.key : segment))
+    .map((part) => (typeof part === 'number' ? `[${part}]` : `.${String(part)}`))
+    .join('');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

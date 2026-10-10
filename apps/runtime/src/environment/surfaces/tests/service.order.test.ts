@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Either, type Layer } from 'effect';
+import { Effect, Result, type Layer } from 'effect';
 
 import { worktreeSurfaces } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
@@ -76,7 +76,7 @@ function setSurfaceRank(surfaceId: number, sortOrder: number) {
   });
 }
 
-type SurfaceTestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
+type SurfaceTestServices = Layer.Success<ReturnType<typeof testLayer>>;
 
 function withSurfaces<A, E>(
   name: string,
@@ -162,7 +162,7 @@ test('a surface from another worktree is rejected rather than adopted', async ()
 
       const rejected = yield* surfaces
         .moveSurfaceOrder({ worktreeId, surfaceId: foreign.surfaceId, beforeSurfaceId: null })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return {
         rejected,
         ranksBefore,
@@ -172,10 +172,10 @@ test('a surface from another worktree is rejected rather than adopted', async ()
     }),
   );
 
-  assert.equal(Either.isLeft(output.rejected), true);
-  if (Either.isLeft(output.rejected)) {
-    assert.ok(output.rejected.left instanceof SurfaceOrderError);
-    assert.equal(output.rejected.left.reason, 'surface_worktree_mismatch');
+  assert.equal(Result.isFailure(output.rejected), true);
+  if (Result.isFailure(output.rejected)) {
+    assert.ok(output.rejected.failure instanceof SurfaceOrderError);
+    assert.equal(output.rejected.failure.reason, 'surface_worktree_mismatch');
   }
   assert.deepEqual(output.ids, [3, 1, 2]);
   assert.deepEqual(output.ranksAfter, output.ranksBefore);
@@ -201,7 +201,7 @@ test('an anchor from another worktree is rejected and the order is untouched', a
           surfaceId: first!,
           beforeSurfaceId: foreign.surfaceId,
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return {
         rejected,
         ranksBefore,
@@ -211,11 +211,11 @@ test('an anchor from another worktree is rejected and the order is untouched', a
     }),
   );
 
-  assert.equal(Either.isLeft(output.rejected), true);
-  if (Either.isLeft(output.rejected)) {
-    assert.ok(output.rejected.left instanceof SurfaceOrderError);
-    assert.equal(output.rejected.left.reason, 'before_surface_worktree_mismatch');
-    assert.equal(output.rejected.left.beforeSurfaceId, 4);
+  assert.equal(Result.isFailure(output.rejected), true);
+  if (Result.isFailure(output.rejected)) {
+    assert.ok(output.rejected.failure instanceof SurfaceOrderError);
+    assert.equal(output.rejected.failure.reason, 'before_surface_worktree_mismatch');
+    assert.equal(output.rejected.failure.beforeSurfaceId, 4);
   }
   assert.deepEqual(output.ids, [3, 1, 2]);
   assert.deepEqual(output.ranksAfter, output.ranksBefore);
@@ -231,13 +231,13 @@ test('unknown worktrees, surfaces, and anchors each get their own reason', async
       const ranksBefore = yield* readSurfaceRanks();
       const unknownWorktree = yield* surfaces
         .moveSurfaceOrder({ worktreeId: 999, surfaceId: first!, beforeSurfaceId: null })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const unknownSurface = yield* surfaces
         .moveSurfaceOrder({ worktreeId, surfaceId: 999, beforeSurfaceId: null })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const unknownAnchor = yield* surfaces
         .moveSurfaceOrder({ worktreeId, surfaceId: first!, beforeSurfaceId: 999 })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return {
         unknownWorktree,
         unknownSurface,
@@ -251,8 +251,8 @@ test('unknown worktrees, surfaces, and anchors each get their own reason', async
 
   const reasons = [output.unknownWorktree, output.unknownSurface, output.unknownAnchor].map(
     (result) =>
-      Either.isLeft(result) && result.left instanceof SurfaceOrderError
-        ? result.left.reason
+      Result.isFailure(result) && result.failure instanceof SurfaceOrderError
+        ? result.failure.reason
         : 'unexpected_success',
   );
   assert.deepEqual(reasons, [

@@ -1,11 +1,11 @@
 import type { Readable } from 'node:stream';
 
-import { Effect, Either, Schema } from 'effect';
+import { Effect, Result } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
   apiBasePath,
-  type ApiContentEndpoint,
+  type AnyApiContentEndpoint,
   type ApiContentEndpointParams,
   type ApiContentEndpointQuery,
   type ApiError,
@@ -50,14 +50,7 @@ export interface ContentResponse {
   readonly filename: string | null;
 }
 
-export interface RegisterContentEndpointOptions<
-  Endpoint extends ApiContentEndpoint<
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
-  R,
-> {
+export interface RegisterContentEndpointOptions<Endpoint extends AnyApiContentEndpoint, R> {
   readonly handle: (
     context: ApiRouteContext,
     params: ApiContentEndpointParams<Endpoint>,
@@ -77,14 +70,7 @@ export interface RegisterContentEndpointOptions<
   ) => Promise<A>;
 }
 
-export function registerContentEndpoint<
-  Endpoint extends ApiContentEndpoint<
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
-  R = never,
->(
+export function registerContentEndpoint<Endpoint extends AnyApiContentEndpoint, R = never>(
   fastify: FastifyInstance,
   endpoint: Endpoint,
   options: RegisterContentEndpointOptions<Endpoint, R>,
@@ -137,10 +123,10 @@ export function registerContentEndpoint<
       let content: ContentResponse;
       try {
         const result = await options.run(
-          Effect.either(options.handle(context, params.value, query.value)),
+          Effect.result(options.handle(context, params.value, query.value)),
           { signal: interrupt.signal },
         );
-        if (Either.isLeft(result)) {
+        if (Result.isFailure(result)) {
           logSlowApiRequest({
             context,
             elapsedMs: Date.now() - handlerStartedAt,
@@ -151,10 +137,11 @@ export function registerContentEndpoint<
             url: request.url,
           });
           const apiError =
-            options.mapError?.(result.left, context) ?? unhandledApiError(context, result.left);
+            options.mapError?.(result.failure, context) ??
+            unhandledApiError(context, result.failure);
           return sendRouteApiError(request, reply, endpoint, context, apiError);
         }
-        content = result.right;
+        content = result.success;
       } catch (error: unknown) {
         if (interrupt.signal.aborted || reply.raw.destroyed) {
           logSlowApiRequest({

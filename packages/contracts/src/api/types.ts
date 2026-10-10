@@ -2,12 +2,30 @@ import type { Schema } from 'effect';
 
 export type ApiMethod = 'DELETE' | 'GET' | 'PATCH' | 'POST' | 'PUT';
 
+/** Any wire schema: no decoding or encoding services. */
+export type WireSchema = Schema.Codec<unknown>;
+
+/** The bound every requester and route registrar accepts. */
+export type AnyApiEndpoint = ApiEndpoint<
+  WireSchema | undefined,
+  WireSchema,
+  WireSchema,
+  WireSchema | undefined,
+  WireSchema | undefined
+>;
+
+export type AnyApiContentEndpoint = ApiContentEndpoint<
+  WireSchema,
+  WireSchema | undefined,
+  WireSchema | undefined
+>;
+
 export interface ApiEndpoint<
-  Body extends Schema.Schema.AnyNoContext | undefined,
-  Output extends Schema.Schema.AnyNoContext,
-  Errors extends Schema.Schema.AnyNoContext,
-  Params extends Schema.Schema.AnyNoContext | undefined = undefined,
-  Query extends Schema.Schema.AnyNoContext | undefined = undefined,
+  Body extends WireSchema | undefined,
+  Output extends WireSchema,
+  Errors extends WireSchema,
+  Params extends WireSchema | undefined = undefined,
+  Query extends WireSchema | undefined = undefined,
 > {
   readonly id: string;
   readonly method: ApiMethod;
@@ -19,66 +37,18 @@ export interface ApiEndpoint<
   readonly errors: Errors;
 }
 
-export type ApiEndpointBody<Endpoint> =
-  Endpoint extends ApiEndpoint<
-    infer Body,
-    infer _Output,
-    infer _Errors,
-    infer _Params,
-    infer _Query
-  >
-    ? Body extends Schema.Schema.AnyNoContext
-      ? Schema.Schema.Type<Body>
-      : undefined
-    : never;
+/** A declared part's decoded type, or `undefined` when the endpoint does not declare that part. */
+type PartType<Endpoint, Part extends string> = Endpoint extends { readonly [K in Part]: infer S }
+  ? S extends WireSchema
+    ? S['Type']
+    : undefined
+  : undefined;
 
-export type ApiEndpointOutput<Endpoint> =
-  Endpoint extends ApiEndpoint<
-    infer _Body,
-    infer Output,
-    infer _Errors,
-    infer _Params,
-    infer _Query
-  >
-    ? Schema.Schema.Type<Output>
-    : never;
-
-export type ApiEndpointParams<Endpoint> =
-  Endpoint extends ApiEndpoint<
-    infer _Body,
-    infer _Output,
-    infer _Errors,
-    infer Params,
-    infer _Query
-  >
-    ? Params extends Schema.Schema.AnyNoContext
-      ? Schema.Schema.Type<Params>
-      : undefined
-    : never;
-
-export type ApiEndpointQuery<Endpoint> =
-  Endpoint extends ApiEndpoint<
-    infer _Body,
-    infer _Output,
-    infer _Errors,
-    infer _Params,
-    infer Query
-  >
-    ? Query extends Schema.Schema.AnyNoContext
-      ? Schema.Schema.Type<Query>
-      : undefined
-    : never;
-
-export type ApiEndpointError<Endpoint> =
-  Endpoint extends ApiEndpoint<
-    infer _Body,
-    infer _Output,
-    infer Errors,
-    infer _Params,
-    infer _Query
-  >
-    ? Schema.Schema.Type<Errors>
-    : never;
+export type ApiEndpointBody<Endpoint> = PartType<Endpoint, 'body'>;
+export type ApiEndpointOutput<Endpoint> = PartType<Endpoint, 'output'>;
+export type ApiEndpointParams<Endpoint> = PartType<Endpoint, 'params'>;
+export type ApiEndpointQuery<Endpoint> = PartType<Endpoint, 'query'>;
+export type ApiEndpointError<Endpoint> = PartType<Endpoint, 'errors'>;
 
 export type ApiEndpointRequestArgs<Endpoint> =
   ApiEndpointParams<Endpoint> extends undefined
@@ -115,9 +85,9 @@ export type ApiEndpointRequestArgs<Endpoint> =
  * has no output to infer.
  */
 export interface ApiContentEndpoint<
-  Errors extends Schema.Schema.AnyNoContext,
-  Params extends Schema.Schema.AnyNoContext | undefined = undefined,
-  Query extends Schema.Schema.AnyNoContext | undefined = undefined,
+  Errors extends WireSchema,
+  Params extends WireSchema | undefined = undefined,
+  Query extends WireSchema | undefined = undefined,
 > {
   readonly id: string;
   readonly method: 'GET';
@@ -127,21 +97,6 @@ export interface ApiContentEndpoint<
   readonly errors: Errors;
 }
 
-export type ApiContentEndpointParams<Endpoint> =
-  Endpoint extends ApiContentEndpoint<infer _Errors, infer Params, infer _Query>
-    ? Params extends Schema.Schema.AnyNoContext
-      ? Schema.Schema.Type<Params>
-      : undefined
-    : never;
-
-export type ApiContentEndpointQuery<Endpoint> =
-  Endpoint extends ApiContentEndpoint<infer _Errors, infer _Params, infer Query>
-    ? Query extends Schema.Schema.AnyNoContext
-      ? Schema.Schema.Type<Query>
-      : undefined
-    : never;
-
-export type ApiContentEndpointError<Endpoint> =
-  Endpoint extends ApiContentEndpoint<infer Errors, infer _Params, infer _Query>
-    ? Schema.Schema.Type<Errors>
-    : never;
+export type ApiContentEndpointParams<Endpoint> = PartType<Endpoint, 'params'>;
+export type ApiContentEndpointQuery<Endpoint> = PartType<Endpoint, 'query'>;
+export type ApiContentEndpointError<Endpoint> = PartType<Endpoint, 'errors'>;

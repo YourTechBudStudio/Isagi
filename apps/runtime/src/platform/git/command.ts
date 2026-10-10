@@ -43,7 +43,7 @@ export interface GitService {
   ) => Effect.Effect<{ readonly stdout: string; readonly stderr: string }, GitCommandError>;
 }
 
-export const Git = Context.GenericTag<GitService>('isagi/Git');
+export const Git = Context.Service<GitService>('isagi/Git');
 
 export const GitLive = Layer.succeed(Git, {
   run: (args, options = {}) =>

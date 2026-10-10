@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { RuntimeLifecycle, RuntimeLifecycleFailure, type RuntimeTarget } from './lifecycle.js';
 import type {
@@ -106,32 +106,38 @@ test('concurrent URL callers share one spawn and readiness plus health gate', as
 
 test('malformed readiness is a stored terminal failure', async () => {
   const subject = harness();
-  const result = Effect.runPromise(Effect.either(subject.lifecycle.start()));
+  const result = Effect.runPromise(Effect.result(subject.lifecycle.start()));
   subject.child.stdout.write('ISAGI_RUNTIME_READY {"url":42}\n');
   const either = await result;
-  assert.equal(Either.isLeft(either) ? either.left.reason : undefined, 'readiness_malformed');
+  assert.equal(Result.isFailure(either) ? either.failure.reason : undefined, 'readiness_malformed');
   assert.equal(subject.lifecycle.snapshot.state, 'failed');
-  const repeated = await Effect.runPromise(Effect.either(subject.lifecycle.getUrl()));
-  assert.equal(Either.isLeft(repeated) ? repeated.left.reason : undefined, 'readiness_malformed');
+  const repeated = await Effect.runPromise(Effect.result(subject.lifecycle.getUrl()));
+  assert.equal(
+    Result.isFailure(repeated) ? repeated.failure.reason : undefined,
+    'readiness_malformed',
+  );
 });
 
 test('readiness timeout is terminal and signals the child', async () => {
   const subject = harness({ readinessTimeoutMs: 5 });
-  const result = await Effect.runPromise(Effect.either(subject.lifecycle.start()));
-  assert.equal(Either.isLeft(result) ? result.left.reason : undefined, 'readiness_timeout');
+  const result = await Effect.runPromise(Effect.result(subject.lifecycle.start()));
+  assert.equal(Result.isFailure(result) ? result.failure.reason : undefined, 'readiness_timeout');
   assert.deepEqual(subject.signals, ['SIGTERM']);
 });
 
 test('spawn failure and pre-ready exit remain distinguishable', async () => {
   const spawnFailure = harness({ spawnError: new Error('spawn denied') });
-  const spawnResult = await Effect.runPromise(Effect.either(spawnFailure.lifecycle.start()));
-  assert.equal(Either.isLeft(spawnResult) ? spawnResult.left.reason : undefined, 'spawn_failed');
+  const spawnResult = await Effect.runPromise(Effect.result(spawnFailure.lifecycle.start()));
+  assert.equal(
+    Result.isFailure(spawnResult) ? spawnResult.failure.reason : undefined,
+    'spawn_failed',
+  );
 
   const earlyExit = harness();
-  const exitResult = Effect.runPromise(Effect.either(earlyExit.lifecycle.start()));
+  const exitResult = Effect.runPromise(Effect.result(earlyExit.lifecycle.start()));
   earlyExit.child.exit(7, null);
   const exited = await exitResult;
-  assert.equal(Either.isLeft(exited) ? exited.left.reason : undefined, 'exited_before_ready');
+  assert.equal(Result.isFailure(exited) ? exited.failure.reason : undefined, 'exited_before_ready');
   assert.equal(
     earlyExit.lifecycle.snapshot.state === 'failed'
       ? earlyExit.lifecycle.snapshot.diagnostic?.exitCode
@@ -152,8 +158,11 @@ test('stage preparation and post-ready process errors retain their stable reason
       },
     },
   });
-  const stageResult = await Effect.runPromise(Effect.either(stageFailure.lifecycle.start()));
-  assert.equal(Either.isLeft(stageResult) ? stageResult.left.reason : undefined, 'stage_invalid');
+  const stageResult = await Effect.runPromise(Effect.result(stageFailure.lifecycle.start()));
+  assert.equal(
+    Result.isFailure(stageResult) ? stageResult.failure.reason : undefined,
+    'stage_invalid',
+  );
 
   const processFailure = harness();
   const started = Effect.runPromise(processFailure.lifecycle.start());
@@ -170,10 +179,13 @@ test('stage preparation and post-ready process errors retain their stable reason
 
 test('health failure and post-ready exit remain distinguishable', async () => {
   const healthFailure = harness({ checkHealth: () => Promise.reject(new Error('health bad')) });
-  const healthResult = Effect.runPromise(Effect.either(healthFailure.lifecycle.start()));
+  const healthResult = Effect.runPromise(Effect.result(healthFailure.lifecycle.start()));
   ready(healthFailure.child);
   const unhealthy = await healthResult;
-  assert.equal(Either.isLeft(unhealthy) ? unhealthy.left.reason : undefined, 'health_check_failed');
+  assert.equal(
+    Result.isFailure(unhealthy) ? unhealthy.failure.reason : undefined,
+    'health_check_failed',
+  );
 
   const postReady = harness();
   const started = Effect.runPromise(postReady.lifecycle.start());
@@ -211,20 +223,20 @@ test('intentional repeated stop is idempotent and never publishes failure', asyn
 
 test('intentional stop during startup settles pending start and URL waiters', async () => {
   const subject = harness();
-  const startResult = Effect.runPromise(Effect.either(subject.lifecycle.start()));
-  const urlResult = Effect.runPromise(Effect.either(subject.lifecycle.getUrl()));
+  const startResult = Effect.runPromise(Effect.result(subject.lifecycle.start()));
+  const urlResult = Effect.runPromise(Effect.result(subject.lifecycle.getUrl()));
 
   await Effect.runPromise(subject.lifecycle.stop());
 
   const [start, url] = await Promise.all([startResult, urlResult]);
-  assert.equal(Either.isLeft(start) ? start.left.reason : undefined, 'process_error');
-  assert.equal(Either.isLeft(url) ? url.left.reason : undefined, 'process_error');
+  assert.equal(Result.isFailure(start) ? start.failure.reason : undefined, 'process_error');
+  assert.equal(Result.isFailure(url) ? url.failure.reason : undefined, 'process_error');
   assert.equal(
-    Either.isLeft(start) ? start.left.diagnostic.message : undefined,
+    Result.isFailure(start) ? start.failure.diagnostic.message : undefined,
     'Runtime lifecycle is stopping or stopped.',
   );
   assert.equal(
-    Either.isLeft(url) ? url.left.diagnostic.message : undefined,
+    Result.isFailure(url) ? url.failure.diagnostic.message : undefined,
     'Runtime lifecycle is stopping or stopped.',
   );
   assert.deepEqual(subject.signals, ['SIGTERM']);

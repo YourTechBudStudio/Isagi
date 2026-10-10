@@ -159,7 +159,7 @@ function reconcileHarness(
       destination: target.path,
       diagnostic: null,
     } satisfies HarnessResult),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.succeed({
         harness,
         availability,

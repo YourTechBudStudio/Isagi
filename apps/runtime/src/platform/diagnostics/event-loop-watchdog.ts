@@ -5,7 +5,7 @@ import { getDiagnosticMarker } from './phase.js';
 const pollIntervalMs = 250;
 const lagWarningThresholdMs = 1_000;
 
-export const EventLoopWatchdogLive = Layer.scopedDiscard(
+export const EventLoopWatchdogLive = Layer.effectDiscard(
   Effect.acquireRelease(
     Effect.sync(() => {
       let expectedAt = Date.now() + pollIntervalMs;

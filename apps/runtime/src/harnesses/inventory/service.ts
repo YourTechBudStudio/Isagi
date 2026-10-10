@@ -1,6 +1,10 @@
-import { Context, Deferred, Effect, Layer, Ref } from 'effect';
+import { Clock, Context, Deferred, Effect, Layer, Ref } from 'effect';
 
-import { UserShell, type UserShellCommandResult } from '../../platform/process/user-shell.js';
+import {
+  UserShell,
+  type UserShellCommandResult,
+  type UserShellService,
+} from '../../platform/process/user-shell.js';
 import {
   approvedHostEnvironmentKeys,
   type ApprovedHostEnvironment,
@@ -23,9 +27,9 @@ export interface HostInventoryService {
   readonly refresh: Effect.Effect<HostInventorySnapshot>;
 }
 
-export const HostInventory = Context.GenericTag<HostInventoryService>('isagi/HostInventory');
+export const HostInventory = Context.Service<HostInventoryService>('isagi/HostInventory');
 
-export const HostInventoryLive = Layer.scoped(
+export const HostInventoryLive = Layer.effect(
   HostInventory,
   Effect.gen(function* () {
     const shell = yield* UserShell;
@@ -65,7 +69,7 @@ export const HostInventoryLive = Layer.scoped(
               collect.pipe(
                 Effect.tap((inventory) =>
                   Effect.gen(function* () {
-                    const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+                    const now = yield* Clock.currentTimeMillis;
                     const nextGeneration = yield* Ref.updateAndGet(
                       generation,
                       (value) => value + 1,
@@ -98,7 +102,7 @@ export const HostInventoryLive = Layer.scoped(
   }),
 );
 
-function collectHostInventory(shell: Context.Tag.Service<typeof UserShell>) {
+function collectHostInventory(shell: UserShellService) {
   return Effect.gen(function* () {
     const [pi, opencode, claude, codex] = yield* Effect.all(
       [
@@ -116,7 +120,7 @@ function collectHostInventory(shell: Context.Tag.Service<typeof UserShell>) {
   });
 }
 
-function probeVersion(shell: Context.Tag.Service<typeof UserShell>, probe: HarnessProbeDefinition) {
+function probeVersion(shell: UserShellService, probe: HarnessProbeDefinition) {
   return runProbe(shell, probe).pipe(
     Effect.map((result): ExecutableProbeResult => {
       const failure = probeFailure(probe.command, result);
@@ -128,7 +132,7 @@ function probeVersion(shell: Context.Tag.Service<typeof UserShell>, probe: Harne
   );
 }
 
-function runProbe(shell: Context.Tag.Service<typeof UserShell>, probe: HarnessProbeDefinition) {
+function runProbe(shell: UserShellService, probe: HarnessProbeDefinition) {
   return shell.run({ ...probe, timeoutMs: probeTimeoutMs, maxOutputBytes: probeOutputLimitBytes });
 }
 
@@ -185,7 +189,7 @@ function approvedEnvironment(environment: NodeJS.ProcessEnv): ApprovedHostEnviro
 }
 
 function approvedEnvironmentResult(
-  environment: Context.Tag.Service<typeof UserShell>['environment'],
+  environment: UserShellService['environment'],
 ): HostEnvironmentResult {
   const values = approvedEnvironment(environment.values);
   return environment._tag === 'Available'

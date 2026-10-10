@@ -6,6 +6,7 @@ import type {
   WorkspaceSnapshot,
 } from '@isagi/contracts';
 
+import { requestBodyText } from '../../test-support/request-body.js';
 import { FIXTURE_CONTROL_PLANE } from '../seed.js';
 import {
   INITIAL_WORKSPACE,
@@ -220,7 +221,7 @@ export function installStateTransitionsRuntime() {
       return success({ activeContext: readActiveContext() });
     }
     if (key === 'PUT /workspace/active-context') {
-      const body = JSON.parse(String(requestInit?.body ?? '{}')) as {
+      const body = JSON.parse(requestBodyText(requestInit?.body) ?? '{}') as {
         activeContext: SetActiveContextInput;
       };
       storeActiveContext(body.activeContext);

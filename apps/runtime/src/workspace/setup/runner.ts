@@ -121,7 +121,7 @@ function runHook(input: {
       completedAt: timestamp(),
       ...result.details,
     })),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.succeed({
         hookIndex: input.hookIndex,
         hookType: input.hook.type,
@@ -257,7 +257,7 @@ function runCommandHook(
   hook: Extract<WorktreePostCreateHook, { type: 'command' }>,
   worktreePath: string,
 ) {
-  return Effect.async<
+  return Effect.callback<
     {
       readonly status: 'succeeded';
       readonly details: StepDetails;

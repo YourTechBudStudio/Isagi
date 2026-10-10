@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Deferred, Effect, Fiber, Layer, Option, Ref } from 'effect';
+import { Deferred, Effect, Fiber, Layer, Ref } from 'effect';
 
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
@@ -100,13 +100,13 @@ test('launch policy reports each fail-closed state and permits an available enab
   ];
   for (const item of cases) {
     const result = await runControlPlane(item.state, item.inventory, (service) =>
-      service.assertCanCreateProcess('pi').pipe(Effect.either),
+      service.assertCanCreateProcess('pi').pipe(Effect.result),
     );
     assert.equal(
-      result._tag === 'Right'
+      result._tag === 'Success'
         ? 'allowed'
-        : result.left instanceof HarnessLaunchBlocked
-          ? result.left.reason
+        : result.failure instanceof HarnessLaunchBlocked
+          ? result.failure.reason
           : 'unexpected',
       item.expected,
     );
@@ -157,14 +157,14 @@ test('start does not complete until initial host inventory is ready', async () =
       Effect.scoped(
         Effect.gen(function* () {
           const controlPlane = yield* HarnessControlPlane;
-          const startFiber = yield* Effect.fork(controlPlane.start);
+          const startFiber = yield* Effect.forkChild(controlPlane.start);
           yield* Deferred.await(refreshStarted);
-          yield* Effect.yieldNow();
-          const before = yield* Fiber.poll(startFiber);
+          yield* Effect.yieldNow;
+          const before = yield* Effect.sync(() => startFiber.pollUnsafe());
           yield* Deferred.succeed(releaseRefresh, undefined);
           yield* Fiber.join(startFiber);
           yield* controlPlane.assertCanCreateProcess('pi');
-          return Option.isSome(before);
+          return before !== undefined;
         }).pipe(Effect.provide(layer)),
       ),
     );
@@ -366,11 +366,11 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
             expectedPolicyRevision: harnessPolicyRevision('missing', disabledPolicy),
             policy: disabledPolicy,
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(layer)),
     ),
   );
-  assert.ok(result._tag === 'Left' && result.left instanceof ControlPlaneNotReady);
+  assert.ok(result._tag === 'Failure' && result.failure instanceof ControlPlaneNotReady);
   assert.equal(committed, false);
 });
 
@@ -418,7 +418,7 @@ function controlPlaneLayer(
       return {
         getCached: Ref.get(ref),
         startRefresh: refresh,
-        refresh: Effect.zipRight(refresh, Ref.get(ref)).pipe(
+        refresh: Effect.andThen(refresh, Ref.get(ref)).pipe(
           Effect.map((current) => {
             if (current._tag === 'Pending') throw new Error('inventory remained pending');
             return current.inventory;

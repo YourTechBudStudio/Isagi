@@ -98,7 +98,7 @@ export function cleanupPtyProcess(
     const inspection = yield* deps.catalog
       .forBackend(session.backend)
       .inspect(ref)
-      .pipe(Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
+      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
 
     if (inspection.status === 'unavailable') {
       return yield* Effect.fail(backendUnavailable(session.backend, session.id));

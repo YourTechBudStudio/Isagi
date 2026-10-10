@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { CliAccessService } from '../../cli-access/index.js';
 import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
@@ -164,7 +164,7 @@ function startAllocation(
   return Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const prepared = yield* restore(prepareLaunch(deps, input, ptyProcessId)).pipe(
-        Effect.either,
+        Effect.result,
         // Quiescence-safe: nothing has reached a backend yet, so no session can
         // ever materialize for this row and a terminal write is honest.
         Effect.onInterrupt(() =>
@@ -175,10 +175,10 @@ function startAllocation(
           ),
         ),
       );
-      if (Either.isLeft(prepared)) {
+      if (Result.isFailure(prepared)) {
         console.warn(
           `[runtime] PTY process launch preparation failed ptyProcessId=${ptyProcessId} command=${metadata.command}`,
-          prepared.left,
+          prepared.failure,
         );
         yield* markLaunchFailed(
           deps,
@@ -188,12 +188,12 @@ function startAllocation(
         return yield* withPersistedLogPath(deps, metadata);
       }
 
-      const spawned = yield* restore(spawnBackendProcess(deps, prepared.right, metadata)).pipe(
-        Effect.either,
+      const spawned = yield* restore(spawnBackendProcess(deps, prepared.success, metadata)).pipe(
+        Effect.result,
         Effect.onInterrupt(() => cleanupCancelledSpawn(deps, ptyProcessId)),
       );
-      if (Either.isLeft(spawned)) {
-        yield* foldSpawnFailure(deps, metadata, spawned.left);
+      if (Result.isFailure(spawned)) {
+        yield* foldSpawnFailure(deps, metadata, spawned.failure);
         return yield* withPersistedLogPath(deps, metadata);
       }
 
@@ -205,10 +205,10 @@ function startAllocation(
       yield* deps.repository
         .updateBackendRef({
           ptyProcessId,
-          backendRefJson: JSON.stringify(spawned.right),
+          backendRefJson: JSON.stringify(spawned.success),
         })
         .pipe(
-          Effect.zipRight(
+          Effect.andThen(
             transitionProcessByIdAndPublish(deps.repository, deps.eventBus, {
               ptyProcessId,
               status: 'running',
@@ -217,7 +217,7 @@ function startAllocation(
               signal: null,
             }),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               console.warn(
                 `[runtime] Could not persist PTY launch result; the process is live and the poller will reconcile it ptyProcessId=${ptyProcessId}`,
@@ -343,7 +343,7 @@ function spawnBackendProcess(
           deps.foreground
             .clear(metadata.ptyProcessId)
             .pipe(
-              Effect.zipRight(
+              Effect.andThen(
                 handleExit(
                   deps.repository,
                   deps.eventBus,
@@ -422,7 +422,7 @@ function markLaunchFailed(
     exitCode: null,
     signal: null,
   }).pipe(
-    Effect.catchAll((error) => Effect.sync(() => console.warn(failureLogMessage, error))),
+    Effect.catch((error) => Effect.sync(() => console.warn(failureLogMessage, error))),
     Effect.asVoid,
   );
 }
@@ -436,7 +436,7 @@ function withPersistedLogPath(
   metadata: PtyProcessLaunchMetadata,
 ): Effect.Effect<PtyProcessLaunchMetadata> {
   return deps.repository.findProcess(metadata.ptyProcessId).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         console.warn(
           `[runtime] Could not read persisted PTY launch metadata; returning launch result without a log path ptyProcessId=${metadata.ptyProcessId}`,

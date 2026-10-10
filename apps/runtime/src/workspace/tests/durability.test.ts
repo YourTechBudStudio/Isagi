@@ -37,7 +37,7 @@ import { liveWorkspaceLayer } from '../testing.js';
  * prove nothing beyond in-memory consistency.
  */
 
-type SurfaceTestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
+type SurfaceTestServices = Layer.Success<ReturnType<typeof testLayer>>;
 
 /** Runs one program against `dataRoot` in its own scope, then closes it. */
 function inFreshScope<A, E>(dataRoot: string, build: Effect.Effect<A, E, SurfaceTestServices>) {

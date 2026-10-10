@@ -52,7 +52,7 @@ function byName(a: Candidate, b: Candidate) {
 }
 
 /** A real event-loop turn, not a microtask: timers and IO callbacks get to run. */
-const yieldToEventLoop = Effect.async<void>((resume) => {
+const yieldToEventLoop = Effect.callback<void>((resume) => {
   const handle = setImmediate(() => {
     resume(Effect.void);
   });
@@ -180,7 +180,7 @@ function listDirectoryEntries(basePath: string) {
     try: () => readdir(basePath, { withFileTypes: true }),
     catch: (error) => error,
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         logDiagnosticEvent(
           'paths.listing_failed',

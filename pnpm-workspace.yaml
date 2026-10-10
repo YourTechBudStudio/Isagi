@@ -1,6 +1,9 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+catalog:
+  '@effect/atom-react': ~4.0.2
+  effect: ~4.0.2
 allowBuilds:
   better-sqlite3: true
   node-pty: true

@@ -1,7 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { Data, Effect, Either } from 'effect';
+import { Data, Effect, Result } from 'effect';
 import { parse } from 'yaml';
 
 import type { WorktreeCommandCatalogConfig, WorktreeHooksConfig } from './config-schema.js';
@@ -116,34 +116,34 @@ export function loadWorktreeCommandCatalog(input: {
               path: configPath,
             }
           : commandConfigDiagnostic(configPath, 'Could not read command config.', cause),
-    }).pipe(Effect.either);
-    if (Either.isLeft(contents)) {
-      return contents.left;
+    }).pipe(Effect.result);
+    if (Result.isFailure(contents)) {
+      return contents.failure;
     }
 
     const parsed = yield* Effect.try({
-      try: () => parse(contents.right),
+      try: () => parse(contents.success),
       catch: (cause) =>
         commandConfigDiagnostic(configPath, 'Could not parse command config.', cause),
-    }).pipe(Effect.either);
-    if (Either.isLeft(parsed)) {
-      return parsed.left;
+    }).pipe(Effect.result);
+    if (Result.isFailure(parsed)) {
+      return parsed.failure;
     }
 
     const config = yield* Effect.try({
       try: () =>
-        normalizeCommandCatalogConfig(parsed.right, {
+        normalizeCommandCatalogConfig(parsed.success, {
           worktreeRootPath: input.worktreeRootPath,
         }),
       catch: (cause) => commandConfigDiagnostic(configPath, 'Invalid command config.', cause),
-    }).pipe(Effect.either);
-    if (Either.isLeft(config)) {
-      return config.left;
+    }).pipe(Effect.result);
+    if (Result.isFailure(config)) {
+      return config.failure;
     }
 
     return {
       status: 'configured' as const,
-      config: config.right,
+      config: config.success,
       path: configPath,
     };
   });

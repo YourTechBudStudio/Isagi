@@ -3,7 +3,8 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 
-import { Duration, Effect, Fiber, TestClock, TestContext } from 'effect';
+import { Duration, Effect, Fiber } from 'effect';
+import { TestClock } from 'effect/testing';
 
 import {
   defaultEditorProbeRequest,
@@ -49,12 +50,12 @@ function scriptedRequest(script: {
 
 function runProbe(
   request: EditorProbeRequest,
-  advance: Duration.DurationInput,
+  advance: Duration.Input,
   timing: Partial<typeof TIMING> = {},
 ) {
   return Effect.gen(function* () {
     const settlements: EditorReadinessSettlement[] = [];
-    const fiber = yield* Effect.fork(
+    const fiber = yield* Effect.forkChild(
       probeWorkbench({
         host: '127.0.0.1',
         port: 41_287,
@@ -69,7 +70,7 @@ function runProbe(
     yield* TestClock.adjust(advance);
     yield* Fiber.join(fiber);
     return settlements;
-  }).pipe(Effect.provide(TestContext.TestContext));
+  }).pipe(Effect.provide(TestClock.layer()));
 }
 
 test('both stages passing settles ready with no detail', async () => {
@@ -140,7 +141,7 @@ test('a probe interrupted mid-flight writes no observation', async () => {
   const settlements = await Effect.runPromise(
     Effect.gen(function* () {
       const recorded: EditorReadinessSettlement[] = [];
-      const fiber = yield* Effect.fork(
+      const fiber = yield* Effect.forkChild(
         probeWorkbench({
           host: '127.0.0.1',
           port: 41_287,
@@ -156,7 +157,7 @@ test('a probe interrupted mid-flight writes no observation', async () => {
       yield* Fiber.interrupt(fiber);
       yield* TestClock.adjust(Duration.seconds(120));
       return recorded;
-    }).pipe(Effect.provide(TestContext.TestContext)),
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   assert.deepEqual(settlements, []);

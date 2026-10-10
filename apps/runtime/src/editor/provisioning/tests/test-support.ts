@@ -74,7 +74,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
   // that prepares state twice must see the same directory both times.
   const sessionSocketDirectory = testSessionSocketDirectory();
   const record = (operation: string) =>
-    Effect.zipRight(
+    Effect.andThen(
       Effect.sync(() => {
         calls.push(operation);
       }),
@@ -83,7 +83,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
 
   const io: EditorInstallIoService = {
     downloadTo: ({ destination }) =>
-      Effect.zipRight(
+      Effect.andThen(
         record('downloadTo'),
         Effect.suspend(() => {
           if (behaviour.downloadFailure) {
@@ -105,7 +105,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
       ),
 
     extractTarGz: ({ into }) =>
-      Effect.zipRight(
+      Effect.andThen(
         record('extractTarGz'),
         Effect.suspend(() => {
           if (behaviour.extractFailure) {
@@ -127,7 +127,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
       ),
 
     assertExecutable: (path) =>
-      Effect.zipRight(
+      Effect.andThen(
         record('assertExecutable'),
         Effect.try({
           try: () => accessSync(path, fsConstants.X_OK),
@@ -142,7 +142,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
       ),
 
     prepareEditorState: ({ editorsPath }) =>
-      Effect.zipRight(
+      Effect.andThen(
         record('prepareEditorState'),
         Effect.suspend(() => {
           if (behaviour.prepareEditorStateFails) {

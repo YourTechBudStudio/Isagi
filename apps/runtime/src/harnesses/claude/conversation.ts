@@ -117,7 +117,7 @@ function readTranscriptFile(input: {
     try: () => readFile(input.transcriptPath, 'utf8'),
     catch: (error) => error,
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         if (input.missingIsExpected && isMissingFileError(error)) return null;
         console.warn('[runtime] Claude transcript could not be read', {
@@ -167,7 +167,7 @@ function discoverNativeTranscriptPaths(input: {
     const projectDirectories = yield* Effect.tryPromise({
       try: () => readdir(projectsDirectory, { withFileTypes: true }),
       catch: (error) => error,
-    }).pipe(Effect.catchAll(() => Effect.succeed([])));
+    }).pipe(Effect.catch(() => Effect.succeed([])));
 
     const candidates: ClaudeTranscriptPath[] = [];
     for (const entry of projectDirectories) {

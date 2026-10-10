@@ -10,22 +10,20 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Schema } from 'effect';
 
-/** Shared scalars and value shapes for the workflow wire surface. */
+import { nonEmptyString, positiveInteger } from '../scalars.js';
 
-export const positiveInteger = Schema.Number.pipe(Schema.int(), Schema.positive());
-export const nonNegativeInteger = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
-export const nonEmptyString = Schema.String.pipe(Schema.minLength(1));
+/** Shared value shapes for the workflow wire surface. */
 
-export const workflowInputKindSchema = Schema.Literal(...workflowInputKinds);
-export const workflowWaitKindSchema = Schema.Literal(...workflowWaitKinds);
+export const workflowInputKindSchema = Schema.Literals(workflowInputKinds);
+export const workflowWaitKindSchema = Schema.Literals(workflowWaitKinds);
 
-export const workflowQuestionOptionSchema: Schema.Schema<WorkflowQuestionOption> = Schema.Struct({
+export const workflowQuestionOptionSchema: Schema.Codec<WorkflowQuestionOption> = Schema.Struct({
   value: Schema.String,
   label: Schema.optional(Schema.String),
   hint: Schema.optional(Schema.String),
 });
 
-export const workflowQuestionSpecSchema: Schema.Schema<WorkflowQuestionSpec> = Schema.Union(
+export const workflowQuestionSpecSchema: Schema.Codec<WorkflowQuestionSpec> = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal('text'),
     key: Schema.String,
@@ -53,28 +51,28 @@ export const workflowQuestionSpecSchema: Schema.Schema<WorkflowQuestionSpec> = S
     label: Schema.String,
     default: Schema.optional(Schema.Boolean),
   }),
-);
+]);
 
-export const workflowCommandManifestSchema: Schema.Schema<WorkflowCommandManifest> = Schema.Struct({
+export const workflowCommandManifestSchema: Schema.Codec<WorkflowCommandManifest> = Schema.Struct({
   title: nonEmptyString,
   description: Schema.optional(Schema.String),
   inputs: Schema.optional(Schema.Array(workflowQuestionSpecSchema)),
 });
 
-export const workflowUiFeedbackSchema: Schema.Schema<WorkflowUiFeedback> = Schema.Struct({
-  kind: Schema.optional(Schema.Literal('info', 'warning', 'error')),
+export const workflowUiFeedbackSchema: Schema.Codec<WorkflowUiFeedback> = Schema.Struct({
+  kind: Schema.optional(Schema.Literals(['info', 'warning', 'error'])),
   phase: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
 });
 
-export const workflowLogLevelSchema = Schema.Literal('debug', 'info', 'warning', 'error');
+export const workflowLogLevelSchema = Schema.Literals(['debug', 'info', 'warning', 'error']);
 
-export const workflowUserInputAnswersSchema = Schema.Record({
-  key: Schema.String,
-  value: Schema.Union(Schema.String, Schema.Array(Schema.String), Schema.Boolean),
-});
+export const workflowUserInputAnswersSchema = Schema.Record(
+  Schema.String,
+  Schema.Union([Schema.String, Schema.Array(Schema.String), Schema.Boolean]),
+);
 
-export const workflowInputsSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+export const workflowInputsSchema = Schema.Record(Schema.String, Schema.Unknown);
 
 /**
  * Which worktree a run was asked to execute in.
@@ -83,7 +81,7 @@ export const workflowInputsSchema = Schema.Record({ key: Schema.String, value: S
  * shape and this schema decodes it, so a drift between the two is a compile error instead of a
  * decode failure at launch.
  */
-export const workflowWorktreeChoiceSchema: Schema.Schema<WorkflowWorktreeChoice> = Schema.Union(
+export const workflowWorktreeChoiceSchema: Schema.Codec<WorkflowWorktreeChoice> = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('current') }),
   Schema.Struct({ kind: Schema.Literal('existing'), worktreeId: positiveInteger }),
   Schema.Struct({
@@ -91,32 +89,33 @@ export const workflowWorktreeChoiceSchema: Schema.Schema<WorkflowWorktreeChoice>
     branch: nonEmptyString,
     fromRef: nonEmptyString,
   }),
-);
+]);
 
 /** Which surface a run was asked to attach to. Bound to the SDK type for the same reason. */
-export const workflowSurfaceChoiceSchema: Schema.Schema<WorkflowSurfaceChoice> = Schema.Union(
+export const workflowSurfaceChoiceSchema: Schema.Codec<WorkflowSurfaceChoice> = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('current') }),
   Schema.Struct({ kind: Schema.Literal('existing'), surfaceId: positiveInteger }),
   Schema.Struct({ kind: Schema.Literal('create'), title: nonEmptyString }),
-);
+]);
 
 /** A requested placement: what was asked for, never what was obtained. */
-export const workflowPlacementRequestSchema: Schema.Schema<WorkflowPlacementRequest> =
-  Schema.Struct({
+export const workflowPlacementRequestSchema: Schema.Codec<WorkflowPlacementRequest> = Schema.Struct(
+  {
     worktree: workflowWorktreeChoiceSchema,
     surface: workflowSurfaceChoiceSchema,
-  });
+  },
+);
 
 /**
  * Who decided the placement. `override` is a caller supplying `placement` on the launch request,
  * `selector` is the workflow's own `placement` hook, `default` is current/current when neither is
  * present. A caller beats the hook, which beats the default.
  */
-export const workflowPlacementSourceSchema = Schema.Literal('default', 'selector', 'override');
+export const workflowPlacementSourceSchema = Schema.Literals(['default', 'selector', 'override']);
 
-export const workflowNodeKindSchema = Schema.Literal('operation', 'subgraph', 'checkpoint');
+export const workflowNodeKindSchema = Schema.Literals(['operation', 'subgraph', 'checkpoint']);
 
-export const workflowOutcomeKindSchema = Schema.Literal('success', 'failure');
+export const workflowOutcomeKindSchema = Schema.Literals(['success', 'failure']);
 
 export type WorkflowWorktreeChoiceDto = typeof workflowWorktreeChoiceSchema.Type;
 export type WorkflowSurfaceChoiceDto = typeof workflowSurfaceChoiceSchema.Type;

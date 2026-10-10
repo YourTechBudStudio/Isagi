@@ -9,7 +9,7 @@ import type { WorkflowOrigin } from '../../types.js';
 import { makePlacementContext, type DiscoveryDeps } from './discovery.js';
 import type { LaunchProject, PlacementSelection } from './types.js';
 
-const decodePlacementRequest = Schema.decodeUnknown(workflowPlacementRequestSchema);
+const decodePlacementRequest = Schema.decodeUnknownEffect(workflowPlacementRequestSchema);
 
 /** Longest title `validateSurfaceTitle` accepts. */
 const surfaceTitleMaxLength = 80;

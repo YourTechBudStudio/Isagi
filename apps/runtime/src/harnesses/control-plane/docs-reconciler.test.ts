@@ -260,11 +260,11 @@ test('failed staged publication restores the previous exact-name target', async 
   };
   const result = await Effect.runPromise(
     publishDocsTargets({ destination, legacyDestinations: [], files }, fileSystem).pipe(
-      Effect.either,
+      Effect.result,
     ),
   );
-  assert.equal(result._tag, 'Left');
-  assert.equal(result._tag === 'Left' ? result.left.reason : null, 'publication_failed');
+  assert.equal(result._tag, 'Failure');
+  assert.equal(result._tag === 'Failure' ? result.failure.reason : null, 'publication_failed');
   assert.equal(entries.get(destination), 'previous content');
   assert.equal(
     [...entries.keys()].some((path) => path.includes('.isagi-docs-backup-')),
@@ -297,10 +297,10 @@ test('failed current publication restores both the prior current and reserved le
         files: new Map([['', 'new router']]),
       },
       fileSystem,
-    ).pipe(Effect.either),
+    ).pipe(Effect.result),
   );
 
-  assert.equal(result._tag, 'Left');
+  assert.equal(result._tag, 'Failure');
   assert.equal(entries.get(destination), 'previous router');
   assert.equal(entries.get(legacy), 'previous skill');
   assert.equal(
@@ -334,10 +334,10 @@ test('failed legacy cleanup rolls back both the new publication and legacy retir
         files: new Map([['', 'new router']]),
       },
       fileSystem,
-    ).pipe(Effect.either),
+    ).pipe(Effect.result),
   );
 
-  assert.equal(result._tag, 'Left');
+  assert.equal(result._tag, 'Failure');
   assert.equal(entries.get(destination), 'previous router');
   assert.equal(entries.get(legacy), 'previous skill');
   assert.equal(

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Semaphore } from 'effect';
 
 // Per-entity mutual exclusion for operations that must not interleave on the
 // same durable entity, lifted out of `session-lifecycle.service.ts` so the two
@@ -48,7 +48,7 @@ export interface EntityLockService {
   ) => Effect.Effect<A, E, R>;
 }
 
-export const EntityLock = Context.GenericTag<EntityLockService>('isagi/EntityLock');
+export const EntityLock = Context.Service<EntityLockService>('isagi/EntityLock');
 
 export function entityLockKeyId(key: EntityLockKey) {
   return `${key.kind}:${key.id}`;
@@ -64,10 +64,10 @@ export function entityLockKeyId(key: EntityLockKey) {
  * at shutdown rather than a lifecycle guarantee — normal code cannot reach the
  * map once its scope is gone.
  */
-export const EntityLockLive = Layer.scoped(
+export const EntityLockLive = Layer.effect(
   EntityLock,
   Effect.gen(function* () {
-    const semaphores = new Map<string, Effect.Semaphore>();
+    const semaphores = new Map<string, Semaphore.Semaphore>();
 
     const service: EntityLockService = {
       withLock: (key, run) =>
@@ -75,7 +75,7 @@ export const EntityLockLive = Layer.scoped(
           const keyId = entityLockKeyId(key);
           let semaphore = semaphores.get(keyId);
           if (!semaphore) {
-            semaphore = yield* Effect.makeSemaphore(1);
+            semaphore = yield* Semaphore.make(1);
             semaphores.set(keyId, semaphore);
           }
           // The one place a witness is created, and the only reason this file

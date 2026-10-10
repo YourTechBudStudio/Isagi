@@ -95,9 +95,9 @@ function fetchWithTimeout(url: string, timeoutMs: number, init?: RequestInit) {
     try: (signal) => fetch(url, { ...init, signal }),
     catch: toError,
   }).pipe(
-    Effect.timeoutFail({
+    Effect.timeoutOrElse({
       duration: Duration.millis(timeoutMs),
-      onTimeout: () => new Error(`${url} request timed out after ${timeoutMs}ms`),
+      orElse: () => Effect.fail(new Error(`${url} request timed out after ${timeoutMs}ms`)),
     }),
   );
 }

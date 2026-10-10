@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Either, Layer } from 'effect';
+import { Effect, Layer, Result } from 'effect';
 
 import { HarnessLaunchBlocked } from '../../../harnesses/control-plane/index.js';
 import {
@@ -132,14 +132,14 @@ test('agent session lifecycle refuses to launch when harness metadata is missing
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* AgentSessionService;
-      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+      return yield* service.ensureActivePtyProcess(10).pipe(Effect.result);
     }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
   );
 
-  assert.equal(Either.isLeft(result), true);
+  assert.equal(Result.isFailure(result), true);
   assert.equal(
-    Either.isLeft(result) && result.left instanceof AgentSessionError
-      ? result.left.code
+    Result.isFailure(result) && result.failure instanceof AgentSessionError
+      ? result.failure.code
       : undefined,
     'harness_metadata_missing',
   );
@@ -160,14 +160,14 @@ test('agent session lifecycle refuses to launch when harness metadata is invalid
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* AgentSessionService;
-      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+      return yield* service.ensureActivePtyProcess(10).pipe(Effect.result);
     }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
   );
 
-  assert.equal(Either.isLeft(result), true);
+  assert.equal(Result.isFailure(result), true);
   assert.equal(
-    Either.isLeft(result) && result.left instanceof AgentSessionError
-      ? result.left.code
+    Result.isFailure(result) && result.failure instanceof AgentSessionError
+      ? result.failure.code
       : undefined,
     'harness_metadata_invalid',
   );
@@ -203,7 +203,7 @@ test('agent session creation checks policy before writing a durable row', async 
       const service = yield* AgentSessionService;
       return yield* service
         .startFresh({ worktreeId: 1, harness: 'pi', cwd: '/repo/isagi' })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
     }).pipe(
       Effect.provide(
         testLayer({
@@ -216,10 +216,10 @@ test('agent session creation checks policy before writing a durable row', async 
       ),
     ),
   );
-  assert.equal(Either.isLeft(result), true);
+  assert.equal(Result.isFailure(result), true);
   assert.equal(
-    Either.isLeft(result) && result.left instanceof HarnessLaunchBlocked
-      ? result.left.reason
+    Result.isFailure(result) && result.failure instanceof HarnessLaunchBlocked
+      ? result.failure.reason
       : null,
     'harness_disabled',
   );
@@ -260,7 +260,7 @@ test('blocked policy allows reuse of a live process but rejects a relaunch', asy
   const relaunched = await Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* AgentSessionService;
-      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+      return yield* service.ensureActivePtyProcess(10).pipe(Effect.result);
     }).pipe(
       Effect.provide(
         testLayer({
@@ -272,10 +272,10 @@ test('blocked policy allows reuse of a live process but rejects a relaunch', asy
       ),
     ),
   );
-  assert.equal(Either.isLeft(relaunched), true);
+  assert.equal(Result.isFailure(relaunched), true);
   assert.equal(
-    Either.isLeft(relaunched) && relaunched.left instanceof HarnessLaunchBlocked
-      ? relaunched.left.reason
+    Result.isFailure(relaunched) && relaunched.failure instanceof HarnessLaunchBlocked
+      ? relaunched.failure.reason
       : null,
     'harness_disabled',
   );

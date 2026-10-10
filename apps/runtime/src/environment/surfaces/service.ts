@@ -151,7 +151,7 @@ export interface SurfaceService {
   }) => Effect.Effect<MoveSurfaceOrderOutput, MoveSurfaceOrderServiceError>;
 }
 
-export const SurfaceService = Context.GenericTag<SurfaceService>('isagi/SurfaceService');
+export const SurfaceService = Context.Service<SurfaceService>('isagi/SurfaceService');
 
 export const SurfaceServiceLive = Layer.effect(
   SurfaceService,
@@ -201,7 +201,7 @@ export const SurfaceServiceLive = Layer.effect(
      */
     const removeStartedPane = (input: { readonly surfaceId: number; readonly paneId: number }) =>
       deleteSurfacePane(input).pipe(
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() =>
             console.warn('[runtime] Could not remove a first pane whose session failed to start', {
               ...input,
@@ -822,7 +822,7 @@ function ensureAgentSessionInWorktree(
         }),
       );
     }),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       error instanceof AgentSessionError
         ? Effect.fail(sessionSurfaceError(error, worktreeId, agentSessionId))
         : Effect.fail(error),
@@ -847,7 +847,7 @@ function ensureTerminalSessionInWorktree(
         }),
       );
     }),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       error instanceof TerminalSessionError
         ? Effect.fail(sessionSurfaceError(error, worktreeId, terminalSessionId))
         : Effect.fail(error),
@@ -1097,7 +1097,7 @@ function terminateDeletedPanePtys(
     gracefulTimeoutMs: 1_000,
     operation: 'surface_delete',
     ptyProcessIds: activePtyProcessIdsForSessions(sessions),
-  }).pipe(Effect.catchAll(() => Effect.void));
+  }).pipe(Effect.catch(() => Effect.void));
 }
 
 function publishSurfaceChanged(

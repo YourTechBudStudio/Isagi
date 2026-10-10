@@ -46,7 +46,7 @@ const isagiTmuxOptions = [
 
 const tmuxKillTimeoutMs = 5_000;
 
-export const TmuxBackend = Context.GenericTag<PtyBackendShape>('isagi/TmuxBackend');
+export const TmuxBackend = Context.Service<PtyBackendShape>('isagi/TmuxBackend');
 
 const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
   Effect.map(({ stdout }) =>
@@ -63,7 +63,7 @@ const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
           }) satisfies TmuxBackendRef,
       ),
   ),
-  Effect.catchAll((cause) =>
+  Effect.catch((cause) =>
     isTmuxServerMissing(cause) ? Effect.succeed([]) : Effect.fail(new PtyInspectError({ cause })),
   ),
 );
@@ -72,7 +72,7 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
   name: 'tmux',
   available: runTmux(['-V']).pipe(
     Effect.as(true),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   ),
   launch: (input) =>
     Effect.gen(function* () {
@@ -259,7 +259,7 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
   inspect: (ref) =>
     runTmux(['has-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
       Effect.as({ status: 'alive' as const }),
-      Effect.catchAll((cause) => Effect.succeed(classifyTmuxInspectFailure(cause))),
+      Effect.catch((cause) => Effect.succeed(classifyTmuxInspectFailure(cause))),
     ),
   listSessions: listTmuxSessions,
   collectGarbage: (input) => collectTmuxGarbage(input, listTmuxSessions),
@@ -304,7 +304,7 @@ function killTmuxSession(sessionName: string, gracefulTimeoutMs: number | null) 
           timeoutMs: tmuxKillTimeoutMs,
         }).pipe(
           Effect.as({ terminated: true } satisfies BackendTerminateResult),
-          Effect.catchAll((cause) =>
+          Effect.catch((cause) =>
             isTmuxBinaryMissing(cause) ||
             !(isTmuxSessionMissing(cause) || isTmuxServerMissing(cause))
               ? Effect.fail(new PtyKillError({ cause }))
@@ -353,7 +353,7 @@ function listTmuxPanePids(sessionName: string, ptyProcessId: number) {
         .map((line) => Number(line.trim()))
         .filter((pid) => Number.isSafeInteger(pid) && pid > 0),
     ),
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.sync(() => {
         if (
           !isTmuxBinaryMissing(cause) &&

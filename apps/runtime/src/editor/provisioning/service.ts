@@ -1,6 +1,6 @@
 import process from 'node:process';
 
-import { Context, Data, Duration, Effect, Layer, Option, Ref } from 'effect';
+import { Context, Data, Duration, Effect, Layer, Option, Ref, Semaphore } from 'effect';
 
 import type { EditorProvisioningFailureReason, EditorProvisioningState } from '@isagi/contracts';
 
@@ -58,7 +58,7 @@ export interface EditorProvisioningService {
   readonly requireReady: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
 }
 
-export const EditorProvisioning = Context.GenericTag<EditorProvisioningService>(
+export const EditorProvisioning = Context.Service<EditorProvisioningService>(
   'isagi/EditorProvisioning',
 );
 
@@ -117,7 +117,7 @@ function projectPhase(phase: EditorProvisioningPhase, version: string): EditorPr
 
 export interface EditorProvisioningOptions {
   readonly capability: EditorCapability;
-  readonly deadline?: Duration.DurationInput;
+  readonly deadline?: Duration.Input;
 }
 
 /**
@@ -132,7 +132,7 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
     const directory = yield* DataDirectory;
     const io = yield* EditorInstallIo;
     const scope = yield* Effect.scope;
-    const deadline = Duration.decode(options.deadline ?? editorProvisioningDeadline);
+    const deadline = Duration.fromInputUnsafe(options.deadline ?? editorProvisioningDeadline);
 
     if (options.capability === null) return notApplicableService;
 
@@ -143,7 +143,7 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
     });
     const setTransient = (status: 'checking' | 'downloading' | 'verifying' | 'extracting') =>
       Ref.set(phase, { kind: 'transient', status });
-    const attempt = yield* Effect.makeSemaphore(1);
+    const attempt = yield* Semaphore.make(1);
     const attemptRequested = yield* Ref.make(false);
 
     const settleFailed = (input: {
@@ -184,27 +184,29 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
         // failure because that is the stage a long attempt overwhelmingly
         // expires in, and the diagnostic says "timed out" rather than implying a
         // transport fault.
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: deadline,
-          onTimeout: () =>
-            new EditorProvisioningFailure({
-              reason: 'download_failed',
-              diagnostic: `Provisioning Code Server ${version} timed out after ${Duration.format(deadline)}.`,
-            }),
+          orElse: () =>
+            Effect.fail(
+              new EditorProvisioningFailure({
+                reason: 'download_failed',
+                diagnostic: `Provisioning Code Server ${version} timed out after ${Duration.format(deadline)}.`,
+              }),
+            ),
         }),
-        Effect.either,
+        Effect.result,
       );
 
-      if (result._tag === 'Left') {
+      if (result._tag === 'Failure') {
         return yield* settleFailed({
-          reason: result.left.reason,
-          diagnostic: result.left.diagnostic,
+          reason: result.failure.reason,
+          diagnostic: result.failure.diagnostic,
         });
       }
-      yield* Ref.set(phase, { kind: 'ready', installation: result.right });
+      yield* Ref.set(phase, { kind: 'ready', installation: result.success });
       return { status: 'ready', version } satisfies EditorProvisioningState;
     }).pipe(
-      // Modelled failures and the deadline settle through `Effect.either` above,
+      // Modelled failures and the deadline settle through `Effect.result` above,
       // but external interruption bypasses it entirely: the retry route runs the
       // attempt under the HTTP request's abort signal, so a client that
       // disconnects mid-download would otherwise leave the projection stuck in a
@@ -228,7 +230,7 @@ export function makeEditorProvisioning(options: EditorProvisioningOptions) {
         ),
       ),
       state: Effect.map(Ref.get(phase), (current) => projectPhase(current, version)),
-      retry: Effect.zipRight(
+      retry: Effect.andThen(
         // Marked before the attempt rather than after, so a boot `start` racing a
         // user retry cannot schedule a second attempt behind it.
         Ref.set(attemptRequested, true),
@@ -277,7 +279,7 @@ export const EditorProvisioningLive: Layer.Layer<
   EditorProvisioningService,
   never,
   DataDirectoryService | EditorInstallIoService
-> = Layer.scoped(
+> = Layer.effect(
   EditorProvisioning,
   Effect.suspend(() =>
     // Read once, at layer acquisition. Everything below this line takes the

@@ -63,8 +63,7 @@ export interface WorkflowRegistryService {
   ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
 }
 
-export const WorkflowRegistry =
-  Context.GenericTag<WorkflowRegistryService>('isagi/WorkflowRegistry');
+export const WorkflowRegistry = Context.Service<WorkflowRegistryService>('isagi/WorkflowRegistry');
 
 export const WorkflowRegistryLive = Layer.effect(
   WorkflowRegistry,

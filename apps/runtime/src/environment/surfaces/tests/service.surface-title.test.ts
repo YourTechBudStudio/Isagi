@@ -11,7 +11,7 @@ import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceError, SurfaceService, validateSurfaceTitle } from '../../index.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
-type TestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
+type TestServices = Layer.Success<ReturnType<typeof testLayer>>;
 
 function inDatabase<A, E>(label: string, effect: Effect.Effect<A, E, TestServices>) {
   const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${label}-`));

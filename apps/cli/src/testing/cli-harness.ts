@@ -1,17 +1,22 @@
 import { Writable } from 'node:stream';
 
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Stream } from 'effect';
 
-import type { RuntimeClientError } from '@isagi/runtime-client';
+import {
+  RuntimeClient,
+  RuntimeTransportError,
+  type RuntimeClientError,
+  type RuntimeContent,
+} from '@isagi/runtime-client';
 
 import type { CommandSpec } from '../commands/table.js';
 import { runCli } from '../main.js';
-import { RuntimeApi, type RuntimeApiService } from '../runtime-api.js';
 
 /**
- * A fake runtime keyed by endpoint id. A route answers with the value its handler returns, or with
- * the runtime-client failure it returns wrapped in `fail(…)`. Every request is recorded, so a test
- * can assert exactly which routes a command called and with what.
+ * A fake `RuntimeClient` keyed by endpoint id. A route answers with the value its handler returns
+ * (a content route with `content(…)` / `cutContent(…)`), or with the runtime-client failure it
+ * returns wrapped in `fail(…)`. Every request is recorded, so a test can assert exactly which routes
+ * a command called and with what.
  */
 export interface RecordedCall {
   readonly endpointId: string;
@@ -26,39 +31,69 @@ export function fail(error: RuntimeClientError) {
   return { [failure]: error };
 }
 
+/** A content route's answer: these bytes, then the end of the body. */
+export function content(bytes: Uint8Array | string): RuntimeContent {
+  return contentOf(
+    Stream.make(typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes),
+  );
+}
+
+/** A content route's answer whose body breaks after `bytes`, like a dropped connection. */
+export function cutContent(endpointId: string, bytes: Uint8Array, cause: unknown): RuntimeContent {
+  return contentOf(
+    Stream.make(bytes).pipe(
+      Stream.concat(Stream.fail(new RuntimeTransportError({ endpointId, cause }))),
+    ),
+  );
+}
+
+function contentOf(stream: Stream.Stream<Uint8Array, RuntimeTransportError>): RuntimeContent {
+  return {
+    contentType: 'application/octet-stream',
+    stream,
+    // The CLI only ever streams a body to its destination.
+    arrayBuffer: Effect.die(new Error('The CLI does not read content bodies whole.')),
+  };
+}
+
 export function fakeRuntime(
   routes: Readonly<Record<string, Route>>,
-  content: Readonly<Record<string, (params: Record<string, string | number>) => RouteAnswer>> = {},
+  contentRoutes: Readonly<
+    Record<string, (params: Record<string, string | number>) => RouteAnswer>
+  > = {},
 ) {
   const calls: RecordedCall[] = [];
-  const answer = (endpointId: string, value: RouteAnswer) => {
+  const answer = (value: RouteAnswer) => {
     if (value && typeof value === 'object' && failure in value) {
       return Effect.fail((value as { [failure]: RuntimeClientError })[failure]);
     }
     return Effect.succeed(value);
   };
-  const layer = (runtimeUrl: string) =>
-    Layer.succeed(RuntimeApi, {
-      runtimeUrl,
-      request: ((endpoint: { id: string }, ...args: unknown[]) =>
-        Effect.suspend(() => {
-          calls.push({ endpointId: endpoint.id, args });
-          const route = routes[endpoint.id];
-          if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
-          return answer(endpoint.id, route(...args));
-        })) as unknown as RuntimeApiService['request'],
-      requestContent: ((
-        endpoint: { id: string },
-        params: Record<string, string | number>,
-        query?: Record<string, unknown>,
-      ) =>
-        Effect.suspend(() => {
-          calls.push({ endpointId: endpoint.id, args: query ? [params, query] : [params] });
-          const route = content[endpoint.id];
-          if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
-          return answer(endpoint.id, route(params));
-        })) as unknown as RuntimeApiService['requestContent'],
-    } satisfies RuntimeApiService);
+  const layer = (runtimeUrl: string): Layer.Layer<RuntimeClient> =>
+    Layer.succeed(
+      RuntimeClient,
+      RuntimeClient.of({
+        runtimeUrl,
+        request: ((endpoint: { id: string }, ...args: unknown[]) =>
+          Effect.suspend(() => {
+            calls.push({ endpointId: endpoint.id, args });
+            const route = routes[endpoint.id];
+            if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
+            return answer(route(...args));
+          })) as unknown as RuntimeClient['Service']['request'],
+        requestContent: ((
+          endpoint: { id: string },
+          params: Record<string, string | number>,
+          query?: Record<string, unknown>,
+        ) =>
+          Effect.suspend(() => {
+            calls.push({ endpointId: endpoint.id, args: query ? [params, query] : [params] });
+            const route = contentRoutes[endpoint.id];
+            if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
+            return answer(route(params));
+          })) as unknown as RuntimeClient['Service']['requestContent'],
+      }),
+    );
   return { calls, layer };
 }
 
@@ -90,7 +125,7 @@ export async function runIsagi(
       cwd: options.cwd ?? process.cwd(),
       env: options.env ?? { ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' },
     },
-    options.runtime ? { runtimeApi: options.runtime.layer } : {},
+    options.runtime ? { runtimeClient: options.runtime.layer } : {},
   );
   const stdoutBytes = stdout.bytes();
   return {

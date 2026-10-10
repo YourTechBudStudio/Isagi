@@ -82,18 +82,20 @@ export function makeOperationContext(
     settle: (value: A) => Partial<Pick<OperationRow, 'resultJson' | 'harnessSessionId'>>,
   ) =>
     effect.pipe(
-      Effect.tapBoth({
-        onFailure: (cause) =>
-          rt.commit('workflow_operation_failed', (db, emit) =>
-            settleOperation(db, emit, operation.id, 'failed', {
-              resultJson: toJson({ error: errorMessage(cause) }),
-            }),
-          ),
-        onSuccess: (value) =>
-          rt.commit('workflow_operation_completed', (db, emit) =>
-            settleOperation(db, emit, operation.id, 'completed', settle(value)),
-          ),
-      }),
+      // `tapError` before `tap`, as `tapBoth` did: a failed completion write is not re-recorded as
+      // the operation failing.
+      Effect.tapError((cause) =>
+        rt.commit('workflow_operation_failed', (db, emit) =>
+          settleOperation(db, emit, operation.id, 'failed', {
+            resultJson: toJson({ error: errorMessage(cause) }),
+          }),
+        ),
+      ),
+      Effect.tap((value) =>
+        rt.commit('workflow_operation_completed', (db, emit) =>
+          settleOperation(db, emit, operation.id, 'completed', settle(value)),
+        ),
+      ),
     );
 
   const context: OperationContext = {

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import { Context, Data, Effect, Layer, Ref } from 'effect';
+import { Context, Data, Effect, Layer, Ref, Semaphore } from 'effect';
 import { Document, isMap, parseDocument } from 'yaml';
 
 import { DataDirectory } from '../platform/persistence/index.js';
@@ -35,7 +35,7 @@ export interface RuntimeConfigService {
     RuntimeConfigError | RuntimeConfigConflict | RuntimeHarnessConfigInvalid
   >;
 }
-export const RuntimeConfig = Context.GenericTag<RuntimeConfigService>('isagi/RuntimeConfig');
+export const RuntimeConfig = Context.Service<RuntimeConfigService>('isagi/RuntimeConfig');
 export const RuntimeConfigLive = Layer.effect(
   RuntimeConfig,
   Effect.gen(function* () {
@@ -43,7 +43,7 @@ export const RuntimeConfigLive = Layer.effect(
     const path = resolve(directory.paths.root, 'config.yaml');
     const initial = yield* readOrCreateRuntimeConfig(path);
     const state = yield* Ref.make(initial);
-    const semaphore = yield* Effect.makeSemaphore(1);
+    const semaphore = yield* Semaphore.make(1);
     return {
       get: Ref.get(state),
       acceptHarnessPolicy: (input) =>

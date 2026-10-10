@@ -1,4 +1,4 @@
-import { Data, Effect, Schema, type ManagedRuntime } from 'effect';
+import { Data, Effect, type ManagedRuntime, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {

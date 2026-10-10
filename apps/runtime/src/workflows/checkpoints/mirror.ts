@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readdir, rm, rmdir, unlink } from 'node:fs/promise
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { CheckpointScope } from '../store/checkpoints.js';
 import type { WorkflowContentStoreService } from '../store/content-store.js';
@@ -115,16 +115,16 @@ async function writeCapturedFile(
   // Capture saw a regular file here: whatever the commit has in its place is replaced.
   await removeEntry(root, file.path);
 
-  const opened = await Effect.runPromise(Effect.either(content.open(`sha256:${file.sha256}`)));
-  if (Either.isLeft(opened)) {
+  const opened = await Effect.runPromise(Effect.result(content.open(`sha256:${file.sha256}`)));
+  if (Result.isFailure(opened)) {
     throw new MirrorFailed(
       file.path,
-      `The saved copy of '${file.path}' is ${opened.left.cause} in the content store.`,
+      `The saved copy of '${file.path}' is ${opened.failure.cause} in the content store.`,
     );
   }
   const absolute = join(root, file.path);
   const mode = file.executable ? 0o755 : 0o644;
-  await pipeline(opened.right, createWriteStream(absolute, { flags: 'wx', mode }));
+  await pipeline(opened.success, createWriteStream(absolute, { flags: 'wx', mode }));
   await chmod(absolute, mode);
 }
 

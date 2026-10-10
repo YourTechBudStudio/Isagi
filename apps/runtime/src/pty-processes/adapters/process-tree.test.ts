@@ -150,7 +150,7 @@ test(
           assert.ok(backend.terminate);
           const ref = yield* launchLeakyRoot(backend, 5_103, fixture.pidFile);
           const pid = yield* Effect.promise(fixture.waitForHelperPid);
-          const fiber = yield* Effect.fork(backend.terminate({ ref, gracefulTimeoutMs: 500 }));
+          const fiber = yield* Effect.forkChild(backend.terminate({ ref, gracefulTimeoutMs: 500 }));
           yield* Effect.sleep(100);
           yield* Fiber.interrupt(fiber);
           return pid;

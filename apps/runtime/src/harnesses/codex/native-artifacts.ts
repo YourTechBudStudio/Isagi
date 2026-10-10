@@ -187,7 +187,7 @@ function indexedCodexRolloutPath(input: {
     },
     catch: (error) => error,
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         if (!isMissingCodexIndexError(error)) {
           console.warn('[runtime] Codex thread index could not be read', {
@@ -356,7 +356,7 @@ function findRolloutFiles(input: {
     const entries = yield* Effect.tryPromise({
       try: () => readdir(input.directory, { withFileTypes: true }),
       catch: (error) => error,
-    }).pipe(Effect.catchAll(() => Effect.succeed([])));
+    }).pipe(Effect.catch(() => Effect.succeed([])));
     const paths: string[] = [];
     for (const entry of entries) {
       const path = join(input.directory, entry.name);
@@ -399,7 +399,7 @@ function readRolloutBuffer(input: {
     try: () => readFile(input.rolloutPath),
     catch: (error) => error,
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         if (input.missingIsExpected && isMissingFileError(error)) return null;
         console.warn('[runtime] Codex rollout could not be read', {

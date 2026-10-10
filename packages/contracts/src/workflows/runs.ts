@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { nonEmptyString, positiveInteger } from '../scalars.js';
 import {
   workflowErrorSchema,
   workflowExecutionSummarySchema,
@@ -9,8 +10,6 @@ import {
 } from './executions.js';
 import { pagedSchema, paginationQueryFields, queryTextSchema } from './pagination.js';
 import {
-  nonEmptyString,
-  positiveInteger,
   workflowCommandManifestSchema,
   workflowInputsSchema,
   workflowNodeKindSchema,
@@ -28,7 +27,7 @@ import { workflowStructureDiagnosticSchema } from './structure.js';
  * `paused` means nothing new starts until Resume. `failed` means an execution failed and Retry is
  * available.
  */
-export const workflowRunStatusSchema = Schema.Literal(
+export const workflowRunStatusSchema = Schema.Literals([
   'preparing',
   'running',
   'waiting',
@@ -36,7 +35,7 @@ export const workflowRunStatusSchema = Schema.Literal(
   'completed',
   'failed',
   'cancelled',
-);
+]);
 
 /** Which controls the runtime will accept right now, derived from the run's status. */
 export const workflowRunControlsSchema = Schema.Struct({
@@ -93,8 +92,8 @@ export const workflowRunSummarySchema = Schema.Struct({
     request: workflowPlacementRequestSchema,
     /** Set exactly when the worktree choice is `create`. */
     baseCommit: Schema.NullOr(nonEmptyString),
-  }).pipe(
-    Schema.filter((placement) =>
+  }).check(
+    Schema.makeFilter((placement) =>
       placement.request.worktree.kind === 'create'
         ? placement.baseCommit !== null ||
           'a create worktree placement must record the commit its ref resolved to'
@@ -128,7 +127,7 @@ export const workflowRunDetailSchema = Schema.Struct({
   /** The raw launch answers. */
   inputs: workflowInputsSchema,
   /** What the workflow's `parse` returned at launch: the root graph's parameters. */
-  parameters: Schema.Unknown,
+  parameters: Schema.optionalKey(Schema.Unknown),
   invocations: Schema.Array(workflowGraphInvocationSchema),
   executions: Schema.Array(workflowExecutionSummarySchema),
 });
@@ -144,7 +143,7 @@ export const workflowLaunchOriginSchema = Schema.Struct({
   agentSessionId: Schema.optional(Schema.NullOr(positiveInteger)),
 });
 
-export const workflowLoadFailureReasonSchema = Schema.Literal(
+export const workflowLoadFailureReasonSchema = Schema.Literals([
   'missing_build',
   'invalid_manifest',
   'unsupported_manifest',
@@ -156,9 +155,9 @@ export const workflowLoadFailureReasonSchema = Schema.Literal(
   'invalid_export',
   'invalid_structure',
   'structure_mismatch',
-);
+]);
 
-export const workflowDescriptorResultSchema = Schema.Union(
+export const workflowDescriptorResultSchema = Schema.Union([
   Schema.Struct({
     ok: Schema.Literal(true),
     workflowKey: nonEmptyString,
@@ -170,7 +169,7 @@ export const workflowDescriptorResultSchema = Schema.Union(
     reason: workflowLoadFailureReasonSchema,
     diagnostics: Schema.Array(workflowStructureDiagnosticSchema),
   }),
-);
+]);
 
 export const listWorkflowDescriptorsInputSchema = Schema.Struct({
   origin: workflowLaunchOriginSchema,

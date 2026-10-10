@@ -5,7 +5,6 @@ import type { TerminalSettings } from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
 
 import { controlPlaneQueryKey } from '../../control-plane/queries.js';
-import { unwrapRuntimeFailure } from '../../runtime/run.js';
 import { isLaunchBlockCode } from '../pane-session/view.js';
 import { surfaceDetailQueryKey } from '../query-keys.js';
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
@@ -102,7 +101,7 @@ export function TerminalPresentationProvider({
           return;
         }
         if (event.type !== 'resolve_failed') return;
-        const failure = unwrapRuntimeFailure(event.error);
+        const failure = event.error;
         if (
           failure instanceof RuntimeApiError &&
           failure.apiError.code === 'session_launch_rejected' &&

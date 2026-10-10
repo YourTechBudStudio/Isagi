@@ -78,7 +78,6 @@ import { runtimeErrorCopy } from '../../copy/index.js';
 import { classifyRuntimeFailure } from '../runtime/classify.js';
 import { createRuntimeClient, type RuntimeClient } from '../runtime/client.js';
 import { resolveRuntimeUrl } from '../runtime/resolve.js';
-import { unwrapRuntimeFailure } from '../runtime/run.js';
 
 let cachedClient: RuntimeClient | null = null;
 let cachedRuntimeUrl: string | null = null;
@@ -544,11 +543,10 @@ function getClient() {
 function runtimeErrorCopyFor(error: unknown, options: { readonly diagnostic: boolean }) {
   // `UserVisibleError` is a workspace-local validation failure (e.g. surface
   // rename), not a runtime-client failure, so it is checked before classifying.
-  const failure = unwrapRuntimeFailure(error);
-  if (failure instanceof UserVisibleError) {
-    return failure.userMessage;
+  if (error instanceof UserVisibleError) {
+    return error.userMessage;
   }
-  const classified = classifyRuntimeFailure(failure);
+  const classified = classifyRuntimeFailure(error);
   switch (classified.kind) {
     case 'api': {
       const summary = runtimeErrorCopy.fromApiError(classified.apiError);

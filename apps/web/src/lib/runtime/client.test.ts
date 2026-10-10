@@ -449,7 +449,13 @@ function captureRequest(data: unknown) {
   globalThis.fetch = ((input, init) => {
     captured.url = String(input);
     captured.method = init?.method;
-    captured.body = typeof init?.body === 'string' ? init.body : null;
+    // The runtime client hands `fetch` its JSON text already encoded as UTF-8 bytes.
+    captured.body =
+      typeof init?.body === 'string'
+        ? init.body
+        : init?.body instanceof Uint8Array
+          ? new TextDecoder().decode(init.body)
+          : null;
     return Promise.resolve(
       new Response(JSON.stringify({ data, meta: { requestId: 'req-editor' } }), { status: 200 }),
     );

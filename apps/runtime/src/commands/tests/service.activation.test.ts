@@ -422,7 +422,7 @@ commands:
       fixture.rootPath,
       ({ service, internalEvents, recorder: progress }) =>
         Effect.gen(function* () {
-          const launching = yield* Effect.fork(
+          const launching = yield* Effect.forkChild(
             service.run({ worktreeId: 10, commandName: 'sweeper' }),
           );
           yield* waitForLog(progress, 'launch-gate-entered');
@@ -480,7 +480,7 @@ commands:
       fixture.rootPath,
       ({ service, internalEvents, recorder: progress }) =>
         Effect.gen(function* () {
-          const launching = yield* Effect.fork(
+          const launching = yield* Effect.forkChild(
             service.run({ worktreeId: 10, commandName: 'sweeper' }),
           );
           yield* waitForLog(progress, 'launch-gate-entered');

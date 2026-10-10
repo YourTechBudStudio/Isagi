@@ -339,7 +339,7 @@ describe('removing a folder project', () => {
           );
           const countRuns = database.use('test_count_runs', (db) => countRunRows(db, runIds));
           const before = { ...(yield* readRows), runs: yield* countRuns };
-          const failure = yield* Effect.either(service.deleteProject(seeded.projectId));
+          const failure = yield* Effect.result(service.deleteProject(seeded.projectId));
           return { before, failure, after: { ...(yield* readRows), runs: yield* countRuns } };
         }).pipe(
           Effect.provide(
@@ -352,8 +352,8 @@ describe('removing a folder project', () => {
         ),
       );
 
-      assert.equal(outcome.failure._tag, 'Left');
-      const error = outcome.failure._tag === 'Left' ? outcome.failure.left : null;
+      assert.equal(outcome.failure._tag, 'Failure');
+      const error = outcome.failure._tag === 'Failure' ? outcome.failure.failure : null;
       assert.ok(error instanceof WorkspaceError);
       // The existing mapping, unchanged: no reason literal was invented here.
       assert.equal(error.code, 'command_cleanup_failed');

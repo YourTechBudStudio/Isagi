@@ -558,7 +558,7 @@ describe('terminal presentation controller', () => {
       resolveUrl: () => {
         env.claims += 1;
         // A claim that never settles on its own: only interruption ends it.
-        return Effect.async<string, Error>(() =>
+        return Effect.callback<string, Error>(() =>
           Effect.sync(() => {
             observedAbort = true;
           }),
@@ -583,11 +583,14 @@ describe('terminal presentation controller', () => {
     });
     const runtimeMessage = 'pty attach failed: exec /bin/zsh: no such file or directory';
     const failure = new RuntimeApiError({
-      code: 'session_launch_rejected',
-      status: 409,
-      message: runtimeMessage,
-      requestId: 'req-42',
-      data: { reason: 'harness_missing' },
+      endpointId: 'surfaces.claimPaneSession',
+      apiError: {
+        code: 'session_launch_rejected',
+        status: 409,
+        message: runtimeMessage,
+        requestId: 'req-42',
+        data: { reason: 'harness_missing' },
+      },
     });
     const session = cache.ensureSession(IDENTITY, PLACEMENT);
     const start = session.beginAttachment();

@@ -27,7 +27,7 @@ export interface PtyBackendCatalogService {
 }
 
 export const PtyBackendCatalog =
-  Context.GenericTag<PtyBackendCatalogService>('isagi/PtyBackendCatalog');
+  Context.Service<PtyBackendCatalogService>('isagi/PtyBackendCatalog');
 
 export const PtyBackendCatalogLive = Layer.effect(
   PtyBackendCatalog,

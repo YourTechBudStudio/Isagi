@@ -1,4 +1,4 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { captureCheckpoint } from '../checkpoints/step.js';
 import { makeOperationContext } from '../operations/context.js';
@@ -58,28 +58,28 @@ function step(rt: EngineRuntime, runId: number): Effect.Effect<boolean, unknown>
     const leaf = yield* rt.read('workflow_read_leaf', (db) => findLeafExecution(db, runId));
     if (!leaf) return true;
 
-    const artifact = yield* rt.loadArtifact(run.artifactHash, run.workflowKey).pipe(Effect.either);
-    if (Either.isLeft(artifact)) {
+    const artifact = yield* rt.loadArtifact(run.artifactHash, run.workflowKey).pipe(Effect.result);
+    if (Result.isFailure(artifact)) {
       yield* failStep(rt, run, leaf, {
         stage: 'node_function',
-        message: `The build ${run.artifactHash} could not be loaded: ${errorMessage(artifact.left)}`,
+        message: `The build ${run.artifactHash} could not be loaded: ${errorMessage(artifact.failure)}`,
       });
       return true;
     }
 
     if (leaf.nodeKind === 'subgraph') {
-      yield* enterSubgraph(rt, artifact.right, runId, leaf);
+      yield* enterSubgraph(rt, artifact.success, runId, leaf);
       return false;
     }
 
     const result = fromJson<SavedResult>(leaf.resultJson);
     if (result === null) {
-      if (leaf.nodeKind === 'checkpoint') yield* captureCheckpoint(rt, artifact.right, run, leaf);
-      else yield* runNodeFunction(rt, artifact.right, run, leaf);
+      if (leaf.nodeKind === 'checkpoint') yield* captureCheckpoint(rt, artifact.success, run, leaf);
+      else yield* runNodeFunction(rt, artifact.success, run, leaf);
       return false;
     }
     if (result.type === 'complete') {
-      return yield* route(rt, artifact.right, runId, leaf.id, { kind: 'immediate' }, null);
+      return yield* route(rt, artifact.success, runId, leaf.id, { kind: 'immediate' }, null);
     }
     const checked = yield* checkWait(rt, leaf, result.wait);
     rt.freshChecks.delete(runId);
@@ -87,7 +87,7 @@ function step(rt: EngineRuntime, runId: number): Effect.Effect<boolean, unknown>
       yield* park(rt, runId, leaf.id);
       return true;
     }
-    return yield* route(rt, artifact.right, runId, leaf.id, checked.event, checked.reply);
+    return yield* route(rt, artifact.success, runId, leaf.id, checked.event, checked.reply);
   });
 }
 
@@ -236,7 +236,7 @@ function runNodeFunction(
     const { context, close } = makeOperationContext(rt, run, leaf);
     const returned = yield* Effect.tryPromise(() =>
       node.run(context, isolate(fromJson(invocation.stateJson))),
-    ).pipe(Effect.either);
+    ).pipe(Effect.result);
     close();
 
     yield* rt.commit('workflow_save_result', (db, emit) => {
@@ -248,13 +248,13 @@ function runNodeFunction(
         message,
         ...at,
       });
-      if (Either.isLeft(returned)) {
+      if (Result.isFailure(returned)) {
         if (execution.status === 'running' && current.status !== 'cancelled') {
-          applyFailure(db, emit, current, execution, failure(errorMessage(returned.left.error)));
+          applyFailure(db, emit, current, execution, failure(errorMessage(returned.failure.cause)));
         }
         return;
       }
-      const validated = validateOperationResult(returned.right);
+      const validated = validateOperationResult(returned.success);
       const problem = validated.ok
         ? (checkSerializable(validated.value, 'result') ??
           unknownHeadlessHandle(validated.value, (id) => getOperation(db, id), run.id))

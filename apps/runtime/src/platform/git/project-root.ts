@@ -79,7 +79,7 @@ export function classifyProjectRoot(root: ValidProjectRoot) {
     // unambiguous branch rather than a second string match.
     const bare = yield* probe(['-C', root.rootPath, 'rev-parse', '--is-bare-repository']).pipe(
       Effect.map((stdout) => ({ ok: true, stdout }) as const),
-      Effect.catchAll((error) => Effect.succeed({ ok: false, error } as const)),
+      Effect.catch((error) => Effect.succeed({ ok: false, error } as const)),
     );
 
     if (!bare.ok) {

@@ -28,12 +28,12 @@ export interface ResolvedPortEntry {
 // the contract's honest `null` rather than failing the read.
 export const resolvedPortsSnapshotSchema = Schema.Array(
   Schema.Struct({
-    envVar: Schema.NullOr(Schema.String.pipe(Schema.minLength(1))),
-    port: Schema.Number.pipe(Schema.int(), Schema.between(1, 65_535)),
+    envVar: Schema.NullOr(Schema.String.check(Schema.isMinLength(1))),
+    port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
     paths: Schema.Array(
       Schema.Struct({
-        label: Schema.String.pipe(Schema.minLength(1)),
-        path: Schema.String.pipe(Schema.minLength(1)),
+        label: Schema.String.check(Schema.isMinLength(1)),
+        path: Schema.String.check(Schema.isMinLength(1)),
       }),
     ),
   }),
@@ -84,8 +84,7 @@ export interface CommandPortProbeService {
   readonly obtainEphemeralPort: Effect.Effect<number, CommandPortAllocationError>;
 }
 
-export const CommandPortProbe =
-  Context.GenericTag<CommandPortProbeService>('isagi/CommandPortProbe');
+export const CommandPortProbe = Context.Service<CommandPortProbeService>('isagi/CommandPortProbe');
 
 /**
  * The commands domain's view of the one socket adapter in the runtime.

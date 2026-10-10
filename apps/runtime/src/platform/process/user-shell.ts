@@ -38,7 +38,7 @@ export type UserShellEnvironmentResult =
       readonly diagnostic: string;
     };
 
-export const UserShell = Context.GenericTag<UserShellService>('isagi/UserShell');
+export const UserShell = Context.Service<UserShellService>('isagi/UserShell');
 
 export const UserShellLive = Layer.effect(
   UserShell,
@@ -86,7 +86,7 @@ export function runUserShellCommand(
   input: UserShellCommand,
   environment: NodeJS.ProcessEnv,
 ): Effect.Effect<UserShellCommandResult> {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const launch = backendLaunchCommand({
       launch: {
         command: input.command,

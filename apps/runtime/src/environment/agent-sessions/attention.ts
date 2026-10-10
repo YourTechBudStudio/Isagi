@@ -31,9 +31,7 @@ export interface AgentSessionAttentionProjectionService {
 }
 
 export const AgentSessionAttentionProjection =
-  Context.GenericTag<AgentSessionAttentionProjectionService>(
-    'isagi/AgentSessionAttentionProjection',
-  );
+  Context.Service<AgentSessionAttentionProjectionService>('isagi/AgentSessionAttentionProjection');
 
 export const AgentSessionAttentionProjectionLive = Layer.effect(
   AgentSessionAttentionProjection,

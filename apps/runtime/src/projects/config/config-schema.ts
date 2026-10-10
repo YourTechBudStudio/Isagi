@@ -1,10 +1,12 @@
 import { Schema } from 'effect';
 
-const nonEmptyStringSchema = Schema.String.pipe(Schema.minLength(1));
-const nonBlankStringSchema = nonEmptyStringSchema.pipe(
-  Schema.filter((value) => value.trim().length > 0, {
+const nonEmptyStringSchema = Schema.String.check(
+  Schema.isMinLength(1, { expected: 'a non-empty string' }),
+);
+const nonBlankStringSchema = nonEmptyStringSchema.check(
+  Schema.makeFilter((value: string) => value.trim().length > 0, {
     title: 'nonBlankString',
-    description: 'a string containing at least one non-whitespace character',
+    expected: 'a string containing at least one non-whitespace character',
   }),
 );
 
@@ -14,270 +16,270 @@ const hookPathDescription =
 const worktreeCommandPathDescription =
   'Relative path resolved against the worktree root. Absolute paths and paths that escape the worktree root are rejected when command config is used.';
 
-const hookEnvSchema = Schema.Record({
-  key: Schema.String,
-  value: Schema.String,
-}).annotations({
+const hookEnvSchema = Schema.Record(Schema.String, Schema.String).annotate({
   description:
     'Environment variables added to the command hook process. Values must be strings and are merged over the runtime environment.',
 });
 
 export const copyHookSchema = Schema.Struct({
-  type: Schema.Literal('copy').annotations({
+  type: Schema.Literal('copy').annotate({
     description: 'Selects a copy hook for post-create worktree setup.',
   }),
-  src: nonBlankStringSchema.annotations({
+  src: nonBlankStringSchema.annotate({
     description: `${hookPathDescription} For copy hooks, src is the source directory or file under the project root. A missing src fails the setup step.`,
   }),
-  dest: nonBlankStringSchema.annotations({
+  dest: nonBlankStringSchema.annotate({
     description: `${hookPathDescription} For copy hooks, dest is the target directory or file under the worktree root.`,
   }),
-  include: Schema.optional(Schema.Array(nonBlankStringSchema)).annotations({
+  include: Schema.optional(Schema.Array(nonBlankStringSchema)).annotate({
     description:
       'Glob patterns included from a directory copy.src. Defaults to ["**/*"]. Setting it when copy.src is a file fails the setup step. Empty or blank pattern strings are rejected.',
   }),
-  exclude: Schema.optional(Schema.Array(nonBlankStringSchema)).annotations({
+  exclude: Schema.optional(Schema.Array(nonBlankStringSchema)).annotate({
     description:
       'Glob patterns excluded after include matching for a directory copy.src. Defaults to an empty list. Setting it when copy.src is a file fails the setup step. Empty or blank pattern strings are rejected.',
   }),
-  overwrite: Schema.optional(Schema.Boolean).annotations({
+  overwrite: Schema.optional(Schema.Boolean).annotate({
     description: 'Whether copied files replace existing worktree files. Defaults to true.',
   }),
-}).annotations({
+}).annotate({
   description:
     'Copies files from the project root into each new worktree. Editing hook content changes the hook hash and can trigger a new trust prompt.',
 });
 
 export const symlinkHookSchema = Schema.Struct({
-  type: Schema.Literal('symlink').annotations({
+  type: Schema.Literal('symlink').annotate({
     description: 'Selects a symlink hook for post-create worktree setup.',
   }),
-  src: nonBlankStringSchema.annotations({
+  src: nonBlankStringSchema.annotate({
     description: `${hookPathDescription} For symlink hooks, src is resolved under the project root.`,
   }),
-  dest: nonBlankStringSchema.annotations({
+  dest: nonBlankStringSchema.annotate({
     description: `${hookPathDescription} For symlink hooks, dest is created under the worktree root.`,
   }),
-  overwrite: Schema.optional(Schema.Boolean).annotations({
+  overwrite: Schema.optional(Schema.Boolean).annotate({
     description: 'Whether an existing destination is replaced. Defaults to true.',
   }),
-}).annotations({
+}).annotate({
   description:
     'Creates a relative symlink in each new worktree. Editing hook content changes the hook hash and can trigger a new trust prompt.',
 });
 
 export const commandHookSchema = Schema.Struct({
-  type: Schema.Literal('command').annotations({
+  type: Schema.Literal('command').annotate({
     description: 'Selects a shell command hook for post-create worktree setup.',
   }),
-  run: nonBlankStringSchema.annotations({
+  run: nonBlankStringSchema.annotate({
     description: 'Shell command run after the worktree is created.',
   }),
-  cwd: Schema.optional(nonBlankStringSchema).annotations({
+  cwd: Schema.optional(nonBlankStringSchema).annotate({
     description: `${hookPathDescription} Defaults to ".".`,
   }),
-  timeout: Schema.optional(nonBlankStringSchema).annotations({
+  timeout: Schema.optional(nonBlankStringSchema).annotate({
     description:
       'Maximum run time before the hook is terminated. Use values like 500ms, 30s, 10m, or 1h. The grammar is validated when the hook runs. Defaults to 10m.',
   }),
-  env: Schema.optional(hookEnvSchema).annotations({
+  env: Schema.optional(hookEnvSchema).annotate({
     description:
       'Environment variables added to the command hook process. Values must be strings. Defaults to an empty object.',
   }),
-}).annotations({
+}).annotate({
   description:
     'Runs a shell command in each new worktree. Editing hook content changes the hook hash and can trigger a new trust prompt.',
 });
 
-export const worktreePostCreateHookSchema = Schema.Union(
+export const worktreePostCreateHookSchema = Schema.Union([
   copyHookSchema,
   symlinkHookSchema,
   commandHookSchema,
-).annotations({
+]).annotate({
+  identifier: 'a hook object with type copy, symlink, or command',
   description:
     'One post-create hook. Supported hook types are copy, symlink, and command. Extra hook fields are ignored for behavior parity with existing config.',
 });
 
 export const worktreeHooksSchema = Schema.Struct({
-  postCreate: Schema.Array(worktreePostCreateHookSchema).annotations({
+  postCreate: Schema.Array(worktreePostCreateHookSchema).annotate({
     description:
       'Hooks run after creating a worktree. Project config is read per operation, so hook edits are picked up without restarting Isagi. Editing hook content changes the hook hash and can trigger a new trust prompt.',
   }),
-}).annotations({
+}).annotate({
   description: 'Worktree hook configuration from worktrees.hooks in .isagi/config.yaml.',
 });
 
-const commandEnvSchema = Schema.Record({
-  key: Schema.String,
-  value: Schema.String,
-}).annotations({
+const commandEnvSchema = Schema.Record(Schema.String, Schema.String).annotate({
   description:
     'Environment variables added when Isagi launches the command. Values must be strings; empty keys are rejected when command config is used.',
 });
 
-const tcpPortSchema = Schema.Number.pipe(Schema.int(), Schema.between(1, 65_535)).annotations({
+const tcpPortSchema = Schema.Int.check(
+  Schema.isBetween(
+    { minimum: 1, maximum: 65_535 },
+    { expected: 'a TCP port from 1 through 65535' },
+  ),
+).annotate({
   description: 'TCP port number from 1 through 65535 associated with this command.',
 });
 
-const envVarNameSchema = nonBlankStringSchema.pipe(
-  Schema.filter((value) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value), {
+const envVarNameSchema = nonBlankStringSchema.check(
+  Schema.makeFilter((value: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value), {
     title: 'envVarName',
-    description:
+    expected:
       'a POSIX shell variable name: letters, digits, and underscores, not starting with a digit',
   }),
 );
 
 export const commandPortPathSchema = Schema.Struct({
-  label: nonBlankStringSchema.annotations({
+  label: nonBlankStringSchema.annotate({
     description:
       "Short badge label for this URL, unique across all of the command's ports. Must not have leading or trailing whitespace.",
   }),
-  path: Schema.String.pipe(
-    Schema.filter((value) => value.startsWith('/') && !/[\s?#]/.test(value), {
+  path: Schema.String.check(
+    Schema.makeFilter((value: string) => value.startsWith('/') && !/[\s?#]/.test(value), {
       title: 'httpUrlPath',
-      description: 'a URL path starting with "/" and containing no whitespace, query, or fragment',
+      expected: 'a URL path starting with "/" and containing no whitespace, query, or fragment',
     }),
-  ).annotations({
+  ).annotate({
     description:
       'URL path served on this port, starting with "/". "/" alone is the root. Resolved URLs are http://localhost:<port><path>.',
   }),
-}).annotations({
+}).annotate({
   description: 'One labelled URL path served by this HTTP port.',
 });
 
 export const commandPortSchema = Schema.Struct({
-  port: Schema.optional(tcpPortSchema).annotations({
+  port: Schema.optional(tcpPortSchema).annotate({
     description:
       'Fixed command port used exactly as declared. Declare either port or envVar, never both.',
   }),
-  envVar: Schema.optional(envVarNameSchema).annotations({
+  envVar: Schema.optional(envVarNameSchema).annotate({
     description:
       'Marks this command port as runtime-allocated. Isagi picks an inactive port at each launch, prefers the previous allocation, and injects the value into the process environment under this name. Declare either port or envVar, never both.',
   }),
-  paths: Schema.optional(Schema.Array(commandPortPathSchema)).annotations({
+  paths: Schema.optional(Schema.Array(commandPortPathSchema)).annotate({
     description:
       'Labelled URL paths served on this port. Defaults to an empty list; a pathless port still resolves, and an allocated pathless port still injects its value, but neither produces URLs.',
   }),
-}).annotations({
+}).annotate({
   description:
     'One port of this command: fixed ({ port }) or runtime-allocated ({ envVar }), with optional labelled HTTP paths.',
 });
 
 const lifecyclePostCreateSchema = Schema.Struct({
-  start: Schema.optional(Schema.Boolean).annotations({
+  start: Schema.optional(Schema.Boolean).annotate({
     description: 'Start the command after worktree creation. Defaults to false.',
   }),
-}).annotations({
+}).annotate({
   description: 'postCreate lifecycle action. Only the start field is supported.',
 });
 
 const lifecycleActivateSchema = Schema.Struct({
-  start: Schema.optional(Schema.Boolean).annotations({
+  start: Schema.optional(Schema.Boolean).annotate({
     description:
       'When activate.start is true, start the command on activation only if it has no prior outcome. This automation does not restart an exited, failed, explicitly stopped, or suspended command; suspension resumes separately when the user returns to the worktree. Defaults to false.',
   }),
-}).annotations({
+}).annotate({
   description: 'activate lifecycle action. Only the start field is supported.',
 });
 
 const lifecycleDeactivateSchema = Schema.Struct({
-  stop: Schema.optional(Schema.Boolean).annotations({
+  stop: Schema.optional(Schema.Boolean).annotate({
     description:
       'Stop the current command process when the worktree is deactivated. A command stopped this way is suspended: Isagi records resume intent and starts a new process incarnation when the user returns to the worktree, unless explicit Stop clears that intent. Runtime startup alone does not resume it. Defaults to true.',
   }),
-}).annotations({
+}).annotate({
   description: 'deactivate lifecycle action. Only the stop field is supported.',
 });
 
 const lifecyclePreDeleteSchema = Schema.Struct({
-  stop: Schema.optional(Schema.Boolean).annotations({
+  stop: Schema.optional(Schema.Boolean).annotate({
     description: 'Stop the command before the worktree is deleted. Defaults to true.',
   }),
-}).annotations({
+}).annotate({
   description: 'preDelete lifecycle action. Only the stop field is supported.',
 });
 
 export const worktreeCommandLifecycleSchema = Schema.Struct({
-  postCreate: Schema.optional(lifecyclePostCreateSchema).annotations({
+  postCreate: Schema.optional(lifecyclePostCreateSchema).annotate({
     description: 'Lifecycle behavior after worktree creation. Defaults to { start: false }.',
   }),
-  activate: Schema.optional(lifecycleActivateSchema).annotations({
+  activate: Schema.optional(lifecycleActivateSchema).annotate({
     description: 'Lifecycle behavior when the worktree is activated. Defaults to { start: false }.',
   }),
-  deactivate: Schema.optional(lifecycleDeactivateSchema).annotations({
+  deactivate: Schema.optional(lifecycleDeactivateSchema).annotate({
     description: 'Lifecycle behavior when the worktree is deactivated. Defaults to { stop: true }.',
   }),
-  preDelete: Schema.optional(lifecyclePreDeleteSchema).annotations({
+  preDelete: Schema.optional(lifecyclePreDeleteSchema).annotate({
     description: 'Lifecycle behavior before the worktree is deleted. Defaults to { stop: true }.',
   }),
-}).annotations({
+}).annotate({
   description:
     'Command lifecycle defaults are postCreate.start=false, activate.start=false, deactivate.stop=true, and preDelete.stop=true. Unknown lifecycle events or action fields are rejected when command config is used.',
 });
 
 export const worktreeCommandSchema = Schema.Struct({
-  name: nonBlankStringSchema.annotations({
+  name: nonBlankStringSchema.annotate({
     description:
       'Stable command name shown in Isagi. Must be non-empty, unique within the config, and must not have leading or trailing whitespace.',
   }),
-  command: nonBlankStringSchema.annotations({
+  command: nonBlankStringSchema.annotate({
     description: 'Shell command line Isagi runs for this command.',
   }),
-  cwd: Schema.optional(Schema.NullOr(nonBlankStringSchema)).annotations({
+  cwd: Schema.optional(Schema.NullOr(nonBlankStringSchema)).annotate({
     description: `${worktreeCommandPathDescription} Null or omitted means the worktree root.`,
   }),
-  env: Schema.optional(commandEnvSchema).annotations({
+  env: Schema.optional(commandEnvSchema).annotate({
     description:
       'Environment variables added to the command process. Values must be strings; empty keys are rejected when command config is used.',
   }),
-  envFiles: Schema.optional(Schema.Array(nonBlankStringSchema)).annotations({
+  envFiles: Schema.optional(Schema.Array(nonBlankStringSchema)).annotate({
     description: `${worktreeCommandPathDescription} Each file is read as dotenv-style environment input. Defaults to an empty list.`,
   }),
-  ports: Schema.optional(Schema.Array(commandPortSchema)).annotations({
+  ports: Schema.optional(Schema.Array(commandPortSchema)).annotate({
     description:
       'Ports this command uses. Fixed entries use their declared port, allocated entries receive a runtime-chosen port, and optional paths produce labelled HTTP URLs. Defaults to an empty list.',
   }),
-  lifecycle: Schema.optional(worktreeCommandLifecycleSchema).annotations({
+  lifecycle: Schema.optional(worktreeCommandLifecycleSchema).annotate({
     description:
       'Optional lifecycle automation. Unknown command and lifecycle fields are rejected; this stricter behavior is intentionally preserved from the current command config parser.',
   }),
-}).annotations({
+}).annotate({
   description:
     'One Isagi command entry from the commands list in .isagi/config.yaml. Project config is re-read per operation, so command edits are hot.',
 });
 
 export const worktreeCommandCatalogSchema = Schema.Struct({
-  commands: Schema.Array(worktreeCommandSchema).annotations({
+  commands: Schema.Array(worktreeCommandSchema).annotate({
     description:
       'Commands available for a worktree. Missing commands means an empty catalog. Duplicate names are rejected when command config is used.',
   }),
-}).annotations({
+}).annotate({
   description: 'Command catalog configuration from .isagi/config.yaml.',
 });
 
 export const projectConfigSchema = Schema.Struct({
   worktrees: Schema.optional(
     Schema.Struct({
-      hooks: Schema.optional(worktreeHooksSchema).annotations({
+      hooks: Schema.optional(worktreeHooksSchema).annotate({
         description: 'Worktree hook settings. Missing hooks means no setup hooks are configured.',
       }),
     }),
-  ).annotations({
+  ).annotate({
     description: 'Worktree-related project configuration.',
   }),
-  commands: Schema.optional(Schema.Array(worktreeCommandSchema)).annotations({
+  commands: Schema.optional(Schema.Array(worktreeCommandSchema)).annotate({
     description:
       'Worktree command catalog. Missing commands means an empty catalog. Command entries reject unknown fields when command config is used.',
   }),
-}).annotations({
+}).annotate({
   description:
     'Project-local Isagi config from .isagi/config.yaml. The file is read relative to the worktree and is re-read per operation.',
 });
 
-export type WorktreePostCreateHookInput = Schema.Schema.Type<typeof worktreePostCreateHookSchema>;
-export type WorktreeHooksInput = Schema.Schema.Type<typeof worktreeHooksSchema>;
-export type WorktreeCommandInput = Schema.Schema.Type<typeof worktreeCommandSchema>;
-export type WorktreeCommandCatalogInput = Schema.Schema.Type<typeof worktreeCommandCatalogSchema>;
+export type WorktreePostCreateHookInput = typeof worktreePostCreateHookSchema.Type;
+export type WorktreeHooksInput = typeof worktreeHooksSchema.Type;
+export type WorktreeCommandInput = typeof worktreeCommandSchema.Type;
+export type WorktreeCommandCatalogInput = typeof worktreeCommandCatalogSchema.Type;
 
 export type WorktreePostCreateHook = CopyHook | SymlinkHook | CommandHook;
 

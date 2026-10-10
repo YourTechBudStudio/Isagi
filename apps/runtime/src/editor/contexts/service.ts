@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Either, Fiber, Layer } from 'effect';
+import { Context, Deferred, Effect, Fiber, Layer, Result } from 'effect';
 
 import type { EditorAttemptFailureReason, EditorDiagnosticsOutput } from '@isagi/contracts';
 
@@ -104,7 +104,7 @@ export interface EditorContextServiceShape {
   >;
 }
 
-export const EditorContextService = Context.GenericTag<EditorContextServiceShape>(
+export const EditorContextService = Context.Service<EditorContextServiceShape>(
   'isagi/EditorContextService',
 );
 
@@ -157,7 +157,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
     // All three keyed by PTY process id, so nothing here can outlive — or be
     // mistaken for — a different incarnation of the same context.
     const readiness = new Map<number, EditorReadinessObservation>();
-    const probes = new Map<number, Fiber.RuntimeFiber<void, never>>();
+    const probes = new Map<number, Fiber.Fiber<void, never>>();
     // Every incarnation this runtime launched, and which context owns it. It is
     // what lets the PTY-event subscriber recognize its own processes without a
     // database read per event, and its emptiness after a restart is exactly
@@ -200,10 +200,12 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
     const assertEditorLockHeld = (held: EntityLockHeld, worktreeId: number) =>
       entityLockKeyId(held.key) === entityLockKeyId(editorLockKey(worktreeId))
         ? Effect.void
-        : Effect.dieMessage(
-            `Editor operation on worktree ${worktreeId} requires ${entityLockKeyId(
-              editorLockKey(worktreeId),
-            )}, but the caller held ${entityLockKeyId(held.key)}.`,
+        : Effect.die(
+            new Error(
+              `Editor operation on worktree ${worktreeId} requires ${entityLockKeyId(
+                editorLockKey(worktreeId),
+              )}, but the caller held ${entityLockKeyId(held.key)}.`,
+            ),
           );
 
     /**
@@ -297,7 +299,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
 
         const fiber = yield* Effect.forkIn(
           Deferred.await(gate).pipe(
-            Effect.zipRight(run({ host: input.host, port: input.port, onSettled })),
+            Effect.andThen(run({ host: input.host, port: input.port, onSettled })),
           ),
           serviceScope,
         );
@@ -353,7 +355,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
             ? Effect.succeed<PtyTerminateOutcome>('already_absent')
             : Effect.fail(error),
         ),
-        Effect.either,
+        Effect.result,
       );
 
     const launchFrom = (row: EditorContextRow, installation: ResolvedEditorInstallation) =>
@@ -361,7 +363,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
         deps: launchDependencies,
         row,
         installation,
-      }).pipe(Effect.zipRight(requireRow(row.id)), Effect.map(factsFor));
+      }).pipe(Effect.andThen(requireRow(row.id)), Effect.map(factsFor));
 
     const openAttempt = (editorContextId: number) =>
       repository
@@ -407,21 +409,21 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
           // process it is polling and settle against a corpse.
           yield* interruptProbe(ptyProcessId);
           const outcome = yield* stopIncarnation(ptyProcessId, editorReplaceGracefulTimeoutMs);
-          if (Either.isLeft(outcome)) {
+          if (Result.isFailure(outcome)) {
             // Ownership survives, endpoint and all. Creating a replacement
             // alongside a process that may still be alive is the one thing this
             // path must never do.
             const committed = yield* commitAttemptFailure({
               editorContextId,
               reason: 'previous_incarnation_not_stopped',
-              detail: describeOperationalCause(outcome.left),
+              detail: describeOperationalCause(outcome.failure),
             });
             return yield* Effect.fail(
               committed === 'applied'
                 ? new EditorLaunchFailed({
                     editorContextId,
                     reason: 'previous_incarnation_not_stopped',
-                    detail: describeOperationalCause(outcome.left),
+                    detail: describeOperationalCause(outcome.failure),
                   })
                 : contextNotFound(editorContextId),
             );
@@ -445,7 +447,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
 
       createForWorktree: ({ held, worktreeId }) =>
         assertEditorLockHeld(held, worktreeId).pipe(
-          Effect.zipRight(repository.create({ worktreeId })),
+          Effect.andThen(repository.create({ worktreeId })),
         ),
 
       ensureRuntime: ({ editorContextId, intent }) =>
@@ -470,14 +472,14 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
           const ptyProcessId = row.activePtyProcessId;
           yield* interruptProbe(ptyProcessId);
           const outcome = yield* stopIncarnation(ptyProcessId, editorReleaseGracefulTimeoutMs);
-          if (Either.isLeft(outcome)) {
+          if (Result.isFailure(outcome)) {
             // The row keeps its pointer and records why. Failing here would make
             // deleting a surface depend on a process that may not answer, which
             // is a cleanup problem the user cannot act on.
             yield* commitAttemptFailure({
               editorContextId,
               reason: 'previous_incarnation_not_stopped',
-              detail: describeOperationalCause(outcome.left),
+              detail: describeOperationalCause(outcome.failure),
             });
             return;
           }
@@ -585,7 +587,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
           const row = yield* repository.find(editorContextId);
           if (row) yield* publishChanged(editorContextId);
         }).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning(
               `[runtime] editor PTY event handling failed cause=${describeOperationalCause(error)}`,
             ),
@@ -599,7 +601,7 @@ export function makeEditorContextService(options: EditorContextServiceOptions = 
   });
 }
 
-export const EditorContextServiceLive = Layer.scoped(
+export const EditorContextServiceLive = Layer.effect(
   EditorContextService,
   makeEditorContextService(),
 );

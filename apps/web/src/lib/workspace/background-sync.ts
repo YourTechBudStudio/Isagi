@@ -52,9 +52,9 @@ function flushActiveContextPersistence() {
 
   void runRuntimeEffect(
     updateActiveContext(activeContext).pipe(
-      Effect.timeoutFail({
+      Effect.timeoutOrElse({
         duration: Duration.seconds(5),
-        onTimeout: () => new Error('Active context persistence timed out.'),
+        orElse: () => Effect.fail(new Error('Active context persistence timed out.')),
       }),
     ),
     { signal: abortController.signal },

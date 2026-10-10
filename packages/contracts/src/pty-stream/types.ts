@@ -1,10 +1,10 @@
 import { Schema } from 'effect';
 
-const nonNegativeIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
+import { nonNegativeInteger } from '../scalars.js';
 
 export const ptyStreamReplayStartMessageSchema = Schema.Struct({
   type: Schema.Literal('replay_start'),
-  bytes: nonNegativeIntegerSchema,
+  bytes: nonNegativeInteger,
 });
 
 export const ptyStreamOutputMessageSchema = Schema.Struct({
@@ -19,11 +19,11 @@ export const ptyStreamReplayEndMessageSchema = Schema.Struct({
 
 export const ptyStreamExitMessageSchema = Schema.Struct({
   type: Schema.Literal('exit'),
-  exitCode: Schema.NullOr(nonNegativeIntegerSchema),
+  exitCode: Schema.NullOr(nonNegativeInteger),
   signal: Schema.NullOr(Schema.String),
 });
 
-export const ptyStreamTransportErrorCodeSchema = Schema.Literal(
+export const ptyStreamTransportErrorCodeSchema = Schema.Literals([
   'invalid_message',
   'stream_superseded',
   'backend_unavailable',
@@ -32,11 +32,11 @@ export const ptyStreamTransportErrorCodeSchema = Schema.Literal(
   'log_read_failed',
   'pty_state_load_failed',
   'unknown',
-);
+]);
 
 export const ptyStreamErrorCodeSchema = ptyStreamTransportErrorCodeSchema;
 
-export const ptyStreamKnownErrorCodeSchema = Schema.Literal(
+export const ptyStreamKnownErrorCodeSchema = Schema.Literals([
   'invalid_session_id',
   'invalid_message',
   'session_not_found',
@@ -70,7 +70,7 @@ export const ptyStreamKnownErrorCodeSchema = Schema.Literal(
   'pty_write_failed',
   'pty_state_load_failed',
   'unknown',
-);
+]);
 
 export const ptyStreamErrorMessageSchema = Schema.Struct({
   type: Schema.Literal('error'),
@@ -80,23 +80,21 @@ export const ptyStreamErrorMessageSchema = Schema.Struct({
   message: Schema.optional(Schema.String),
 });
 
-export const ptyStreamOutputMessageSetSchema = Schema.Union(
+export const ptyStreamOutputMessageSetSchema = Schema.Union([
   ptyStreamReplayStartMessageSchema,
   ptyStreamOutputMessageSchema,
   ptyStreamReplayEndMessageSchema,
   ptyStreamExitMessageSchema,
-);
+]);
 
-export type PtyStreamReplayStartMessage = Schema.Schema.Type<
-  typeof ptyStreamReplayStartMessageSchema
->;
-export type PtyStreamOutputMessage = Schema.Schema.Type<typeof ptyStreamOutputMessageSchema>;
-export type PtyStreamReplayEndMessage = Schema.Schema.Type<typeof ptyStreamReplayEndMessageSchema>;
-export type PtyStreamExitMessage = Schema.Schema.Type<typeof ptyStreamExitMessageSchema>;
-export type PtyStreamErrorCode = Schema.Schema.Type<typeof ptyStreamKnownErrorCodeSchema>;
+export type PtyStreamReplayStartMessage = typeof ptyStreamReplayStartMessageSchema.Type;
+export type PtyStreamOutputMessage = typeof ptyStreamOutputMessageSchema.Type;
+export type PtyStreamReplayEndMessage = typeof ptyStreamReplayEndMessageSchema.Type;
+export type PtyStreamExitMessage = typeof ptyStreamExitMessageSchema.Type;
+export type PtyStreamErrorCode = typeof ptyStreamKnownErrorCodeSchema.Type;
 export type PtyStreamErrorMessage = {
   readonly type: 'error';
   readonly code: PtyStreamErrorCode;
   readonly message?: string | undefined;
 };
-export type PtyStreamOutputMessageSet = Schema.Schema.Type<typeof ptyStreamOutputMessageSetSchema>;
+export type PtyStreamOutputMessageSet = typeof ptyStreamOutputMessageSetSchema.Type;

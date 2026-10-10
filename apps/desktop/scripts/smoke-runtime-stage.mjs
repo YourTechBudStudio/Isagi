@@ -6,6 +6,6 @@ import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
 
 const exit = await Effect.runPromiseExit(smokeRuntimeStage());
 if (Exit.isFailure(exit)) {
-  console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+  console.error(Cause.pretty(exit.cause));
   process.exitCode = 1;
 }

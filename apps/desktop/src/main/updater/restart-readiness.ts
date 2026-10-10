@@ -33,12 +33,12 @@ export function createRestartReadinessReader(dependencies: {
       // never finishes, not just a request that never produced headers.
       const controller = new AbortController();
       return probeActivity(dependencies, fetchImplementation, controller.signal).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: Duration.millis(restartReadinessTimeoutMs),
-          onTimeout: () => new RestartReadinessFailure({ category: 'timeout' }),
+          orElse: () => Effect.fail(new RestartReadinessFailure({ category: 'timeout' })),
         }),
         Effect.ensuring(Effect.sync(() => controller.abort())),
-        Effect.catchAll((failure) =>
+        Effect.catch((failure) =>
           Effect.sync(() => {
             dependencies.diagnose(
               failure instanceof RestartReadinessFailure ? failure.category : 'transport',
@@ -99,7 +99,7 @@ function probeActivity(
   });
 }
 
-function decode<S extends Schema.Schema.AnyNoContext>(
+function decode<S extends Schema.Codec<unknown, unknown>>(
   schema: S,
   value: unknown,
   failure: RestartReadinessFailure,

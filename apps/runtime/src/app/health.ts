@@ -42,7 +42,7 @@ function getRuntimeVersion() {
 
 function readRuntimeVersion() {
   return Effect.firstSuccessOf(getPackageJsonPaths().map(readPackageVersion)).pipe(
-    Effect.catchAll(() => Effect.succeed('0.0.0')),
+    Effect.catch(() => Effect.succeed('0.0.0')),
   );
 }
 

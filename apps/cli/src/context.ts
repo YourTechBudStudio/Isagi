@@ -11,4 +11,4 @@ export interface CliIo {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
-export const CliContext = Context.GenericTag<CliIo>('isagi/cli/CliContext');
+export class CliContext extends Context.Service<CliContext, CliIo>()('isagi/cli/CliContext') {}

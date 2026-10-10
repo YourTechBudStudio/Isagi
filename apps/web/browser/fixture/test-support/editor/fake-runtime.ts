@@ -5,6 +5,8 @@ import type {
   WorkspaceSnapshot,
 } from '@isagi/contracts';
 
+import { requestBodyText } from '../request-body.js';
+
 /**
  * A runtime made of one mutable projection and a `fetch` stub, in the shape the
  * command-palette fixture already established.
@@ -177,7 +179,7 @@ export function installFakeRuntime(): EditorRuntimeControls {
     const ensure = /^\/editor-contexts\/(\d+)\/runtime$/.exec(path);
     if (method === 'POST' && ensure) {
       const editorContextId = Number(ensure[1]);
-      const body = JSON.parse(String(init?.body ?? '{}')) as { intent?: string };
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as { intent?: string };
       ensureRequests.push({ editorContextId, intent: body.intent ?? '' });
 
       if (ensureDelay > 0) await delay(ensureDelay);

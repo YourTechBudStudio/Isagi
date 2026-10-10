@@ -14,12 +14,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { Either, Schema } from 'effect';
+import { Exit, Schema } from 'effect';
 
 import * as contracts from './index.js';
 import { applyMutation, type Mutation } from './testing/wire-golden-mutations.js';
 
-type AnySchema = Schema.Schema.AnyNoContext;
+type AnySchema = Schema.Codec<unknown>;
 
 interface Golden {
   readonly name: string;
@@ -73,10 +73,10 @@ const json = (value: unknown): unknown => JSON.parse(JSON.stringify(value)) as u
 
 /** Decode then re-encode; any failure in either direction counts as a reject (as in the capture). */
 const decodeEncode = (schema: AnySchema, input: unknown): { ok: boolean; output?: unknown } => {
-  const decoded = Schema.decodeUnknownEither(schema)(input);
-  if (Either.isLeft(decoded)) return { ok: false };
+  const decoded = Schema.decodeUnknownExit(schema)(input);
+  if (Exit.isFailure(decoded)) return { ok: false };
   try {
-    return { ok: true, output: json(Schema.encodeSync(schema)(decoded.right)) };
+    return { ok: true, output: json(Schema.encodeSync(schema)(decoded.value)) };
   } catch {
     return { ok: false };
   }
@@ -168,12 +168,12 @@ test('the golden harness reports a drifted schema', () => {
   assert.ok(codeGolden !== undefined && errorGolden !== undefined);
 
   // A dropped literal and an unconstrained `status`, the kind of drift a port could introduce.
-  const droppedLiteral = Schema.Literal(
+  const droppedLiteral = Schema.Literals([
     'api_request_decoding_failed',
     'api_request_parsing_failed',
     'api_response_encoding_failed',
     'api_route_not_found',
-  );
+  ]);
   const loosenedError = Schema.Struct({
     code: droppedLiteral,
     status: Schema.Number,

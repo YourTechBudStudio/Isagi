@@ -150,7 +150,7 @@ function workspaceLayerWith(repository: WorkspaceRepositoryService) {
 
 interface ManagementRequest {
   readonly label: string;
-  readonly endpoint: { readonly errors: Schema.Schema.AnyNoContext };
+  readonly endpoint: { readonly errors: Schema.Codec<unknown, unknown> };
   readonly method: 'DELETE' | 'GET' | 'POST' | 'PUT';
   readonly url: string;
   readonly payload?: Record<string, unknown>;

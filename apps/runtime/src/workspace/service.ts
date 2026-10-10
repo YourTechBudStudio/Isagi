@@ -254,7 +254,7 @@ export interface WorkspaceService {
   }) => Effect.Effect<MoveWorktreeOrderOutput, MoveWorktreeOrderServiceError>;
 }
 
-export const WorkspaceService = Context.GenericTag<WorkspaceService>('isagi/WorkspaceService');
+export const WorkspaceService = Context.Service<WorkspaceService>('isagi/WorkspaceService');
 
 export const WorkspaceServiceLive = Layer.effect(
   WorkspaceService,
@@ -1163,7 +1163,7 @@ function deleteBranchIfRequested(
 
   return git.run(['-C', project.rootPath, 'branch', '-d', worktree.branch]).pipe(
     Effect.as({ status: 'deleted' as const, branch: worktree.branch }),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.succeed({
         status: 'failed' as const,
         branch: worktree.branch as string,
@@ -1528,7 +1528,7 @@ function describeWorktreeDiscoveryFailure(rootPath: string, error: GitCommandErr
 function validateBranchName(git: GitServiceShape, project: ProjectRow, branch: string) {
   return git.run(['-C', project.rootPath, 'check-ref-format', '--branch', branch]).pipe(
     Effect.asVoid,
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.fail(
         new WorkspaceError({
           branch,
@@ -1637,7 +1637,7 @@ function resolveCommit(git: GitServiceShape, project: ProjectRow, ref: string) {
     .run(['-C', project.rootPath, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])
     .pipe(
       Effect.map(({ stdout }) => stdout.trim()),
-      Effect.catchAll(() =>
+      Effect.catch(() =>
         Effect.fail(
           new WorkspaceError({
             branch: ref,
@@ -1661,8 +1661,8 @@ function resolveCommit(git: GitServiceShape, project: ProjectRow, ref: string) {
  * half-prepared checkout are worse than no commands at all.
  */
 function completeWorktreeCreation(input: {
-  readonly commands: Context.Tag.Service<typeof CommandService>;
-  readonly worktreeSetupRepository: Context.Tag.Service<typeof WorktreeSetupRepository>;
+  readonly commands: (typeof CommandService)['Service'];
+  readonly worktreeSetupRepository: (typeof WorktreeSetupRepository)['Service'];
   readonly project: ProjectRow;
   readonly worktree: WorktreeRow;
   readonly setupPlan: WorktreeSetupPlan;
@@ -1696,8 +1696,8 @@ function completeWorktreeCreation(input: {
   });
 }
 
-type WorktreeSetupPlan = Effect.Effect.Success<
-  ReturnType<Context.Tag.Service<typeof WorktreeSetupService>['validateTrustForOpen']>
+type WorktreeSetupPlan = Effect.Success<
+  ReturnType<(typeof WorktreeSetupService)['Service']['validateTrustForOpen']>
 >;
 
 function checkoutPathForBranch(worktreesPath: string, projectId: number, branch: string) {
@@ -1770,5 +1770,5 @@ function pathExists(path: string) {
   }
 }
 
-type WorkspaceRepositoryService = Context.Tag.Service<typeof WorkspaceRepository>;
-type GitServiceShape = Context.Tag.Service<typeof Git>;
+type WorkspaceRepositoryService = (typeof WorkspaceRepository)['Service'];
+type GitServiceShape = (typeof Git)['Service'];

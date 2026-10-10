@@ -115,9 +115,9 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
             { worktreeId, commandName: command.name },
             runCommand({ worktreeId, commandName: command.name }),
           )
-          .pipe(Effect.catchAll(logLifecycleError(`postCreate:${command.name}`)));
+          .pipe(Effect.catch(logLifecycleError(`postCreate:${command.name}`)));
       }
-    }).pipe(Effect.catchAll(logLifecycleError('postCreate')));
+    }).pipe(Effect.catch(logLifecycleError('postCreate')));
 
   const stopPreDeleteCommands = (worktreeId: number) =>
     Effect.gen(function* () {
@@ -258,17 +258,17 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
               { cause: 'deactivation' },
             ),
           )
-          .pipe(Effect.either);
-        if (outcome._tag === 'Left') {
+          .pipe(Effect.result);
+        if (outcome._tag === 'Failure') {
           failures += 1;
-          yield* logLifecycleError(`deactivate:${candidate.commandName}`)(outcome.left);
+          yield* logLifecycleError(`deactivate:${candidate.commandName}`)(outcome.failure);
           continue;
         }
         // Only a stop that actually minted the intent is counted: an
         // already-suspended command, an absent process, and a command that was
         // never running are all no-ops, and reporting them as suspensions would
         // make this line useless for diagnosing AC1.
-        if (outcome.right.resolution === 'suspended') suspended += 1;
+        if (outcome.success.resolution === 'suspended') suspended += 1;
       }
       // `considered`, not `swept`: the unconfigured set is every state row the
       // catalog no longer names, most of which are already finished and stop
@@ -306,13 +306,13 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
             { worktreeId, commandName: entry.commandName },
             executeActivationEntry(worktreeId, worktreeRootPath, entry),
           )
-          .pipe(Effect.either);
-        if (outcome._tag === 'Left') {
+          .pipe(Effect.result);
+        if (outcome._tag === 'Failure') {
           errored += 1;
-          yield* logLifecycleError(`activate:${entry.commandName}`)(outcome.left);
+          yield* logLifecycleError(`activate:${entry.commandName}`)(outcome.failure);
           continue;
         }
-        if (outcome.right === 'discarded') {
+        if (outcome.success === 'discarded') {
           discarded += 1;
           continue;
         }
@@ -393,12 +393,12 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
       // suspended before the next worktree's are started.
       if (input.previousWorktreeId !== null) {
         yield* deactivateWorktreeCommands(input.previousWorktreeId).pipe(
-          Effect.catchAll(logLifecycleError('deactivate')),
+          Effect.catch(logLifecycleError('deactivate')),
         );
       }
       if (input.nextWorktreeId !== null) {
         yield* activateWorktreeCommands(input.nextWorktreeId, input.cause).pipe(
-          Effect.catchAll(logLifecycleError('activate')),
+          Effect.catch(logLifecycleError('activate')),
         );
       }
     });

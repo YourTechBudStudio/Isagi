@@ -499,3 +499,32 @@ test('command catalog defaults ports and paths to empty lists', () => {
     [],
   );
 });
+
+test('command catalog decode errors name the field, the expectation and the offending value', () => {
+  const failureFor = (command: Record<string, unknown>) => {
+    try {
+      normalizeCommandCatalogConfig({ commands: [command] }, { worktreeRootPath: root });
+    } catch (error) {
+      return (error as Error).message;
+    }
+    return assert.fail('expected the command config to be rejected');
+  };
+
+  assert.equal(
+    failureFor({ name: 'dev', command: 'pnpm dev', env: { PORT: 5173 } }),
+    'commands[0].env.PORT Expected string, got 5173',
+  );
+  assert.equal(failureFor({ command: 'pnpm dev' }), 'commands[0].name is required.');
+  assert.equal(
+    failureFor({ name: 'dev', command: '   ' }),
+    'commands[0].command Expected a string containing at least one non-whitespace character, got "   "',
+  );
+  assert.equal(
+    failureFor({ name: 'dev', command: 'pnpm dev', ports: [{ port: 0 }] }),
+    'commands[0].ports[0].port Expected a TCP port from 1 through 65535, got 0',
+  );
+  assert.equal(
+    failureFor({ name: 'dev', command: 'pnpm dev', ports: [{ envVar: '1PORT' }] }),
+    'commands[0].ports[0].envVar Expected a POSIX shell variable name: letters, digits, and underscores, not starting with a digit, got "1PORT"',
+  );
+});

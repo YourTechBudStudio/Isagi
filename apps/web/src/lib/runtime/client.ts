@@ -78,14 +78,13 @@ import {
   type WorkflowRunControlOutput,
   type WorkspaceSnapshot,
   type DurableSessionInventory,
+  type AnyApiContentEndpoint,
 } from '@isagi/contracts';
 import {
   contentEndpointUrl,
-  createEndpointRequester,
   interpolatePath,
-  requestContent,
-  RuntimeDecodeError,
-  type AnyApiContentEndpoint,
+  RuntimeClient as RuntimeHttpApi,
+  RuntimeHttpClient,
   type ContentQuery,
   type RuntimeContentEndpointError,
   type RuntimeEndpointError,
@@ -408,7 +407,7 @@ export interface RuntimeClient {
   /**
    * The bytes of one saved checkpoint file.
    *
-   * A raw `fetch` rather than the typed requester, because the success body is not the JSON
+   * The content requester rather than the typed requester, because the success body is not the JSON
    * envelope every other route returns. A failure still is, so a non-OK response is decoded exactly
    * as the typed requester decodes one and the caller sees the same error shape.
    */
@@ -476,7 +475,14 @@ export interface RuntimeClient {
 }
 
 export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
-  const request = createEndpointRequester(runtimeUrl);
+  // `@isagi/runtime-client` builds its requesters from an `HttpClient`. Providing the platform `fetch`
+  // client per call keeps every method requirement-free, so callers run them exactly as before.
+  const withHttpApi = <A, E>(
+    use: (api: RuntimeHttpApi['Service']) => Effect.Effect<A, E>,
+  ): Effect.Effect<A, E> =>
+    RuntimeHttpApi.make(runtimeUrl).pipe(Effect.flatMap(use), Effect.provide(RuntimeHttpClient));
+  const request: RuntimeHttpApi['Service']['request'] = (endpoint, ...args) =>
+    withHttpApi((api) => api.request(endpoint, ...args));
 
   return {
     fetchClientSettings: () => request(apiEndpoints.clientSettings),
@@ -594,11 +600,8 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
         { path, ...(options?.download ? { download: true } : {}) },
       ),
     fetchWorkflowCheckpointFile: (checkpointId, path) =>
-      fetchContent(
-        runtimeUrl,
-        workflowContentEndpoints.getCheckpointFile,
-        { checkpointId },
-        { path },
+      withHttpApi((api) =>
+        fetchContent(api, workflowContentEndpoints.getCheckpointFile, { checkpointId }, { path }),
       ),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
@@ -620,19 +623,21 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
 /**
  * One content route's bytes, buffered: the web renders or downloads a capture whole. The request and
  * its error decoding are the shared client's, so a failure has the same shape as any other route's.
+ * The `Blob` carries the response's content type, as the platform `response.blob()` did.
  */
 function fetchContent<Endpoint extends AnyApiContentEndpoint>(
-  runtimeUrl: string,
+  api: RuntimeHttpApi['Service'],
   endpoint: Endpoint,
   params: Record<string, string | number>,
   query?: ContentQuery,
 ): Effect.Effect<Blob, RuntimeContentEndpointError<Endpoint>> {
-  return requestContent(runtimeUrl, endpoint, params, query).pipe(
-    Effect.flatMap((response) =>
-      Effect.tryPromise({
-        try: () => response.blob(),
-        catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-      }),
-    ),
-  );
+  return api
+    .requestContent(endpoint, params, query)
+    .pipe(
+      Effect.flatMap((content) =>
+        content.arrayBuffer.pipe(
+          Effect.map((buffer) => new Blob([buffer], { type: content.contentType ?? '' })),
+        ),
+      ),
+    );
 }

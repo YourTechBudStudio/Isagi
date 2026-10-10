@@ -97,10 +97,7 @@ async function runProjection(input: {
 }) {
   const published: RuntimeEvent[] = [];
   const logged: string[] = [];
-  const capture = Logger.replace(
-    Logger.defaultLogger,
-    Logger.make(({ message }) => void logged.push(String(message))),
-  );
+  const capture = Logger.layer([Logger.make(({ message }) => void logged.push(String(message)))]);
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

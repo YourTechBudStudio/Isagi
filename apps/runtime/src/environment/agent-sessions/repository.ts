@@ -34,7 +34,7 @@ export interface AgentSessionRepositoryService {
   ) => Effect.Effect<{ readonly surfaceId: number; readonly paneId: number } | null, DatabaseError>;
 }
 
-export const AgentSessionRepository = Context.GenericTag<AgentSessionRepositoryService>(
+export const AgentSessionRepository = Context.Service<AgentSessionRepositoryService>(
   'isagi/AgentSessionRepository',
 );
 
@@ -63,7 +63,7 @@ export const AgentSessionRepositoryLive = Layer.effect(
               .get().id;
           });
           yield* artifacts.initializeMetadata(agentSessionId).pipe(
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.sync(() => {
                 console.warn('[runtime] Agent session metadata initialization failed', {
                   agentSessionId,

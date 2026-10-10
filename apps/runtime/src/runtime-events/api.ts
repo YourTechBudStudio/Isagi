@@ -1,4 +1,4 @@
-import { Effect, Either, Schema, type ManagedRuntime } from 'effect';
+import { Effect, Result, Schema, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -62,19 +62,19 @@ export function registerRuntimeEventsApi(
         Effect.gen(function* () {
           const eventBus = yield* RuntimeEventBus;
           return yield* eventBus.subscribe;
-        }).pipe(Effect.either),
+        }).pipe(Effect.result),
       )
         .then((subscriptionResult) => {
-          if (Either.isLeft(subscriptionResult)) {
+          if (Result.isFailure(subscriptionResult)) {
             console.error(
               '[runtime] Runtime event websocket subscribe failed',
-              subscriptionResult.left,
+              subscriptionResult.failure,
             );
             socket.close();
             return;
           }
 
-          const subscription = subscriptionResult.right;
+          const subscription = subscriptionResult.success;
           unsubscribe = () => {
             void run(subscription.unsubscribe).catch((error: unknown) => {
               console.warn('[runtime] Runtime event websocket unsubscribe failed', error);
@@ -90,20 +90,20 @@ export function registerRuntimeEventsApi(
               return;
             }
 
-            void run(subscription.take.pipe(Effect.either)).then(
+            void run(subscription.take.pipe(Effect.result)).then(
               (eventResult) => {
                 if (closed) {
                   return;
                 }
-                if (Either.isLeft(eventResult)) {
+                if (Result.isFailure(eventResult)) {
                   console.error(
                     '[runtime] Runtime event websocket receive failed',
-                    eventResult.left,
+                    eventResult.failure,
                   );
                   socket.close();
                   return;
                 }
-                if (send(eventResult.right)) {
+                if (send(eventResult.success)) {
                   pump();
                 }
               },

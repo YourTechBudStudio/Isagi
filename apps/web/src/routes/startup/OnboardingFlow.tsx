@@ -17,7 +17,7 @@ import {
 } from '../../lib/control-plane/queries.js';
 import { editorProvisioningManifestLine } from '../../lib/editor/provisioning.js';
 import { useRetryEditorProvisioningMutation } from '../../lib/editor/queries.js';
-import { runRuntimeEffect, unwrapRuntimeFailure } from '../../lib/runtime/run.js';
+import { runRuntimeEffect } from '../../lib/runtime/run.js';
 import {
   fetchControlPlane,
   formatRuntimeError,
@@ -85,8 +85,7 @@ export function OnboardingFlow({
       // Every accept error keeps the manifest editable — the policy was not
       // committed. A stale-revision conflict additionally refetches so the next
       // attempt carries the current revision.
-      const failure = unwrapRuntimeFailure(caught);
-      if (failure instanceof RuntimeApiError && failure.apiError.code === 'harness_policy_conflict')
+      if (caught instanceof RuntimeApiError && caught.apiError.code === 'harness_policy_conflict')
         void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
       setError(formatRuntimeError(caught));
     } finally {

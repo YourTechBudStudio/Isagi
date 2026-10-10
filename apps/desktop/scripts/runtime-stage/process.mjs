@@ -5,7 +5,7 @@ import { Effect } from 'effect';
 import { StageCommandError, StageOperationError } from './errors.mjs';
 
 export function runCommand(command, args, options = {}) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     let settled = false;
     const child = spawn(command, args, {
       cwd: options.cwd,

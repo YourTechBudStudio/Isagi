@@ -3,22 +3,22 @@ import { Schema } from 'effect';
 import { terminalSettingsBounds } from '@isagi/contracts';
 
 function optionalBoundedInteger(maximum: number, description: string) {
-  return Schema.optional(Schema.Number.pipe(Schema.int(), Schema.between(0, maximum))).annotations({
+  return Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum }))).annotate({
     description,
   });
 }
 
-export const runtimeConfigPtyBackendSchema = Schema.Literal('node-pty', 'tmux').annotations({
+export const runtimeConfigPtyBackendSchema = Schema.Literals(['node-pty', 'tmux']).annotate({
   description:
     'PTY backend used for new runtime-managed processes. Missing or null defaults to node-pty. Changing this setting requires restarting Isagi.',
 });
 
 export const runtimeHarnessPolicyEntrySchema = Schema.Struct({
-  enabled: Schema.optional(Schema.Boolean).annotations({
+  enabled: Schema.optional(Schema.Boolean).annotate({
     description:
       'Whether Isagi may create new processes for this harness. Missing defaults to false. Existing live processes remain attachable when disabled.',
   }),
-  installIsagiDocs: Schema.optional(Schema.Boolean).annotations({
+  installIsagiDocs: Schema.optional(Schema.Boolean).annotate({
     description:
       'Whether Isagi maintains the reserved global isagi-docs skill in this harness native skill directory. Missing defaults to false and the value is ignored unless enabled is true. Disabling does not uninstall prior content.',
   }),
@@ -29,17 +29,17 @@ export const runtimeHarnessPolicySchema = Schema.Struct({
   opencode: Schema.optional(runtimeHarnessPolicyEntrySchema),
   claude: Schema.optional(runtimeHarnessPolicyEntrySchema),
   codex: Schema.optional(runtimeHarnessPolicyEntrySchema),
-}).annotations({
+}).annotate({
   description:
     'Per-harness process-creation and Isagi Docs installation policy. Missing harness entries default both settings to false. A present empty object completes onboarding with no enabled harnesses.',
 });
 
 export const runtimeWorkflowSettingsSchema = Schema.Struct({
-  additionalDirectories: Schema.optional(Schema.Array(Schema.String)).annotations({
+  additionalDirectories: Schema.optional(Schema.Array(Schema.String)).annotate({
     description:
       'Additional machine-global workflow collection directories, ordered from lower to higher priority. Entries must be absolute paths or use ~ for the current user home directory. Changes require restarting Isagi.',
   }),
-}).annotations({
+}).annotate({
   description:
     'Workflow discovery settings. Additional directories extend the built-in data-root and project workflow sources.',
 });
@@ -63,11 +63,11 @@ export const runtimeTerminalSettingsSchema = Schema.Struct({
         terminalSettingsBounds.cache.maxEstimatedBufferMiB.maximum,
         'Estimated parsed-buffer memory budget in MiB. Missing defaults to 64. Accepts integers from 0 through 2048; zero makes hidden heavy entries immediately ineligible. Visible terminals may temporarily exceed this budget. This setting is global and changing it requires restarting Isagi.',
       ),
-    }).annotations({
+    }).annotate({
       description: 'Process-local retention settings for hidden terminal presentations.',
     }),
   ),
-}).annotations({
+}).annotate({
   description:
     'Global terminal presentation history and cache retention settings. Missing fields use defaults. Changes require restarting Isagi.',
 });
@@ -76,14 +76,14 @@ export const runtimeConfigSchema = Schema.Struct({
   pty: Schema.optional(
     Schema.Struct({
       backend: Schema.optional(Schema.NullOr(runtimeConfigPtyBackendSchema)),
-    }).annotations({ description: 'Process-scoped PTY settings read when the runtime starts.' }),
+    }).annotate({ description: 'Process-scoped PTY settings read when the runtime starts.' }),
   ),
-  harnesses: Schema.optional(runtimeHarnessPolicySchema).annotations({
+  harnesses: Schema.optional(runtimeHarnessPolicySchema).annotate({
     description:
       'Harness policy. A missing section means onboarding is incomplete; use an explicit empty object to complete onboarding with every harness disabled.',
   }),
   workflows: Schema.optional(runtimeWorkflowSettingsSchema),
   terminal: Schema.optional(runtimeTerminalSettingsSchema),
-}).annotations({ description: 'Runtime Isagi config from <dataRoot>/config.yaml.' });
+}).annotate({ description: 'Runtime Isagi config from <dataRoot>/config.yaml.' });
 
-export type RuntimeConfigPtyBackend = Schema.Schema.Type<typeof runtimeConfigPtyBackendSchema>;
+export type RuntimeConfigPtyBackend = typeof runtimeConfigPtyBackendSchema.Type;

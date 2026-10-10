@@ -1,4 +1,4 @@
-import { Deferred, Effect, Either, Queue } from 'effect';
+import { Deferred, Effect, Queue, Result } from 'effect';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import {
@@ -107,9 +107,22 @@ export function registerPtyStreamRoute<Target, Preamble extends { readonly type:
       preValidation: enforceRuntimeWebSocketOrigin,
     },
     (socket, request) => {
-      const scoped = Effect.scoped(runConnection(socket, request, strategy));
+      // Effect v4's ManagedRuntime.dispose interrupts every fiber it started, so runtime shutdown interrupts open
+      // connections. That is an orderly close, not a crash: close the socket quietly, as the v3 runtime did.
+      let interrupted = false;
+      const scoped = Effect.scoped(runConnection(socket, request, strategy)).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            interrupted = true;
+          }),
+        ),
+      );
       setImmediate(() => {
         void run(scoped).catch((error: unknown) => {
+          if (interrupted) {
+            socket.close();
+            return;
+          }
           const socketError = strategy.mapError(error);
           console.error(`[runtime] ${strategy.logLabel} crashed`, {
             errorCode: socketError.code,
@@ -189,29 +202,29 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
       if (strategy.closeOnClientError) setImmediate(() => socket.close());
     }).pipe(Effect.forkScoped);
 
-    const targetResult = yield* strategy.resolveTarget(request).pipe(Effect.either);
-    if (Either.isLeft(targetResult)) {
-      closeWithMappedError(socket, strategy, strategy.logLabel, targetResult.left);
+    const targetResult = yield* strategy.resolveTarget(request).pipe(Effect.result);
+    if (Result.isFailure(targetResult)) {
+      closeWithMappedError(socket, strategy, strategy.logLabel, targetResult.failure);
       return yield* Deferred.await(closedSignal);
     }
 
-    const target = targetResult.right;
+    const target = targetResult.success;
     const pty = yield* PtyService;
     const planResult =
       target.ptyProcessId === null
-        ? Either.right(null)
-        : yield* pty.getAttachmentPlan({ ptyProcessId: target.ptyProcessId }).pipe(Effect.either);
-    if (Either.isLeft(planResult)) {
+        ? Result.succeed(null)
+        : yield* pty.getAttachmentPlan({ ptyProcessId: target.ptyProcessId }).pipe(Effect.result);
+    if (Result.isFailure(planResult)) {
       closeWithMappedError(
         socket,
         strategy,
         `${strategy.logLabel} attachment plan failed`,
-        planResult.left,
+        planResult.failure,
       );
       return yield* Deferred.await(closedSignal);
     }
 
-    const plan = planResult.right;
+    const plan = planResult.success;
     sendMessage(strategy.preamble({ target, plan }));
     if (closed) return;
 
@@ -223,13 +236,13 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
             bytes: plan.replayBytes,
             send: (message) => sendMessage(message),
           })
-          .pipe(Effect.either);
-        if (Either.isLeft(replayResult)) {
+          .pipe(Effect.result);
+        if (Result.isFailure(replayResult)) {
           closeWithMappedError(
             socket,
             strategy,
             `${strategy.logLabel} replay failed`,
-            replayResult.left,
+            replayResult.failure,
           );
           return yield* Deferred.await(closedSignal);
         }
@@ -247,13 +260,13 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
           bytes: plan.replayBytes,
           send: (message) => sendMessage(message),
         })
-        .pipe(Effect.either);
-      if (Either.isLeft(replayResult)) {
+        .pipe(Effect.result);
+      if (Result.isFailure(replayResult)) {
         closeWithMappedError(
           socket,
           strategy,
           `${strategy.logLabel} replay failed`,
-          replayResult.left,
+          replayResult.failure,
         );
         return yield* Deferred.await(closedSignal);
       }
@@ -263,13 +276,13 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
         strategy,
         target: liveTarget,
         sendLive,
-      }).pipe(Effect.either);
-      if (Either.isLeft(attachResult)) {
+      }).pipe(Effect.result);
+      if (Result.isFailure(attachResult)) {
         const recovered = yield* recoverReplayOnlyAfterAttachFailure({
           socket,
           strategy,
           target: liveTarget,
-          cause: attachResult.left,
+          cause: attachResult.failure,
           sendMessage,
           closed: () => closed,
         });
@@ -283,12 +296,12 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
           socket,
           strategy,
           `${strategy.logLabel} live attach failed`,
-          attachResult.left,
+          attachResult.failure,
         );
         return yield* Deferred.await(closedSignal);
       }
 
-      const attachment = attachResult.right;
+      const attachment = attachResult.success;
       yield* Deferred.succeed(ready, {
         target,
         attachmentId: attachment.attachmentId,
@@ -302,16 +315,16 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
       strategy,
       target: liveTarget,
       sendLive,
-    }).pipe(Effect.either);
+    }).pipe(Effect.result);
 
-    if (Either.isLeft(attachResult)) {
+    if (Result.isFailure(attachResult)) {
       bufferingLive = false;
       liveBuffer.splice(0);
       const recovered = yield* recoverReplayOnlyAfterAttachFailure({
         socket,
         strategy,
         target: liveTarget,
-        cause: attachResult.left,
+        cause: attachResult.failure,
         sendMessage,
         closed: () => closed,
       });
@@ -325,12 +338,12 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
         socket,
         strategy,
         `${strategy.logLabel} live attach failed`,
-        attachResult.left,
+        attachResult.failure,
       );
       return yield* Deferred.await(closedSignal);
     }
 
-    const attachment = attachResult.right;
+    const attachment = attachResult.success;
     yield* Deferred.succeed(ready, {
       target,
       attachmentId: attachment.attachmentId,
@@ -348,15 +361,15 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
         bytes: attachment.replayBytes,
         send: (message) => sendMessage(message),
       })
-      .pipe(Effect.either);
+      .pipe(Effect.result);
     bufferingLive = false;
 
-    if (Either.isLeft(replayResult)) {
+    if (Result.isFailure(replayResult)) {
       closeWithMappedError(
         socket,
         strategy,
         `${strategy.logLabel} replay failed`,
-        replayResult.left,
+        replayResult.failure,
       );
       return yield* Deferred.await(closedSignal);
     }
@@ -382,19 +395,19 @@ function recoverReplayOnlyAfterAttachFailure<
     const pty = yield* PtyService;
     const targetResult = yield* input.strategy
       .recoverAttachFailure({ target: input.target, cause: input.cause })
-      .pipe(Effect.either);
-    if (Either.isLeft(targetResult) || targetResult.right === null) return null;
+      .pipe(Effect.result);
+    if (Result.isFailure(targetResult) || targetResult.success === null) return null;
 
-    const recoveredTarget = targetResult.right;
+    const recoveredTarget = targetResult.success;
     const planResult =
       recoveredTarget.ptyProcessId === null
-        ? Either.right(null)
+        ? Result.succeed(null)
         : yield* pty
             .getAttachmentPlan({ ptyProcessId: recoveredTarget.ptyProcessId })
-            .pipe(Effect.either);
-    if (Either.isLeft(planResult) || planResult.right?.live) return null;
+            .pipe(Effect.result);
+    if (Result.isFailure(planResult) || planResult.success?.live) return null;
 
-    const plan = planResult.right;
+    const plan = planResult.success;
     input.sendMessage(input.strategy.preamble({ target: recoveredTarget, plan }));
     if (input.closed()) return { status: 'recovered' as const, target: recoveredTarget };
 
@@ -405,13 +418,13 @@ function recoverReplayOnlyAfterAttachFailure<
           bytes: plan.replayBytes,
           send: (message) => input.sendMessage(message),
         })
-        .pipe(Effect.either);
-      if (Either.isLeft(replayResult)) {
+        .pipe(Effect.result);
+      if (Result.isFailure(replayResult)) {
         closeWithMappedError(
           input.socket,
           input.strategy,
           `${input.strategy.logLabel} replay failed after attach recovery`,
-          replayResult.left,
+          replayResult.failure,
         );
         return { status: 'closed' as const };
       }
@@ -483,9 +496,9 @@ function processClientMessages<Target, Preamble extends { readonly type: string 
           attachmentId: attachment.attachmentId,
           message,
         })
-        .pipe(Effect.either);
-      if (Either.isLeft(result)) {
-        const error = strategy.mapError(result.left);
+        .pipe(Effect.result);
+      if (Result.isFailure(result)) {
+        const error = strategy.mapError(result.failure);
         sendMessage({ type: 'error', ...error });
       }
     }),

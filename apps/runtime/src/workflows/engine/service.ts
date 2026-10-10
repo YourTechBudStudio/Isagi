@@ -144,14 +144,14 @@ export interface WorkflowEngineService {
   ) => Effect.Effect<ExportWorkflowCheckpointOutput, unknown>;
 }
 
-export const WorkflowEngine = Context.GenericTag<WorkflowEngineService>('isagi/WorkflowEngine');
+export const WorkflowEngine = Context.Service<WorkflowEngineService>('isagi/WorkflowEngine');
 
 /** The engine plus a way to wait until its background work has settled, for tests and scripts. */
 export interface EngineHandle extends WorkflowEngineService {
   readonly awaitIdle: Effect.Effect<void>;
 }
 
-export const WorkflowEngineLive = Layer.scoped(
+export const WorkflowEngineLive = Layer.effect(
   WorkflowEngine,
   Effect.gen(function* () {
     const workspaceService = yield* WorkspaceService;
@@ -242,9 +242,7 @@ export function startEngine(input: {
             });
           }),
         ).pipe(
-          Effect.tap(() =>
-            publish(appended).pipe(Effect.catchAllCause(logCause('publish failed'))),
-          ),
+          Effect.tap(() => publish(appended).pipe(Effect.catchCause(logCause('publish failed')))),
         );
       },
       read: (operation, read) => database.use(operation, read),
@@ -260,14 +258,14 @@ export function startEngine(input: {
           Effect.gen(function* () {
             for (;;) {
               state.again = false;
-              yield* driveRun(rt, runId).pipe(Effect.catchAllCause(failRunOnDefect(runId)));
+              yield* driveRun(rt, runId).pipe(Effect.catchCause(failRunOnDefect(runId)));
               if (!state.again) break;
             }
           }).pipe(Effect.ensuring(Effect.sync(() => drivers.delete(runId)))),
         );
       },
       fork: (work, label) => {
-        runFiber(work.pipe(Effect.catchAllCause(logCause(label))));
+        runFiber(work.pipe(Effect.catchCause(logCause(label))));
       },
       loadArtifact: (artifactHash, workflowKey) => {
         const cached = artifactCache.get(artifactHash);
@@ -304,7 +302,7 @@ export function startEngine(input: {
                 message,
               });
             })
-            .pipe(Effect.catchAllCause(logCause('recording a step defect failed')));
+            .pipe(Effect.catchCause(logCause('recording a step defect failed')));
         });
     }
 
@@ -355,7 +353,14 @@ export function startEngine(input: {
             }),
             'workflow headless settlement',
           );
-        }).pipe(Effect.catchAllCause(logCause('workflow trigger handling failed'))),
+        }).pipe(
+          // A shut-down subscription interrupts `take`; end the loop then instead of spinning on it.
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : logCause('workflow trigger handling failed')(cause),
+          ),
+        ),
       ),
     );
 
@@ -391,13 +396,13 @@ export function startEngine(input: {
       awaitIdle,
       listWorkflowDescriptors: (origin) => listWorkflowDescriptors(rt, origin),
       launch: (launchInput) => launch(rt, launchInput),
-      pause: (runId) => Effect.zipRight(controls.pause(rt, runId), summaryOf(runId)),
-      resume: (runId) => Effect.zipRight(controls.resume(rt, runId), summaryOf(runId)),
-      retry: (runId) => Effect.zipRight(controls.retry(rt, runId), summaryOf(runId)),
-      cancel: (runId) => Effect.zipRight(controls.cancel(rt, runId), summaryOf(runId)),
-      dismiss: (runId) => Effect.zipRight(controls.dismiss(rt, runId), summaryOf(runId)),
+      pause: (runId) => Effect.andThen(controls.pause(rt, runId), summaryOf(runId)),
+      resume: (runId) => Effect.andThen(controls.resume(rt, runId), summaryOf(runId)),
+      retry: (runId) => Effect.andThen(controls.retry(rt, runId), summaryOf(runId)),
+      cancel: (runId) => Effect.andThen(controls.cancel(rt, runId), summaryOf(runId)),
+      dismiss: (runId) => Effect.andThen(controls.dismiss(rt, runId), summaryOf(runId)),
       advance: (advanceInput) =>
-        Effect.zipRight(controls.advance(rt, advanceInput), summaryOf(advanceInput.runId)),
+        Effect.andThen(controls.advance(rt, advanceInput), summaryOf(advanceInput.runId)),
       listRuns: (query) => reading('workflow_list_runs', (db) => listRunSummaries(db, query)),
       listAttachedSummaries: reading('workflow_list_attached', listAttachedSummaries),
       getRun: (runId) => reading('workflow_get_run', (db) => getRunDetail(db, runId)),
@@ -426,7 +431,7 @@ export function startEngine(input: {
 function unwrapEngineError<A>(
   effect: Effect.Effect<A, DatabaseError>,
 ): Effect.Effect<A, DatabaseError | WorkflowEngineError> {
-  return Effect.catchAll(effect, (error) =>
+  return Effect.catch(effect, (error) =>
     Effect.fail(error.cause instanceof WorkflowEngineError ? error.cause : error),
   );
 }
@@ -434,7 +439,7 @@ function unwrapEngineError<A>(
 function logCause(label: string) {
   return (cause: Cause.Cause<unknown>) =>
     Effect.sync(() => {
-      if (Cause.isInterruptedOnly(cause)) return;
+      if (Cause.hasInterruptsOnly(cause)) return;
       console.warn(`[runtime] ${label}`, Cause.pretty(cause));
     });
 }

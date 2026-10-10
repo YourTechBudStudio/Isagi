@@ -258,7 +258,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   }
 
   requestRestart(): Effect.Effect<void> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       if (
         this.#stopped ||
         this.#store.snapshot.state !== 'ready' ||

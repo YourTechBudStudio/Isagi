@@ -52,7 +52,7 @@ export const isPtyWebSocketErrorCode: (code: unknown) => code is PtyWebSocketErr
 );
 
 const isHarnessLaunchBlockCode = Schema.is(
-  Schema.Literal(
+  Schema.Literals([
     'onboarding_incomplete',
     'config_invalid',
     'inventory_pending',
@@ -60,7 +60,7 @@ const isHarnessLaunchBlockCode = Schema.is(
     'harness_missing',
     'harness_incompatible',
     'harness_probe_failed',
-  ),
+  ]),
 );
 
 /**

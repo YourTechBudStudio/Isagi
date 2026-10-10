@@ -81,7 +81,7 @@ test('PTY websocket API reports unsupported harness adapter failures with stable
         fakeAgentSessionService({
           ensureActivePtyProcess: () =>
             Effect.sleep(1).pipe(
-              Effect.zipRight(
+              Effect.andThen(
                 Effect.fail(
                   new HarnessAdapterError(
                     'unsupported_harness',

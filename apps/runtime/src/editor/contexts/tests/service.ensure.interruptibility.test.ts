@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Fiber } from 'effect';
+import { Deferred, Effect, Fiber } from 'effect';
 
 import type { InternalRuntimeEvent } from '../../../platform/events/index.js';
 import { editorServiceLayer, insertWorktree, withEditorService } from '../../testing.js';
@@ -20,6 +20,7 @@ import { EditorContextService } from '../service.js';
 test('layer shutdown interrupts a probe that would otherwise never settle', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-shutdown-'));
   const events: InternalRuntimeEvent[] = [];
+  const probeStarted = Deferred.makeUnsafe<void>();
   let probeInterrupted = false;
   try {
     await Effect.runPromise(
@@ -29,6 +30,10 @@ test('layer shutdown interrupts a probe that would otherwise never settle', asyn
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const created = yield* repository.create({ worktreeId });
         yield* service.ensureRuntime({ editorContextId: created.id, intent: 'reuse' });
+        // The probe is forked, so it starts on a later scheduler turn. Shut down
+        // only once it is running: a fiber interrupted before it starts never
+        // reaches `onInterrupt`, which would fail this test for the wrong reason.
+        yield* Deferred.await(probeStarted);
       }).pipe(
         Effect.provide(
           editorServiceLayer({
@@ -36,7 +41,8 @@ test('layer shutdown interrupts a probe that would otherwise never settle', asyn
             events,
             options: {
               probe: () =>
-                Effect.never.pipe(
+                Deferred.succeed(probeStarted, undefined).pipe(
+                  Effect.andThen(Effect.never),
                   Effect.onInterrupt(() =>
                     Effect.sync(() => {
                       probeInterrupted = true;
@@ -72,10 +78,10 @@ test('an ensure cancelled while a probe is registered does not wait on the spawn
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const created = yield* repository.create({ worktreeId });
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           service.ensureRuntime({ editorContextId: created.id, intent: 'reuse' }),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         // The cancellation completes rather than blocking behind the spawn,
         // which is what `restore(allocation.start)` buys.
         yield* Fiber.interrupt(fiber);

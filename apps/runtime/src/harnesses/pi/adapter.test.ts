@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { emptyOrphanSweepStats } from '../../platform/persistence/orphan-files.js';
 import { prepareHarnessIntegrationArtifacts } from '../artifacts.js';
@@ -230,12 +230,12 @@ test('harness artifact preparation fails when the runtime data root cannot host 
   writeFileSync(dataRoot, 'not a directory', 'utf8');
   try {
     const result = await Effect.runPromise(
-      prepareHarnessIntegrationArtifacts(dataRoot).pipe(Effect.either),
+      prepareHarnessIntegrationArtifacts(dataRoot).pipe(Effect.result),
     );
-    assert.equal(Either.isLeft(result), true);
+    assert.equal(Result.isFailure(result), true);
     assert.equal(
-      Either.isLeft(result) && result.left instanceof HarnessAdapterError
-        ? result.left.code
+      Result.isFailure(result) && result.failure instanceof HarnessAdapterError
+        ? result.failure.code
         : undefined,
       'artifact_write_failed',
     );

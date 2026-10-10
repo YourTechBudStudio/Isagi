@@ -1,4 +1,4 @@
-import { Context, Effect, Either, Layer } from 'effect';
+import { Context, Effect, Layer, Result, Semaphore } from 'effect';
 
 import type {
   CommandActionOutput,
@@ -76,7 +76,7 @@ export interface CommandService {
   }) => Effect.Effect<void, CommandServiceError>;
 }
 
-export const CommandService = Context.GenericTag<CommandService>('isagi/CommandService');
+export const CommandService = Context.Service<CommandService>('isagi/CommandService');
 
 const commandStopGracefulTimeoutMs = 2_000;
 
@@ -98,7 +98,7 @@ type PtyCommandEvent =
       readonly statusReason: string | null;
     };
 
-export const CommandServiceLive = Layer.scoped(
+export const CommandServiceLive = Layer.effect(
   CommandService,
   Effect.gen(function* () {
     const workspaceRepository = yield* WorkspaceRepository;
@@ -369,8 +369,8 @@ export const CommandServiceLive = Layer.scoped(
 
         const terminate = yield* pty
           .terminate({ ptyProcessId, gracefulTimeoutMs: commandStopGracefulTimeoutMs })
-          .pipe(Effect.either);
-        if (Either.isLeft(terminate)) {
+          .pipe(Effect.result);
+        if (Result.isFailure(terminate)) {
           // No terminal evidence at all: the command stays truthfully
           // `running`, carrying a diagnostic that says so, and the failure
           // still reaches the caller — explicit Stop reports it, worktree
@@ -381,7 +381,7 @@ export const CommandServiceLive = Layer.scoped(
             ptyProcessId,
             detail: processControlFailureDetail(
               options.cause,
-              describeCommandCause(terminate.left),
+              describeCommandCause(terminate.failure),
             ),
           }).pipe(
             // The repair failing is the error the caller will see, so the
@@ -390,7 +390,7 @@ export const CommandServiceLive = Layer.scoped(
             Effect.tapError(() =>
               Effect.sync(() => {
                 console.warn(
-                  `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure: ${describeCommandCause(terminate.left)}`,
+                  `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure: ${describeCommandCause(terminate.failure)}`,
                 );
               }),
             ),
@@ -401,7 +401,7 @@ export const CommandServiceLive = Layer.scoped(
               message: `Could not stop command ${input.commandName}.`,
               worktreeId: input.worktreeId,
               commandName: input.commandName,
-              cause: terminate.left,
+              cause: terminate.failure,
             }),
           );
         }
@@ -411,7 +411,7 @@ export const CommandServiceLive = Layer.scoped(
         // never happened would be a lie. The incarnation's real terminal fact —
         // a captured exit, or the poller's verdict — owns the outcome and
         // reconciles the command when it durably lands.
-        if (terminate.right === 'already_absent') {
+        if (terminate.success === 'already_absent') {
           return { status: state.status, resolution: 'unchanged' } as const;
         }
 
@@ -535,7 +535,7 @@ export const CommandServiceLive = Layer.scoped(
     // establishing what happened to that command's processes. It is a
     // construction-time internal with no production caller outside this block.
     yield* reconcileCommandsAtBoot(convergenceDependencies).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.sync(() => {
           console.warn(
             `[runtime] Command boot convergence failed cause=${describeCommandCause(error)}`,
@@ -573,7 +573,7 @@ export const CommandServiceLive = Layer.scoped(
             // stall reconciliation of other commands' events behind it in the
             // queue. The per-command lock still serializes same-command work.
             yield* Effect.forkScoped(
-              reconcilePtyProcessEvent(event).pipe(Effect.catchAll(logEventError)),
+              reconcilePtyProcessEvent(event).pipe(Effect.catch(logEventError)),
             );
             return;
           }
@@ -586,9 +586,9 @@ export const CommandServiceLive = Layer.scoped(
                 nextWorktreeId: event.nextWorktreeId,
                 cause: event.cause,
               })
-              .pipe(Effect.catchAll(logEventError));
+              .pipe(Effect.catch(logEventError));
           }
-        }).pipe(Effect.catchAll(logEventError)),
+        }).pipe(Effect.catch(logEventError)),
       ),
     );
 
@@ -663,7 +663,7 @@ export const CommandServiceLive = Layer.scoped(
           locks,
           input,
           stopCommand(input, { cause: 'user', suppressChangedEvent: true }).pipe(
-            Effect.zipRight(runCommand(input)),
+            Effect.andThen(runCommand(input)),
           ),
         ),
       runPostCreateLifecycle: (input) => lifecycle.runPostCreateLifecycle(input.worktreeId),
@@ -695,7 +695,7 @@ export const CommandServiceLive = Layer.scoped(
 // command key ever seen, including after its worktree is deleted) rather than
 // reference-counted away — a deliberate, negligible, desktop-scale tradeoff that
 // avoids racing entry teardown against an in-flight lock.
-type CommandLocks = Map<string, Effect.Semaphore>;
+type CommandLocks = Map<string, Semaphore.Semaphore>;
 
 function withCommandLock<A, E, R>(
   locks: CommandLocks,
@@ -706,7 +706,7 @@ function withCommandLock<A, E, R>(
   return Effect.gen(function* () {
     let semaphore = locks.get(key);
     if (!semaphore) {
-      semaphore = yield* Effect.makeSemaphore(1);
+      semaphore = yield* Semaphore.make(1);
       locks.set(key, semaphore);
     }
     return yield* semaphore.withPermits(1)(effect);

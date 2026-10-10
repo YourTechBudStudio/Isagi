@@ -66,7 +66,7 @@ export function recordingInternalEventBusLayer(events: InternalRuntimeEvent[]) {
         publish: (event) =>
           Effect.sync(() => {
             events.push(event);
-          }).pipe(Effect.zipRight(bus.publish(event))),
+          }).pipe(Effect.andThen(bus.publish(event))),
         subscribe: bus.subscribe,
       } satisfies InternalRuntimeEventBusService;
     }),

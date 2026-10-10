@@ -94,7 +94,7 @@ function runPtyProbe(root, workingDirectory, electronExecutable) {
 }
 
 function runRuntimeProbe(root, workingDirectory, electronExecutable) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const dataRoot = resolve(workingDirectory, `data-${Date.now()}-${Math.random()}`);
     const child = spawn(electronExecutable, [resolve(root, 'index.js')], {
       cwd: workingDirectory,

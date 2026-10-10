@@ -3,6 +3,7 @@ import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
 import { controlPlaneQueryKey } from '../../../src/lib/control-plane/queries.js';
 import { queryClient } from '../../../src/lib/query/client.js';
 import { moveBefore } from '../../../src/lib/workspace/rail-order.js';
+import { requestBodyText } from '../test-support/request-body.js';
 import { FIXTURE_CONTROL_PLANE, FIXTURE_SNAPSHOT } from './seed.js';
 
 /**
@@ -121,7 +122,7 @@ export function installFakeRuntime() {
       });
     }
 
-    const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, number | null>;
+    const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as Record<string, number | null>;
     const beforeId = body[order.anchorField] ?? null;
     snapshot = order.apply(snapshot, beforeId);
     return success(order.output);

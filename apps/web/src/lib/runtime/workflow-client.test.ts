@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Cause, Effect, Option } from 'effect';
 
 import { RuntimeApiError } from '@isagi/runtime-client';
 
@@ -104,7 +104,8 @@ test('a refused control keeps its own reason rather than collapsing to a generic
     )) as typeof fetch;
 
   const exit = await Effect.runPromiseExit(createRuntimeClient(runtimeUrl).pauseWorkflow(77));
-  const failure = exit._tag === 'Failure' ? causeFailure(exit.cause) : null;
+  const failure =
+    exit._tag === 'Failure' ? Option.getOrNull(Cause.findErrorOption(exit.cause)) : null;
   assert.ok(failure instanceof RuntimeApiError);
   assert.equal(
     (apiErrorData(failure as RuntimeApiError<never>) as { readonly reason: string }).reason,
@@ -131,6 +132,25 @@ test('checkpoint file bytes are fetched raw by path, with the download variant a
   );
 });
 
+test('checkpoint file bytes keep the content type the runtime served them with', async () => {
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      }),
+    )) as typeof fetch;
+
+  const blob = await Effect.runPromise(
+    createRuntimeClient(runtimeUrl).fetchWorkflowCheckpointFile(1, 'shot.png') as Effect.Effect<
+      Blob,
+      never
+    >,
+  );
+  assert.equal(blob.type, 'image/png');
+  assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [137, 80, 78, 71]);
+});
+
 async function capture<Output>(
   data: unknown,
   call: (client: ReturnType<typeof createRuntimeClient>) => Effect.Effect<Output, unknown>,
@@ -154,11 +174,6 @@ async function capture<Output>(
 
 function apiErrorData(failure: RuntimeApiError<never>): unknown {
   return (failure.apiError as { readonly data?: unknown }).data;
-}
-
-function causeFailure(cause: unknown): unknown {
-  const failures = (cause as { readonly error?: unknown }).error;
-  return failures ?? cause;
 }
 
 function structureOutput() {

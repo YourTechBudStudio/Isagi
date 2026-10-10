@@ -1,4 +1,4 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { applyFailure, type StepFailure } from '../engine/chain.js';
 import type { SavedResult } from '../engine/results.js';
@@ -75,7 +75,7 @@ export function captureCheckpoint(
     yield* Effect.scoped(
       Effect.gen(function* () {
         const capture = yield* rt.deps.checkpoints.content.openCapture;
-        const captured = yield* Effect.either(
+        const captured = yield* Effect.result(
           Effect.gen(function* () {
             const project = yield* rt.deps.places.workspace.findProject(run.projectId);
             if (!project) {
@@ -102,8 +102,8 @@ export function captureCheckpoint(
             return { commitSha, scopes };
           }),
         );
-        if (Either.isLeft(captured)) {
-          return yield* fail('checkpoint_capture', captureMessage(captured.left));
+        if (Result.isFailure(captured)) {
+          return yield* fail('checkpoint_capture', captureMessage(captured.failure));
         }
 
         yield* rt.commit('workflow_save_checkpoint', (db, emit) => {
@@ -115,8 +115,8 @@ export function captureCheckpoint(
             executionId: leaf.id,
             title,
             label: execution.label,
-            commitSha: captured.right.commitSha,
-            scopes: captured.right.scopes,
+            commitSha: captured.success.commitSha,
+            scopes: captured.success.scopes,
           });
           const result: SavedResult = { type: 'complete', update: {}, checkpointId: checkpoint.id };
           updateExecution(db, leaf.id, { resultJson: toJson(result), checkpointId: checkpoint.id });

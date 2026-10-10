@@ -3,7 +3,7 @@ import { Schema } from 'effect';
 export const pathSuggestInputSchema = Schema.Struct({
   input: Schema.String,
   limit: Schema.optional(
-    Schema.Number.pipe(Schema.int(), Schema.positive(), Schema.lessThanOrEqualTo(100)),
+    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
   ),
 });
 
@@ -20,6 +20,6 @@ export const pathSuggestOutputSchema = Schema.Struct({
   suggestions: Schema.Array(pathSuggestionSchema),
 });
 
-export type PathSuggestInput = Schema.Schema.Type<typeof pathSuggestInputSchema>;
-export type PathSuggestOutput = Schema.Schema.Type<typeof pathSuggestOutputSchema>;
-export type PathSuggestion = Schema.Schema.Type<typeof pathSuggestionSchema>;
+export type PathSuggestInput = typeof pathSuggestInputSchema.Type;
+export type PathSuggestOutput = typeof pathSuggestOutputSchema.Type;
+export type PathSuggestion = typeof pathSuggestionSchema.Type;

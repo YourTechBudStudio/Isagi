@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either, Layer } from 'effect';
+import { Effect, Layer, Result } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
 import { InternalRuntimeEventBusLive } from '../../platform/events/index.js';
@@ -233,13 +233,13 @@ test('backend_unavailable reports the row own adapter being unavailable, not a d
         (ptyProcessId) =>
           Effect.gen(function* () {
             const pty = yield* PtyService;
-            return yield* pty.kill({ ptyProcessId }).pipe(Effect.either);
+            return yield* pty.kill({ ptyProcessId }).pipe(Effect.result);
           }),
       ),
     );
 
-    assert.ok(Either.isLeft(outcome));
-    const error = outcome.left;
+    assert.ok(Result.isFailure(outcome));
+    const error = outcome.failure;
     assert.ok(error instanceof PtyServiceError);
     assert.equal(error.code, 'backend_unavailable');
     assert.match(error.message, /tmux is unavailable/);

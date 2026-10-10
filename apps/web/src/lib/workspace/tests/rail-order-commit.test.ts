@@ -78,16 +78,22 @@ function failureMessage(scopeKey: string) {
 
 function apiFailure(code: string, reason: string): RuntimeApiError<ApiError> {
   return new RuntimeApiError({
-    code,
-    status: 400,
-    message: 'diagnostic',
-    requestId: 'req-1',
-    data: { reason },
-  } as ApiError);
+    endpointId: 'projects.moveOrder',
+    apiError: {
+      code,
+      status: 400,
+      message: 'diagnostic',
+      requestId: 'req-1',
+      data: { reason },
+    } as ApiError,
+  });
 }
 
 function transportFailure() {
-  return new RuntimeTransportError('offline', new Error('offline'));
+  return new RuntimeTransportError({
+    endpointId: 'projects.moveOrder',
+    cause: new Error('offline'),
+  });
 }
 
 /**

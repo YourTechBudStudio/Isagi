@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import { apiInfrastructureErrorSchema, type ApiError } from '@isagi/contracts';
+import { apiInfrastructureErrorSchema, type ApiError, type WireSchema } from '@isagi/contracts';
 
 import { logDiagnosticEvent } from '../diagnostics/phase.js';
 import {
@@ -60,7 +60,7 @@ function decodeWith<Value>(
   value: unknown,
   context: ApiRouteContext,
 ): Decoded<Value> {
-  const decoder = schema as Schema.Schema.AnyNoContext | undefined;
+  const decoder = schema as WireSchema | undefined;
   if (!decoder) {
     return { status: 'succeeded', value: undefined as Value };
   }
@@ -167,7 +167,7 @@ export function sendRouteApiError(
 ) {
   const errorSchema = apiError.code.startsWith('api_')
     ? apiInfrastructureErrorSchema
-    : (endpoint.errors as Schema.Schema.AnyNoContext);
+    : (endpoint.errors as WireSchema);
 
   try {
     Schema.decodeUnknownSync(errorSchema)(apiError);

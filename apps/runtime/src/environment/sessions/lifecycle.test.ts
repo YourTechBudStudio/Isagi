@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Either, Layer } from 'effect';
+import { Effect, Layer, Result } from 'effect';
 
 import { EntityLockLive } from '../../platform/locks/entity-lock.js';
 import { SessionLifecycle, SessionLifecycleLive } from '../../session-lifecycle/index.js';
@@ -21,17 +21,18 @@ test('attach tokens are single use', async () => {
       const token = yield* lifecycle.issueAttachToken(agentKey);
       const first = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: token.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const second = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: token.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { first, second };
     }).pipe(Effect.provide(lifecycleLayer)),
   );
 
-  assert.equal(Either.isRight(result.first), true);
-  assert.equal(Either.isLeft(result.second), true);
-  if (Either.isLeft(result.second)) assert.equal(result.second.left.code, 'attach_token_invalid');
+  assert.equal(Result.isSuccess(result.first), true);
+  assert.equal(Result.isFailure(result.second), true);
+  if (Result.isFailure(result.second))
+    assert.equal(result.second.failure.code, 'attach_token_invalid');
 });
 
 test('issuing multiple tokens keeps unresolved attach attempts independent', async () => {
@@ -42,16 +43,16 @@ test('issuing multiple tokens keeps unresolved attach attempts independent', asy
       const secondToken = yield* lifecycle.issueAttachToken(agentKey);
       const first = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: firstToken.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const second = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: secondToken.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { first, second };
     }).pipe(Effect.provide(lifecycleLayer)),
   );
 
-  assert.equal(Either.isRight(result.first), true);
-  assert.equal(Either.isRight(result.second), true);
+  assert.equal(Result.isSuccess(result.first), true);
+  assert.equal(Result.isSuccess(result.second), true);
 });
 
 test('revoking attach tokens invalidates all outstanding tokens for a session', async () => {
@@ -63,16 +64,16 @@ test('revoking attach tokens invalidates all outstanding tokens for a session', 
       yield* lifecycle.revokeAttachTokens(agentKey);
       const first = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: firstToken.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const second = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: secondToken.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { first, second };
     }).pipe(Effect.provide(lifecycleLayer)),
   );
 
-  assert.equal(Either.isLeft(result.first), true);
-  assert.equal(Either.isLeft(result.second), true);
+  assert.equal(Result.isFailure(result.first), true);
+  assert.equal(Result.isFailure(result.second), true);
 });
 
 test('attach tokens expire after five minutes', async () => {
@@ -86,12 +87,12 @@ test('attach tokens expire after five minutes', async () => {
         Date.now = () => 1_000 + 5 * 60 * 1000 + 1;
         return yield* lifecycle
           .consumeAttachToken({ key: agentKey, token: token.token })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(lifecycleLayer)),
     );
 
-    assert.equal(Either.isLeft(result), true);
-    if (Either.isLeft(result)) assert.equal(result.left.code, 'attach_token_expired');
+    assert.equal(Result.isFailure(result), true);
+    if (Result.isFailure(result)) assert.equal(result.failure.code, 'attach_token_expired');
   } finally {
     Date.now = originalNow;
   }
@@ -104,18 +105,18 @@ test('token consumption rejects session mismatches and still consumes the token'
       const token = yield* lifecycle.issueAttachToken(agentKey);
       const mismatch = yield* lifecycle
         .consumeAttachToken({ key: otherAgentKey, token: token.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       const retry = yield* lifecycle
         .consumeAttachToken({ key: agentKey, token: token.token })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
       return { mismatch, retry };
     }).pipe(Effect.provide(lifecycleLayer)),
   );
 
-  assert.equal(Either.isLeft(result.mismatch), true);
-  if (Either.isLeft(result.mismatch))
-    assert.equal(result.mismatch.left.code, 'attach_token_session_mismatch');
-  assert.equal(Either.isLeft(result.retry), true);
+  assert.equal(Result.isFailure(result.mismatch), true);
+  if (Result.isFailure(result.mismatch))
+    assert.equal(result.mismatch.failure.code, 'attach_token_session_mismatch');
+  assert.equal(Result.isFailure(result.retry), true);
 });
 
 test('superseding an active attachment invokes the moved handle once', async () => {

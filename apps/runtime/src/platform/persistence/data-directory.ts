@@ -35,7 +35,7 @@ export interface DataDirectoryService {
   readonly paths: IsagiDataDirectory;
 }
 
-export const DataDirectory = Context.GenericTag<DataDirectoryService>('isagi/DataDirectory');
+export const DataDirectory = Context.Service<DataDirectoryService>('isagi/DataDirectory');
 
 /**
  * The Isagi-owned paths under one data root, with the root canonicalized.

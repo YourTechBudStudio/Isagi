@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 
 import { runtimePackageExternals } from '../../../runtime/runtime-externals.mjs';
 import { repoRoot, runtimeRoot } from './paths.mjs';
@@ -154,7 +154,7 @@ test('command failures preserve exit and command context', async () => {
   );
   assert.equal(Exit.isFailure(exit), true);
   if (Exit.isFailure(exit)) {
-    const error = /** @type {{ error?: any }} */ (exit.cause).error;
+    const error = /** @type {any} */ (Option.getOrUndefined(Cause.findErrorOption(exit.cause)));
     assert.equal(error?._tag, 'StageCommandError');
     assert.equal(error?.exitCode, 7);
     assert.equal(error?.command, process.execPath);
@@ -170,7 +170,7 @@ test('command timeouts are distinguished from external termination', async () =>
   );
   assert.equal(Exit.isFailure(exit), true);
   if (Exit.isFailure(exit)) {
-    const error = /** @type {{ error?: any }} */ (exit.cause).error;
+    const error = /** @type {any} */ (Option.getOrUndefined(Cause.findErrorOption(exit.cause)));
     assert.equal(error?._tag, 'StageCommandError');
     assert.equal(error?.timedOut, true);
     assert.match(error?.message, /timed out/);

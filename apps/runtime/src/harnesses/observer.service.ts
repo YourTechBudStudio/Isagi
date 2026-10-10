@@ -1,5 +1,5 @@
 import { eq, inArray } from 'drizzle-orm';
-import { Context, Data, Effect, Layer } from 'effect';
+import { Cause, Context, Data, Effect, Layer, Semaphore } from 'effect';
 
 import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
 
@@ -65,7 +65,7 @@ export interface HarnessLedgerObserverTestControlService {
   readonly pollAgentSession: (agentSessionId: number) => Effect.Effect<void, unknown>;
 }
 
-export const HarnessLedgerObserver = Context.GenericTag<HarnessLedgerObserverService>(
+export const HarnessLedgerObserver = Context.Service<HarnessLedgerObserverService>(
   'isagi/HarnessLedgerObserver',
 );
 
@@ -91,14 +91,14 @@ type InventoryRow = {
 
 export type { ObservedHarnessTurnEdge } from './observer-state.js';
 
-export const HarnessLedgerObserverLive = Layer.scoped(
+export const HarnessLedgerObserverLive = Layer.effect(
   HarnessLedgerObserver,
   Effect.gen(function* () {
     const artifacts = yield* AgentSessionArtifacts;
     const database = yield* RuntimeDatabase;
     const eventBus = yield* InternalRuntimeEventBus;
     const states = new Map<number, AgentObserverState>();
-    const locks = new Map<number, Effect.Semaphore>();
+    const locks = new Map<number, Semaphore.Semaphore>();
     const activePtyByAgent = new Map<number, number | null>();
     const harnessByAgent = new Map<number, AgentHarness>();
     const ownerByPty = new Map<number, number>();
@@ -108,7 +108,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
       Effect.gen(function* () {
         const existing = locks.get(agentSessionId);
         if (existing) return existing;
-        const lock = yield* Effect.makeSemaphore(1);
+        const lock = yield* Semaphore.make(1);
         locks.set(agentSessionId, lock);
         return lock;
       });
@@ -721,7 +721,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
 
     const pollAgentSession = (agentSessionId: number, publish = true) =>
       withAgentLock(agentSessionId, refreshAgent(agentSessionId, { publish })).pipe(
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => {
             console.warn('[runtime] Harness observer refresh failed', {
               agentSessionId,
@@ -783,10 +783,14 @@ export const HarnessLedgerObserverLive = Layer.scoped(
             refreshAgent(owner, { publish: true, forceRecompute: true }),
           );
         }).pipe(
-          Effect.catchAllCause((cause) =>
-            Effect.sync(() =>
-              console.warn('[runtime] Harness observer event handling failed', String(cause)),
-            ),
+          // `catchCause` also sees self-interruption (a `take` on a shut-down subscription), so
+          // re-raise interruption-only causes to end this loop instead of spinning on `take`.
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : Effect.sync(() =>
+                  console.warn('[runtime] Harness observer event handling failed', String(cause)),
+                ),
           ),
         ),
       ),
@@ -797,7 +801,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
     const startupInventory = yield* inventoryQuery({ mode: 'all' });
     applyInventory(startupInventory, true);
     const startupArtifactIds = yield* artifacts.listAgentSessionIds.pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.sync(() => {
           console.warn('[runtime] Harness artifact inventory could not be read', String(cause));
           return [];
@@ -816,8 +820,8 @@ export const HarnessLedgerObserverLive = Layer.scoped(
     yield* Effect.forkScoped(
       Effect.forever(
         Effect.sleep('500 millis').pipe(
-          Effect.zipRight(pollOnce),
-          Effect.catchAllCause((cause) =>
+          Effect.andThen(pollOnce),
+          Effect.catchCause((cause) =>
             Effect.sync(() =>
               console.warn('[runtime] Harness observer poll failed', String(cause)),
             ),
@@ -983,7 +987,7 @@ function sourceOrElse<A, E, R>(
       failureKeys.delete(failureKey);
       return value;
     }),
-    Effect.catchAllCause((cause) =>
+    Effect.catchCause((cause) =>
       Effect.sync(() => {
         if (!failureKeys.has(failureKey)) {
           failureKeys.add(failureKey);

@@ -20,7 +20,7 @@ import {
   hashDescriptor,
   workflowStructureDescriptorVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
-import { Effect, Either, Layer, Ref } from 'effect';
+import { Effect, Result, Layer, Ref } from 'effect';
 
 import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -330,13 +330,13 @@ test('maps injected scan failures through the registry with typed source context
       },
     });
 
-    const result = await Effect.runPromise(registry.discover().pipe(Effect.either));
+    const result = await Effect.runPromise(registry.discover().pipe(Effect.result));
 
-    assert.ok(Either.isLeft(result));
-    assert.ok(result.left instanceof WorkflowRegistryError);
-    assert.equal(result.left.code, 'scan_failed');
-    assert.equal(result.left.sourceKind, 'additional');
-    assert.equal(result.left.workflowSourceDirectory, configured);
+    assert.ok(Result.isFailure(result));
+    assert.ok(result.failure instanceof WorkflowRegistryError);
+    assert.equal(result.failure.code, 'scan_failed');
+    assert.equal(result.failure.sourceKind, 'additional');
+    assert.equal(result.failure.workflowSourceDirectory, configured);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -429,16 +429,16 @@ test('rejects a complete discovery when a later source cannot be scanned', async
     const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
 
     const result = await Effect.runPromise(
-      registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.either),
+      registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.result),
     );
 
-    assert.ok(Either.isLeft(result));
-    assert.ok(result.left instanceof WorkflowRegistryError);
-    assert.equal(result.left.code, 'scan_failed');
-    assert.equal(result.left.sourceKind, 'project');
-    assert.equal(result.left.workflowSourceDirectory, join(project, '.isagi', 'workflows'));
+    assert.ok(Result.isFailure(result));
+    assert.ok(result.failure instanceof WorkflowRegistryError);
+    assert.equal(result.failure.code, 'scan_failed');
+    assert.equal(result.failure.sourceKind, 'project');
+    assert.equal(result.failure.workflowSourceDirectory, join(project, '.isagi', 'workflows'));
     assert.equal(
-      result.left.message,
+      result.failure.message,
       `Could not scan workflow directory: ${join(project, '.isagi', 'workflows')}.`,
     );
   } finally {
@@ -624,10 +624,10 @@ function discoverAndLoad(
 }
 
 async function failure(effect: Effect.Effect<unknown, unknown>) {
-  const result = await Effect.runPromise(Effect.either(effect));
-  assert.equal(Either.isLeft(result), true);
-  assert.ok(Either.isLeft(result) && result.left instanceof WorkflowLoadError);
-  return result.left;
+  const result = await Effect.runPromise(Effect.result(effect));
+  assert.equal(Result.isFailure(result), true);
+  assert.ok(Result.isFailure(result) && result.failure instanceof WorkflowLoadError);
+  return result.failure;
 }
 
 async function writePackage(

@@ -1,5 +1,5 @@
 import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type {
   WorkflowLaunchOrigin,
@@ -227,24 +227,24 @@ export function listWorkflowDescriptors(
       );
     return yield* Effect.forEach(snapshot.entries, (entry) =>
       Effect.gen(function* () {
-        const loaded = yield* entry.load().pipe(Effect.either);
-        if (Either.isLeft(loaded)) {
+        const loaded = yield* entry.load().pipe(Effect.result);
+        if (Result.isFailure(loaded)) {
           return {
             workflowKey: entry.workflowKey,
             result: {
               ok: false,
-              reason: loaded.left.reason,
-              diagnostics: loaded.left.diagnostics ?? [],
+              reason: loaded.failure.reason,
+              diagnostics: loaded.failure.diagnostics ?? [],
             },
           } satisfies DescriptorListing;
         }
         const manifest = yield* Effect.tryPromise(async () =>
-          loaded.right.definition.command(origin),
-        ).pipe(Effect.either);
-        return Either.isRight(manifest)
+          loaded.success.definition.command(origin),
+        ).pipe(Effect.result);
+        return Result.isSuccess(manifest)
           ? ({
               workflowKey: entry.workflowKey,
-              result: { ok: true, manifest: manifest.right },
+              result: { ok: true, manifest: manifest.success },
             } satisfies DescriptorListing)
           : ({
               workflowKey: entry.workflowKey,

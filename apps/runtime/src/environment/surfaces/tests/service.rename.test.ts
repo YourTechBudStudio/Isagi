@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { SurfaceError, SurfaceService } from '../../index.js';
 import { insertWorktree, testLayer } from '../../testing.js';
@@ -63,23 +63,23 @@ test('rename rejects empty and overlong titles', async () => {
         });
         const empty = yield* surfaces
           .renameSurface({ surfaceId: surface.surfaceId, title: '   ' })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         const long = yield* surfaces
           .renameSurface({ surfaceId: surface.surfaceId, title: 'a'.repeat(81) })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         return { empty, long };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.equal(Either.isLeft(output.empty), true);
-    assert.equal(Either.isLeft(output.long), true);
-    if (Either.isLeft(output.empty)) {
-      assert.ok(output.empty.left instanceof SurfaceError);
-      assert.equal(output.empty.left.code, 'invalid_surface_title');
+    assert.equal(Result.isFailure(output.empty), true);
+    assert.equal(Result.isFailure(output.long), true);
+    if (Result.isFailure(output.empty)) {
+      assert.ok(output.empty.failure instanceof SurfaceError);
+      assert.equal(output.empty.failure.code, 'invalid_surface_title');
     }
-    if (Either.isLeft(output.long)) {
-      assert.ok(output.long.left instanceof SurfaceError);
-      assert.equal(output.long.left.code, 'invalid_surface_title');
+    if (Result.isFailure(output.long)) {
+      assert.ok(output.long.failure instanceof SurfaceError);
+      assert.equal(output.long.failure.code, 'invalid_surface_title');
     }
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });

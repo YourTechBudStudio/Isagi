@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { surfacePanes } from '../../../persistence/schema.js';
 import { DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
@@ -114,7 +114,7 @@ test('failed split session creation leaves the split pane recoverable and sessio
               newPane: { kind: 'agent_session', harness: 'pi' },
             },
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId);
         return { surface, result, detail };
       }).pipe(
@@ -138,7 +138,7 @@ test('failed split session creation leaves the split pane recoverable and sessio
       ),
     );
 
-    assert.ok(Either.isLeft(output.result));
+    assert.ok(Result.isFailure(output.result));
     assert.equal(output.detail.panes.length, 2);
     const splitPane = output.detail.panes.find((pane) => pane.id !== output.surface.paneId);
     assert.ok(splitPane);
@@ -235,23 +235,23 @@ test('set split weights rejects stale layout nodes and changed child shapes', as
             surfaceId: surface.surfaceId,
             weights: { nodeId: 'split-missing', weights: [0.5, 0.5] },
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         const changedShape = yield* surfaces
           .setSplitWeights({
             surfaceId: surface.surfaceId,
             weights: { nodeId: `split-${surface.surfaceId}`, weights: [0.2, 0.3, 0.5] },
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         return { missing, changedShape };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.ok(Either.isLeft(output.missing));
-    assert.ok(output.missing.left instanceof SurfaceError);
-    assert.equal(output.missing.left.code, 'layout_node_stale');
-    assert.ok(Either.isLeft(output.changedShape));
-    assert.ok(output.changedShape.left instanceof SurfaceError);
-    assert.equal(output.changedShape.left.code, 'layout_node_stale');
+    assert.ok(Result.isFailure(output.missing));
+    assert.ok(output.missing.failure instanceof SurfaceError);
+    assert.equal(output.missing.failure.code, 'layout_node_stale');
+    assert.ok(Result.isFailure(output.changedShape));
+    assert.ok(output.changedShape.failure instanceof SurfaceError);
+    assert.equal(output.changedShape.failure.code, 'layout_node_stale');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

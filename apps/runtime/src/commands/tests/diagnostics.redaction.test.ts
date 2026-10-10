@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 
 import { decodeBackendRef } from '../../pty-processes/service/backend-ref.js';
 import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
@@ -64,9 +64,7 @@ async function auditWithFailure(pty: {
       fixture.rootPath,
       ({ service, recorder }) =>
         Effect.sync(() => recorder.reset()).pipe(
-          Effect.zipRight(
-            service.cleanupBeforeWorktreeDelete({ worktreeId: 10 }).pipe(Effect.exit),
-          ),
+          Effect.andThen(service.cleanupBeforeWorktreeDelete({ worktreeId: 10 }).pipe(Effect.exit)),
         ),
       {
         states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 801 })],
@@ -88,9 +86,9 @@ async function auditWithFailure(pty: {
 }
 
 test('a schema decode that echoes a ref value reaches neither logs nor durable diagnostics', async () => {
-  // Prove the fixture is genuinely a leaking shape before asserting the fix:
-  // Effect Schema really does render the offending value here.
-  const rawDecodeFailure = await Effect.runPromise(
+  // The production decoder fails with this shape: a `PtyServiceError` whose
+  // cause is the schema error.
+  const productionDecodeFailure = await Effect.runPromise(
     Effect.flip(
       decodeBackendRef({
         id: 801,
@@ -99,7 +97,27 @@ test('a schema decode that echoes a ref value reaches neither logs nor durable d
       } as never),
     ),
   );
-  const rawSchemaMessage = String((rawDecodeFailure as { readonly cause?: unknown }).cause);
+  // Effect v4 renders the offending value only when a decode opts into
+  // `reportInput`, which the backend-ref decoder does not. The recognizer must
+  // not depend on that default, so the fixture keeps the production shape but
+  // swaps in a schema error decoded with `reportInput`: one that really carries
+  // the sentinel.
+  const echoingSchemaError = await Effect.runPromise(
+    Effect.flip(
+      Schema.decodeUnknownEffect(Schema.Struct({ backend: Schema.Literal('tmux') }))(
+        JSON.parse(refEchoingSentinel),
+        { reportInput: true },
+      ),
+    ),
+  );
+  const rawDecodeFailure = new PtyServiceError({
+    code: productionDecodeFailure.code,
+    message: productionDecodeFailure.message,
+    ptyProcessId: 801,
+    cause: echoingSchemaError,
+  });
+  // Prove the fixture is genuinely a leaking shape before asserting the fix.
+  const rawSchemaMessage = String(rawDecodeFailure.cause);
   assert.ok(
     rawSchemaMessage.includes(SENTINEL),
     'fixture must use a shape that actually echoes the value, or this test is vacuous',
@@ -226,7 +244,7 @@ commands:
       fixture.rootPath,
       ({ service, recorder }) =>
         Effect.sync(() => recorder.reset()).pipe(
-          Effect.zipRight(service.run({ worktreeId: 10, commandName: 'dev' }).pipe(Effect.exit)),
+          Effect.andThen(service.run({ worktreeId: 10, commandName: 'dev' }).pipe(Effect.exit)),
         ),
       {
         portProbe: {

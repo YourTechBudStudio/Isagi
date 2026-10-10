@@ -15,7 +15,7 @@ export function harnessEnvForProcess(input: {
         ptyProcessId: input.ptyProcessId,
       })
       .pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             console.warn('[runtime] Agent session process artifact preparation failed', {
               agentSessionId: input.agentSessionId,

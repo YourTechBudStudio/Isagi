@@ -222,7 +222,7 @@ function installRendererContainment(window: BrowserWindow, target: RendererTarge
 function startRuntime() {
   runtimeStartPromise ??= Effect.runPromiseExit(runtimeLifecycle.start()).then((exit) => {
     if (Exit.isFailure(exit)) {
-      console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+      console.error(Cause.pretty(exit.cause));
     }
   });
   return runtimeStartPromise;

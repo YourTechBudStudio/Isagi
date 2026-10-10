@@ -32,6 +32,24 @@
       }
     ],
     "eslint/no-underscore-dangle": ["error", { "allow": ["_tag"] }],
+    "eslint/no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": [
+              "effect/unstable",
+              "effect/unstable/*",
+              "@effect/schema",
+              "@effect/schema/*",
+              "@effect/platform",
+              "@effect/platform/*"
+            ],
+            "message": "Effect v4 only: stable effect@4 ships no effect/unstable/*; Schema and platform modules live in effect itself (effect, effect/http, effect/process, ...)."
+          }
+        ]
+      }
+    ],
     "tailwindcss/enforce-canonical": "error"
   },
   "overrides": [

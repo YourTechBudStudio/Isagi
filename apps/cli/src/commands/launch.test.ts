@@ -186,12 +186,15 @@ test("the runtime's own launch rejection passes through unchanged", async () => 
     'workflows.start': () =>
       fail(
         new RuntimeApiError({
-          code: 'workflow_rejected',
-          status: 409,
-          message: 'The origin worktree is not in the checkpoint project.',
-          requestId: 'req-9',
-          data: { reason: 'workflow_launch_context_mismatch' },
-        } as never),
+          endpointId: 'workflows.start',
+          apiError: {
+            code: 'workflow_rejected',
+            status: 409,
+            message: 'The origin worktree is not in the checkpoint project.',
+            requestId: 'req-9',
+            data: { reason: 'workflow_launch_context_mismatch' },
+          },
+        }),
       ),
   });
   const run = await runIsagi(

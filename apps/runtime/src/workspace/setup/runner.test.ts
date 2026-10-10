@@ -88,7 +88,7 @@ async function runCopyHookFixture(
   arrange: (roots: { readonly projectRoot: string; readonly worktreeRoot: string }) => void,
   inspect: (fixture: {
     readonly worktreeRoot: string;
-    readonly result: Effect.Effect.Success<ReturnType<typeof runPostCreateSetup>>;
+    readonly result: Effect.Success<ReturnType<typeof runPostCreateSetup>>;
     readonly step: CreateSetupStepFixture | undefined;
   }) => void,
 ) {
@@ -181,7 +181,7 @@ test('command hooks are interrupted without persisting a setup run', async () =>
   try {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           runPostCreateSetup({
             config: {
               postCreate: [

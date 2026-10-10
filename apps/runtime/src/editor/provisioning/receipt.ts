@@ -29,7 +29,7 @@ export const editorInstallReceiptSchema = Schema.Struct({
   completedAt: Schema.String,
 });
 
-export type EditorInstallReceipt = Schema.Schema.Type<typeof editorInstallReceiptSchema>;
+export type EditorInstallReceipt = typeof editorInstallReceiptSchema.Type;
 
 const decodeReceipt = Schema.decodeUnknownSync(editorInstallReceiptSchema);
 

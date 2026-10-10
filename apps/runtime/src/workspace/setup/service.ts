@@ -46,7 +46,7 @@ export interface WorktreeSetupService {
   >;
 }
 
-export const WorktreeSetupService = Context.GenericTag<WorktreeSetupService>(
+export const WorktreeSetupService = Context.Service<WorktreeSetupService>(
   'isagi/WorktreeSetupService',
 );
 

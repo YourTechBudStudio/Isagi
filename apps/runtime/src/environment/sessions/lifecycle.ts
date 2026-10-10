@@ -49,10 +49,9 @@ export interface SessionLifecycleService {
   readonly supersedeAttachment: (key: SessionLifecycleKey) => Effect.Effect<void>;
 }
 
-export const SessionLifecycle =
-  Context.GenericTag<SessionLifecycleService>('isagi/SessionLifecycle');
+export const SessionLifecycle = Context.Service<SessionLifecycleService>('isagi/SessionLifecycle');
 
-export const SessionLifecycleLive = Layer.scoped(
+export const SessionLifecycleLive = Layer.effect(
   SessionLifecycle,
   Effect.gen(function* () {
     // Restore exclusion is the generic per-entity lock, shared with every other

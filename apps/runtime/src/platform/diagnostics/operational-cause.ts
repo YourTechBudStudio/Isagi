@@ -51,9 +51,9 @@ const knownForeignErrorNames: ReadonlySet<string> = new Set([
   'EvalError',
   'URIError',
   'AggregateError',
-  // Effect Schema's decode failure, the proven value-echoing case. Naming the
-  // type is safe; rendering its message is not.
-  'ParseError',
+  // Effect Schema's decode failure (`ParseError` in Effect v3), the proven
+  // value-echoing case. Naming the type is safe; rendering its message is not.
+  'SchemaError',
 ]);
 
 export interface RecognizedError {

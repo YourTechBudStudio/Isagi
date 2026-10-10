@@ -1,13 +1,11 @@
 import type { ApiError } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
-
-import { unwrapRuntimeFailure } from './run.js';
+import type { RuntimeClientError } from '@isagi/runtime-client';
 
 /**
  * A runtime-client failure reduced to the shape the UI reasons about. This is the
  * single authoritative classification of a rejected runtime effect; both the
  * runtime-error copy layer and the palette workflow-failure adapter consume it so
- * the `unwrap → instanceof` ladder lives in exactly one place.
+ * the `_tag` switch lives in exactly one place.
  */
 export type ClassifiedRuntimeFailure =
   | { readonly kind: 'api'; readonly apiError: ApiError }
@@ -15,22 +13,35 @@ export type ClassifiedRuntimeFailure =
   | { readonly kind: 'decode'; readonly endpointId: string }
   | { readonly kind: 'unknown' };
 
+const runtimeClientErrorTags: ReadonlySet<unknown> = new Set<RuntimeClientError['_tag']>([
+  'RuntimeApiError',
+  'RuntimeTransportError',
+  'RuntimeDecodeError',
+]);
+
 /**
- * Classify a thrown/rejected runtime failure. Unwraps an Effect fiber-failure
- * wrapper first, so callers may pass either the raw class instance or a
- * `runPromiseExit`/`FiberFailure`-wrapped value. An already-unwrapped value is
- * returned by `unwrapRuntimeFailure` unchanged, so a second unwrap is harmless.
+ * Classify a thrown/rejected runtime failure. `runRuntimeEffect` and Effect's own `runPromise`
+ * reject with the failure value itself, so the value is classified as-is.
  */
 export function classifyRuntimeFailure(error: unknown): ClassifiedRuntimeFailure {
-  const failure = unwrapRuntimeFailure(error);
-  if (failure instanceof RuntimeApiError) {
-    return { kind: 'api', apiError: failure.apiError };
+  if (!isRuntimeClientError(error)) {
+    return { kind: 'unknown' };
   }
-  if (failure instanceof RuntimeTransportError) {
-    return { kind: 'transport' };
+  switch (error._tag) {
+    case 'RuntimeApiError':
+      return { kind: 'api', apiError: error.apiError };
+    case 'RuntimeTransportError':
+      return { kind: 'transport' };
+    case 'RuntimeDecodeError':
+      return { kind: 'decode', endpointId: error.endpointId };
   }
-  if (failure instanceof RuntimeDecodeError) {
-    return { kind: 'decode', endpointId: failure.endpointId };
-  }
-  return { kind: 'unknown' };
+}
+
+function isRuntimeClientError(error: unknown): error is RuntimeClientError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    '_tag' in error &&
+    runtimeClientErrorTags.has(error._tag)
+  );
 }

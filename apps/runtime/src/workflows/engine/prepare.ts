@@ -1,4 +1,4 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { errorMessage } from '../state/pure.js';
 import {
@@ -31,12 +31,12 @@ import type { EngineRuntime } from './runtime.js';
  */
 export function prepareAndStart(rt: EngineRuntime, runId: number): Effect.Effect<void, unknown> {
   return Effect.gen(function* () {
-    const prepared = yield* prepare(rt, runId).pipe(Effect.either);
-    if (Either.isLeft(prepared)) {
+    const prepared = yield* prepare(rt, runId).pipe(Effect.result);
+    if (Result.isFailure(prepared)) {
       yield* rt.commit('workflow_preparation_failed', (db, emit) => {
         const run = getRun(db, runId);
         if (!run || run.status !== 'preparing') return;
-        const message = errorMessage(prepared.left);
+        const message = errorMessage(prepared.failure);
         updateRun(db, runId, {
           status: 'failed',
           errorJson: toJson({ stage: 'environment', message }),
@@ -59,7 +59,7 @@ export function prepareAndStart(rt: EngineRuntime, runId: number): Effect.Effect
       });
       return;
     }
-    if (prepared.right === 'stopped') return;
+    if (prepared.success === 'stopped') return;
     yield* enterRoot(rt, runId);
   });
 }

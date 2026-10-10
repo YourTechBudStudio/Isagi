@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { EditorContextRepository } from '../../../editor/contexts/index.js';
 import { insertPtyProcess as insertEditorPtyProcess } from '../../../editor/testing.js';
@@ -186,7 +186,7 @@ test('delete surface leaves log cleanup failures to PTY GC', async () => {
         });
 
         const deleted = yield* surfaces.deleteSurface(surface.surfaceId);
-        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.result);
         return { deleted, detail, logPath, surface };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -196,7 +196,7 @@ test('delete surface leaves log cleanup failures to PTY GC', async () => {
       deletedPaneIds: [output.surface.paneId],
     });
     assert.equal(existsSync(output.logPath), true);
-    assert.equal(Either.isLeft(output.detail), true);
+    assert.equal(Result.isFailure(output.detail), true);
     assert.equal(warnings.length, 0);
   } finally {
     console.warn = originalConsoleWarn;
@@ -225,7 +225,7 @@ test('delete surface best-effort terminates live PTYs', async () => {
         });
 
         const deleted = yield* surfaces.deleteSurface(surface.surfaceId);
-        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.result);
         return { deleted, detail, surface };
       }).pipe(
         Effect.provide(
@@ -244,7 +244,7 @@ test('delete surface best-effort terminates live PTYs', async () => {
 
     assert.equal(output.deleted.deletedSurfaceId, output.surface.surfaceId);
     assert.deepEqual(output.deleted.deletedPaneIds, [output.surface.paneId]);
-    assert.equal(Either.isLeft(output.detail), true);
+    assert.equal(Result.isFailure(output.detail), true);
     assert.equal(terminations.length, 1);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -277,7 +277,7 @@ test('delete surface still succeeds when live PTY termination fails', async () =
         });
 
         const deleted = yield* surfaces.deleteSurface(surface.surfaceId);
-        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.result);
         return { deleted, detail, surface };
       }).pipe(
         Effect.provide(
@@ -298,7 +298,7 @@ test('delete surface still succeeds when live PTY termination fails', async () =
 
     assert.equal(output.deleted.deletedSurfaceId, output.surface.surfaceId);
     assert.deepEqual(output.deleted.deletedPaneIds, [output.surface.paneId]);
-    assert.equal(Either.isLeft(output.detail), true);
+    assert.equal(Result.isFailure(output.detail), true);
     assert.equal(warnings.length, 1);
   } finally {
     console.warn = originalConsoleWarn;
@@ -617,8 +617,7 @@ test('an editor still placed when the lock is acquired is never terminated', asy
             // the race would never be exercised.
             decorateEditorService: (inner) => ({
               ...inner,
-              findForWorktree: (id) =>
-                Effect.tap(inner.findForWorktree(id), () => Effect.yieldNow()),
+              findForWorktree: (id) => Effect.tap(inner.findForWorktree(id), () => Effect.yieldNow),
             }),
           }),
         ),
@@ -658,7 +657,7 @@ test('a release failure after the deletion commits still publishes, then fails h
         const eventBus = yield* InternalRuntimeEventBus;
         const subscription = yield* eventBus.subscribe({ types: ['surface_changed'] });
         const surfaces = yield* SurfaceService;
-        const result = yield* Effect.either(surfaces.deleteSurface(opened.surfaceId));
+        const result = yield* Effect.result(surfaces.deleteSurface(opened.surfaceId));
         const published = yield* subscription.take;
         yield* subscription.unsubscribe;
         const surfaceStillThere = yield* (yield* SurfaceRepository).findSurface(opened.surfaceId);
@@ -688,8 +687,8 @@ test('a release failure after the deletion commits still publishes, then fails h
     );
     // And the failure is re-raised rather than absorbed: durable cleanup did not
     // settle as intended, and reporting success would hide that.
-    assert.ok(Either.isLeft(output.result));
-    assert.equal(output.result.left._tag, 'DatabaseError');
+    assert.ok(Result.isFailure(output.result));
+    assert.equal(output.result.failure._tag, 'DatabaseError');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

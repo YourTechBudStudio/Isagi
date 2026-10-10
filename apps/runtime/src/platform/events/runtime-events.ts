@@ -12,9 +12,9 @@ export interface RuntimeEventSubscription {
   readonly unsubscribe: Effect.Effect<void>;
 }
 
-export const RuntimeEventBus = Context.GenericTag<RuntimeEventBusService>('isagi/RuntimeEventBus');
+export const RuntimeEventBus = Context.Service<RuntimeEventBusService>('isagi/RuntimeEventBus');
 
-export const RuntimeEventBusLive = Layer.scoped(
+export const RuntimeEventBusLive = Layer.effect(
   RuntimeEventBus,
   Effect.gen(function* () {
     const subscribers = new Set<Queue.Queue<RuntimeEvent>>();
@@ -23,17 +23,17 @@ export const RuntimeEventBusLive = Layer.scoped(
       publish: (event) =>
         Effect.sync(() => {
           for (const subscriber of subscribers) {
-            subscriber.unsafeOffer(event);
+            Queue.offerUnsafe(subscriber, event);
           }
         }),
       subscribe: Queue.unbounded<RuntimeEvent>().pipe(
         Effect.map((queue) => {
           subscribers.add(queue);
           return {
-            take: queue.take,
+            take: Queue.take(queue),
             unsubscribe: Effect.sync(() => {
               subscribers.delete(queue);
-            }).pipe(Effect.zipRight(queue.shutdown)),
+            }).pipe(Effect.andThen(Queue.shutdown(queue))),
           } satisfies RuntimeEventSubscription;
         }),
       ),
@@ -42,7 +42,7 @@ export const RuntimeEventBusLive = Layer.scoped(
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.gen(function* () {
         for (const subscriber of subscribers) {
-          yield* subscriber.shutdown;
+          yield* Queue.shutdown(subscriber);
         }
         subscribers.clear();
       }),

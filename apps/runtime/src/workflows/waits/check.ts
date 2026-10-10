@@ -63,12 +63,12 @@ export function checkWait(
         wait.operations.map((handle) => Number(handle.operationId)),
       ).pipe(
         // A write that fails again leaves the job owned for the next check; the wait keeps waiting.
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           Effect.sync(() =>
             console.warn('[runtime] Settling an exited headless job failed', cause),
           ),
         ),
-        Effect.zipRight(
+        Effect.andThen(
           rt.read('workflow_check_headless', (db) => {
             const rows = wait.operations.map((handle) =>
               getOperation(db, Number(handle.operationId)),

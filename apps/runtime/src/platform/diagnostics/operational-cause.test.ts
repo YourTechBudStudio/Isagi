@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { Schema } from 'effect';
+
 import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
 import { DatabaseError } from '../persistence/index.js';
 import { describeOperationalCause } from './operational-cause.js';
@@ -57,6 +59,24 @@ test('a foreign value cannot name itself', () => {
   class SUPERSECRETTOKEN12345 extends Error {}
   assert.equal(describeOperationalCause(new SUPERSECRETTOKEN12345('boom')), 'Error');
   assert.equal(describeOperationalCause(new SyntaxError('boom')), 'SyntaxError');
+});
+
+test('a schema decode failure is named but its message is never rendered', () => {
+  // The proven value-echoing case: Effect Schema puts the offending input in its
+  // message. The type is allowlisted by its Effect v4 name (`ParseError` in v3),
+  // so a decode failure is still reported as one — and only as one.
+  let failure: unknown;
+  try {
+    Schema.decodeUnknownSync(Schema.Struct({ token: Schema.Number }))({ token: SENTINEL });
+  } catch (error: unknown) {
+    failure = error;
+  }
+  assert.ok(failure instanceof Error);
+  assert.equal(describeOperationalCause(failure), 'SchemaError');
+  assert.equal(
+    describeOperationalCause(new DatabaseError({ operation: 'decode_ref', cause: failure })),
+    'Database operation decode_ref failed: SchemaError',
+  );
 });
 
 test('the cause chain stops at the first foreign link', () => {

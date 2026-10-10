@@ -14,9 +14,10 @@
   },
   "dependencies": {
     "@isagi/contracts": "workspace:*",
-    "effect": "^3.21.2"
+    "effect": "catalog:"
   },
   "devDependencies": {
+    "@isagi/testing": "workspace:*",
     "@types/node": "^24.10.1",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"

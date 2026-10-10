@@ -11,7 +11,9 @@
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { checkDependencyPolicy } from './dependency-policy.mjs';
 import { checkEffectRunSites } from './effect-run-sites.mjs';
+import { checkEffectV3Apis } from './effect-v3-apis.mjs';
 import { checkModuleBoundaries } from './module-boundaries.mjs';
 import { isMainModule } from './source-files.mjs';
 
@@ -28,6 +30,15 @@ export const CHECKS = [
     reportRules: ['R9'],
     run: (repoRoot) => checkModuleBoundaries(repoRoot),
   },
+  // D1 (banned React Query/Zustand) stays report-only until the web state port removes them (S4.Z enforces it).
+  {
+    check: 'dependency-policy',
+    mode: 'enforce',
+    reportRules: ['D1'],
+    run: (repoRoot) => checkDependencyPolicy(repoRoot),
+  },
+  // Enforced since the S2 port: no Effect v3-only API name or banned v3-era package import may come back.
+  { check: 'effect-v3-apis', mode: 'enforce', run: (repoRoot) => checkEffectV3Apis(repoRoot) },
 ];
 
 const MODES = new Set(['enforce', 'report']);

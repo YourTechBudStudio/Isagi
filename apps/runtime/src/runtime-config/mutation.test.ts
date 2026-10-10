@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { DataDirectory, type IsagiDataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
@@ -92,9 +92,9 @@ test('policy mutation rejects malformed workflow config without writing or chang
               expectedPolicyRevision: before.harnesses.revision,
               policy: disabledHarnessPolicy,
             })
-            .pipe(Effect.either);
-          assert.ok(Either.isLeft(result));
-          assert.ok(result.left instanceof RuntimeConfigError);
+            .pipe(Effect.result);
+          assert.ok(Result.isFailure(result));
+          assert.ok(result.failure instanceof RuntimeConfigError);
           assert.deepEqual(yield* service.get, before);
           assert.equal(readFileSync(path, 'utf8'), malformed);
         }),
@@ -131,10 +131,10 @@ test('policy mutation maps a malformed source-race reread to RuntimeConfigError'
               expectedPolicyRevision: before.harnesses.revision,
               policy: racingPolicy,
             })
-            .pipe(Effect.either);
+            .pipe(Effect.result);
 
-          assert.ok(Either.isLeft(result));
-          assert.ok(result.left instanceof RuntimeConfigError);
+          assert.ok(Result.isFailure(result));
+          assert.ok(result.failure instanceof RuntimeConfigError);
           assert.deepEqual(yield* service.get, before);
           assert.equal(readFileSync(path, 'utf8'), malformed);
         }),
@@ -153,10 +153,10 @@ test('policy mutation rejects a stale semantic revision without rewriting', asyn
           const service = yield* program(root);
           const result = yield* service
             .acceptHarnessPolicy({ expectedPolicyRevision: 'stale', policy: disabledHarnessPolicy })
-            .pipe(Effect.either);
-          assert.equal(Either.isLeft(result), true);
-          if (Either.isLeft(result))
-            assert.equal(result.left instanceof RuntimeConfigConflict, true);
+            .pipe(Effect.result);
+          assert.equal(Result.isFailure(result), true);
+          if (Result.isFailure(result))
+            assert.equal(result.failure instanceof RuntimeConfigConflict, true);
         }),
       ),
     );

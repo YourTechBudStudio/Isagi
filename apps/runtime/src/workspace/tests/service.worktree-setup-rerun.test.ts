@@ -24,7 +24,7 @@ afterAll(() => {
   fixture.cleanup();
 });
 
-type TrustPlan = Effect.Effect.Success<ReturnType<WorktreeSetupService['validateTrustForOpen']>>;
+type TrustPlan = Effect.Success<ReturnType<WorktreeSetupService['validateTrustForOpen']>>;
 type TrustAnswer = Effect.Effect<TrustPlan, WorktreeSetupError>;
 
 /**
@@ -86,7 +86,7 @@ function withWorktreeThenRerun<A, E>(
   label: string,
   harness: ReturnType<typeof recordingHarness>,
   rerun: (input: {
-    readonly service: Effect.Effect.Success<typeof WorkspaceService>;
+    readonly service: (typeof WorkspaceService)['Service'];
     readonly projectId: number;
     readonly worktreeId: number;
   }) => Effect.Effect<A, E>,

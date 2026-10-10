@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 
-import { Effect } from 'effect';
+import { Effect, Stream } from 'effect';
 
 import { apiEndpoints, workflowContentEndpoints } from '@isagi/contracts';
 
@@ -10,6 +10,7 @@ import { causeText, CliFailure, errnoOf, writeFailure } from '../errors.js';
 import { call, callContent } from '../runtime-api.js';
 import type { GroupHandlers } from './handlers.js';
 import { compact } from './query.js';
+import type { CommandArguments } from './table.js';
 
 const workflows = apiEndpoints.workflows;
 
@@ -34,46 +35,52 @@ export const checkpointsHandlers = {
    * refusal arrives as an error envelope; a failure after bytes have started can only be a cut
    * stream, reported on stderr, and whatever reached stdout may be truncated.
    */
-  'checkpoints read': ({ positionals }) =>
-    Effect.gen(function* () {
-      const io = yield* CliContext;
-      const response = yield* callContent(
-        workflowContentEndpoints.getCheckpointFile,
-        { checkpointId: positionals.checkpointId },
-        { path: positionals.path },
-      );
-      yield* streamContent(response.body, io.stdout, { end: false }).pipe(
-        Effect.catchAll((failure) => {
-          // A reader that stopped early (`| head`) is the reader's choice, not a failure.
-          if (failure.side === 'destination' && errnoOf(failure.cause) === 'EPIPE') {
-            return Effect.void;
-          }
-          return Effect.fail(
-            failure.side === 'source'
-              ? CliFailure.of(
-                  'runtime_unreachable',
-                  'The checkpoint file stream failed part-way; stdout may be truncated.',
-                  {
-                    checkpointId: positionals.checkpointId,
-                    path: positionals.path,
-                    cause: causeText(failure.cause),
-                  },
-                )
-              : writeFailure('<stdout>', failure.cause),
-          );
-        }),
-      );
-      return undefined;
-    }),
+  'checkpoints read': Effect.fn('cli.checkpoints.read')(function* ({
+    positionals,
+  }: CommandArguments<'checkpoints read'>) {
+    const io = yield* CliContext;
+    const content = yield* callContent(
+      workflowContentEndpoints.getCheckpointFile,
+      { checkpointId: positionals.checkpointId },
+      { path: positionals.path },
+    );
+    // A cut body is reported by the platform error behind it (`terminated: other side closed`), not
+    // by the client's generic transport message.
+    const body = content.stream.pipe(Stream.mapError((error) => error.cause));
+    yield* streamContent(body, io.stdout).pipe(
+      Effect.catch((failure) => {
+        // A reader that stopped early (`| head`) is the reader's choice, not a failure.
+        if (failure.side === 'destination' && errnoOf(failure.cause) === 'EPIPE') {
+          return Effect.void;
+        }
+        return Effect.fail(
+          failure.side === 'source'
+            ? CliFailure.of(
+                'runtime_unreachable',
+                'The checkpoint file stream failed part-way; stdout may be truncated.',
+                {
+                  checkpointId: positionals.checkpointId,
+                  path: positionals.path,
+                  cause: causeText(failure.cause),
+                },
+              )
+            : writeFailure('<stdout>', failure.cause),
+        );
+      }),
+    );
+    return undefined;
+  }),
 
   /** One runtime call: the runtime checks the folder, creates it and writes every captured scope. */
-  'checkpoints export': ({ positionals, options }) =>
-    Effect.gen(function* () {
-      const io = yield* CliContext;
-      return yield* call(
-        workflows.exportCheckpoint,
-        { checkpointId: positionals.checkpointId },
-        { destinationPath: resolve(io.cwd, options.output) },
-      );
-    }),
+  'checkpoints export': Effect.fn('cli.checkpoints.export')(function* ({
+    positionals,
+    options,
+  }: CommandArguments<'checkpoints export'>) {
+    const io = yield* CliContext;
+    return yield* call(
+      workflows.exportCheckpoint,
+      { checkpointId: positionals.checkpointId },
+      { destinationPath: resolve(io.cwd, options.output) },
+    );
+  }),
 } satisfies GroupHandlers<'checkpoints'>;

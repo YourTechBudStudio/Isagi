@@ -75,22 +75,17 @@ const program = Effect.gen(function* () {
   ]);
   const packageResult =
     request.kind === 'linux-release'
-      ? // Effect v3 types `release` as infallible although a failing release does fail the
-        // whole effect; v4's signature accepts it. The cast restores the honest result type.
-        yield* /** @type {Effect.Effect<CommandResult, CommandStartError | LinuxReleaseStagingError>} */ (
-          Effect.acquireUseRelease(
+      ? yield* Effect.acquireUseRelease(
+          Effect.try({
+            try: () => prepareLinuxIconPackaging(),
+            catch: (cause) => new LinuxReleaseStagingError({ cause }),
+          }),
+          () => packageEffect,
+          (packaging) =>
             Effect.try({
-              try: () => prepareLinuxIconPackaging(),
+              try: () => cleanupLinuxIconPackaging(packaging),
               catch: (cause) => new LinuxReleaseStagingError({ cause }),
             }),
-            () => packageEffect,
-            (packaging) =>
-              // @ts-expect-error see the comment above; remove with the Effect v4 port.
-              Effect.try({
-                try: () => cleanupLinuxIconPackaging(packaging),
-                catch: (cause) => new LinuxReleaseStagingError({ cause }),
-              }),
-          )
         )
       : yield* packageEffect;
   const packageExitCode = commandExitCode(packageResult);
@@ -186,7 +181,7 @@ process.off('SIGINT', onInterruptSignal);
 process.off('SIGTERM', onTerminateSignal);
 
 const outcome = classifyProgramExit(exit, receivedSignal);
-if (outcome.cause) console.error(Cause.pretty(outcome.cause, { renderErrorCause: true }));
+if (outcome.cause) console.error(Cause.pretty(outcome.cause));
 process.exitCode = outcome.code;
 
 /** @typedef {{ code: number | null; signal: NodeJS.Signals | null }} CommandResult */
@@ -197,7 +192,7 @@ process.exitCode = outcome.code;
  * @returns {Effect.Effect<CommandResult, CommandStartError>}
  */
 function runCommand(command, args) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const child = spawn(command, args, {
       cwd: process.cwd(),
       env: process.env,

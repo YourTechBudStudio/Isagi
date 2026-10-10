@@ -117,7 +117,9 @@ async function launch(
       fixture.rootPath,
       (service) =>
         Effect.gen(function* () {
-          const launching = yield* Effect.fork(service.run({ worktreeId: 10, commandName: 'dev' }));
+          const launching = yield* Effect.forkChild(
+            service.run({ worktreeId: 10, commandName: 'dev' }),
+          );
           if (options.interruptWhen) {
             yield* waitUntilEffect(() => options.interruptWhen!(harness));
             yield* Fiber.interrupt(launching);
@@ -130,7 +132,7 @@ async function launch(
           // One listing purely to pull the repository's own rows out through
           // `afterListStates`. It runs after the launch has fully settled, so
           // what it captures is the durable outcome.
-          yield* service.listForWorktree(10).pipe(Effect.either);
+          yield* service.listForWorktree(10).pipe(Effect.result);
           return settled;
         }),
       {
@@ -727,7 +729,7 @@ test('a launch interrupted during resolution leaves no run and no snapshot write
     interruptWhen: () => enteredResolution,
   });
 
-  assert.ok(Exit.isInterrupted(result.exit));
+  assert.ok(Exit.hasInterrupts(result.exit));
   // No run was created, so no recovery was owed and none ran.
   assert.deepEqual(result.runs, []);
   assert.deepEqual(result.transitions, []);

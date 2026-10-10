@@ -107,7 +107,7 @@ export interface AgentSessionArtifactsService {
   }) => Effect.Effect<OrphanSweepStats>;
 }
 
-export const AgentSessionArtifacts = Context.GenericTag<AgentSessionArtifactsService>(
+export const AgentSessionArtifacts = Context.Service<AgentSessionArtifactsService>(
   'isagi/AgentSessionArtifacts',
 );
 

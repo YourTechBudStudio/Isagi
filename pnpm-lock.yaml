@@ -4,6 +4,12 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    effect:
+      specifier: ~4.0.2
+      version: 4.0.2
+
 importers:
 
   .:
@@ -12,8 +18,8 @@ importers:
         specifier: ^24.10.1
         version: 24.12.4
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
       oxfmt:
         specifier: ^0.52.0
         version: 0.52.0
@@ -36,9 +42,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/runtime-client
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
     devDependencies:
+      '@isagi/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -57,9 +66,12 @@ importers:
       '@isagi/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@isagi/runtime-client':
+        specifier: workspace:*
+        version: link:../../packages/runtime-client
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
       electron-updater:
         specifier: 6.8.9
         version: 6.8.9(supports-color@7.2.0)
@@ -70,6 +82,9 @@ importers:
       '@electron/rebuild':
         specifier: ^4.2.0
         version: 4.2.0(supports-color@7.2.0)
+      '@isagi/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -113,8 +128,8 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
       fastify:
         specifier: ^5.8.5
         version: 5.8.5
@@ -131,6 +146,9 @@ importers:
       '@isagi/cli':
         specifier: workspace:*
         version: link:../cli
+      '@isagi/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -183,8 +201,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
       elkjs:
         specifier: ^0.12.0
         version: 0.12.0
@@ -207,6 +225,9 @@ importers:
         specifier: ^5.0.14
         version: 5.0.14(@types/react@19.2.15)(react@19.2.6)(use-sync-external-store@1.6.0(react@19.2.6))
     devDependencies:
+      '@isagi/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
       '@playwright/test':
         specifier: ^1.55.0
         version: 1.62.0
@@ -244,9 +265,12 @@ importers:
         specifier: workspace:*
         version: link:../workflow-sdk
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
     devDependencies:
+      '@isagi/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -269,9 +293,12 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       effect:
-        specifier: ^3.21.2
-        version: 3.21.2
+        specifier: 'catalog:'
+        version: 4.0.2
     devDependencies:
+      '@isagi/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -293,6 +320,22 @@ importers:
       node-pty:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
+
+  packages/testing:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.2
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.12.4
+      tsx:
+        specifier: ^4.21.0
+        version: 4.22.3
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
   packages/workflow-sdk:
     devDependencies:
@@ -1333,9 +1376,6 @@ packages:
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
     engines: {node: '>=10'}
 
-  '@standard-schema/spec@1.1.0':
-    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
-
   '@szmarczak/http-timer@4.0.6':
     resolution: {integrity: sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w==}
     engines: {node: '>=10'}
@@ -2005,8 +2045,8 @@ packages:
   duplexify@4.1.3:
     resolution: {integrity: sha512-M3BmBhwJRZsSx38lZyhE53Csddgzl5R7xGJNk7CVddZD6CcmwMCH8J+7AprIrQKH7TonKxaCjcv27Qmf+sQ+oA==}
 
-  effect@3.21.2:
-    resolution: {integrity: sha512-rXd2FGDM8KdjSIrc+mqEELo7ScW7xTVxEf1iInmPSpIde9/nyGuFM710cjTo7/EreGXiUX2MOonPpprbz2XHCg==}
+  effect@4.0.2:
+    resolution: {integrity: sha512-YeYnLqSFrL4+tCOXRrfNP03w8FILoF/wDl+ukraJAGzXrjcS383W7LAAvGBbLatEyktmLxRq+9xJinx7QzXW5A==}
 
   ejs@3.1.10:
     resolution: {integrity: sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA==}
@@ -2108,10 +2148,6 @@ packages:
 
   exponential-backoff@3.1.3:
     resolution: {integrity: sha512-ZgEeZXj30q+I0EN+CbSSpIyPaJ5HVQD18Z1m+u1FXbAeT94mr1zw50q4q6jiiC447Nl/YTcIYSAftiGqetwXCA==}
-
-  fast-check@3.23.2:
-    resolution: {integrity: sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A==}
-    engines: {node: '>=8.0.0'}
 
   fast-decode-uri-component@1.0.1:
     resolution: {integrity: sha512-WKgKWg5eUxvRZGwW8FvfbaH7AXSh2cL+3j5fMGzUMCxWBJ3dV3a7Wz8y2f/uQ0e3B6WmodD3oS54jTQ9HVTIIg==}
@@ -2758,9 +2794,6 @@ packages:
 
   pump@3.0.4:
     resolution: {integrity: sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA==}
-
-  pure-rand@6.1.0:
-    resolution: {integrity: sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA==}
 
   pvtsutils@1.3.6:
     resolution: {integrity: sha512-PLgQXQ6H2FWCaeRak8vvk1GW462lMxB5s3Jm673N82zI4vqtVUPuZdffdZbPDFRoU8kAhItWFtPCWiPpp4/EDg==}
@@ -3919,8 +3952,6 @@ snapshots:
 
   '@sindresorhus/is@4.6.0': {}
 
-  '@standard-schema/spec@1.1.0': {}
-
   '@szmarczak/http-timer@4.0.6':
     dependencies:
       defer-to-connect: 2.0.1
@@ -4459,10 +4490,7 @@ snapshots:
       readable-stream: 3.6.2
       stream-shift: 1.0.3
 
-  effect@3.21.2:
-    dependencies:
-      '@standard-schema/spec': 1.1.0
-      fast-check: 3.23.2
+  effect@4.0.2: {}
 
   ejs@3.1.10:
     dependencies:
@@ -4668,10 +4696,6 @@ snapshots:
   expand-template@2.0.3: {}
 
   exponential-backoff@3.1.3: {}
-
-  fast-check@3.23.2:
-    dependencies:
-      pure-rand: 6.1.0
 
   fast-decode-uri-component@1.0.1: {}
 
@@ -5341,8 +5365,6 @@ snapshots:
     dependencies:
       end-of-stream: 1.4.5
       once: 1.4.0
-
-  pure-rand@6.1.0: {}
 
   pvtsutils@1.3.6:
     dependencies:

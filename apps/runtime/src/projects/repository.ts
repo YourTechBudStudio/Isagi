@@ -143,7 +143,7 @@ export interface WorkspaceRepositoryService {
   }) => Effect.Effect<WorktreeOrderMoveResult, DatabaseError>;
 }
 
-export const WorkspaceRepository = Context.GenericTag<WorkspaceRepositoryService>(
+export const WorkspaceRepository = Context.Service<WorkspaceRepositoryService>(
   'isagi/WorkspaceRepository',
 );
 

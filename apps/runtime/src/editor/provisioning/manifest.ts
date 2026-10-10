@@ -28,20 +28,20 @@ export type EditorPlatformKey = 'darwin-arm64' | 'darwin-x64' | 'linux-x64';
 const sha256Pattern = /^[0-9a-f]{64}$/;
 
 const codeServerArtifactSchema = Schema.Struct({
-  url: Schema.String.pipe(Schema.minLength(1)),
+  url: Schema.String.check(Schema.isMinLength(1)),
   /** Lowercase hex, because that is what `crypto.Hash.digest('hex')` produces
    *  and the comparison in `install.ts` is an exact string equality. */
-  sha256: Schema.String.pipe(Schema.pattern(sha256Pattern)),
+  sha256: Schema.String.check(Schema.isPattern(sha256Pattern)),
   archive: Schema.Literal('tar_gz'),
-  stripComponents: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  stripComponents: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** POSIX-relative to the install root. An absolute path would break the
    *  moment the data directory moves. */
-  executablePath: Schema.String.pipe(Schema.minLength(1)),
+  executablePath: Schema.String.check(Schema.isMinLength(1)),
 });
 
 const codeServerManifestSchema = Schema.Struct({
   manifestVersion: Schema.Literal(1),
-  version: Schema.String.pipe(Schema.minLength(1)),
+  version: Schema.String.check(Schema.isMinLength(1)),
   // A struct with three required members rather than a record: the supported
   // matrix is a closed set that must match the release workflow, and stating it
   // structurally means a missing target fails at import instead of at the moment
@@ -53,8 +53,8 @@ const codeServerManifestSchema = Schema.Struct({
   }),
 });
 
-export type CodeServerArtifact = Schema.Schema.Type<typeof codeServerArtifactSchema>;
-export type CodeServerManifest = Schema.Schema.Type<typeof codeServerManifestSchema>;
+export type CodeServerArtifact = typeof codeServerArtifactSchema.Type;
+export type CodeServerManifest = typeof codeServerManifestSchema.Type;
 
 export const codeServerManifest: CodeServerManifest = Schema.decodeUnknownSync(
   codeServerManifestSchema,

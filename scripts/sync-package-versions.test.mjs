@@ -12,6 +12,7 @@ import { Effect } from 'effect';
 import { parseCanonicalVersion } from './release-version-contract.mjs';
 import {
   createPackageVersionPlan,
+  PackageVersionSyncError,
   syncPackageVersions,
   verifyPackageVersions,
 } from './sync-package-versions.mjs';
@@ -345,6 +346,7 @@ function instrumentedFileSystem(writes) {
 
 async function assertEffectFailure(effect, expectedMessage) {
   await assert.rejects(Effect.runPromise(effect), (error) => {
+    assert.ok(error instanceof PackageVersionSyncError);
     assert.match(String(error), new RegExp(escapeRegExp(expectedMessage)));
     return true;
   });

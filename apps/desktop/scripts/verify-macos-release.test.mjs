@@ -194,7 +194,7 @@ test('DMG acquisition detaches when the surrounding fiber is interrupted', async
   const mounted = await Effect.runPromise(
     Effect.gen(function* () {
       const started = yield* Deferred.make();
-      const fiber = yield* Effect.fork(
+      const fiber = yield* Effect.forkChild(
         withMountedDmg(lifecycle.options, () =>
           Effect.gen(function* () {
             lifecycle.events.push('use');
@@ -204,10 +204,11 @@ test('DMG acquisition detaches when the surrounding fiber is interrupted', async
         ),
       );
       yield* Deferred.await(started);
-      return yield* Fiber.interrupt(fiber);
+      yield* Fiber.interrupt(fiber);
+      return yield* Fiber.await(fiber);
     }),
   );
-  assert.equal(Exit.isInterrupted(mounted), true);
+  assert.equal(Exit.hasInterrupts(mounted), true);
   assert.deepEqual(lifecycle.events, ['attach', 'use', 'detach']);
 });
 
@@ -432,7 +433,10 @@ function createMountLifecycle(options = {}) {
 // failure, so both channels are flattened into one ordered list.
 function causeErrors(exit) {
   if (Exit.isSuccess(exit)) return [];
-  return [...Cause.failures(exit.cause), ...Cause.defects(exit.cause)];
+  return [
+    ...exit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error),
+    ...exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect),
+  ];
 }
 
 function success(stdout = '', stderr = '') {

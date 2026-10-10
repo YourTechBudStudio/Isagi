@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { surfacePanes, worktreeSurfaces } from '../../../persistence/schema.js';
 import { DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
@@ -182,7 +182,7 @@ test('failed agent surface creation leaves the harness-titled empty surface visi
         const surfaces = yield* SurfaceService;
         const result = yield* surfaces
           .createSurface({ worktreeId, initialPane: { kind: 'agent_session', harness: 'pi' } })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
         const database = yield* RuntimeDatabase;
         const persistedSurface = yield* database.use('test_find_failed_launch_surface', (db) =>
           db
@@ -213,7 +213,7 @@ test('failed agent surface creation leaves the harness-titled empty surface visi
       ),
     );
 
-    assert.ok(Either.isLeft(output.result));
+    assert.ok(Result.isFailure(output.result));
     assert.equal(output.detail.title, 'Pi');
     assert.equal(output.detail.panes.length, 1);
     assert.equal(output.detail.panes[0]?.title, 'Pi');

@@ -49,7 +49,7 @@ function succeeded<A>(exit: Exit.Exit<A, CommandPortAllocationError>): A {
 // unexpected success rather than letting `undefined` flow into an assertion.
 function expectedFailure(exit: Exit.Exit<unknown, CommandPortAllocationError>) {
   assert.ok(Exit.isFailure(exit), 'expected the resolution to fail');
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   assert.ok(Option.isSome(failure), 'expected a tagged failure, not a defect or interruption');
   return failure.value;
 }

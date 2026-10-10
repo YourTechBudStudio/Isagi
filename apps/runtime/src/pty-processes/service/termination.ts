@@ -1,4 +1,4 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../platform/events/index.js';
 import type { PtyBackendCatalogService } from '../backend.js';
@@ -106,14 +106,14 @@ function runReservedTermination(
       backend.terminate
         ? backend.terminate({ ref, gracefulTimeoutMs: input.gracefulTimeoutMs ?? 2_000 })
         : backend.kill(ref),
-    ).pipe(Effect.either);
+    ).pipe(Effect.result);
 
     // Affirmative kill. The captured exit, if any, describes the death this
     // attempt caused, so it is discarded rather than persisted as an
     // independent fact.
-    if (Either.isRight(killResult) && killResult.right.terminated) {
-      const transition = yield* persistKilledTransition(input, session).pipe(Effect.either);
-      if (Either.isLeft(transition)) {
+    if (Result.isSuccess(killResult) && killResult.success.terminated) {
+      const transition = yield* persistKilledTransition(input, session).pipe(Effect.result);
+      if (Result.isFailure(transition)) {
         // The kill is real even though its write is not durable yet; the retry
         // takes over both the write and the reservation.
         retryPersistKilledUntilSuccess(
@@ -147,20 +147,20 @@ function runReservedTermination(
         termination,
         termination.exit,
       );
-      if (Either.isLeft(killResult)) {
+      if (Result.isFailure(killResult)) {
         console.info(
           `[runtime] PTY termination found an independent exit ptyProcessId=${session.id} reason=${input.reason}`,
-          killResult.left,
+          killResult.failure,
         );
       }
       return 'already_absent' as const;
     }
 
     releaseTerminationFromAttempt(input.terminations, session.id, termination);
-    if (Either.isLeft(killResult)) {
+    if (Result.isFailure(killResult)) {
       // Failed with no terminal evidence: the process may well still be alive,
       // so nothing is written and the caller decides what to do about it.
-      return yield* Effect.fail(killResult.left);
+      return yield* Effect.fail(killResult.failure);
     }
     return 'already_absent' as const;
   });

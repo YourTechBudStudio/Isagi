@@ -20,7 +20,7 @@ import process from 'node:process';
 import { PassThrough, Readable } from 'node:stream';
 import test from 'node:test';
 
-import { Effect, Exit, Scope } from 'effect';
+import { Cause, Effect, Exit, Scope } from 'effect';
 
 import {
   contentPathFor,
@@ -65,7 +65,7 @@ const hashOf = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex
 /** A capture in a scope the test closes itself, synchronously (the finalizer is synchronous). */
 function openCapture(store: WorkflowContentStoreInstance) {
   const scope = Effect.runSync(Scope.make());
-  const capture = Effect.runSync(Scope.extend(store.service.openCapture, scope));
+  const capture = Effect.runSync(store.service.openCapture.pipe(Scope.provide(scope)));
   return { capture, close: () => Effect.runSync(Scope.close(scope, Exit.void)) };
 }
 
@@ -319,8 +319,11 @@ test(
     source.end();
     const exit = await pending;
     assert.ok(Exit.isFailure(exit));
+    const [reason] = exit.cause.reasons;
     assert.equal(
-      exit.cause._tag === 'Fail' ? exit.cause.error._tag : exit.cause._tag,
+      exit.cause.reasons.length === 1 && reason && Cause.isFailReason(reason)
+        ? reason.error._tag
+        : Cause.pretty(exit.cause),
       'ContentPublishError',
     );
     assert.equal(existsSync(blobPath), false);

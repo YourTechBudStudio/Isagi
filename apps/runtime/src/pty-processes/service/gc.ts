@@ -1,7 +1,7 @@
 import { unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { Cause, Effect, Either } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 
 import { diagnosticPhase, logDiagnosticEvent } from '../../platform/diagnostics/phase.js';
 import {
@@ -44,7 +44,7 @@ export function startPtyGarbageCollector(
   const timer = setInterval(() => {
     void Effect.runPromise(
       collectPtyGarbage(repository, catalog, runtimeNamespace, sessionsPath, options).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             console.warn('[runtime] PTY GC failed', error);
           }),
@@ -104,7 +104,7 @@ export function collectPtyGarbage(
         nowMs: options.nowMs ?? Date.now(),
       }),
     ).pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.sync(() => {
           console.warn(
             '[runtime] PTY GC phase failed phase=orphan_shell_integration',
@@ -174,7 +174,7 @@ function cleanupBackendProcesses(
       if (!backend.collectGarbage) continue;
       if (!(yield* backend.available)) continue;
       const findings = yield* backend.collectGarbage({ runtimeNamespace, sessions }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             console.warn(
               `[runtime] Could not collect PTY backend GC findings backend=${backend.name}`,
@@ -287,7 +287,7 @@ function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow
 
     const inspection = yield* backend
       .inspect(ref)
-      .pipe(Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
+      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
     if (inspection.status === 'missing') return true;
     if (inspection.status === 'unavailable') {
       console.warn(
@@ -297,11 +297,11 @@ function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow
       return false;
     }
 
-    const killResult = yield* backend.kill(ref).pipe(Effect.either);
-    if (Either.isLeft(killResult)) {
+    const killResult = yield* backend.kill(ref).pipe(Effect.result);
+    if (Result.isFailure(killResult)) {
       console.warn(
         `[runtime] Keeping orphan PTY process because backend kill failed backend=${backend.name} ptyProcessId=${process.id}`,
-        killResult.left,
+        killResult.failure,
       );
       return false;
     }
@@ -364,7 +364,7 @@ function applyGcFinding(backend: PtyBackend, finding: PtyBackendGcFinding) {
     `[runtime] Killing ${reason} during PTY backend GC backend=${backend.name} ptyProcessId=${finding.ptyProcessId}`,
   );
   return backend.kill(finding.ref).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         console.warn(
           `[runtime] Failed to kill PTY backend session during GC backend=${backend.name} ptyProcessId=${finding.ptyProcessId}`,

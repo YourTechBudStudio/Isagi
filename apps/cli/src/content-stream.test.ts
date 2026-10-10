@@ -2,14 +2,26 @@ import assert from 'node:assert/strict';
 import { Writable } from 'node:stream';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Stream } from 'effect';
+
+import { runScoped } from '@isagi/testing';
 
 import { ContentStreamFailure, streamContent } from './content-stream.js';
 
 const chunks = [Buffer.from('one '), Buffer.from('two '), Buffer.from('three')];
 
-/** A body that delivers each chunk from its own `pull()`, then breaks if asked to, after a pause. */
+/**
+ * A response body that delivers each chunk from its own `pull()`, then breaks if asked to, after a
+ * pause.
+ */
 function body(options: { readonly breakAfter?: number } = {}) {
+  return Stream.fromReadableStream({
+    evaluate: () => readable(options),
+    onError: (cause) => cause,
+  });
+}
+
+function readable(options: { readonly breakAfter?: number }) {
   let index = 0;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -43,16 +55,14 @@ function destination(accept = Number.POSITIVE_INFINITY) {
 
 test('a complete stream reports the bytes written', async () => {
   const target = destination();
-  const written = await Effect.runPromise(streamContent(body(), target.stream, { end: true }));
+  const written = await runScoped(streamContent(body(), target.stream));
   assert.equal(written, 13);
   assert.equal(Buffer.concat(target.received).toString(), 'one two three');
 });
 
 test('a write that fails part-way is the destination, even though the download is torn down too', async () => {
   const target = destination(1);
-  const failure = await Effect.runPromise(
-    Effect.flip(streamContent(body(), target.stream, { end: true })),
-  );
+  const failure = await runScoped(Effect.flip(streamContent(body(), target.stream)));
   assert.ok(failure instanceof ContentStreamFailure);
   assert.equal(failure.side, 'destination');
   assert.equal((failure.cause as { code?: string }).code, 'ENOSPC');
@@ -60,8 +70,8 @@ test('a write that fails part-way is the destination, even though the download i
 
 test('a download that breaks part-way is the source, even though the write is torn down too', async () => {
   const target = destination();
-  const failure = await Effect.runPromise(
-    Effect.flip(streamContent(body({ breakAfter: 1 }), target.stream, { end: true })),
+  const failure = await runScoped(
+    Effect.flip(streamContent(body({ breakAfter: 1 }), target.stream)),
   );
   assert.equal(failure.side, 'source');
   assert.equal(Buffer.concat(target.received).toString(), 'one ');
@@ -69,7 +79,7 @@ test('a download that breaks part-way is the source, even though the write is to
 
 test('an absent body writes nothing', async () => {
   const target = destination();
-  const written = await Effect.runPromise(streamContent(null, target.stream, { end: true }));
+  const written = await runScoped(streamContent(Stream.empty, target.stream));
   assert.equal(written, 0);
   assert.equal(target.received.length, 0);
 });

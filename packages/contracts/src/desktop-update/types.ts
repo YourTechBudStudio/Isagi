@@ -4,23 +4,23 @@ export const DESKTOP_UPDATE_PROTOCOL_VERSION = 2 as const;
 
 const snapshotBase = {
   protocolVersion: Schema.Literal(DESKTOP_UPDATE_PROTOCOL_VERSION),
-  revision: Schema.NonNegativeInt,
+  revision: Schema.Natural,
   installedVersion: Schema.String,
 };
 
-export const desktopUpdateFailureCodeSchema = Schema.Literal(
+export const desktopUpdateFailureCodeSchema = Schema.Literals([
   'check_failed',
   'download_failed',
   'download_page_open_failed',
-);
+]);
 
 /** Download progress is always normalized to a percentage of the target artifact. */
-const progressPercentSchema = Schema.Number.pipe(Schema.between(0, 100));
+const progressPercentSchema = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
 
 /** Restart confirmation is only surfaced when at least one agent is still working. */
-const workingAgentCountSchema = Schema.NonNegativeInt.pipe(Schema.positive());
+const workingAgentCountSchema = Schema.Natural.check(Schema.isGreaterThan(0));
 
-export const desktopUpdateSnapshotSchema = Schema.Union(
+export const desktopUpdateSnapshotSchema = Schema.Union([
   Schema.Struct({ ...snapshotBase, state: Schema.Literal('disabled') }),
   Schema.Struct({ ...snapshotBase, state: Schema.Literal('idle') }),
   Schema.Struct({ ...snapshotBase, state: Schema.Literal('checking') }),
@@ -51,13 +51,13 @@ export const desktopUpdateSnapshotSchema = Schema.Union(
     ...snapshotBase,
     state: Schema.Literal('restart_confirmation'),
     targetVersion: Schema.String,
-    activity: Schema.Union(
+    activity: Schema.Union([
       Schema.Struct({
         kind: Schema.Literal('working'),
         workingAgentCount: workingAgentCountSchema,
       }),
       Schema.Struct({ kind: Schema.Literal('unknown') }),
-    ),
+    ]),
   }),
   Schema.Struct({
     ...snapshotBase,
@@ -101,9 +101,9 @@ export const desktopUpdateSnapshotSchema = Schema.Union(
     code: Schema.Literal('download_failed'),
     targetVersion: Schema.String,
   }),
-);
+]);
 
-export const desktopUpdateIntentSchema = Schema.Union(
+export const desktopUpdateIntentSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal('check_for_updates') }),
   /** Fetches the update the last check found. Carries no version: the desktop
    * knows what it found, and a client-supplied target would be a second source
@@ -113,7 +113,7 @@ export const desktopUpdateIntentSchema = Schema.Union(
   Schema.Struct({ type: Schema.Literal('confirm_restart') }),
   Schema.Struct({ type: Schema.Literal('cancel_restart') }),
   Schema.Struct({ type: Schema.Literal('open_download_page') }),
-);
+]);
 
 export type DesktopUpdateFailureCode = typeof desktopUpdateFailureCodeSchema.Type;
 export type DesktopUpdateSnapshot = typeof desktopUpdateSnapshotSchema.Type;

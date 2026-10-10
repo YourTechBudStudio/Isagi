@@ -70,7 +70,7 @@ async function expectRejection(path: string, code: ProjectPathValidationCode) {
 
 function typedFailure(exit: Exit.Exit<unknown, ProjectPathValidationError>) {
   assert.ok(Exit.isFailure(exit));
-  const failure = Option.getOrNull(Cause.failureOption(exit.cause));
+  const failure = Option.getOrNull(Cause.findErrorOption(exit.cause));
   assert.ok(
     failure instanceof ProjectPathValidationError,
     `expected a typed ProjectPathValidationError, got ${String(exit.cause)}`,

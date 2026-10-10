@@ -98,7 +98,7 @@ function superviseChildren({
   outputDrainGraceMs = 5_000,
   spawnChild = spawn,
 }) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     let settled = false;
     let webReady = false;
     let webUrl;

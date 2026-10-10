@@ -4,14 +4,18 @@ import test from 'node:test';
 
 import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { fail, fakeRuntime, onlyJsonDocument, runIsagi } from '../testing/cli-harness.js';
+import {
+  content,
+  cutContent,
+  fail,
+  fakeRuntime,
+  onlyJsonDocument,
+  runIsagi,
+} from '../testing/cli-harness.js';
 
 test('checkpoints read writes the captured bytes, unchanged, to stdout', async () => {
   const bytes = Buffer.from([0x00, 0xff, 0x0a, 0x41]);
-  const runtime = fakeRuntime(
-    {},
-    { 'workflows.getCheckpointFile': () => new Response(bytes, { status: 200 }) },
-  );
+  const runtime = fakeRuntime({}, { 'workflows.getCheckpointFile': () => content(bytes) });
   const run = await runIsagi(['checkpoints', 'read', '5', 'scratch/plan.md', '--json'], {
     runtime,
   });
@@ -32,12 +36,15 @@ test('a refused read prints its error on stderr, never on the byte stream', asyn
       'workflows.getCheckpointFile': () =>
         fail(
           new RuntimeApiError({
-            code: 'workflow_rejected',
-            status: 400,
-            message: 'Checkpoint 5 has no captured file.',
-            requestId: 'r',
-            data: { reason: 'workflow_checkpoint_file_not_found', checkpointId: 5, path: 'x' },
-          } as never),
+            endpointId: 'workflows.getCheckpointFile',
+            apiError: {
+              code: 'workflow_rejected',
+              status: 400,
+              message: 'Checkpoint 5 has no captured file.',
+              requestId: 'r',
+              data: { reason: 'workflow_checkpoint_file_not_found', checkpointId: 5, path: 'x' },
+            },
+          }),
         ),
     },
   );
@@ -57,10 +64,33 @@ test('a refused checkpoints read command line also keeps stdout for bytes only',
   assert.equal(document.error.code, 'cli_usage_invalid');
 });
 
+test('a read cut part-way is runtime_unreachable on stderr, after the bytes that arrived', async () => {
+  const cause = Object.assign(new TypeError('terminated'), {
+    cause: new Error('other side closed'),
+  });
+  const runtime = fakeRuntime(
+    {},
+    {
+      'workflows.getCheckpointFile': () =>
+        cutContent('workflows.getCheckpointFile', Buffer.from('partial'), cause),
+    },
+  );
+  const run = await runIsagi(['checkpoints', 'read', '5', 'a.md', '--json'], { runtime });
+  assert.equal(run.code, 1);
+  assert.equal(run.stdout, 'partial');
+  assert.deepEqual(JSON.parse(run.stderr), {
+    error: {
+      code: 'runtime_unreachable',
+      message: 'The checkpoint file stream failed part-way; stdout may be truncated.',
+      data: { checkpointId: 5, path: 'a.md', cause: 'terminated: other side closed' },
+    },
+  });
+});
+
 test('a reader that closes the pipe early is not a failure', async () => {
   const runtime = fakeRuntime(
     {},
-    { 'workflows.getCheckpointFile': () => new Response('a lot of bytes', { status: 200 }) },
+    { 'workflows.getCheckpointFile': () => content('a lot of bytes') },
   );
   const closed = new Writable({
     write(_chunk, _encoding, callback) {
@@ -98,12 +128,15 @@ test('an export the runtime refuses is its error document and exit 1', async () 
     'workflows.exportCheckpoint': () =>
       fail(
         new RuntimeApiError({
-          code: 'workflow_rejected',
-          status: 409,
-          message: 'The commit is gone.',
-          requestId: 'r',
-          data,
-        } as never),
+          endpointId: 'workflows.exportCheckpoint',
+          apiError: {
+            code: 'workflow_rejected',
+            status: 409,
+            message: 'The commit is gone.',
+            requestId: 'r',
+            data,
+          },
+        }),
       ),
   });
   const run = await runIsagi(['checkpoints', 'export', '5', '--output', '/x', '--json'], {

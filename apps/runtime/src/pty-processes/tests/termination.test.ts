@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either, Fiber, Layer } from 'effect';
+import { Effect, Fiber, Layer, Result } from 'effect';
 
 import {
   publishOnlyRecordingEventBus,
@@ -246,10 +246,10 @@ test('a kill that fails with no exit writes nothing and surfaces the failure', a
         backendStub('node_pty', {
           kill: () => Effect.fail(new PtyKillError({ cause: new Error('no evidence') })),
         }),
-      ).pipe(Effect.either);
+      ).pipe(Effect.result);
 
-      assert.equal(Either.isLeft(outcome), true);
-      assert.ok(Either.isLeft(outcome) && outcome.left instanceof PtyKillError);
+      assert.equal(Result.isFailure(outcome), true);
+      assert.ok(Result.isFailure(outcome) && outcome.failure instanceof PtyKillError);
       // The process may well still be alive, so the row stays honest.
       const row = yield* harness.repository.findProcess(harness.ptyProcessId);
       assert.equal(row?.status, 'running');
@@ -451,14 +451,16 @@ test('a second termination attempt is rejected and never reaches the backend', a
           }),
       });
 
-      const first = yield* Effect.fork(terminate(harness, backend));
-      yield* Effect.yieldNow();
+      const first = yield* Effect.forkChild(terminate(harness, backend));
+      yield* Effect.yieldNow;
 
-      const second = yield* terminate(harness, backend).pipe(Effect.either);
+      const second = yield* terminate(harness, backend).pipe(Effect.result);
       yield* Fiber.interrupt(first);
 
-      assert.equal(Either.isLeft(second), true);
-      assert.ok(Either.isLeft(second) && second.left instanceof PtyTerminationInProgressError);
+      assert.equal(Result.isFailure(second), true);
+      assert.ok(
+        Result.isFailure(second) && second.failure instanceof PtyTerminationInProgressError,
+      );
       // Rejected before decode, availability, detach, and the backend — the loser
       // must not be handed the winner's affirmative result either.
       assert.equal(availabilityProbes, 1);
@@ -476,8 +478,8 @@ test('interrupting a termination releases its reservation instead of stranding t
         available: Effect.never,
       });
 
-      const fiber = yield* Effect.fork(terminate(harness, backend));
-      yield* Effect.yieldNow();
+      const fiber = yield* Effect.forkChild(terminate(harness, backend));
+      yield* Effect.yieldNow;
       assert.equal(harness.terminations.size, 1);
 
       yield* Fiber.interrupt(fiber);
@@ -500,8 +502,8 @@ test('a poller pass leaves a reserved row alone instead of assigning it a compet
       });
       const catalog = catalogWith(backend);
 
-      const fiber = yield* Effect.fork(terminate(harness, backend));
-      yield* Effect.yieldNow();
+      const fiber = yield* Effect.forkChild(terminate(harness, backend));
+      yield* Effect.yieldNow;
       assert.equal(harness.terminations.size, 1);
 
       yield* reconcilePersistedProcesses(

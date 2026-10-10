@@ -12,6 +12,7 @@ import {
   workflowEventFixture,
   workflowSummaryFixture,
 } from '../../../src/lib/workspace/workflow/test-support.js';
+import { requestBodyText } from '../test-support/request-body.js';
 
 /**
  * The runtime boundary the workflow-bar page talks to.
@@ -156,7 +157,8 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
     const url = new URL(String(input));
     const path = url.pathname.replace(/^\/api\/v1/, '');
     const method = init?.method ?? 'GET';
-    const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+    const text = requestBodyText(init?.body);
+    const body = text === undefined ? undefined : JSON.parse(text);
     requests.push({ method, path: `${path}${url.search}`, body });
     snapshotOfRequests = requests.slice();
     for (const listener of [...listeners]) listener();

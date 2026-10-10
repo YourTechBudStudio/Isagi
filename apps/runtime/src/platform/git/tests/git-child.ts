@@ -47,7 +47,7 @@ const exit = await Effect.runPromiseExit(program.pipe(Effect.provide(GitLive)));
 if (Exit.isSuccess(exit)) {
   process.stdout.write(`${JSON.stringify({ ok: true, value: exit.value })}\n`);
 } else {
-  const failure = Option.getOrNull(Cause.failureOption(exit.cause));
+  const failure = Option.getOrNull(Cause.findErrorOption(exit.cause));
   process.stdout.write(
     `${JSON.stringify({
       ok: false,

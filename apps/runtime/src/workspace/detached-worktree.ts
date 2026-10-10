@@ -222,7 +222,7 @@ function createParent(projectId: number, destination: string) {
 /** Step 6. Git refuses a non-empty or registered path itself, which covers a race with the preflight. */
 function addWorktree(git: GitService, project: ProjectRow, destination: string, commit: string) {
   return git.run(['-C', project.rootPath, 'worktree', 'add', '--detach', destination, commit]).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.fail(
         new DetachedWorktreeError({
           reason: 'git_add_failed',

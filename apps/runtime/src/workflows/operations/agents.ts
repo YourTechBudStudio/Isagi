@@ -132,10 +132,12 @@ export function spawnAgentSession(
       deps.agents
         .ensureActivePtyProcess(agentSessionId, { model: input.model, effort: input.effort })
         .pipe(
-          Effect.timeoutFail({
+          Effect.timeoutOrElse({
             duration: `${spawnTimeoutMs} millis`,
-            onTimeout: () =>
-              new Error(`Timed out waiting for agent session ${agentSessionId} to start.`),
+            orElse: () =>
+              Effect.fail(
+                new Error(`Timed out waiting for agent session ${agentSessionId} to start.`),
+              ),
           }),
         ),
     );
@@ -151,10 +153,12 @@ export function spawnAgentSession(
       'workflow.spawn.await_startup_output',
       { ...session, ptyProcessId },
       waitForPtyStartupOutput(deps.pty, ptyProcessId).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: `${spawnTimeoutMs} millis`,
-          onTimeout: () =>
-            new Error(`Timed out waiting for agent session ${agentSessionId} startup output.`),
+          orElse: () =>
+            Effect.fail(
+              new Error(`Timed out waiting for agent session ${agentSessionId} startup output.`),
+            ),
         }),
       ),
     );
@@ -176,11 +180,13 @@ export function spawnAgentSession(
       'workflow.spawn.await_harness_session_id',
       { ...session, ptyProcessId },
       waitForHarnessSessionId(deps, { ptyProcessId, agentSessionId }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: `${spawnTimeoutMs} millis`,
-          onTimeout: () =>
-            new Error(
-              `Timed out waiting for agent session ${agentSessionId} to accept its prompt.`,
+          orElse: () =>
+            Effect.fail(
+              new Error(
+                `Timed out waiting for agent session ${agentSessionId} to accept its prompt.`,
+              ),
             ),
         }),
       ),

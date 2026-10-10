@@ -91,7 +91,7 @@ function expectCode(
   code: ProjectPathValidationCode,
 ) {
   assert.ok(Exit.isFailure(exit), 'expected a refusal, but classification succeeded');
-  const failure = Option.getOrNull(Cause.failureOption(exit.cause));
+  const failure = Option.getOrNull(Cause.findErrorOption(exit.cause));
   assert.ok(
     failure instanceof ProjectPathValidationError,
     `unexpected cause: ${String(exit.cause)}`,

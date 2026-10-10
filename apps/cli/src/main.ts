@@ -1,17 +1,22 @@
 import { Cause, Effect, Exit, Layer, Option } from 'effect';
 
+import { RuntimeClient, RuntimeHttpClient } from '@isagi/runtime-client';
+
 import { handlerFor } from './commands/index.js';
 import { parseCommandLine } from './commands/table.js';
 import { CliContext, type CliIo } from './context.js';
 import { CliFailure } from './errors.js';
 import { exitCodeFor, renderFailure, renderResult, renderText } from './output.js';
-import { runtimeApiLayer, type RuntimeApiService } from './runtime-api.js';
 import { resolveRuntimeUrl } from './target.js';
 
 export interface RunCliOptions {
-  /** The runtime API for a resolved URL; tests pass a fake keyed by endpoint id. */
-  readonly runtimeApi?: (runtimeUrl: string) => Layer.Layer<RuntimeApiService>;
+  /** The runtime client for a resolved URL; tests pass a fake keyed by endpoint id. */
+  readonly runtimeClient?: (runtimeUrl: string) => Layer.Layer<RuntimeClient>;
 }
+
+/** The runtime client over the platform `fetch`. */
+const httpRuntimeClient = (runtimeUrl: string): Layer.Layer<RuntimeClient> =>
+  RuntimeClient.layer(runtimeUrl).pipe(Layer.provide(RuntimeHttpClient));
 
 /**
  * One `isagi` invocation: parse, target, run, render. Returns the exit status.
@@ -46,7 +51,7 @@ export async function runCli(
   const program = handlerFor(parsed.id)(parsed.arguments).pipe(
     Effect.provide(
       Layer.merge(
-        (options.runtimeApi ?? runtimeApiLayer)(target.url),
+        (options.runtimeClient ?? httpRuntimeClient)(target.url),
         Layer.succeed(CliContext, io),
       ),
     ),
@@ -57,7 +62,7 @@ export async function runCli(
     if (!mode.raw) await renderResult(io, exit.value, mode.json);
     return 0;
   }
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isSome(failure)) {
     await renderFailure(io, failure.value.document, mode);
     return exitCodeFor(failure.value.document);

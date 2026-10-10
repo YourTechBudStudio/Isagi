@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, ManagedRuntime } from 'effect';
+import { Effect, Fiber, Layer, ManagedRuntime } from 'effect';
 
 import {
   UserShell,
@@ -98,14 +98,14 @@ test('concurrent refreshes are single-flight and keep the previous ready snapsho
       assert.equal(calls, 4);
 
       generation = 2;
-      const refreshFiber = yield* Effect.fork(inventory.refresh);
+      const refreshFiber = yield* Effect.forkChild(inventory.refresh);
       yield* Effect.sleep('5 millis');
       const during = yield* inventory.getCached;
       assert.equal(during['_tag'], 'Ready');
       if (during['_tag'] === 'Ready' && during.inventory.harnesses.pi['_tag'] === 'Available') {
         assert.equal(during.inventory.harnesses.pi.version, 'pi 1.0.0');
       }
-      yield* refreshFiber.await;
+      yield* Fiber.await(refreshFiber);
       const after = yield* inventory.getCached;
       assert.equal(after['_tag'], 'Ready');
       if (after['_tag'] === 'Ready' && after.inventory.harnesses.pi['_tag'] === 'Available') {
@@ -117,13 +117,20 @@ test('concurrent refreshes are single-flight and keep the previous ready snapsho
 
 test('managed runtime disposal interrupts an in-flight inventory refresh', async () => {
   let interruptions = 0;
+  const probeStarted = Promise.withResolvers<void>();
   const shell = fakeShell(() =>
-    Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => interruptions++))),
+    Effect.sync(() => probeStarted.resolve()).pipe(
+      Effect.andThen(Effect.never),
+      Effect.onInterrupt(() => Effect.sync(() => interruptions++)),
+    ),
   );
   const runtime = ManagedRuntime.make(
     HostInventoryLive.pipe(Layer.provide(Layer.succeed(UserShell, shell))),
   );
   await runtime.runPromise(Effect.flatMap(HostInventory, (inventory) => inventory.startRefresh));
+  // `startRefresh` only forks the refresh; v4 starts that fiber on a later scheduler tick, so wait
+  // until a probe is actually in flight before disposing.
+  await probeStarted.promise;
   await runtime.dispose();
   assert.ok(interruptions > 0);
 });

@@ -1,6 +1,7 @@
 import { Schema } from 'effect';
 
-import { nonEmptyString, positiveInteger, workflowOutcomeKindSchema } from './primitives.js';
+import { nonEmptyString, positiveInteger } from '../scalars.js';
+import { workflowOutcomeKindSchema } from './primitives.js';
 
 /**
  * The serialized structural descriptor.
@@ -18,7 +19,7 @@ import { nonEmptyString, positiveInteger, workflowOutcomeKindSchema } from './pr
  * client handle a structural rejection exhaustively instead of pattern-matching free text. A
  * test-only binding proves the two sets stay identical.
  */
-export const workflowStructureDiagnosticCodeSchema = Schema.Literal(
+export const workflowStructureDiagnosticCodeSchema = Schema.Literals([
   'invalid_export',
   'unsupported_contract',
   'missing_callback',
@@ -58,61 +59,61 @@ export const workflowStructureDiagnosticCodeSchema = Schema.Literal(
   'destination_no_longer_declared',
   'outcome_missing',
   'outcome_kind_changed',
-);
+]);
 
 export const workflowStructureDiagnosticSchema = Schema.Struct({
   code: workflowStructureDiagnosticCodeSchema,
   message: Schema.String,
   at: Schema.Struct({
-    graphKey: Schema.optionalWith(Schema.String, { exact: true }),
-    nodeId: Schema.optionalWith(Schema.String, { exact: true }),
-    edgeId: Schema.optionalWith(Schema.String, { exact: true }),
-    outcomeId: Schema.optionalWith(Schema.String, { exact: true }),
-    field: Schema.optionalWith(Schema.String, { exact: true }),
+    graphKey: Schema.optionalKey(Schema.String),
+    nodeId: Schema.optionalKey(Schema.String),
+    edgeId: Schema.optionalKey(Schema.String),
+    outcomeId: Schema.optionalKey(Schema.String),
+    field: Schema.optionalKey(Schema.String),
   }),
 });
 
-export const workflowNodeDescriptorSchema = Schema.Union(
+export const workflowNodeDescriptorSchema = Schema.Union([
   Schema.Struct({
     id: nonEmptyString,
     kind: Schema.Literal('operation'),
-    title: Schema.optionalWith(Schema.String, { exact: true }),
-    description: Schema.optionalWith(Schema.String, { exact: true }),
+    title: Schema.optionalKey(Schema.String),
+    description: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({
     id: nonEmptyString,
     kind: Schema.Literal('subgraph'),
     graphKey: nonEmptyString,
-    title: Schema.optionalWith(Schema.String, { exact: true }),
-    description: Schema.optionalWith(Schema.String, { exact: true }),
+    title: Schema.optionalKey(Schema.String),
+    description: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({
     id: nonEmptyString,
     kind: Schema.Literal('checkpoint'),
-    title: Schema.optionalWith(Schema.String, { exact: true }),
-    description: Schema.optionalWith(Schema.String, { exact: true }),
+    title: Schema.optionalKey(Schema.String),
+    description: Schema.optionalKey(Schema.String),
   }),
-);
+]);
 
 export const workflowEdgeDescriptorSchema = Schema.Struct({
   id: nonEmptyString,
   from: nonEmptyString,
   /** The author's declared destination set, in declared order. Order is descriptive only. */
   to: Schema.Array(nonEmptyString),
-  title: Schema.optionalWith(Schema.String, { exact: true }),
+  title: Schema.optionalKey(Schema.String),
 });
 
 export const workflowOutcomeDescriptorSchema = Schema.Struct({
   id: nonEmptyString,
   kind: workflowOutcomeKindSchema,
-  reason: Schema.optionalWith(Schema.String, { exact: true }),
-  title: Schema.optionalWith(Schema.String, { exact: true }),
+  reason: Schema.optionalKey(Schema.String),
+  title: Schema.optionalKey(Schema.String),
 });
 
 export const workflowGraphDescriptorSchema = Schema.Struct({
   key: nonEmptyString,
   title: nonEmptyString,
-  description: Schema.optionalWith(Schema.String, { exact: true }),
+  description: Schema.optionalKey(Schema.String),
   stateFields: Schema.Array(nonEmptyString),
   entry: nonEmptyString,
   nodes: Schema.Array(workflowNodeDescriptorSchema),

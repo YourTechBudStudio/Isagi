@@ -86,14 +86,14 @@ function timeOutHeadless(rt: EngineRuntime, ptyProcessId: number): Effect.Effect
     const tracked = rt.headlessProcesses.get(ptyProcessId);
     if (!tracked) return;
     tracked.timedOut = true;
-    const stopped = yield* rt.deps.headless.terminate(ptyProcessId).pipe(Effect.either);
-    if (stopped._tag === 'Left') {
+    const stopped = yield* rt.deps.headless.terminate(ptyProcessId).pipe(Effect.result);
+    if (stopped._tag === 'Failure') {
       yield* rt.commit('workflow_headless_stop_failed', (_db, emit) =>
         emit({
           runId: tracked.runId,
           category: 'run',
           kind: 'stop_failed',
-          message: `Headless process ${ptyProcessId} timed out and could not be stopped: ${errorMessage(stopped.left)}`,
+          message: `Headless process ${ptyProcessId} timed out and could not be stopped: ${errorMessage(stopped.failure)}`,
           data: { operationId: tracked.operationId, ptyProcessId, reason: 'timeout' },
         }),
       );
@@ -127,13 +127,13 @@ export function settleHeadless(
 
     const captured = yield* rt.deps.headless
       .capture({ ptyProcessId, harness: tracked.harness })
-      .pipe(Effect.either);
+      .pipe(Effect.result);
 
-    const output = captured._tag === 'Right' ? captured.right : null;
+    const output = captured._tag === 'Success' ? captured.success : null;
     const error = tracked.timedOut
       ? 'timeout'
       : output === null
-        ? `output_unavailable: ${errorMessage(captured._tag === 'Left' ? captured.left : null)}`
+        ? `output_unavailable: ${errorMessage(captured._tag === 'Failure' ? captured.failure : null)}`
         : (output.semanticError ??
           (exit.status === 'killed'
             ? 'killed'
@@ -155,11 +155,11 @@ export function settleHeadless(
           usageJson: toNullableJson(output?.usage),
         });
       })
-      .pipe(Effect.either);
-    if (settled._tag === 'Left') {
+      .pipe(Effect.result);
+    if (settled._tag === 'Failure') {
       // Still owned: the next check of the run's headless wait settles it again.
       tracked.settling = false;
-      return yield* Effect.fail(settled.left);
+      return yield* Effect.fail(settled.failure);
     }
     // Ownership ends only once the operation's end is committed.
     rt.headlessProcesses.delete(ptyProcessId);
@@ -211,8 +211,8 @@ function stopTracked(rt: EngineRuntime, ptyProcessId: number): Effect.Effect<voi
     const entry = rt.headlessProcesses.get(ptyProcessId);
     if (!entry) return;
     if (entry.timer) clearTimeout(entry.timer);
-    const stopped = yield* rt.deps.headless.terminate(ptyProcessId).pipe(Effect.either);
-    if (stopped._tag === 'Right') {
+    const stopped = yield* rt.deps.headless.terminate(ptyProcessId).pipe(Effect.result);
+    if (stopped._tag === 'Success') {
       rt.headlessProcesses.delete(ptyProcessId);
       yield* rt.deps.headless.release(ptyProcessId);
       return;
@@ -222,7 +222,7 @@ function stopTracked(rt: EngineRuntime, ptyProcessId: number): Effect.Effect<voi
         runId: entry.runId,
         category: 'run',
         kind: 'stop_failed',
-        message: `Headless process ${ptyProcessId} could not be stopped: ${errorMessage(stopped.left)}`,
+        message: `Headless process ${ptyProcessId} could not be stopped: ${errorMessage(stopped.failure)}`,
         data: { operationId: entry.operationId, ptyProcessId },
       }),
     );
@@ -259,7 +259,10 @@ export function makeHeadlessPort(deps: {
             new Error(`Headless process ${input.ptyProcessId} kept no output log.`),
           );
         }
-        const raw = yield* Effect.try(() => readFileSync(logPath, 'utf8'));
+        const raw = yield* Effect.try({
+          try: () => readFileSync(logPath, 'utf8'),
+          catch: (cause) => cause,
+        });
         const launch = harnessDefinition(input.harness).launch;
         const provenance = launch.extractHeadlessProvenance?.(raw);
         return {

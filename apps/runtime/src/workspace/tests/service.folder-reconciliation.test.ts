@@ -132,7 +132,7 @@ describe('a folder project through its whole presence lifecycle', () => {
         };
       };
       const recordValue = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) =>
-        Effect.zipRight(
+        Effect.andThen(
           Effect.sync(() => {
             worktreeCalls.push(name);
           }),

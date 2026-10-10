@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Cause, Effect, Exit, Layer } from 'effect';
+import { Cause, Effect, Exit, Layer, Option, Result } from 'effect';
 
 import { EditorContextRepository } from '../../../editor/contexts/index.js';
 import {
@@ -17,7 +17,7 @@ import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { SurfaceRepository, SurfaceRepositoryInitialSessionRejected } from '../../index.js';
 import { insertWorktree, testLayer } from '../../testing.js';
 
-type TestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
+type TestServices = Layer.Success<ReturnType<typeof testLayer>>;
 
 function inDatabase<A, E>(effect: Effect.Effect<A, E, TestServices>) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-placement-'));
@@ -50,12 +50,12 @@ function rejectionReason<A, E>(exit: Exit.Exit<A, E>) {
   if (!Exit.isFailure(exit)) return null;
   // A precondition breach is an integrity defect, never a user-facing error:
   // the caller holds the worktree lock and has already checked placement.
-  assert.equal(Cause.failureOption(exit.cause)._tag, 'None');
-  const defect = Cause.dieOption(exit.cause);
-  assert.equal(defect._tag, 'Some');
-  if (defect._tag !== 'Some') return null;
-  assert.ok(defect.value instanceof SurfaceRepositoryInitialSessionRejected);
-  return defect.value.reason;
+  assert.equal(Option.isNone(Cause.findErrorOption(exit.cause)), true);
+  const defect = Cause.findDefect(exit.cause);
+  assert.equal(Result.isSuccess(defect), true);
+  if (!Result.isSuccess(defect)) return null;
+  assert.ok(defect.success instanceof SurfaceRepositoryInitialSessionRejected);
+  return defect.success.reason;
 }
 
 test('an editor context is bound to its pane inside the creating transaction', async () => {

@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 
+import { nonEmptyString, nonNegativeInteger, positiveInteger } from '../scalars.js';
 import { pagedSchema, paginationQueryFields, queryTextSchema } from './pagination.js';
-import { nonEmptyString, nonNegativeInteger, positiveInteger } from './primitives.js';
 
 /**
  * Checkpoints: what one visit to a checkpoint node saved.
@@ -12,11 +12,11 @@ import { nonEmptyString, nonNegativeInteger, positiveInteger } from './primitive
  * been discarded.
  */
 
-const hex64 = Schema.String.pipe(Schema.pattern(/^[a-f0-9]{64}$/));
+const hex64 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 /** Git's object format is read at capture, so a commit id is SHA-1 or SHA-256 hex. */
-const commitShaSchema = Schema.String.pipe(Schema.pattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
+const commitShaSchema = Schema.String.check(Schema.isPattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
 
-export const workflowCheckpointScopeKindSchema = Schema.Literal('directory', 'file');
+export const workflowCheckpointScopeKindSchema = Schema.Literals(['directory', 'file']);
 
 export const workflowCheckpointFileSchema = Schema.Struct({
   /** Destination-root-relative, like the scope's own path, so it is what the file route takes. */

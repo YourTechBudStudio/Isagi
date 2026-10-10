@@ -271,7 +271,7 @@ export function editorContextServiceLayer<E>(input: {
   readonly bus: Layer.Layer<InternalRuntimeEventBusService, E>;
   readonly options?: EditorContextServiceOptions | undefined;
 }) {
-  return Layer.scoped(EditorContextService, makeEditorContextService(input.options ?? {})).pipe(
+  return Layer.effect(EditorContextService, makeEditorContextService(input.options ?? {})).pipe(
     Layer.provide(input.database),
     Layer.provide(input.workspace),
     Layer.provide(input.pty),
@@ -375,14 +375,12 @@ export function editorContextChangedIds(events: readonly InternalRuntimeEvent[])
 export function awaitProbeSettled(ptyProcessId: number) {
   return Effect.gen(function* () {
     const service = yield* EditorContextService;
-    return yield* Effect.iterate(undefined as EditorReadinessObservation | undefined, {
-      while: (observation) => observation === undefined || observation.state === 'pending',
-      body: () =>
-        Effect.yieldNow().pipe(
-          Effect.zipRight(service.readinessFor([ptyProcessId])),
-          Effect.map((observations) => observations.get(ptyProcessId)),
-        ),
-    });
+    let observation: EditorReadinessObservation | undefined;
+    while (observation === undefined || observation.state === 'pending') {
+      yield* Effect.yieldNow;
+      observation = (yield* service.readinessFor([ptyProcessId])).get(ptyProcessId);
+    }
+    return observation;
   });
 }
 

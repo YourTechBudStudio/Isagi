@@ -16,7 +16,7 @@ import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces/rep
 import type { AgentSessionRow, TerminalSessionRow } from './surfaces/types.js';
 import { TerminalSessionRepository } from './terminal-sessions/index.js';
 
-export const RuntimeEventProjectionLive = Layer.scopedDiscard(
+export const RuntimeEventProjectionLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const internalBus = yield* InternalRuntimeEventBus;
     const publicBus = yield* RuntimeEventBus;
@@ -163,7 +163,7 @@ function resolveLookup<A>(
       (value): LookupOutcome<A> =>
         value === null ? { outcome: 'absent' } : { outcome: 'found', value },
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.logWarning(
         `[runtime] runtime event projection lookup failed lookup=${context.lookup} ` +
           `entityId=${context.entityId} cause=${describeOperationalCause(error)}`,

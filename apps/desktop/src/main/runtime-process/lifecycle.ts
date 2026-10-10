@@ -100,7 +100,7 @@ export class RuntimeLifecycle {
   }
 
   start(): Effect.Effect<void, RuntimeLifecycleFailure> {
-    return Effect.async<void, RuntimeLifecycleFailure>((resume) => {
+    return Effect.callback<void, RuntimeLifecycleFailure>((resume) => {
       if (this.#state === 'ready') {
         resume(Effect.void);
         return;

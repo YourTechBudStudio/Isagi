@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import { surfacePanes, terminalSessions } from '../../../persistence/schema.js';
 import { RuntimeDatabase } from '../../../platform/persistence/index.js';
@@ -89,7 +89,7 @@ test('claim pane session rejects sessions from another worktree', async () => {
             worktreeId,
             claim: { action: 'claim_agent_session', paneId: surface.paneId, agentSessionId: 77 },
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(
         Effect.provide(
           testLayer(dataRoot, {
@@ -101,10 +101,10 @@ test('claim pane session rejects sessions from another worktree', async () => {
       ),
     );
 
-    assert.equal(Either.isLeft(result), true);
-    if (Either.isLeft(result)) {
-      assert.equal(result.left instanceof SurfaceError, true);
-      assert.equal((result.left as SurfaceError).code, 'session_worktree_mismatch');
+    assert.equal(Result.isFailure(result), true);
+    if (Result.isFailure(result)) {
+      assert.equal(result.failure instanceof SurfaceError, true);
+      assert.equal((result.failure as SurfaceError).code, 'session_worktree_mismatch');
     }
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });

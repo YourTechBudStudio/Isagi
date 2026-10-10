@@ -136,11 +136,11 @@ export interface InternalRuntimeEventBusService {
   }) => Effect.Effect<InternalRuntimeEventSubscription>;
 }
 
-export const InternalRuntimeEventBus = Context.GenericTag<InternalRuntimeEventBusService>(
+export const InternalRuntimeEventBus = Context.Service<InternalRuntimeEventBusService>(
   'isagi/InternalRuntimeEventBus',
 );
 
-export const InternalRuntimeEventBusLive = Layer.scoped(
+export const InternalRuntimeEventBusLive = Layer.effect(
   InternalRuntimeEventBus,
   Effect.gen(function* () {
     const subscribers = new Set<{
@@ -153,7 +153,7 @@ export const InternalRuntimeEventBusLive = Layer.scoped(
         Effect.sync(() => {
           for (const subscriber of subscribers) {
             if (!subscriber.types || subscriber.types.has(event.type)) {
-              subscriber.queue.unsafeOffer(event);
+              Queue.offerUnsafe(subscriber.queue, event);
             }
           }
         }),
@@ -166,10 +166,10 @@ export const InternalRuntimeEventBusLive = Layer.scoped(
             };
             subscribers.add(subscriber);
             return {
-              take: queue.take,
+              take: Queue.take(queue),
               unsubscribe: Effect.sync(() => {
                 subscribers.delete(subscriber);
-              }).pipe(Effect.zipRight(queue.shutdown)),
+              }).pipe(Effect.andThen(Queue.shutdown(queue))),
             } satisfies InternalRuntimeEventSubscription;
           }),
         ),
@@ -178,7 +178,7 @@ export const InternalRuntimeEventBusLive = Layer.scoped(
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.gen(function* () {
         for (const subscriber of subscribers) {
-          yield* subscriber.queue.shutdown;
+          yield* Queue.shutdown(subscriber.queue);
         }
         subscribers.clear();
       }),

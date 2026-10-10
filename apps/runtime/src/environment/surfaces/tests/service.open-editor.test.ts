@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import {
   editorContexts,
@@ -168,7 +168,7 @@ test('two concurrent opens produce exactly one context and one surface', async (
             decorateEditorService: (inner) => ({
               ...inner,
               findForWorktree: (worktreeId) =>
-                Effect.tap(inner.findForWorktree(worktreeId), () => Effect.yieldNow()),
+                Effect.tap(inner.findForWorktree(worktreeId), () => Effect.yieldNow),
             }),
           }),
         ),
@@ -193,15 +193,15 @@ test('an unprovisioned runtime refuses before any row is written', async () => {
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           surfaces.openEditor({ worktreeId, intoSurfaceId: null }),
         );
         return { result, state: yield* counts() };
       }).pipe(Effect.provide(testLayer(dataRoot, { editorProvisioning: 'unavailable' }))),
     );
 
-    assert.ok(Either.isLeft(output.result));
-    assert.equal(output.result.left._tag, 'EditorUnavailable');
+    assert.ok(Result.isFailure(output.result));
+    assert.equal(output.result.failure._tag, 'EditorUnavailable');
     assert.equal(output.state.contexts, 0);
     assert.equal(output.state.surfaces, 0);
   } finally {
@@ -216,18 +216,18 @@ test('an unknown worktree is rejected as worktree_not_found', async () => {
       Effect.gen(function* () {
         yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           surfaces.openEditor({ worktreeId: 987_654, intoSurfaceId: null }),
         );
         return { result, state: yield* counts() };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.ok(Either.isLeft(output.result));
-    assert.equal(output.result.left._tag, 'SurfaceError');
+    assert.ok(Result.isFailure(output.result));
+    assert.equal(output.result.failure._tag, 'SurfaceError');
     assert.equal(
-      Either.isLeft(output.result) && output.result.left._tag === 'SurfaceError'
-        ? output.result.left.code
+      Result.isFailure(output.result) && output.result.failure._tag === 'SurfaceError'
+        ? output.result.failure.code
         : null,
       'worktree_not_found',
     );

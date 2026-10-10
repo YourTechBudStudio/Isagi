@@ -106,10 +106,9 @@ export function probeWorkbench(input: {
       // default implementation carries no timing of its own and every stub
       // inherits the same cancellation. Timing out interrupts the request, which
       // aborts its signal.
-      Effect.timeoutTo({
+      Effect.timeoutOrElse({
         duration: Duration.millis(timing.requestTimeoutMs),
-        onTimeout: (): EditorProbeOutcome => ({ kind: 'timed_out' }),
-        onSuccess: (outcome): EditorProbeOutcome => outcome,
+        orElse: () => Effect.succeed<EditorProbeOutcome>({ kind: 'timed_out' }),
       }),
     ),
   );
@@ -133,22 +132,29 @@ export function probeWorkbench(input: {
   return poll.pipe(
     // The deadline wraps the initial delay, the schedule, both stages, and any
     // request in flight.
-    Effect.timeoutTo({
-      duration: Duration.millis(timing.deadlineMs),
-      onTimeout: (): EditorReadinessSettlement => ({
-        state: 'unreachable',
-        detail: describeUnreachable({
-          host: input.host,
-          port: input.port,
-          stage,
-          outcome: lastOutcome,
-          deadlineMs: timing.deadlineMs,
-        }),
-      }),
-      onSuccess: (): EditorReadinessSettlement => ({
+    Effect.map(
+      (): EditorReadinessSettlement => ({
         state: 'ready',
         detail: null,
       }),
+    ),
+    Effect.timeoutOrElse({
+      duration: Duration.millis(timing.deadlineMs),
+      // Evaluated only when the deadline fires, so it reads the furthest stage
+      // and last outcome reached at that moment.
+      orElse: () =>
+        Effect.sync(
+          (): EditorReadinessSettlement => ({
+            state: 'unreachable',
+            detail: describeUnreachable({
+              host: input.host,
+              port: input.port,
+              stage,
+              outcome: lastOutcome,
+              deadlineMs: timing.deadlineMs,
+            }),
+          }),
+        ),
     }),
     Effect.flatMap(input.onSettled),
   );
@@ -280,7 +286,7 @@ export const defaultEditorProbeRequest: EditorProbeRequest = ({ url, requireMark
     // whose cause carries platform detail, and reading either would make this a
     // second redaction policy.
     catch: (): EditorProbeOutcome => ({ kind: 'no_response' }),
-  }).pipe(Effect.merge);
+  }).pipe(Effect.catch(Effect.succeed));
 
 /** Drain rather than leak the socket; the status is the whole payload we needed. */
 async function discardBody(response: Response): Promise<void> {

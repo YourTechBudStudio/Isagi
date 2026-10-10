@@ -667,7 +667,7 @@ export function commandRepository(
           }
           return stale;
         });
-        return injected ? Effect.zipRight(injected, body) : body;
+        return injected ? Effect.andThen(injected, body) : body;
       }),
   };
 }

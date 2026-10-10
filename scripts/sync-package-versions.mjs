@@ -341,7 +341,7 @@ async function runCli() {
     }),
   );
   if (Exit.isFailure(exit)) {
-    console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+    console.error(Cause.pretty(exit.cause));
     process.exitCode = 1;
     return;
   }

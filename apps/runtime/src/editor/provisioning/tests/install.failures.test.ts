@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { Deferred, Effect, Exit, Fiber } from 'effect';
+import { Cause, Deferred, Effect, Exit, Fiber, Option } from 'effect';
 
 import { EditorProvisioningFailure, provisionCodeServer } from '../install.js';
 import {
@@ -47,7 +47,7 @@ async function provisionExpectingFailure(
   );
   assert.ok(Exit.isFailure(exit), 'the attempt failed');
   const failure = Exit.isFailure(exit) ? exit.cause : null;
-  const error = failure && failure._tag === 'Fail' ? failure.error : null;
+  const error = failure ? Option.getOrNull(Cause.findErrorOption(failure)) : null;
   assert.ok(error instanceof EditorProvisioningFailure, 'it failed with a modelled reason');
   return error;
 }
@@ -172,13 +172,13 @@ test('an interrupted attempt settles without leaving staging behind', async () =
           // Holds the attempt open inside the staged region, so the interrupt
           // lands exactly where the attempt deadline would.
           downloadTo: () =>
-            Effect.zipRight(
+            Effect.andThen(
               Deferred.succeed(reachedDownload, undefined),
-              Effect.zipRight(Deferred.await(blockForever), Effect.succeed({ sha256: '' })),
+              Effect.andThen(Deferred.await(blockForever), Effect.succeed({ sha256: '' })),
             ),
         };
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           provisionCodeServer({
             io,
             paths: roots.paths,
@@ -193,8 +193,9 @@ test('an interrupted attempt settles without leaving staging behind', async () =
         // after the interrupt would pass for the wrong reason.
         assert.equal(stagingEntries(roots.stagingRoot).length, 1);
 
-        const exit = yield* Fiber.interrupt(fiber);
-        assert.ok(Exit.isInterrupted(exit));
+        yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+        assert.ok(Exit.hasInterrupts(exit));
       }),
     );
 

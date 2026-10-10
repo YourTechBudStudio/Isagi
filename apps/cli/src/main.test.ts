@@ -6,6 +6,7 @@ import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isa
 import { commandTable } from './commands/table.js';
 import { cliErrorCodeSchema } from './errors.js';
 import {
+  content,
   fail,
   fakeRuntime,
   minimalArgv,
@@ -58,12 +59,15 @@ test('an API failure keeps its code and lifts its reason, request id and data', 
     'workflows.getRun': () =>
       fail(
         new RuntimeApiError({
-          code: 'workflow_rejected',
-          status: 404,
-          message: 'Run 9 does not exist.',
-          requestId: 'req-9',
-          data,
-        } as never),
+          endpointId: 'workflows.getRun',
+          apiError: {
+            code: 'workflow_rejected',
+            status: 404,
+            message: 'Run 9 does not exist.',
+            requestId: 'req-9',
+            data,
+          },
+        }),
       ),
   });
 
@@ -93,7 +97,7 @@ test('a transport failure is runtime_unreachable, naming the endpoint and runtim
   });
   const runtime = fakeRuntime({
     'workflows.listRuns': () =>
-      fail(new RuntimeTransportError('Could not reach runtime endpoint.', cause)),
+      fail(new RuntimeTransportError({ endpointId: 'workflows.listRuns', cause })),
   });
   const run = await runIsagi(['runs', 'list', '--json'], { runtime });
   assert.equal(run.code, 1);
@@ -113,7 +117,7 @@ test('a transport failure is runtime_unreachable, naming the endpoint and runtim
 test('a response that breaks the contract is runtime_response_invalid', async () => {
   const runtime = fakeRuntime({
     'workflows.listRuns': () =>
-      fail(new RuntimeDecodeError('workflows.listRuns', new Error('bad'))),
+      fail(new RuntimeDecodeError({ endpointId: 'workflows.listRuns', cause: new Error('bad') })),
   });
   const run = await runIsagi(['runs', 'list', '--json'], { runtime });
   assert.equal(run.code, 1);
@@ -176,7 +180,7 @@ test('every command that is not composed issues exactly one request', async () =
     if (composed.has(id)) continue;
     const runtime = fakeRuntime(
       new Proxy({}, { get: () => () => page }),
-      new Proxy({}, { get: () => () => new Response('') }),
+      new Proxy({}, { get: () => () => content('') }),
     );
     const run = await runIsagi([...minimalArgv(spec), '--json'], { runtime });
     assert.equal(run.code, 0, `${id}: ${run.stdout}${run.stderr}`);

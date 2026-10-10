@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "effect": "^3.21.2",
+    "effect": "catalog:",
     "oxfmt": "^0.52.0",
     "oxlint": "^1.67.0",
     "oxlint-tailwindcss": "^1.0.0",

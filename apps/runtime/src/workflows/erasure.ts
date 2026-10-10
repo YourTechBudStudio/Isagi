@@ -17,7 +17,7 @@ export interface WorkflowRunErasureService {
   readonly eraseProjectRunsInTransaction: (db: RuntimeDrizzleDatabase, projectId: number) => number;
 }
 
-export const WorkflowRunErasure = Context.GenericTag<WorkflowRunErasureService>(
+export const WorkflowRunErasure = Context.Service<WorkflowRunErasureService>(
   'isagi/WorkflowRunErasure',
 );
 

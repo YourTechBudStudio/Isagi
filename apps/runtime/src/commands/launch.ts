@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/contracts';
 
@@ -111,7 +111,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
       // order matches the one the architecture fixed. An expected failure here
       // is an ordinary failed launch: `failedRun` records a completed failed run
       // carrying the diagnostic, exactly as `missing_cwd` and `env_invalid` do.
-      // `Effect.either` narrows to the resolver's single expected failure — a
+      // `Effect.result` narrows to the resolver's single expected failure — a
       // defect stays a defect and an interrupt still interrupts, and neither
       // reaches the marker, so the previous snapshot survives all three.
       const resolution = yield* resolveCommandPorts({
@@ -121,17 +121,17 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         // extra read.
         remembered: current?.resolvedPorts ?? null,
         probe: portProbe,
-      }).pipe(Effect.either);
-      if (Either.isLeft(resolution)) {
-        return yield* failedRun(target, 'port_allocation_failed', resolution.left.detail);
+      }).pipe(Effect.result);
+      if (Result.isFailure(resolution)) {
+        return yield* failedRun(target, 'port_allocation_failed', resolution.failure.detail);
       }
-      const resolved = resolution.right;
+      const resolved = resolution.success;
 
       const envResult = yield* buildCommandEnv(target.worktree.path, target.command).pipe(
-        Effect.either,
+        Effect.result,
       );
-      if (Either.isLeft(envResult)) {
-        return yield* failedRun(target, 'env_invalid', envResult.left.message);
+      if (Result.isFailure(envResult)) {
+        return yield* failedRun(target, 'env_invalid', envResult.failure.message);
       }
 
       // The top of the precedence ladder. The PTY layer supplies the login-shell
@@ -145,7 +145,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
       // this can shadow is one from an env file, which is the documented
       // precedence.
       const launchEnv: NodeJS.ProcessEnv = {
-        ...envResult.right,
+        ...envResult.success,
         ...portEnvInjections(resolved),
       };
 
@@ -190,8 +190,8 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               diagnosticReason: 'pty_launch_failed',
               diagnosticDetail: detail,
             })
-            .pipe(Effect.either);
-          if (Either.isRight(completed) && completed.right) {
+            .pipe(Effect.result);
+          if (Result.isSuccess(completed) && completed.success) {
             yield* publishCommandChanged(worktreeId, commandName, current?.status ?? 'idle');
           } else {
             // Nothing was written, so there is no new metadata to invalidate
@@ -200,7 +200,9 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             // and by boot reconciliation.
             console.warn(
               `[runtime] Command launch could not record its failure diagnostic worktree=${worktreeId} command=${commandName} cause=${
-                Either.isLeft(completed) ? describeCommandCause(completed.left) : 'run row missing'
+                Result.isFailure(completed)
+                  ? describeCommandCause(completed.failure)
+                  : 'run row missing'
               }`,
             );
           }
@@ -225,8 +227,8 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         // would abandon a possibly-live incarnation under a null pointer.
         // Both a nonterminal row and a failed read therefore fall through to
         // ownership.
-        const row = yield* ptyRepository.findProcess(allocation.ptyProcessId).pipe(Effect.either);
-        const terminal = Either.isRight(row) ? terminalPtyFactsForRow(row.right) : null;
+        const row = yield* ptyRepository.findProcess(allocation.ptyProcessId).pipe(Effect.result);
+        const terminal = Result.isSuccess(row) ? terminalPtyFactsForRow(row.success) : null;
         if (terminal) {
           yield* converge(terminalCommandOutcomeForPtyRow(terminal, 'launch'));
           return;
@@ -244,7 +246,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         });
         yield* publishCommandChanged(worktreeId, commandName, 'running');
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => {
             console.warn(
               `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName} cause=${describeCommandCause(error)}`,
@@ -257,11 +259,11 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         const pruned = yield* pruneCommandRunHistory(commandRepository, {
           worktreeId,
           commandName,
-        }).pipe(Effect.either);
-        if (Either.isLeft(pruned)) {
+        }).pipe(Effect.result);
+        if (Result.isFailure(pruned)) {
           return yield* convergeBeforeMarker(
-            pruned.left,
-            `Could not prepare the launch: ${describeCommandCause(pruned.left)}`,
+            pruned.failure,
+            `Could not prepare the launch: ${describeCommandCause(pruned.failure)}`,
           );
         }
 
@@ -277,11 +279,11 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         // forgetting to forget is how stale memory survives a config edit.
         const marker = yield* commandRepository
           .markLaunchInProgress({ worktreeId, commandName, resolvedPorts: resolved })
-          .pipe(Effect.either);
-        if (Either.isLeft(marker)) {
+          .pipe(Effect.result);
+        if (Result.isFailure(marker)) {
           return yield* convergeBeforeMarker(
-            marker.left,
-            `Could not record the launch: ${describeCommandCause(marker.left)}`,
+            marker.failure,
+            `Could not record the launch: ${describeCommandCause(marker.failure)}`,
           );
         }
 
@@ -300,31 +302,31 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
                 shellIntegration: false,
               }),
               (candidate) => candidate.abandon,
-            ).pipe(Effect.either);
-            if (Either.isLeft(acquired)) {
-              yield* converge(launchFailure(describeCommandCause(acquired.left)));
+            ).pipe(Effect.result);
+            if (Result.isFailure(acquired)) {
+              yield* converge(launchFailure(describeCommandCause(acquired.failure)));
               return actionOutput(target.command, 'failed', worktreeId, null);
             }
-            const acquiredAllocation = acquired.right;
+            const acquiredAllocation = acquired.success;
             allocation = acquiredAllocation;
 
             // The ownership link, written before any process exists.
             const link = yield* commandRepository
               .updateRunPty({ runId: run.id, ptyProcessId: acquiredAllocation.ptyProcessId })
-              .pipe(Effect.either);
-            if (Either.isLeft(link)) {
+              .pipe(Effect.result);
+            if (Result.isFailure(link)) {
               yield* acquiredAllocation.abandon;
               const converged = yield* converge(
                 launchFailure(
-                  `Could not record the process association; the command was not started: ${describeCommandCause(link.left)}`,
+                  `Could not record the process association; the command was not started: ${describeCommandCause(link.failure)}`,
                 ),
-              ).pipe(Effect.either);
+              ).pipe(Effect.result);
               // Only when the convergence write also fails does the original
               // fault propagate, leaving the residue boot resolves.
-              if (Either.isLeft(converged)) return yield* Effect.fail(link.left);
+              if (Result.isFailure(converged)) return yield* Effect.fail(link.failure);
               return actionOutput(target.command, 'failed', worktreeId, null);
             }
-            if (!link.right) {
+            if (!link.success) {
               // The run was created moments ago inside this held lock, so it
               // cannot legitimately be gone. Reporting an ordinary `failed`
               // action here would claim a diagnostic that has no row to live
@@ -349,9 +351,9 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             // event can still converge it.
             const startedRow = yield* ptyRepository
               .findProcess(acquiredAllocation.ptyProcessId)
-              .pipe(Effect.either);
-            const terminal = Either.isRight(startedRow)
-              ? terminalPtyFactsForRow(startedRow.right)
+              .pipe(Effect.result);
+            const terminal = Result.isSuccess(startedRow)
+              ? terminalPtyFactsForRow(startedRow.success)
               : null;
             if (terminal) {
               const outcome = terminalCommandOutcomeForPtyRow(terminal, 'launch');

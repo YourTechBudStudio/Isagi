@@ -76,10 +76,10 @@ test('an interruption during preparation lands launch_interrupted, not a stuck a
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const created = yield* repository.create({ worktreeId });
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           service.ensureRuntime({ editorContextId: created.id, intent: 'reuse' }),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
 
         return {
@@ -119,19 +119,16 @@ test('an interruption after the handoff abandons the allocation rather than rese
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const created = yield* repository.create({ worktreeId });
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           service.ensureRuntime({ editorContextId: created.id, intent: 'reuse' }),
         );
         // Wait for the handoff to commit, which is precisely the interruption
         // window under test rather than an arbitrary delay.
-        const owned = yield* Effect.iterate(null as number | null, {
-          while: (ptyProcessId) => ptyProcessId === null,
-          body: () =>
-            Effect.yieldNow().pipe(
-              Effect.zipRight(repository.find(created.id)),
-              Effect.map((row) => row?.activePtyProcessId ?? null),
-            ),
-        });
+        let owned: number | null = null;
+        while (owned === null) {
+          yield* Effect.yieldNow;
+          owned = (yield* repository.find(created.id))?.activePtyProcessId ?? null;
+        }
         yield* Fiber.interrupt(fiber);
 
         return {

@@ -8,15 +8,15 @@ import { PtyServiceError, type BackendSessionRef, type PtyBackend } from '../typ
 const nodePtyBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   backend: Schema.Literal('node_pty'),
-  ptyProcessId: Schema.Number.pipe(Schema.int(), Schema.positive()),
-  pid: Schema.NullOr(Schema.Number.pipe(Schema.int())),
+  ptyProcessId: Schema.Int.check(Schema.isGreaterThan(0)),
+  pid: Schema.NullOr(Schema.Int),
   shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const tmuxBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   backend: Schema.Literal('tmux'),
-  sessionName: Schema.String.pipe(Schema.minLength(1)),
+  sessionName: Schema.String.check(Schema.isMinLength(1)),
   shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 

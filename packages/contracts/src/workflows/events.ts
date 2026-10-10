@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 
+import { nonEmptyString, positiveInteger } from '../scalars.js';
 import { pagedSchema, paginationQueryFields } from './pagination.js';
-import { nonEmptyString, positiveInteger } from './primitives.js';
 
 /**
  * A run's event log: one append-only list of everything that happened to it, in id order. The same
@@ -11,15 +11,15 @@ import { nonEmptyString, positiveInteger } from './primitives.js';
  * `ui_feedback` carries the author's `WorkflowUiFeedback`, and environment events carry the ids and
  * output of what was created.
  */
-export const workflowEventCategorySchema = Schema.Literal(
+export const workflowEventCategorySchema = Schema.Literals([
   'run',
   'environment',
   'node',
   'log',
   'ui',
-);
+]);
 
-export const workflowEventKindSchema = Schema.Literal(
+export const workflowEventKindSchema = Schema.Literals([
   // run
   'run_launched',
   'run_paused',
@@ -56,7 +56,7 @@ export const workflowEventKindSchema = Schema.Literal(
   // log and ui
   'log',
   'ui_feedback',
-);
+]);
 
 export const workflowEventSchema = Schema.Struct({
   eventId: positiveInteger,
@@ -66,7 +66,7 @@ export const workflowEventSchema = Schema.Struct({
   category: workflowEventCategorySchema,
   kind: workflowEventKindSchema,
   message: Schema.String,
-  data: Schema.Unknown,
+  data: Schema.optionalKey(Schema.Unknown),
 });
 
 export const listWorkflowEventsQuerySchema = Schema.Struct(paginationQueryFields);

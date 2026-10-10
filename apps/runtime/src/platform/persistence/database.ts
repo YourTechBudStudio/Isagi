@@ -30,9 +30,9 @@ export interface RuntimeDatabaseService {
   ) => Effect.Effect<A, DatabaseError>;
 }
 
-export const RuntimeDatabase = Context.GenericTag<RuntimeDatabaseService>('isagi/RuntimeDatabase');
+export const RuntimeDatabase = Context.Service<RuntimeDatabaseService>('isagi/RuntimeDatabase');
 
-export const RuntimeDatabaseLive = Layer.scoped(
+export const RuntimeDatabaseLive = Layer.effect(
   RuntimeDatabase,
   Effect.gen(function* () {
     const directory = yield* DataDirectory;

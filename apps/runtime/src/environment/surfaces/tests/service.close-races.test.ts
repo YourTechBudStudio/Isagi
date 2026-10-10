@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Deferred, Effect, Either, Fiber, Option } from 'effect';
+import { Deferred, Effect, Fiber, Result } from 'effect';
 
 import { EditorContextRepository } from '../../../editor/contexts/index.js';
 import { insertPtyProcess as insertEditorPtyProcess } from '../../../editor/testing.js';
@@ -41,7 +41,7 @@ test('a session another pane claimed during startup survives its first pane bein
         });
         if (spare.status !== 'started') throw new Error('spare pane was not started');
 
-        const starting = yield* Effect.fork(
+        const starting = yield* Effect.forkChild(
           surfaces.startPane({
             surfaceId: closing.surfaceId,
             start: { newPane: { kind: 'terminal_session' } },
@@ -60,7 +60,7 @@ test('a session another pane claimed during startup survives its first pane bein
         // …and the pane it was created for goes away.
         yield* surfaces.deleteSurface(closing.surfaceId);
         yield* Deferred.succeed(resume, undefined);
-        const started = yield* Effect.either(Fiber.join(starting));
+        const started = yield* Effect.result(Fiber.join(starting));
 
         const database = yield* RuntimeDatabase;
         const rows = yield* database.use('test_claimed_session_rows', (db) => ({
@@ -83,7 +83,7 @@ test('a session another pane claimed during startup survives its first pane bein
                   .pipe(
                     Effect.tap((result) =>
                       Deferred.succeed(created, result.terminalSessionId).pipe(
-                        Effect.zipRight(Deferred.await(resume)),
+                        Effect.andThen(Deferred.await(resume)),
                       ),
                     ),
                   ),
@@ -93,9 +93,9 @@ test('a session another pane claimed during startup survives its first pane bein
       ),
     );
 
-    assert.ok(Either.isLeft(output.started));
-    assert.ok(output.started.left instanceof SurfaceError);
-    assert.equal(output.started.left.code, 'pane_not_found');
+    assert.ok(Result.isFailure(output.started));
+    assert.ok(output.started.failure instanceof SurfaceError);
+    assert.equal(output.started.failure.code, 'pane_not_found');
     assert.ok(output.rows.session, 'the claimed session is kept');
     assert.equal(output.rows.spare?.sessionKind, 'terminal_session');
     assert.equal(output.rows.spare?.sessionId, output.sessionId);
@@ -176,7 +176,7 @@ test('a committed delete is published even when its cleanup lookup fails', async
         const empty = yield* surfaces.createEmptySurface({ worktreeId, titleBase: 'Scratch' });
         const eventBus = yield* InternalRuntimeEventBus;
         const subscription = yield* eventBus.subscribe({ types: ['surface_changed'] });
-        const deleted = yield* Effect.either(surfaces.deleteSurface(empty.surfaceId));
+        const deleted = yield* Effect.result(surfaces.deleteSurface(empty.surfaceId));
         const event = yield* subscription.take;
         yield* subscription.unsubscribe;
         return { deleted, event, surfaceId: empty.surfaceId };
@@ -198,7 +198,7 @@ test('a committed delete is published even when its cleanup lookup fails', async
       ),
     );
 
-    assert.ok(Either.isLeft(output.deleted), 'the failed cleanup is still reported');
+    assert.ok(Result.isFailure(output.deleted), 'the failed cleanup is still reported');
     assert.equal(output.event.type, 'surface_changed');
     assert.equal(output.event.payload.surfaceId, output.surfaceId);
     assert.equal(output.event.payload.change, 'deleted');
@@ -230,7 +230,7 @@ test('a claim that validated a session before orphan GC deleted it refuses to bi
         if (spare.status !== 'started') throw new Error('spare pane was not started');
 
         pauseNextGet = true;
-        const claiming = yield* Effect.fork(
+        const claiming = yield* Effect.forkChild(
           surfaces.claimPaneSession({
             worktreeId,
             claim: { action: 'claim_terminal_session', paneId: spare.paneId, terminalSessionId },
@@ -243,7 +243,7 @@ test('a claim that validated a session before orphan GC deleted it refuses to bi
           db.delete(terminalSessions).where(eq(terminalSessions.id, terminalSessionId)).run();
         });
         yield* Deferred.succeed(resume, undefined);
-        const claimed = yield* Effect.either(Fiber.join(claiming));
+        const claimed = yield* Effect.result(Fiber.join(claiming));
 
         const pane = yield* database.use('test_claim_gc_pane', (db) =>
           db.select().from(surfacePanes).where(eq(surfacePanes.id, spare.paneId)).get(),
@@ -265,8 +265,8 @@ test('a claim that validated a session before orphan GC deleted it refuses to bi
                         ? Effect.sync(() => {
                             pauseNextGet = false;
                           }).pipe(
-                            Effect.zipRight(Deferred.succeed(validated, undefined)),
-                            Effect.zipRight(Deferred.await(resume)),
+                            Effect.andThen(Deferred.succeed(validated, undefined)),
+                            Effect.andThen(Deferred.await(resume)),
                           )
                         : Effect.void,
                     ),
@@ -278,9 +278,9 @@ test('a claim that validated a session before orphan GC deleted it refuses to bi
       ),
     );
 
-    assert.ok(Either.isLeft(output.claimed));
-    assert.ok(output.claimed.left instanceof SurfaceError);
-    assert.equal(output.claimed.left.code, 'session_not_found');
+    assert.ok(Result.isFailure(output.claimed));
+    assert.ok(output.claimed.failure instanceof SurfaceError);
+    assert.equal(output.claimed.failure.code, 'session_not_found');
     assert.equal(output.pane?.sessionId, null, 'the pane never points at the deleted row');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -315,7 +315,7 @@ test('a claim waits for a holder of the session lock that found the session unpl
 
         // The holder is `stopUnlessPlaced`'s shape: it reads "unplaced" and is
         // held there, standing in for the stop that follows.
-        const holder = yield* Effect.fork(
+        const holder = yield* Effect.forkChild(
           lifecycle.withRestoreLock(
             key,
             Effect.gen(function* () {
@@ -330,14 +330,14 @@ test('a claim waits for a holder of the session lock that found the session unpl
           ),
         );
         yield* Deferred.await(decided);
-        const claiming = yield* Effect.fork(
+        const claiming = yield* Effect.forkChild(
           surfaces.claimPaneSession({
             worktreeId,
             claim: { action: 'claim_agent_session', paneId: spare.paneId, agentSessionId: 77 },
           }),
         );
-        for (let turn = 0; turn < 20; turn += 1) yield* Effect.yieldNow();
-        const whileHeld = yield* Fiber.poll(claiming);
+        for (let turn = 0; turn < 20; turn += 1) yield* Effect.yieldNow;
+        const whileHeld = yield* Effect.sync(() => claiming.pollUnsafe());
         const database = yield* RuntimeDatabase;
         const spareWhileHeld = yield* database.use('test_spare_while_held', (db) =>
           db.select().from(surfacePanes).where(eq(surfacePanes.id, spare.paneId)).get(),
@@ -362,7 +362,7 @@ test('a claim waits for a holder of the session lock that found the session unpl
     );
 
     assert.equal(output.seenByHolder, null, 'the holder decided on an unplaced session');
-    assert.ok(Option.isNone(output.whileHeld), 'the claim cannot bind while the decision stands');
+    assert.equal(output.whileHeld, undefined, 'the claim cannot bind while the decision stands');
     assert.equal(output.spareWhileHeld?.sessionId, null);
     assert.equal(output.spareAfter?.sessionId, 77, 'it binds once the holder is done');
   } finally {

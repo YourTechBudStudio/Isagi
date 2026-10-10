@@ -236,7 +236,7 @@ export interface CommandPtyLink {
 }
 
 export const CommandRepository =
-  Context.GenericTag<CommandRepositoryService>('isagi/CommandRepository');
+  Context.Service<CommandRepositoryService>('isagi/CommandRepository');
 
 export const CommandRepositoryLive = Layer.effect(
   CommandRepository,

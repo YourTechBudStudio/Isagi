@@ -36,7 +36,7 @@ export function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
         );
       }),
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.sync(() => {
         console.warn('[runtime] Could not inspect PTY process logs for orphans', error);
       }),

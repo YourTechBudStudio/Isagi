@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 
-import { Context, Effect, Either, Layer } from 'effect';
+import { Context, Effect, Layer, Result } from 'effect';
 
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
@@ -172,9 +172,9 @@ export interface PtyService {
   }) => Effect.Effect<PtyLogTail, DatabaseError | PtyServiceError>;
 }
 
-export const PtyService = Context.GenericTag<PtyService>('isagi/PtyProcessService');
+export const PtyService = Context.Service<PtyService>('isagi/PtyProcessService');
 
-export const PtyServiceLive = Layer.scoped(
+export const PtyServiceLive = Layer.effect(
   PtyService,
   Effect.gen(function* () {
     const repository = yield* PtyRepository;
@@ -477,15 +477,15 @@ function attachToProcess(
             ),
           onSessionExit: (exit) => input.send({ type: 'exit', ...exit }),
         })
-        .pipe(Effect.either);
-      if (Either.isLeft(attachResult)) {
+        .pipe(Effect.result);
+      if (Result.isFailure(attachResult)) {
         yield* handleAttachFailure(repository, backend, eventBus, reservations, session, ref);
         return yield* Effect.fail(
           new PtyServiceError({
             code: 'backend_attach_failed',
             message: `Could not attach to PTY process ${session.id}.`,
             ptyProcessId: session.id,
-            cause: attachResult.left,
+            cause: attachResult.failure,
           }),
         );
       }
@@ -503,7 +503,7 @@ function attachToProcess(
       const ptyAttachment = {
         session,
         attachmentId: input.mode === 'interactive' ? attachmentId : null,
-        replayBytes: attachResult.right.replayBytes,
+        replayBytes: attachResult.success.replayBytes,
         live: true,
         detach,
         unsubscribe: () => {
@@ -513,7 +513,7 @@ function attachToProcess(
       activeAttachments.set(session.id, {
         ptyProcessId: session.id,
         attachmentId,
-        attachment: attachResult.right,
+        attachment: attachResult.success,
         displace: input.displace?.(ptyAttachment),
       });
       return ptyAttachment;
@@ -609,7 +609,7 @@ function startStatusPolling(
       reconcilePersistedProcesses(repository, catalog, eventBus, reservations, {
         startup: false,
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.sync(() => console.warn('[runtime] PTY status polling failed', error)),
         ),
       ),
@@ -658,9 +658,7 @@ export function reconcilePersistedProcesses(
       const inspection = yield* catalog
         .forBackend(session.backend)
         .inspect(ref)
-        .pipe(
-          Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })),
-        );
+        .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
       switch (inspection.status) {
         case 'alive':
           yield* transitionIfChanged(
@@ -711,7 +709,7 @@ function handleAttachFailure(
     }
     const inspection = yield* backend
       .inspect(ref)
-      .pipe(Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
+      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
     if (inspection.status === 'missing') {
       yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',

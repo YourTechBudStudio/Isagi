@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either, Layer } from 'effect';
+import { Effect, Layer, Result } from 'effect';
 
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -158,10 +158,10 @@ test('agent session artifacts reject a symlinked Isagi harness directory', async
         const artifacts = yield* AgentSessionArtifacts;
         return yield* artifacts
           .prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
-    assert.equal(Either.isLeft(result), true);
+    assert.equal(Result.isFailure(result), true);
     assert.equal(existsSync(join(external, '10')), false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });

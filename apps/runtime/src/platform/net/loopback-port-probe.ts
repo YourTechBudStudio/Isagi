@@ -74,13 +74,13 @@ export interface LoopbackPortProbeHooks {
    * *deferred* rather than delivered. The fiber is never gone while the bind is
    * in flight; it completes acquisition, the resource becomes owned, and the
    * interruption is taken at the first interruptible point inside `use`, where
-   * `releaseListener` is already installed. That is why this `async` carries no
+   * `releaseListener` is already installed. That is why this `callback` carries no
    * cancellation finalizer — a canceller here would be unreachable code
    * claiming to guard a state the framework does not allow. The test below is
    * what keeps that reasoning honest instead of assumed.
    *
    * It is a promise rather than an `Effect` on purpose: it is awaited inside
-   * the `Effect.async` register, which has no fiber to run an effect on.
+   * the `Effect.callback` register, which has no fiber to run an effect on.
    * Production supplies nothing and acquisition resumes immediately.
    */
   readonly holdAcquisition?: () => Promise<void>;
@@ -122,7 +122,7 @@ export interface LoopbackPortProbeService {
 }
 
 export const LoopbackPortProbe =
-  Context.GenericTag<LoopbackPortProbeService>('isagi/LoopbackPortProbe');
+  Context.Service<LoopbackPortProbeService>('isagi/LoopbackPortProbe');
 
 export function makeLoopbackPortProbe(
   hooks: LoopbackPortProbeHooks = {},
@@ -134,7 +134,7 @@ export function makeLoopbackPortProbe(
       // failure means the port is in use, and a close failure means this file
       // may still hold it. Neither is a launch-ending fact, because a fresh
       // assignment can still serve the endpoint.
-      Effect.catchAll(() => Effect.succeed(false)),
+      Effect.catch(() => Effect.succeed(false)),
     );
 
   const obtainEphemeralPort = withLoopbackPort(0, hooks);
@@ -209,7 +209,7 @@ function openLoopbackListener(
   port: number,
   hooks: LoopbackPortProbeHooks,
 ): Effect.Effect<LoopbackListener, LoopbackPortUnavailable> {
-  return Effect.async<LoopbackListener, LoopbackPortUnavailable>((resume) => {
+  return Effect.callback<LoopbackListener, LoopbackPortUnavailable>((resume) => {
     const sockets = new Set<net.Socket>();
     let server: net.Server;
     try {
@@ -237,7 +237,7 @@ function openLoopbackListener(
       server.removeListener('error', onError);
       // Production resumes here; the hook exists only so a test can hold this
       // exact moment open. See `holdAcquisition` for why no cancellation
-      // finalizer belongs on this `async`.
+      // finalizer belongs on this `callback`.
       if (!hooks.holdAcquisition) {
         resume(Effect.succeed(listener));
         return;
@@ -263,7 +263,7 @@ function openLoopbackListener(
 // The result-sensitive close. Sweeping the socket set first is what bounds the
 // callback on process-local work instead of a peer's chosen lifetime.
 function closeListener(listener: LoopbackListener): Effect.Effect<void, LoopbackPortUnavailable> {
-  return Effect.async<void, LoopbackPortUnavailable>((resume) => {
+  return Effect.callback<void, LoopbackPortUnavailable>((resume) => {
     try {
       destroyTrackedSockets(listener);
       listener.server.close((cause) => {
@@ -282,7 +282,7 @@ function closeListener(listener: LoopbackListener): Effect.Effect<void, Loopback
 // Infallible, idempotent, and bounded by the same socket sweep — an
 // uninterruptible finalizer must never be able to wait on a peer.
 function releaseListener(listener: LoopbackListener): Effect.Effect<void> {
-  return Effect.async<void>((resume) => {
+  return Effect.callback<void>((resume) => {
     if (listener.closed) {
       resume(Effect.void);
       return;

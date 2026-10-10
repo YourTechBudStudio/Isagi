@@ -2,7 +2,7 @@ import { createReadStream, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
 
@@ -117,10 +117,11 @@ async function copyFile(
   const absolute = join(root, path);
   const stats = await lstat(absolute);
   const put = await Effect.runPromise(
-    Effect.either(capture.put({ source: createReadStream(absolute) })),
+    Effect.result(capture.put({ source: createReadStream(absolute) })),
   );
-  if (Either.isLeft(put)) throw new CaptureFailed(`Could not save '${path}': ${put.left.message}`);
-  const stored = put.right;
+  if (Result.isFailure(put))
+    throw new CaptureFailed(`Could not save '${path}': ${put.failure.message}`);
+  const stored = put.success;
   return {
     path,
     sha256: stored.contentRef.slice('sha256:'.length),

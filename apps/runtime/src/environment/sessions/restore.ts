@@ -1,4 +1,4 @@
-import { Effect, Either, Layer } from 'effect';
+import { Effect, Layer, Result } from 'effect';
 
 import { HarnessLaunchBlocked } from '../../harnesses/control-plane/index.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
@@ -31,7 +31,7 @@ const restoreStartupSessionsEffect = Effect.gen(function* () {
 });
 
 export const restoreStartupSessions = restoreStartupSessionsEffect.pipe(
-  Effect.catchAll((error) =>
+  Effect.catch((error) =>
     Effect.sync(() => {
       console.warn('[runtime][startup-restore] Skipped: binding discovery failed', {
         errorTag: errorTag(error),
@@ -42,7 +42,7 @@ export const restoreStartupSessions = restoreStartupSessionsEffect.pipe(
   ),
 );
 
-export const StartupSessionRestoreLayer = Layer.scopedDiscard(restoreStartupSessions);
+export const StartupSessionRestoreLayer = Layer.effectDiscard(restoreStartupSessions);
 
 function restoreBinding(binding: PaneSessionBinding) {
   return Effect.gen(function* () {
@@ -66,15 +66,15 @@ function restoreWithIsolation(
   restore: Effect.Effect<number, unknown>,
 ) {
   return Effect.gen(function* () {
-    const result = yield* Effect.either(restore);
-    if (Either.isRight(result)) {
-      const ptyProcessId = result.right;
+    const result = yield* Effect.result(restore);
+    if (Result.isSuccess(result)) {
+      const ptyProcessId = result.success;
       return ptyProcessId === binding.activePtyProcessId
         ? ({ kind: 'reused', binding, ptyProcessId } satisfies RestoreOutcome)
         : ({ kind: 'relaunched', binding, ptyProcessId } satisfies RestoreOutcome);
     }
 
-    const error = result.left;
+    const error = result.failure;
     const kind = unrecoverableMetadataError(error) ? 'skipped_unrecoverable' : 'failed';
     console.warn('[runtime][startup-restore] Failed for pane-bound session', {
       ...bindingDiagnostic(binding),

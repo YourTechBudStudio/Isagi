@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { SurfaceDetail } from '@isagi/contracts';
 
@@ -60,7 +60,7 @@ function spawnWith(outcome: StopUnlessPlacedOutcome) {
   } as unknown as AgentDeps;
 
   return Effect.runPromise(
-    Effect.either(
+    Effect.result(
       spawnAgentSession(deps, {
         worktreeId: 1,
         surfaceId: 3,
@@ -79,17 +79,17 @@ test('spawn asks the session domain to stop its process unless the session is pl
 
 test('an agent whose surface was closed while it launched is reported as stopped', async () => {
   const { result } = await spawnWith({ kind: 'stopped' });
-  assert.ok(Either.isLeft(result));
+  assert.ok(Result.isFailure(result));
   assert.match(
-    String(result.left),
+    String(result.failure),
     /was closed while agent session 5 was starting; its process 42 was stopped/,
   );
 });
 
 test('an agent moved to another pane while it launched is reported as left running there', async () => {
   const { result } = await spawnWith({ kind: 'placed', surfaceId: 9, paneId: 11 });
-  assert.ok(Either.isLeft(result));
-  assert.match(String(result.left), /moved to pane 11 on surface 9 .* left running there/);
+  assert.ok(Result.isFailure(result));
+  assert.match(String(result.failure), /moved to pane 11 on surface 9 .* left running there/);
 });
 
 test('a stop that fails is reported as a failure, not as a stop', async () => {
@@ -97,10 +97,10 @@ test('a stop that fails is reported as a failure, not as a stop', async () => {
     kind: 'stop_failed',
     cause: new Error('the backend refused the signal'),
   });
-  assert.ok(Either.isLeft(result));
+  assert.ok(Result.isFailure(result));
   assert.match(
-    String(result.left),
+    String(result.failure),
     /its process 42 could not be stopped: the backend refused the signal/,
   );
-  assert.doesNotMatch(String(result.left), /was stopped/);
+  assert.doesNotMatch(String(result.failure), /was stopped/);
 });

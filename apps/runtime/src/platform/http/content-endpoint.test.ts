@@ -3,10 +3,14 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import Fastify from 'fastify';
 
-import { apiInfrastructureErrorSchema, type ApiContentEndpoint } from '@isagi/contracts';
+import {
+  apiInfrastructureErrorSchema,
+  type ApiContentEndpoint,
+  type WireSchema,
+} from '@isagi/contracts';
 
 import {
   contentDisposition,
@@ -36,7 +40,7 @@ const endpoint = {
   method: 'GET',
   path: '/test/content',
   errors: apiInfrastructureErrorSchema,
-} as const satisfies ApiContentEndpoint<Schema.Schema.AnyNoContext>;
+} as const satisfies ApiContentEndpoint<WireSchema>;
 
 function routeServing(handle: () => Effect.Effect<ContentResponse, unknown>) {
   const fastify = Fastify({ logger: false });

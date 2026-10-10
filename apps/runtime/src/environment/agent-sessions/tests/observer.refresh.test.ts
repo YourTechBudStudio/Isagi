@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import {
   HarnessLedgerObserver,
@@ -73,11 +73,11 @@ test('explicit turn refresh tails native events without waiting for the backgrou
         );
         assert.equal(refreshed, yield* observer.getTurnEdges(10));
         unlinkSync(path);
-        const unavailable = yield* observer.refreshTurnEdges(10).pipe(Effect.either);
-        assert.ok(Either.isLeft(unavailable));
-        assert.ok(unavailable.left instanceof HarnessObserverRefreshError);
+        const unavailable = yield* observer.refreshTurnEdges(10).pipe(Effect.result);
+        assert.ok(Result.isFailure(unavailable));
+        assert.ok(unavailable.failure instanceof HarnessObserverRefreshError);
         assert.ok(
-          unavailable.left.failedSources.includes(
+          unavailable.failure.failedSources.includes(
             realpathSync.native(directory) + path.slice(directory.length),
           ),
         );

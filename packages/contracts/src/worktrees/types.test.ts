@@ -4,6 +4,7 @@ import test from 'node:test';
 import { Schema } from 'effect';
 
 import { worktreeOpenRejectedErrorSchema } from '../api/errors.js';
+import type { WireSchema } from '../api/types.js';
 import { openWorktreeInputSchema, worktreeBaseRefSchema } from './types.js';
 
 /**
@@ -13,8 +14,8 @@ import { openWorktreeInputSchema, worktreeBaseRefSchema } from './types.js';
  * malformed one must be rejected here rather than reaching Git.
  */
 
-const decode = <A, I>(schema: Schema.Schema<A, I>, value: unknown): A =>
-  Schema.decodeUnknownSync(schema)(value as I);
+const decode = <S extends WireSchema>(schema: S, value: unknown): S['Type'] =>
+  Schema.decodeUnknownSync(schema)(value);
 
 const commit = 'a'.repeat(40);
 

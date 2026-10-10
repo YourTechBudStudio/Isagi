@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Either, Schema } from 'effect';
+import { Result, Schema } from 'effect';
 
 import { DESKTOP_UPDATE_PROTOCOL_VERSION, desktopUpdateSnapshotSchema } from '@isagi/contracts';
 
-const decode = Schema.decodeUnknownEither(desktopUpdateSnapshotSchema);
+const decode = Schema.decodeUnknownResult(desktopUpdateSnapshotSchema);
 const base = {
   protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
   revision: 1,
@@ -58,7 +58,7 @@ test('the update snapshot contract accepts the states the coordinator produces',
     // shown to the user degrades instead of the snapshot being rejected.
     { ...base, state: 'failed', operation: 'download', code: 'download_failed', targetVersion: '' },
   ])
-    assert.equal(Either.isRight(decode(snapshot)), true, JSON.stringify(snapshot));
+    assert.equal(Result.isSuccess(decode(snapshot)), true, JSON.stringify(snapshot));
 });
 
 test('the update snapshot contract rejects states the coordinator can never reach', () => {
@@ -91,5 +91,5 @@ test('the update snapshot contract rejects states the coordinator can never reac
       openFailure: 'check_failed',
     },
   ])
-    assert.equal(Either.isLeft(decode(snapshot)), true, JSON.stringify(snapshot));
+    assert.equal(Result.isFailure(decode(snapshot)), true, JSON.stringify(snapshot));
 });

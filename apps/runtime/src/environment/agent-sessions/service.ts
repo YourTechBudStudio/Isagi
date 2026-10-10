@@ -1,4 +1,4 @@
-import { Context, Effect, Either, Layer } from 'effect';
+import { Context, Effect, Layer, Result } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
@@ -72,7 +72,7 @@ export class AgentSessionError extends Error {
   }
 }
 
-export const AgentSessionService = Context.GenericTag<AgentSessionService>(
+export const AgentSessionService = Context.Service<AgentSessionService>(
   'isagi/AgentSessionService',
 );
 
@@ -151,10 +151,10 @@ export const AgentSessionServiceLive = Layer.effect(
             if (placement) return { kind: 'placed', ...placement } as const;
             const stopped = yield* pty
               .terminate({ ptyProcessId: input.ptyProcessId, gracefulTimeoutMs: 1_000 })
-              .pipe(Effect.either);
-            return Either.isRight(stopped)
+              .pipe(Effect.result);
+            return Result.isSuccess(stopped)
               ? ({ kind: 'stopped' } as const)
-              : ({ kind: 'stop_failed', cause: stopped.left } as const);
+              : ({ kind: 'stop_failed', cause: stopped.failure } as const);
           }),
         ),
       activePtyProcessId: (agentSessionId) =>

@@ -20,7 +20,7 @@ export interface HarnessAdapterRegistryService {
   ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
 }
 
-export const HarnessAdapterRegistry = Context.GenericTag<HarnessAdapterRegistryService>(
+export const HarnessAdapterRegistry = Context.Service<HarnessAdapterRegistryService>(
   'isagi/HarnessAdapterRegistry',
 );
 

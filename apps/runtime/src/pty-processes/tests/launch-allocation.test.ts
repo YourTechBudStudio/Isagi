@@ -167,7 +167,7 @@ test('an acquisition fault after the hook ran strands no reservation', async () 
             hooked = 99;
             input.onInserted?.(99);
           }).pipe(
-            Effect.zipRight(
+            Effect.andThen(
               Effect.fail(
                 new DatabaseError({
                   operation: 'create_pty_process_metadata',
@@ -182,9 +182,9 @@ test('an acquisition fault after the hook ran strands no reservation', async () 
         command: 'pnpm',
         args: ['dev'],
         cwd: '/repo/isagi',
-      }).pipe(Effect.either);
+      }).pipe(Effect.result);
 
-      assert.equal(result._tag, 'Left');
+      assert.equal(result._tag, 'Failure');
       assert.equal(hooked, 99);
       assert.equal(harness.reservations.launches.size, 0);
     }),
@@ -268,7 +268,7 @@ test('an allocation starts at most once and cannot be abandoned after starting',
       const second = yield* Effect.exit(allocation.start);
       assert.equal(Exit.isFailure(second), true);
       // A defect, not a recoverable failure: starting twice is a caller bug.
-      assert.equal(Exit.isFailure(second) && Cause.isDie(second.cause), true);
+      assert.equal(Exit.isFailure(second) && Cause.hasDies(second.cause), true);
     }),
   );
 });
@@ -291,11 +291,11 @@ test('cancelling before the spawn marks the launch failed and releases', async (
           args: ['dev'],
           cwd: '/repo/isagi',
           envForProcess: () =>
-            Deferred.succeed(entered, undefined).pipe(Effect.zipRight(Effect.never)),
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
         },
       );
 
-      const fiber = yield* Effect.fork(allocation.start);
+      const fiber = yield* Effect.forkChild(allocation.start);
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
 
@@ -317,7 +317,7 @@ test('cancelling mid-spawn never terminalizes off an absence observation', async
       let alive = false;
       let kills = 0;
       const backend = backendStub('node_pty', {
-        launch: () => Deferred.succeed(entered, undefined).pipe(Effect.zipRight(Effect.never)),
+        launch: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
         inspect: () => Effect.succeed({ status: alive ? 'alive' : ('missing' as const) }),
         kill: () =>
           Effect.sync(() => {
@@ -331,7 +331,7 @@ test('cancelling mid-spawn never terminalizes off an absence observation', async
         cwd: '/repo/isagi',
       });
 
-      const fiber = yield* Effect.fork(allocation.start);
+      const fiber = yield* Effect.forkChild(allocation.start);
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
 
@@ -363,7 +363,7 @@ test('a hung spawn keeps its reservation and stays out of the poller', async () 
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const backend = backendStub('node_pty', {
-        launch: () => Deferred.succeed(entered, undefined).pipe(Effect.zipRight(Effect.never)),
+        launch: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
         inspect: () => Effect.succeed({ status: 'missing' as const }),
       });
       const allocation = yield* allocateLaunch(harness.dependencies(backend), {
@@ -372,7 +372,7 @@ test('a hung spawn keeps its reservation and stays out of the poller', async () 
         cwd: '/repo/isagi',
       });
 
-      const fiber = yield* Effect.fork(allocation.start);
+      const fiber = yield* Effect.forkChild(allocation.start);
       yield* Deferred.await(entered);
 
       yield* reconcilePersistedProcesses(

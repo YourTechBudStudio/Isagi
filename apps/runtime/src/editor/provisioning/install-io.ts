@@ -120,7 +120,7 @@ export function runtimeSessionSocketDirectory(): string {
   return join(tmpdir(), `isagi-editor-${randomBytes(6).toString('hex')}`);
 }
 
-export const EditorInstallIo = Context.GenericTag<EditorInstallIoService>('isagi/EditorInstallIo');
+export const EditorInstallIo = Context.Service<EditorInstallIoService>('isagi/EditorInstallIo');
 
 const maxToolOutputBytes = 2_048;
 
@@ -283,7 +283,7 @@ export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInsta
  * removal is best-effort: a temporary directory that resists deletion is not a
  * reason to fail a shutdown that has otherwise completed.
  */
-export const EditorInstallIoLive: Layer.Layer<EditorInstallIoService> = Layer.scoped(
+export const EditorInstallIoLive: Layer.Layer<EditorInstallIoService> = Layer.effect(
   EditorInstallIo,
   Effect.gen(function* () {
     const sessionSocketDirectory = runtimeSessionSocketDirectory();

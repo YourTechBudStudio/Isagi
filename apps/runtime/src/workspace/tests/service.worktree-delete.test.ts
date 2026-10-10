@@ -240,7 +240,7 @@ test('delete worktree announces every durable session it cascaded away', async (
         publish: (event) =>
           Effect.sync(() => {
             order.push(`publish:${event.type}`);
-          }).pipe(Effect.zipRight(bus.service.publish(event))),
+          }).pipe(Effect.andThen(bus.service.publish(event))),
       }),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),

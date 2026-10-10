@@ -81,7 +81,7 @@ export function provisionCodeServer(
       // no filesystem target is ever derived from a persisted string.
       const usable = yield* io.assertExecutable(executablePath).pipe(
         Effect.as(true),
-        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.catch(() => Effect.succeed(false)),
       );
       if (usable) {
         // 8/9 for the reuse path: shared editor state is still prepared, so

@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Ref } from 'effect';
+import { Context, Data, Effect, Layer, Ref, Semaphore } from 'effect';
 
 import type {
   AgentHarness,
@@ -73,10 +73,10 @@ export interface HarnessControlPlaneService {
     harness: AgentHarness,
   ) => Effect.Effect<void, HarnessLaunchBlocked>;
 }
-export const HarnessControlPlane = Context.GenericTag<HarnessControlPlaneService>(
+export const HarnessControlPlane = Context.Service<HarnessControlPlaneService>(
   'isagi/HarnessControlPlane',
 );
-export const HarnessControlPlaneLive = Layer.scoped(
+export const HarnessControlPlaneLive = Layer.effect(
   HarnessControlPlane,
   Effect.gen(function* () {
     const inventory = yield* HostInventory;
@@ -89,7 +89,7 @@ export const HarnessControlPlaneLive = Layer.scoped(
     const editorProvisioning = yield* EditorProvisioning;
     const scope = yield* Effect.scope;
     const reconciliation = yield* Ref.make(initialReconciliation);
-    const lock = yield* Effect.makeSemaphore(1);
+    const lock = yield* Semaphore.make(1);
     const reconcileCurrent = (forceBoot: boolean) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
@@ -174,8 +174,10 @@ export const HarnessControlPlaneLive = Layer.scoped(
           // revision.
           const result = yield* reconcileCurrent(false);
           if (!result)
-            return yield* Effect.dieMessage(
-              'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
+            return yield* Effect.die(
+              new Error(
+                'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
+              ),
             );
           return {
             acceptedPolicyRevision: accepted.harnesses.revision,

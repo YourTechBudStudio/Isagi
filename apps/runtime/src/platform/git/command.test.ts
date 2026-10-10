@@ -43,7 +43,7 @@ function run(args: readonly string[], options?: { readonly env?: Record<string, 
 
 function commandFailure(exit: Exit.Exit<unknown, GitCommandError>) {
   assert.ok(Exit.isFailure(exit), 'expected the git call to fail');
-  const failure = Option.getOrNull(Cause.failureOption(exit.cause));
+  const failure = Option.getOrNull(Cause.findErrorOption(exit.cause));
   assert.ok(failure instanceof GitCommandError, `unexpected cause: ${String(exit.cause)}`);
   return failure;
 }

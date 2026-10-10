@@ -29,7 +29,7 @@ export interface SessionGcService {
   readonly collectOrphans: Effect.Effect<void, DatabaseError>;
 }
 
-export const SessionGc = Context.GenericTag<SessionGcService>('isagi/SessionGc');
+export const SessionGc = Context.Service<SessionGcService>('isagi/SessionGc');
 
 export interface SessionGcDependencies {
   readonly agents: AgentSessionRepositoryService;
@@ -106,14 +106,14 @@ export function makeSessionGc({
 
   const tick: Effect.Effect<void> = Effect.gen(function* () {
     yield* collectOrphans.pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.sync(() => console.warn('[runtime] orphan session GC failed', error)),
       ),
     );
-    // catchAllCause, not catchAll: a defect here (such as a rejected promise)
+    // catchCause, not catch: a defect here (such as a rejected promise)
     // must be logged and leave the next tick running.
     yield* collectOrphanAgentFolders.pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.sync(() =>
           console.warn('[runtime] orphan agent folder GC failed', Cause.pretty(cause)),
         ),
@@ -124,7 +124,7 @@ export function makeSessionGc({
   return { collectOrphans, tick };
 }
 
-export const SessionGcLive = Layer.scoped(
+export const SessionGcLive = Layer.effect(
   SessionGc,
   Effect.gen(function* () {
     const gc = makeSessionGc({

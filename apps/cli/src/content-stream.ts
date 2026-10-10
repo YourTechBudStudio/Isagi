@@ -1,8 +1,4 @@
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
-
-import { Data, Effect } from 'effect';
+import { Data, Effect, Stream } from 'effect';
 
 /**
  * A content stream that stopped part-way, with the side that actually failed.
@@ -16,54 +12,53 @@ export class ContentStreamFailure extends Data.TaggedError('ContentStreamFailure
 }> {}
 
 /**
- * Streams a content response body into `destination` and returns the byte count written.
+ * Writes every chunk of `source` into `destination` and returns the byte count written. The
+ * destination is not ended: stdout belongs to the process.
  *
- * `pipeline` tears down every stream once one fails and rejects with whichever error it saw first,
- * so neither its rejection nor "which stream emitted an error" says where the failure began: a
- * broken download also destroys the file stream, and a failed write also destroys the download.
- * The first `error` event does. These listeners are attached before `pipeline` attaches its own,
- * so they observe the original failure before the teardown it causes.
+ * Each side fails through its own channel, so there is no race over which failure came first: a
+ * source failure arrives on the stream's error channel, a destination failure through a write's
+ * callback (or an `error` event seen before the next write). Each write waits for its callback, so a
+ * slow reader holds the download back. When a write fails the stream is interrupted, which cancels
+ * the response body.
  */
-export function streamContent(
-  body: ReadableStream<Uint8Array> | null,
+export const streamContent = Effect.fnUntraced(function* <E>(
+  source: Stream.Stream<Uint8Array, E>,
   destination: NodeJS.WritableStream,
-  options: { readonly end: boolean },
-): Effect.Effect<number, ContentStreamFailure> {
-  if (body === null) {
-    return streamContent(emptyBody(), destination, options);
-  }
-  return Effect.suspend(() => {
-    const source = Readable.fromWeb(body as NodeReadableStream);
-    let first: ContentStreamFailure | undefined;
-    source.once('error', (cause) => {
-      first ??= new ContentStreamFailure({ side: 'source', cause });
-    });
-    destination.once('error', (cause) => {
-      first ??= new ContentStreamFailure({ side: 'destination', cause });
-    });
+) {
+  // A failed write emits `error` *after* its callback, and an `error` event with no listener crashes
+  // Node (EPIPE on a closed stdout). So this listener is never removed: it must outlive the transfer.
+  let destinationError: unknown;
+  yield* Effect.sync(() =>
+    destination.on('error', (cause) => {
+      destinationError ??= cause;
+    }),
+  );
 
-    let written = 0;
-    const counted = async function* (chunks: AsyncIterable<Uint8Array>) {
-      for await (const chunk of chunks) {
-        written += chunk.byteLength;
-        yield chunk;
+  const write = (chunk: Uint8Array) =>
+    Effect.callback<void, ContentStreamFailure>((resume) => {
+      if (destinationError !== undefined) {
+        resume(
+          Effect.fail(new ContentStreamFailure({ side: 'destination', cause: destinationError })),
+        );
+        return;
       }
-    };
-    return Effect.tryPromise({
-      // The signal aborts the streams when the effect is interrupted (a sibling write failed), so
-      // an abandoned transfer stops rather than writing on into a file that is being removed.
-      try: (signal) => pipeline(source, counted, destination, { end: options.end, signal }),
-      // No stream emitted: the failure was in the byte counter, which only writing can cause here.
-      catch: (cause) => first ?? new ContentStreamFailure({ side: 'destination', cause }),
-    }).pipe(Effect.map(() => written));
-  });
-}
+      destination.write(chunk, (error) =>
+        resume(
+          error
+            ? Effect.fail(new ContentStreamFailure({ side: 'destination', cause: error }))
+            : Effect.void,
+        ),
+      );
+    });
 
-/** An empty body still runs the whole pipeline, so an empty file is written as nothing. */
-function emptyBody(): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    start(controller) {
-      controller.close();
-    },
-  });
-}
+  let written = 0;
+  yield* source.pipe(
+    Stream.mapError((cause) => new ContentStreamFailure({ side: 'source', cause })),
+    Stream.runForEach((chunk) =>
+      Effect.map(write(chunk), () => {
+        written += chunk.byteLength;
+      }),
+    ),
+  );
+  return written;
+});

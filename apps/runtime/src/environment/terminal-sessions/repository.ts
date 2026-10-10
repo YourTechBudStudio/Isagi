@@ -29,7 +29,7 @@ export interface TerminalSessionRepositoryService {
   readonly delete: (terminalSessionId: number) => Effect.Effect<void, DatabaseError>;
 }
 
-export const TerminalSessionRepository = Context.GenericTag<TerminalSessionRepositoryService>(
+export const TerminalSessionRepository = Context.Service<TerminalSessionRepositoryService>(
   'isagi/TerminalSessionRepository',
 );
 

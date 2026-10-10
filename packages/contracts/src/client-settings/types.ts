@@ -19,7 +19,7 @@ export const terminalSettingsBounds = {
 } as const;
 
 function boundedInteger(minimum: number, maximum: number) {
-  return Schema.Number.pipe(Schema.int(), Schema.between(minimum, maximum));
+  return Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum, maximum }));
 }
 
 export const terminalCacheSettingsSchema = Schema.Struct({
@@ -49,6 +49,6 @@ export const clientSettingsOutputSchema = Schema.Struct({
   terminal: terminalSettingsSchema,
 });
 
-export type TerminalCacheSettings = Schema.Schema.Type<typeof terminalCacheSettingsSchema>;
-export type TerminalSettings = Schema.Schema.Type<typeof terminalSettingsSchema>;
-export type ClientSettingsOutput = Schema.Schema.Type<typeof clientSettingsOutputSchema>;
+export type TerminalCacheSettings = typeof terminalCacheSettingsSchema.Type;
+export type TerminalSettings = typeof terminalSettingsSchema.Type;
+export type ClientSettingsOutput = typeof clientSettingsOutputSchema.Type;

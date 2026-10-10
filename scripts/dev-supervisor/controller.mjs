@@ -15,12 +15,12 @@ const exit = await Effect.runPromiseExit(runDevelopmentSupervisor());
 if (Exit.isSuccess(exit)) {
   process.exitCode = exit.value;
 } else {
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (failure._tag === 'Some' && failure.value instanceof SupervisorFailure) {
     console.error(`[dev] ${failure.value.message}`);
     process.exitCode = failure.value.exitCode;
   } else {
-    console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+    console.error(Cause.pretty(exit.cause));
     process.exitCode = 1;
   }
 }

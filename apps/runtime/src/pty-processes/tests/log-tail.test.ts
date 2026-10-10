@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
 
-import { Effect, Exit, Layer } from 'effect';
+import { Cause, Effect, Exit, Layer, Option } from 'effect';
 
 import { CliAccessNone } from '../../cli-access/index.js';
 import { InternalRuntimeEventBusLive } from '../../platform/events/index.js';
@@ -251,7 +251,7 @@ test(
       chmodSync(logPath, 0o600);
       assert.ok(Exit.isFailure(exit));
       const failure = Exit.isFailure(exit)
-        ? (exit.cause as { readonly error?: unknown }).error
+        ? Option.getOrNull(Cause.findErrorOption(exit.cause))
         : null;
       assert.ok(failure instanceof PtyServiceError);
       assert.equal(failure.code, 'log_read_failed');
@@ -269,7 +269,7 @@ test('an unknown process is not answered as a process that retained nothing', as
     );
 
     assert.ok(Exit.isFailure(exit));
-    const failure = (exit.cause as { readonly error?: unknown }).error;
+    const failure = Option.getOrNull(Cause.findErrorOption(exit.cause));
     assert.ok(failure instanceof PtyServiceError);
     assert.equal(failure.code, 'session_not_found');
   });

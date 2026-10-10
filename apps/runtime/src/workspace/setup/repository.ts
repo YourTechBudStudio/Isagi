@@ -59,7 +59,7 @@ export interface WorktreeSetupRepositoryService {
   readonly listRunSteps: (runId: number) => Effect.Effect<WorktreeSetupStepRow[], DatabaseError>;
 }
 
-export const WorktreeSetupRepository = Context.GenericTag<WorktreeSetupRepositoryService>(
+export const WorktreeSetupRepository = Context.Service<WorktreeSetupRepositoryService>(
   'isagi/WorktreeSetupRepository',
 );
 

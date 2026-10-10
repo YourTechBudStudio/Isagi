@@ -1,15 +1,16 @@
-import { Effect, Either, Schema } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
   apiBasePath,
   apiSuccessResponseSchema,
-  type ApiEndpoint,
+  type AnyApiEndpoint,
   type ApiEndpointBody,
   type ApiEndpointOutput,
   type ApiEndpointParams,
   type ApiEndpointQuery,
   type ApiError,
+  type WireSchema,
 } from '@isagi/contracts';
 
 import { logDiagnosticEvent } from '../diagnostics/phase.js';
@@ -29,16 +30,7 @@ import {
   slowApiRequestThresholdMs,
 } from './route-runtime.js';
 
-export interface RegisterApiEndpointOptions<
-  Endpoint extends ApiEndpoint<
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
-  R,
-> {
+export interface RegisterApiEndpointOptions<Endpoint extends AnyApiEndpoint, R> {
   readonly handle: (
     input: ApiEndpointBody<Endpoint>,
     context: ApiRouteContext,
@@ -52,16 +44,11 @@ export interface RegisterApiEndpointOptions<
   ) => Promise<A>;
 }
 
-export function registerApiEndpoint<
-  Endpoint extends ApiEndpoint<
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
-  R = never,
->(fastify: FastifyInstance, endpoint: Endpoint, options: RegisterApiEndpointOptions<Endpoint, R>) {
+export function registerApiEndpoint<Endpoint extends AnyApiEndpoint, R = never>(
+  fastify: FastifyInstance,
+  endpoint: Endpoint,
+  options: RegisterApiEndpointOptions<Endpoint, R>,
+) {
   fastify.route({
     method: endpoint.method,
     url: `${apiBasePath}${endpoint.path}`,
@@ -105,12 +92,12 @@ export function registerApiEndpoint<
       let output: ApiEndpointOutput<Endpoint>;
       try {
         const result = await options.run(
-          Effect.either(options.handle(input.value, context, params.value, query.value)),
+          Effect.result(options.handle(input.value, context, params.value, query.value)),
           {
             signal: interrupt.signal,
           },
         );
-        if (Either.isLeft(result)) {
+        if (Result.isFailure(result)) {
           logSlowApiRequest({
             context,
             elapsedMs: Date.now() - handlerStartedAt,
@@ -121,10 +108,11 @@ export function registerApiEndpoint<
             url: request.url,
           });
           const apiError =
-            options.mapError?.(result.left, context) ?? unhandledApiError(context, result.left);
+            options.mapError?.(result.failure, context) ??
+            unhandledApiError(context, result.failure);
           return sendRouteApiError(request, reply, endpoint, context, apiError);
         }
-        output = result.right;
+        output = result.success;
       } catch (error: unknown) {
         if (interrupt.signal.aborted || reply.raw.destroyed) {
           logSlowApiRequest({
@@ -181,16 +169,12 @@ export function registerApiEndpoint<
   });
 }
 
-function decodeInput<
-  Endpoint extends ApiEndpoint<
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
->(endpoint: Endpoint, body: unknown, context: ApiRouteContext) {
-  const bodySchema = endpoint.body as Schema.Schema.AnyNoContext | undefined;
+function decodeInput<Endpoint extends AnyApiEndpoint>(
+  endpoint: Endpoint,
+  body: unknown,
+  context: ApiRouteContext,
+) {
+  const bodySchema = endpoint.body as WireSchema | undefined;
 
   if (!bodySchema) {
     return { status: 'succeeded' as const, value: undefined as ApiEndpointBody<Endpoint> };
