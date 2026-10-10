@@ -1,50 +1,60 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Fiber, Layer, SubscriptionRef } from 'effect';
 
-import { DESKTOP_UPDATE_PROTOCOL_VERSION, type DesktopUpdateIntent } from '@isagi/contracts';
+import {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  type DesktopUpdateIntent,
+  type DesktopUpdateSnapshot,
+} from '@isagi/contracts';
+import { runScoped } from '@isagi/testing';
 
-import type { DesktopUpdaterService } from './coordinator.js';
 import { decodeDesktopUpdateIntent, dispatchDesktopUpdateIntent } from './desktop-update-ipc.js';
 import { RELEASE_DOWNLOAD_PAGE_URL } from './download-page.js';
+import { DesktopUpdater, type ReportDownloadPageOutcome } from './service.js';
+import { settle } from './test-support.js';
 
-function fakeService() {
+/** An updater that records which operation each intent reached. */
+function fakeService(
+  report: (calls: string[]) => ReportDownloadPageOutcome = (calls) => (outcome) =>
+    Effect.sync(() => void calls.push(`report:${outcome}`)),
+) {
   const calls: string[] = [];
-  const record = (name: string) => {
-    calls.push(name);
-    return Effect.void;
+  const record = (name: string) => Effect.sync(() => void calls.push(name));
+  const layer = Layer.effect(
+    DesktopUpdater,
+    Effect.gen(function* () {
+      const status = yield* SubscriptionRef.make<DesktopUpdateSnapshot>({
+        protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
+        revision: 0,
+        installedVersion: '1.2.3',
+        state: 'idle',
+      });
+      return DesktopUpdater.of({
+        status,
+        checkForUpdates: record('checkForUpdates'),
+        downloadUpdate: record('downloadUpdate'),
+        requestRestart: record('requestRestart'),
+        confirmRestart: record('confirmRestart'),
+        cancelRestart: record('cancelRestart'),
+        beginDownloadPageAttempt: record('beginDownloadPageAttempt').pipe(Effect.as(report(calls))),
+        installer: {
+          quitAndInstall: () => void calls.push('quitAndInstall'),
+          recordInstallRejection: record('recordInstallRejection'),
+        },
+      });
+    }),
+  );
+  return {
+    calls,
+    run: <A, E>(effect: Effect.Effect<A, E, DesktopUpdater>) =>
+      runScoped(Effect.provide(effect, layer)),
   };
-  const service: DesktopUpdaterService = {
-    snapshot: {
-      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-      revision: 0,
-      installedVersion: '1.2.3',
-      state: 'idle',
-    },
-    subscribe: () => () => undefined,
-    start: () => record('start'),
-    stop: () => record('stop'),
-    checkForUpdates: () => record('checkForUpdates'),
-    downloadUpdate: () => record('downloadUpdate'),
-    requestRestart: () => record('requestRestart'),
-    confirmRestart: () => record('confirmRestart'),
-    cancelRestart: () => record('cancelRestart'),
-    quitAndInstall: () => calls.push('quitAndInstall'),
-    recordInstallRejection: () => {
-      calls.push('recordInstallRejection');
-      return Promise.resolve();
-    },
-    beginDownloadPageAttempt: () => {
-      calls.push('beginDownloadPageAttempt');
-      return (outcome) => {
-        calls.push(`report:${outcome}`);
-        return Promise.resolve();
-      };
-    },
-  };
-  return { service, calls };
 }
+
+const openDownloadPage = (openExternal: (url: string) => Promise<void>) =>
+  dispatchDesktopUpdateIntent({ type: 'open_download_page' }, { openExternal });
 
 test('every intent reaches exactly one operation', async () => {
   const opened: string[] = [];
@@ -55,32 +65,29 @@ test('every intent reaches exactly one operation', async () => {
     [{ type: 'confirm_restart' }, 'confirmRestart'],
     [{ type: 'cancel_restart' }, 'cancelRestart'],
   ] as const satisfies readonly (readonly [DesktopUpdateIntent, string])[]) {
-    const { service, calls } = fakeService();
-    await dispatchDesktopUpdateIntent(intent, {
-      service,
-      openExternal: (url) => {
-        opened.push(url);
-        return Promise.resolve();
-      },
-    });
+    const { calls, run } = fakeService();
+    await run(
+      dispatchDesktopUpdateIntent(intent, {
+        openExternal: (url) => {
+          opened.push(url);
+          return Promise.resolve();
+        },
+      }),
+    );
     assert.deepEqual(calls, [expected]);
   }
   assert.deepEqual(opened, [], 'no update operation may open a browser');
 });
 
 test('the download page is opened by main at a fixed destination, not by the updater', async () => {
-  const { service, calls } = fakeService();
+  const { calls, run } = fakeService();
   const opened: string[] = [];
 
-  await dispatchDesktopUpdateIntent(
-    { type: 'open_download_page' },
-    {
-      service,
-      openExternal: (url) => {
-        opened.push(url);
-        return Promise.resolve();
-      },
-    },
+  await run(
+    openDownloadPage((url) => {
+      opened.push(url);
+      return Promise.resolve();
+    }),
   );
 
   assert.deepEqual(opened, [RELEASE_DOWNLOAD_PAGE_URL]);
@@ -92,17 +99,13 @@ test('the download page is opened by main at a fixed destination, not by the upd
 
 test('a rejected launch is reported as a failure and does not reject the intent', async () => {
   // The user hears about it through the snapshot the service publishes, not
-  // through this promise — the state stays `manual_update_required` and the
+  // through this intent — the state stays `manual_update_required` and the
   // control stays pressable.
-  const { service, calls } = fakeService();
+  const { calls, run } = fakeService();
 
   await assert.doesNotReject(() =>
-    dispatchDesktopUpdateIntent(
-      { type: 'open_download_page' },
-      {
-        service,
-        openExternal: () => Promise.reject(new Error('no browser at https://token@example.test')),
-      },
+    run(
+      openDownloadPage(() => Promise.reject(new Error('no browser at https://token@example.test'))),
     ),
   );
 
@@ -110,17 +113,13 @@ test('a rejected launch is reported as a failure and does not reject the intent'
 });
 
 test('a launch that throws synchronously is a failure like any other', async () => {
-  const { service, calls } = fakeService();
+  const { calls, run } = fakeService();
 
   await assert.doesNotReject(() =>
-    dispatchDesktopUpdateIntent(
-      { type: 'open_download_page' },
-      {
-        service,
-        openExternal: () => {
-          throw new Error('shell is unavailable');
-        },
-      },
+    run(
+      openDownloadPage(() => {
+        throw new Error('shell is unavailable');
+      }),
     ),
   );
 
@@ -128,14 +127,10 @@ test('a launch that throws synchronously is a failure like any other', async () 
 });
 
 test('an outcome that cannot be recorded does not fail the intent either', async () => {
-  const { service } = fakeService();
-  service.beginDownloadPageAttempt = () => () => Promise.reject(new Error('log volume is full'));
+  const { run } = fakeService(() => () => Effect.die(new Error('log volume is full')));
 
   await assert.doesNotReject(() =>
-    dispatchDesktopUpdateIntent(
-      { type: 'open_download_page' },
-      { service, openExternal: () => Promise.reject(new Error('no browser')) },
-    ),
+    run(openDownloadPage(() => Promise.reject(new Error('no browser')))),
   );
 });
 
@@ -143,24 +138,20 @@ test('overlapping presses claim their attempts in press order, not completion or
   // Ordering can only be established before the launch is awaited. Here the
   // second press launches and finishes while the first is still pending, so a
   // claim taken at completion would have them backwards.
-  const { service, calls } = fakeService();
+  const { calls, run } = fakeService();
   const release: (() => void)[] = [];
-  const open = (settle: 'now' | 'later') =>
-    dispatchDesktopUpdateIntent(
-      { type: 'open_download_page' },
-      {
-        service,
-        openExternal: () =>
-          settle === 'now'
-            ? Promise.resolve()
-            : new Promise<void>((resolve) => release.push(resolve)),
-      },
-    );
 
-  const slow = open('later');
-  await open('now');
-  release[0]!();
-  await slow;
+  await run(
+    Effect.gen(function* () {
+      const slow = yield* Effect.forkChild(
+        openDownloadPage(() => new Promise<void>((resolve) => release.push(resolve))),
+      );
+      yield* settle;
+      yield* openDownloadPage(() => Promise.resolve());
+      release[0]!();
+      yield* Fiber.join(slow);
+    }),
+  );
 
   assert.deepEqual(calls, [
     'beginDownloadPageAttempt',

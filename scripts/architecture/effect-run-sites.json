@@ -1,9 +1,6 @@
 {
   "apps/cli/src/main.ts": "CLI process entry: runs the command program once with runPromiseExit and maps the exit to the process exit code.",
   "apps/desktop/src/main/index.ts": "Electron main entry: app lifecycle events and IPC handlers are Promise callbacks that run desktop effects.",
-  "apps/desktop/src/main/runtime.ts": "Desktop runtime-process wiring (transitional): RuntimeLifecycle takes a Promise health check until desktop services become layers.",
-  "apps/desktop/src/main/shutdown.ts": "Electron quit boundary (transitional): the quit handler runs the desktop-services shutdown effect until desktop composition owns shutdown.",
-  "apps/desktop/src/main/updater/desktop-update-ipc.ts": "IPC boundary: each update intent from the renderer runs one updater effect.",
   "apps/runtime/src/app/health-api.ts": "HTTP boundary: Fastify route handlers run the endpoint effect with Effect.runPromise (no services needed) (transitional: route running moves into the shared endpoint helper).",
   "apps/runtime/src/app/http-server.ts": "Fastify boundary: creates, initializes and disposes the runtime ManagedRuntime.",
   "apps/runtime/src/commands/api.ts": "HTTP boundary: Fastify route handlers run the endpoint effect on the runtime ManagedRuntime (transitional: route running moves into the shared endpoint helper).",

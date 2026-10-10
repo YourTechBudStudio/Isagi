@@ -1,6 +1,10 @@
 import { appendFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { Context, Effect, Fiber, FiberSet, Layer, Semaphore } from 'effect';
+
+import { DesktopUpdaterConfig } from './config.js';
+
 const maximumFileBytes = 256 * 1024;
 const maximumSummaryBytes = 4 * 1024;
 
@@ -13,49 +17,90 @@ export interface UpdaterDiagnosticRecord {
   readonly summary: string;
 }
 
-export interface UpdaterDiagnosticSink {
-  write(record: UpdaterDiagnosticRecord): Promise<void>;
-  flush(): Promise<void>;
+/**
+ * The updater's own diagnostic trail (`updater.jsonl` in the app's logs directory), kept apart from
+ * the process logs so a user can attach one small redacted file to a report.
+ */
+export class UpdaterDiagnostics extends Context.Service<
+  UpdaterDiagnostics,
+  {
+    /**
+     * Appends one sanitized record. Never fails: a trail that cannot be written must not change
+     * what the updater does. Writes are serialized, and the effect has no requirements, so it can
+     * still run after the desktop runtime is disposed (the installer-rejection record).
+     */
+    readonly write: (record: UpdaterDiagnosticRecord) => Effect.Effect<void>;
+  }
+>()('isagi/desktop/updater/UpdaterDiagnostics') {
+  static readonly layer = Layer.effect(
+    UpdaterDiagnostics,
+    Effect.gen(function* () {
+      const config = yield* DesktopUpdaterConfig;
+      return yield* makeUpdaterDiagnostics(config.logsDirectory);
+    }),
+  );
 }
 
-export function createUpdaterDiagnosticSink(
-  logDirectory: string,
-  warn: (message: string) => void = console.warn,
-): UpdaterDiagnosticSink {
-  const currentPath = join(logDirectory, 'updater.jsonl');
-  const previousPath = join(logDirectory, 'updater.previous.jsonl');
-  let writes = Promise.resolve();
+const makeUpdaterDiagnostics = Effect.fnUntraced(function* (logsDirectory: () => string) {
+  const writes = yield* Semaphore.make(1);
   let warningWritten = false;
 
-  const enqueue = (record: UpdaterDiagnosticRecord) => {
-    writes = writes.then(async () => {
-      try {
-        await mkdir(logDirectory, { recursive: true });
-        const line = `${JSON.stringify(sanitizeRecord(record))}\n`;
-        const lineBytes = Buffer.byteLength(line, 'utf8');
-        const currentBytes = await stat(currentPath)
-          .then((value) => value.size)
-          .catch(() => 0);
-        if (currentBytes > 0 && currentBytes + lineBytes > maximumFileBytes) {
-          await rm(previousPath, { force: true });
-          await rename(currentPath, previousPath);
-        }
-        await appendFile(currentPath, line, 'utf8');
-      } catch {
-        if (!warningWritten) {
-          warningWritten = true;
-          warn('[desktop] Updater diagnostics could not be persisted.');
-        }
+  const append = (record: UpdaterDiagnosticRecord) =>
+    Effect.tryPromise(async () => {
+      const logDirectory = logsDirectory();
+      const currentPath = join(logDirectory, 'updater.jsonl');
+      const previousPath = join(logDirectory, 'updater.previous.jsonl');
+      await mkdir(logDirectory, { recursive: true });
+      const line = `${JSON.stringify(sanitizeRecord(record))}\n`;
+      const lineBytes = Buffer.byteLength(line, 'utf8');
+      const currentBytes = await stat(currentPath)
+        .then((value) => value.size)
+        .catch(() => 0);
+      if (currentBytes > 0 && currentBytes + lineBytes > maximumFileBytes) {
+        await rm(previousPath, { force: true });
+        await rename(currentPath, previousPath);
       }
+      await appendFile(currentPath, line, 'utf8');
     });
-    return writes;
-  };
 
+  // One warning per process, not one per record: a broken log volume would otherwise turn every
+  // updater event into a line about the log volume.
+  const warnOnce = Effect.suspend(() => {
+    if (warningWritten) return Effect.void;
+    warningWritten = true;
+    return Effect.logWarning('Updater diagnostics could not be persisted.');
+  });
+
+  return UpdaterDiagnostics.of({
+    write: (record) =>
+      append(record).pipe(
+        Effect.catch(() => warnOnce),
+        Semaphore.withPermits(writes, 1),
+        Effect.withSpan('UpdaterDiagnostics.write', { attributes: { code: record.code } }),
+      ),
+  });
+});
+
+/**
+ * Diagnostic writes owned by one updater composition's scope. A write outlives the event or intent
+ * that caused it, and closing the scope waits for every write still in flight, so a shutdown never
+ * loses the line that explains it.
+ */
+export const makeTrackedDiagnosticWrites = Effect.fnUntraced(function* (
+  diagnostics: UpdaterDiagnostics['Service'],
+) {
+  const writes = yield* FiberSet.make<void, never>();
+  // Registered after the set, so it runs before the set's own finalizer interrupts what is left.
+  yield* Effect.addFinalizer(() => FiberSet.awaitEmpty(writes));
+  const start = (record: UpdaterDiagnosticRecord) =>
+    FiberSet.run(writes, diagnostics.write(record));
   return {
-    write: enqueue,
-    flush: () => writes,
+    /** Starts the write and returns at once: the caller's transition is not delayed by the log. */
+    start: (record: UpdaterDiagnosticRecord) => Effect.asVoid(start(record)),
+    /** Starts the write and waits for it; the write still finishes if the caller is interrupted. */
+    complete: (record: UpdaterDiagnosticRecord) => Effect.flatMap(start(record), Fiber.join),
   };
-}
+});
 
 function sanitizeRecord(record: UpdaterDiagnosticRecord) {
   return {

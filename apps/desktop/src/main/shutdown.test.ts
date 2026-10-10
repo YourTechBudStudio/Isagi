@@ -1,44 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
 
-import { DesktopShutdownCoordinator, handleBeforeQuit, stopDesktopServices } from './shutdown.js';
-
-test('shutdown stops the updater before the runtime and tolerates partial initialization', async () => {
-  const order: string[] = [];
-  const updater = {
-    stop: () =>
-      Effect.sync(() => {
-        order.push('updater');
-      }),
-  };
-  const runtime = {
-    stop: () =>
-      Effect.sync(() => {
-        order.push('runtime');
-      }),
-  };
-  await Effect.runPromise(stopDesktopServices(updater as never, runtime as never));
-  assert.deepEqual(order, ['updater', 'runtime']);
-
-  order.length = 0;
-  await Effect.runPromise(stopDesktopServices(undefined, runtime as never));
-  assert.deepEqual(order, ['runtime']);
-});
-
+// The order in which disposal stops the services is a property of the desktop layer: `desktop-layer.test.ts`.
 function shutdownHarness(options: { readonly installThrows?: boolean } = {}) {
   const events: string[] = [];
   const exits: number[] = [];
   let diagnoses = 0;
   const coordinator = new DesktopShutdownCoordinator({
-    desktopUpdater: () =>
-      ({
-        stop: () => Effect.sync(() => events.push('updater')),
-      }) as never,
-    runtimeLifecycle: {
-      stop: () => Effect.sync(() => events.push('runtime')),
-    } as never,
+    dispose: async () => {
+      events.push('dispose');
+    },
     destroyRenderer: () => events.push('renderer'),
     exit: (code) => exits.push(code),
     diagnoseInstallRejection: () => {
@@ -62,7 +35,7 @@ test('install disposition stops services once before invoking the installer and 
   void subject.coordinator.request({ kind: 'ordinary', code: 143 });
   await shutdown;
   assert.equal(subject.coordinator.committed, true);
-  assert.deepEqual(subject.events, ['renderer', 'updater', 'runtime', 'install']);
+  assert.deepEqual(subject.events, ['renderer', 'dispose', 'install']);
   assert.deepEqual(subject.exits, []);
 });
 
@@ -72,14 +45,14 @@ test('ordinary exit cannot be upgraded to installation and preserves nonzero esc
   void subject.coordinator.request({ kind: 'install_update', install: subject.install });
   void subject.coordinator.request({ kind: 'ordinary', code: 130 });
   await shutdown;
-  assert.deepEqual(subject.events, ['renderer', 'updater', 'runtime']);
+  assert.deepEqual(subject.events, ['renderer', 'dispose']);
   assert.deepEqual(subject.exits, [130]);
 });
 
 test('synchronous installer rejection remains an install disposition and terminates nonzero', async () => {
   const subject = shutdownHarness({ installThrows: true });
   await subject.coordinator.request({ kind: 'install_update', install: subject.install });
-  assert.deepEqual(subject.events, ['renderer', 'updater', 'runtime', 'install']);
+  assert.deepEqual(subject.events, ['renderer', 'dispose', 'install']);
   assert.deepEqual(subject.exits, [1]);
   assert.equal(subject.diagnoses(), 1);
   assert.equal(subject.coordinator.installHandoffStarted, false);
