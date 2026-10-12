@@ -53,7 +53,7 @@ export function editorCapabilityFromEnvironment(env: {
   return env.ISAGI_EDITOR_CAPABILITY === 'code_server' ? 'code_server' : null;
 }
 
-/** Program design §7.1.6. Long enough for a 235 MB artifact on an ordinary
+/** Long enough for a 235 MB artifact on an ordinary
  *  connection; bounded so the attempt always settles. */
 export const editorProvisioningDeadline = Duration.minutes(10);
 

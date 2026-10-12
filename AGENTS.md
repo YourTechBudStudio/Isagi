@@ -2,7 +2,6 @@
 
 Isagi is a desktop app for resumable worktree-based development environments. Electron is only a client: the runtime (`apps/runtime`, local or remote) owns all operational work, including Git, worktrees, PTYs, commands, agent sessions, workflows and persistence.
 
-
 ## Rules
 
 - Always start by reading:
