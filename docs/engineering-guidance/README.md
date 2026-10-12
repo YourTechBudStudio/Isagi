@@ -8,7 +8,7 @@ This guidance helps humans and coding agents keep Isagi maintainable as it grows
 2. [`how-to-use.md`](./how-to-use.md) - how coding and review agents apply the guidance, the severity ladder, and how to act on review output.
 3. The relevant lenses under [`lenses/`](./lenses/).
 
-Decisions live in ADRs ([`../adrs/README.md`](../adrs/README.md)); how Isagi uses Effect is ADR 0012.
+Decisions live in ADRs ([`../adrs/README.md`](../adrs/README.md)); how Isagi uses Effect is ADR 0011.
 
 ## Lenses
 

@@ -7,7 +7,7 @@ date: 2026-06-05
 
 Isagi separates state ownership from persistence location and frontend tooling.
 
-How the web app reads, caches and holds state (the tooling) is ADR 0012, which supersedes this ADR's original React Query and Zustand clause; this ADR decides ownership only.
+How the web app reads, caches and holds state (the tooling) is ADR 0011, which supersedes this ADR's original React Query and Zustand clause; this ADR decides ownership only.
 
 `activeContext` is frontend-owned live workspace selection persisted by the runtime for restart restoration. The runtime may validate and store it through dedicated active-context persistence APIs. It is not part of the workspace snapshot and is not itself runtime operational scope.
 

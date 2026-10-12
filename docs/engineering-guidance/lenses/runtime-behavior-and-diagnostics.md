@@ -4,13 +4,13 @@
 
 Operational truth: lifecycle clarity, failure semantics, cancellation, resource ownership, diagnosability and early-user supportability. Isagi launches and manages worktrees, commands, PTYs, agent sessions, surfaces and restoration. When these fail, the user should understand what happened and the maintainer should be able to diagnose it.
 
-This lens reviews operational work once it exists. Whether that work is attached to the right trigger belongs to `state-flow-and-operational-cost.md`. How Isagi uses Effect for this work is ADR 0012.
+This lens reviews operational work once it exists. Whether that work is attached to the right trigger belongs to `state-flow-and-operational-cost.md`. How Isagi uses Effect for this work is ADR 0011.
 
 ## Review Questions
 
 - Is runtime state owned by the runtime, and are Git and filesystem facts rediscovered from their real source where practical?
 - Is lifecycle ownership clear for processes, PTYs, commands, agent sessions, background work and persisted state? Can the change orphan, leak, mis-associate or misrepresent any of them?
-- Does operational code follow ADR 0012: effects run only at boundaries, and everything a service starts that outlives a call (fibers, subscriptions, child processes, loops) is owned by its layer scope so shutdown releases it?
+- Does operational code follow ADR 0011: effects run only at boundaries, and everything a service starts that outlives a call (fibers, subscriptions, child processes, loops) is owned by its layer scope so shutdown releases it?
 - Are interruption, shutdown and cleanup explicit for long-lived processes, streams, sessions and supervisors? Can a client disconnect cut a must-finish sequence in half?
 - Do third-party callbacks reach operational code through the edge that owns the integration, rather than starting work ad hoc?
 - Are expected failures tagged and structured, distinct from defects, and mapped at the API boundary to errors the endpoint's contract declares?

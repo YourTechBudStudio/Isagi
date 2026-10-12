@@ -8,7 +8,7 @@ Before editing, pick the relevant lenses and keep their questions nearby while y
 
 Some lenses meet around stateful runtime/client work. Keep their jobs distinct: `boundaries-and-contracts.md` decides who owns a fact or API boundary, `state-flow-and-operational-cost.md` decides whether a transition has the right cause, scope and cost, and `runtime-behavior-and-diagnostics.md` reviews lifecycle, failure, cancellation and diagnosability once operational work exists. When a change touches user-facing UI or copy, load the `design-system` skill.
 
-Prefer the smallest correct change that keeps the product model intact and the code easy to follow. For Effect code, follow ADR 0012.
+Prefer the smallest correct change that keeps the product model intact and the code easy to follow. For Effect code, follow ADR 0011.
 
 When the change is complete, report what changed, what was verified, and any known risk or follow-up. Do not claim more confidence than the evidence supports.
 

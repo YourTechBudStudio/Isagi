@@ -16,7 +16,7 @@ State changes have clear causes, bounded effects, and a cost that matches the tr
 
 ## Make Operational Work And Its Failures Explicit
 
-Work that can fail, block, retry, hold resources, depend on services, spawn processes or outlive a call makes those facts visible in its type, boundary and lifecycle. Expected failures are named, structured and small in vocabulary, and are mapped to contract errors at API boundaries; unexpected defects stay distinct from them. ADR 0012 records how Isagi does this with Effect; it is the substrate for operational work, not a style for pure code.
+Work that can fail, block, retry, hold resources, depend on services, spawn processes or outlive a call makes those facts visible in its type, boundary and lifecycle. Expected failures are named, structured and small in vocabulary, and are mapped to contract errors at API boundaries; unexpected defects stay distinct from them. ADR 0011 records how Isagi does this with Effect; it is the substrate for operational work, not a style for pure code.
 
 ## Use Narrow Types Where Mixups Matter
 
