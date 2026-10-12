@@ -1,99 +1,40 @@
 # How To Use This Guidance
 
-Use this guidance as a question set during coding and review. It should help catch drift from Isagi's product model, architecture boundaries, supportability goals, and human-readable code standards.
+Use this guidance as a question set while coding and reviewing. It should catch drift from Isagi's product model, architecture boundaries, supportability goals and human-readable code.
 
 ## For Coding Agents
 
-Before editing, identify which lenses are relevant to the change. During implementation, keep the relevant lens questions nearby instead of treating them as a final checklist.
+Before editing, pick the relevant lenses and keep their questions nearby while you work instead of treating them as a final checklist.
 
-Several lenses intentionally meet around stateful runtime/client work. Keep their jobs distinct: use `boundaries-and-contracts.md` to decide who owns a fact or API boundary, `state-flow-causality-and-operational-cost.md` to decide whether the transition is caused by the right action with appropriate scope and cost, and `runtime-behavior-and-diagnostics.md` to review lifecycle, failure, cancellation, and diagnosability once operational work exists.
+Some lenses meet around stateful runtime/client work. Keep their jobs distinct: `boundaries-and-contracts.md` decides who owns a fact or API boundary, `state-flow-and-operational-cost.md` decides whether a transition has the right cause, scope and cost, and `runtime-behavior-and-diagnostics.md` reviews lifecycle, failure, cancellation and diagnosability once operational work exists. When a change touches user-facing UI or copy, load the `design-system` skill.
 
-`product-behavior-and-ux.md` and `design-fidelity-and-voice.md` also meet on user-facing surfaces. Keep them distinct: product-behavior asks whether the surface is honest and useful for the user's next action; design-fidelity asks whether it looks and sounds like Isagi. When a change touches user-facing UI, marketing surfaces, or user-facing copy, load the `design-system` skill and review against it.
+Prefer the smallest correct change that keeps the product model intact and the code easy to follow. For Effect code, follow ADR 0012.
 
-Prefer the smallest correct change that preserves the product model and keeps the code easy to follow. If a cleaner internal interface requires migrating callers, migrate them rather than adding compatibility shims, unless a real external boundary depends on the old behavior.
-
-For operational implementation code, prefer Effect-shaped internals and run them only at the listed run sites (framework, process, IPC and socket boundaries; see `effect-conventions.md` §9). Expected domain and operational failures should usually be tagged and structured rather than thrown as generic errors. As an operational domain grows, prefer explicit services and layers for IO, config, persistence, Git, process, runtime-client, or adapter dependencies. Use branded or otherwise narrow domain types where plain primitives make important targets easy to mix up.
-
-In the web app, runtime-owned reads are `query(...)` atoms and client interaction state is keepAlive state atoms or local component state (ADR 0001, ADR 0012); do not move runtime authority or operational targeting into client atoms.
-
-Do not wrap pure helpers, schemas, or presentational code in Effect just to make the code look consistent. Schema-backed contracts remain descriptive boundary artifacts even when they use Effect Schema; do not expose operational Effect concepts, services, layers, fibers, or runtime error classes across the API boundary.
-
-When the change is complete, report what changed, what was verified, and any known risk or follow-up. Do not claim confidence that the evidence does not support.
+When the change is complete, report what changed, what was verified, and any known risk or follow-up. Do not claim more confidence than the evidence supports.
 
 ## For Review Agents
 
-Review the change against each relevant lens. The lenses are equal priority; do not skip a lens just because it often produces fewer findings.
+Review the change against each relevant lens; the lenses are equal priority, so do not skip one because it usually finds less.
 
-Prefer findings that explain consequence. A good finding says what could break, drift, become hard to debug, or become hard to change.
+Prefer findings that explain consequence: what could break, drift, become hard to debug, or become hard to change. Use the lens's own severity calibration. When two severities seem plausible, choose the lower one unless the consequence is concrete and material. Report a finding under the lens that best describes its primary failure instead of duplicating it.
 
-Use the lens-specific severity mapping. When two severities seem plausible, choose the lower severity unless the consequence is concrete and material. If a finding could fit multiple lenses, report it under the lens that best describes the primary failure rather than duplicating it. Hard-to-review working code is usually a **Concern**, not a **Blocker**, unless the structure makes behavior ownership, runtime lifecycle, or correctness impossible to assess.
+Useful review output is concise: findings ordered by severity, file and line references, why each matters for Isagi, the evidence used, and what was not verified. Do not restate the guidance.
 
-## Consuming Review Output
+## Severity Ladder
 
-When the `engineering-guidance-reviewer` returns, it hands back two distinct kinds of output. Handle them differently; do not collapse them into one list.
+Each lens calibrates these levels for its own concerns.
 
-### Severity Findings
+- **Blocker** - material divergence from the guidance. Fix before returning the change, then re-review.
+- **Concern** - a design, runtime, maintainability, supportability or product gap with real consequence. Fix it when the fix is clear; bring it to the user when it needs a tradeoff or conflicts with their stated direction. Re-review only if the fix is substantial.
+- **Nit** - a marginal optional improvement. Apply only if trivial and safe; never a reason to re-review.
 
-Each finding is a defect on the ladder defined in [`README.md`](./README.md). Act by tier:
+Never silently dismiss a Blocker or Concern; dismissing either needs the user's explicit acknowledgement.
 
-- **Blocker** - must fix before returning the change to the user; re-review after the fix.
-- **Concern** - fix directly when the resolution is clear; surface to the user when it needs a design-level tradeoff or conflicts with their stated direction; re-review only if the fix is substantial.
-- **Nit** - terminal; apply only if trivial and safe; never a reason to re-review.
+## Architectural Reflection
 
-Never silently dismiss a Blocker or Concern. Dismissing either one requires explicit user acknowledgement.
+Separately from findings, a review may return an `Architectural Reflection`: a proposal that a simpler mental model or a different solution shape would serve the goal better. It sits outside the ladder and never triggers a re-review. Weigh it as a decision, not a patch:
 
-### Architectural Reflection (Step-Back)
+- **In scope and clearly aligned with the plan** - you may adopt it, as a deliberate choice rather than an autopilot edit.
+- **Beyond the change's scope, structural, or in tension with the plan** - stop and offer the user two paths: re-architect now, or ship the current change and defer the restructuring. Where a deferred restructuring lands is the user's call.
 
-Separately from the ladder, the reviewer may return an `Architectural Reflection`: a proposal that a simpler mental model or different solution shape would serve the goal better. It is not a finding to fix, and it never triggers a re-review. Weigh it as a decision, not a reflex patch:
-
-- **In scope and clearly aligned with the plan** - you may adopt it, but as a deliberate "yes, this fits," not an autopilot edit.
-- **Beyond the change's scope, structural, or in tension with the plan** - stop and bring the user in, offering two paths: re-architect now, or ship the current change and defer the restructuring. Where a deferred restructuring lands is the user's call.
-
-You own the plan and intent judgment; the reviewer only estimates the technical blast radius. Do not silently fold a large or scope-expanding re-architecture into the change.
-
-## Effect Adoption Posture
-
-Effect is Isagi's substrate for operational work, not its universal programming style. Use Effect primitives to make operational facts visible: failure, dependencies, lifecycle, resources, cancellation, concurrency, and domain identity.
-
-The concrete rules for each tier (service shape, error typing, run sites, scopes, logging, tests) are in [`effect-conventions.md`](./effect-conventions.md); cite its sections in reviews. Use this maturity model as review orientation, not as a checklist:
-
-- **Tier 0: Non-operational code** - pure helpers, constants, schemas, descriptive contracts, and presentational rendering. Keep this plain TypeScript or React.
-- **Tier 1: Local Effect** - a contained async, failure, retry, timeout, validation, or parsing flow that runs at a nearby boundary.
-- **Tier 2: Effect services/layers** - operational domains with dependencies that should be testable, replaceable, and explicit, such as Git, config, persistence, runtime clients, process adapters, or harness integrations.
-- **Tier 3: Scoped runtime systems** - long-lived resources or concurrent systems that need scopes, fibers, queues, streams, supervisors, interruption, or structured shutdown.
-
-Isagi should aim for **Tier 2 by default in operational code** and move to **Tier 3 where lifecycle complexity justifies it**. Runtime orchestration, PTYs, commands, agent sessions, restoration, and process supervision are likely Tier 3 territory. Pure schemas, descriptive contracts, presentational rendering, and tiny local helpers are not.
-
-Use these primitives where they protect real reasoning:
-
-- **Tagged data/errors** for expected failures, messages, findings, events, or state variants that callers are meant to distinguish.
-- **Services and layers** for operational dependencies, not for every group of functions.
-- **Scopes, fibers, queues, streams, supervisors, and interruption** when work can outlive one request or component interaction.
-- **Branded or opaque domain types** for identifiers, refs, paths, tokens, or other primitives that cross boundaries or could be confused in dangerous ways.
-
-Contracts are the exception boundary: they may use Effect Schema for serializable DTOs, but they must not expose runtime services, layers, fibers, Effect error classes, or domain implementation internals.
-
-## Pre-MVP Interface Evolution
-
-Before the first MVP, Isagi should favor clean internal interfaces over compatibility layers.
-
-Preserve compatibility deliberately at real boundaries:
-
-- released user data
-- public APIs or contracts used outside the repo
-- integrations or deployment behavior users rely on
-- behavior already depended on by early users
-
-For private internals, prefer migrating callers, deleting obsolete paths, and avoiding dual systems.
-
-## Review Output
-
-Useful review output is concise and consequence-driven:
-
-- findings ordered by severity
-- file and line references when available
-- why the issue matters for Isagi
-- what evidence was used
-- what was not verified
-
-Avoid restating the whole guidance in every review.
+You own plan and intent; the reviewer only estimates technical blast radius. Never silently fold a large or scope-expanding re-architecture into the change.
