@@ -1,24 +1,16 @@
-import { queryOptions, useQuery } from '@tanstack/react-query';
-import type { Effect } from 'effect';
+import { Duration } from 'effect';
 
-import type { ClientSettingsOutput } from '@isagi/contracts';
-
-import { runRuntimeEffect } from '../runtime/run.js';
+import { keys } from '../state/keys.js';
+import { query } from '../state/policy.js';
 import { fetchClientSettings } from '../workspace/runtime-data.js';
 
-export const clientSettingsQueryKey = ['client-settings'] as const;
-
-export function clientSettingsQueryOptions(
-  fetchSettings: () => Effect.Effect<ClientSettingsOutput, Error> = fetchClientSettings,
-) {
-  return queryOptions({
-    queryKey: clientSettingsQueryKey,
-    queryFn: ({ signal }) => runRuntimeEffect(fetchSettings(), { signal }),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
-}
-
-export function useClientSettingsQuery() {
-  return useQuery(clientSettingsQueryOptions());
-}
+/**
+ * The runtime's client settings. They change only when the runtime restarts, so they are never
+ * stale and kept for the whole app session (the old `staleTime`/`gcTime: Infinity`); a failed read
+ * is still retried on the next mount.
+ */
+export const clientSettingsAtom = query(() => fetchClientSettings(), {
+  keys: [keys.clientSettings],
+  staleTime: Duration.infinity,
+  idleTTL: Duration.infinity,
+});

@@ -1,3 +1,4 @@
+import { useAtomValue } from '@effect/atom-react';
 import {
   Bot,
   CircleDashed,
@@ -24,7 +25,7 @@ import { ContextMenu } from '../../components/ContextMenu.js';
 import { PaneActionCluster } from '../../components/PaneActionCluster.js';
 import { agentSessionCopy, ptyCopy, type PaneRestorePrompt } from '../../copy/index.js';
 import { usePaneFocusTarget } from '../../lib/workspace/activation.js';
-import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
+import { attentionForPane, attentionSourcesAtom } from '../../lib/workspace/attention.js';
 import { paneHasSharedActions } from '../../lib/workspace/pane-session/presentation.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
@@ -47,7 +48,12 @@ export function PtyPane({
   const shellRef = useRef<HTMLElement>(null);
   const Icon = paneSessionIcon(pane.session?.kind);
   const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
-  const paneAttention = useAttentionStore((state) => attentionForPane(state.sourcesByKey, pane.id));
+  const selectPaneAttention = useCallback(
+    (sourcesByKey: Parameters<typeof attentionForPane>[0]) =>
+      attentionForPane(sourcesByKey, pane.id),
+    [pane.id],
+  );
+  const paneAttention = useAtomValue(attentionSourcesAtom, selectPaneAttention);
   const focusShell = useCallback(() => {
     shellRef.current?.focus({ preventScroll: true });
   }, []);

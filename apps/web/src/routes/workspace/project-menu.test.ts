@@ -6,7 +6,11 @@ import { projectMenuItems } from './project-menu.js';
 
 describe('project rail context menu', () => {
   it('offers one destructive Delete project… item', () => {
-    const items = projectMenuItems(7, async () => {});
+    const items = projectMenuItems(
+      7,
+      async () => {},
+      () => {},
+    );
     assert.deepEqual(
       items.map(({ label, danger }) => ({ label, danger })),
       [{ label: 'Delete project…', danger: true }],
@@ -17,9 +21,13 @@ describe('project rail context menu', () => {
   for (const projectId of [7, 9]) {
     it(`dispatches delete-project for project ${projectId}, not the active one`, () => {
       const dispatched: Array<[string, ArgValues]> = [];
-      const [item] = projectMenuItems(projectId, async (entryId, values) => {
-        dispatched.push([entryId, values]);
-      });
+      const [item] = projectMenuItems(
+        projectId,
+        async (entryId, values) => {
+          dispatched.push([entryId, values]);
+        },
+        () => {},
+      );
       item?.onSelect();
       assert.deepEqual(dispatched, [['delete-project', { projectId: String(projectId) }]]);
     });

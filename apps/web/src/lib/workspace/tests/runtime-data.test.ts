@@ -15,12 +15,15 @@ import {
 
 test('runtime error summary maps project path rejections to user copy without diagnostics', () => {
   const error = new RuntimeApiError({
-    code: 'project_path_rejected',
-    status: 400,
-    message: 'Not a Git repository: /repo/nope',
-    requestId: 'req-path-rejected',
-    data: { reason: 'not_git_repository', path: '/repo/nope' },
-  } satisfies ApiError);
+    endpointId: 'projects.add',
+    apiError: {
+      code: 'project_path_rejected',
+      status: 400,
+      message: 'Not a Git repository: /repo/nope',
+      requestId: 'req-path-rejected',
+      data: { reason: 'not_git_repository', path: '/repo/nope' },
+    } satisfies ApiError,
+  });
 
   assert.equal(formatRuntimeErrorSummary(error), "That folder isn't a Git repository.");
   assert.equal(
@@ -29,19 +32,22 @@ test('runtime error summary maps project path rejections to user copy without di
   );
 });
 
-test('runtime error formatting unwraps Effect promise failures before mapping copy', async () => {
+test('runtime error formatting maps an Effect promise rejection as-is', async () => {
   const error = new RuntimeApiError({
-    code: 'project_path_rejected',
-    status: 400,
-    message: 'Not a Git repository: /repo/nope',
-    requestId: 'req-path-rejected',
-    data: { reason: 'not_git_repository', path: '/repo/nope' },
-  } satisfies ApiError);
-  const wrapped = await Effect.runPromise(Effect.fail(error)).catch((cause: unknown) => cause);
+    endpointId: 'projects.add',
+    apiError: {
+      code: 'project_path_rejected',
+      status: 400,
+      message: 'Not a Git repository: /repo/nope',
+      requestId: 'req-path-rejected',
+      data: { reason: 'not_git_repository', path: '/repo/nope' },
+    } satisfies ApiError,
+  });
+  const rejection = await Effect.runPromise(Effect.fail(error)).catch((cause: unknown) => cause);
 
-  assert.equal(formatRuntimeErrorSummary(wrapped), "That folder isn't a Git repository.");
+  assert.equal(formatRuntimeErrorSummary(rejection), "That folder isn't a Git repository.");
   assert.equal(
-    formatRuntimeError(wrapped),
+    formatRuntimeError(rejection),
     "That folder isn't a Git repository. (project_path_rejected · request req-path-rejected)",
   );
 });
@@ -53,13 +59,13 @@ test('UserVisibleError passes its message through unchanged, with and without di
 });
 
 test('transport failures map to the transport copy without a diagnostic suffix', () => {
-  const error = new RuntimeTransportError('unreachable', null);
+  const error = new RuntimeTransportError({ endpointId: 'workspace.get', cause: null });
   assert.equal(formatRuntimeErrorSummary(error), runtimeErrorCopy.transport);
   assert.equal(formatRuntimeError(error), runtimeErrorCopy.transport);
 });
 
 test('decode failures map to the decode copy', () => {
-  const error = new RuntimeDecodeError('workspace.get', null);
+  const error = new RuntimeDecodeError({ endpointId: 'workspace.get', cause: null });
   assert.equal(formatRuntimeErrorSummary(error), runtimeErrorCopy.decode);
   assert.equal(formatRuntimeError(error), runtimeErrorCopy.decode);
 });

@@ -1,19 +1,53 @@
-import { QueryClientProvider } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { Effect } from 'effect';
+import { useEffect, useRef, useState } from 'react';
 
 import type { WorkflowEventDto } from '@isagi/contracts';
 
-import { queryClient } from '../../../src/lib/query/client.js';
-import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
+import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
+import { useRegistry } from '../../../src/lib/state/registry.js';
+import { runApp } from '../../../src/lib/state/runtime.js';
 import {
-  useRuntimeIdentity,
-  useWorkflowRuntimeSync,
-} from '../../../src/lib/workspace/workflow/queries.js';
-import { publishWorkflowSignal } from '../../../src/lib/workspace/workflow/signals.js';
+  restoreActivePaneFocus,
+  usePaneFocusTarget,
+} from '../../../src/lib/workspace/activation.js';
+import {
+  selectWorktree,
+  setActivePane,
+  setActiveSurface,
+} from '../../../src/lib/workspace/store.js';
+import type { WorkflowSignal } from '../../../src/lib/workspace/workflow/live.js';
+import { useRuntimeIdentity } from '../../../src/lib/workspace/workflow/queries.js';
+import { receiveWorkflowSignal } from '../../../src/lib/workspace/workflow/sync.js';
 import { WorkflowBarContainer } from '../../../src/routes/workspace/WorkflowBarContainer.js';
+import { createFixtureRegistry } from '../test-support/registry.js';
 import { FIXTURE_PLACEMENT, type InspectorRuntimeControls } from './fake-runtime.js';
 import type { ScriptedEngineControls } from './scripted-engine.js';
 import { scenarioKeys, type ScenarioKey } from './world.js';
+
+const fixtureRegistry = createFixtureRegistry();
+
+/**
+ * Deliver runtime signals the way the runtime-events connection does: in order, through the
+ * production live sync of this page's app session.
+ */
+function publishWorkflowSignals(...signals: readonly WorkflowSignal[]) {
+  void runApp(
+    fixtureRegistry,
+    Effect.forEach(signals, (signal) => receiveWorkflowSignal(signal), { discard: true }),
+  );
+}
+
+declare global {
+  interface Window {
+    inspectorWorkbench?: {
+      /**
+       * Ask the production focus router to put keyboard focus on the active pane, as a terminal does
+       * when it re-asserts focus (its activation after the bar's resize reaches it, or a re-render).
+       */
+      readonly reassertPaneFocus: () => void;
+    };
+  }
+}
 
 /**
  * The **production** bar and inspector over a fake runtime boundary.
@@ -34,15 +68,17 @@ export function WorkflowInspectorFixtureApp({
   readonly engine: ScriptedEngineControls;
 }) {
   useEffect(() => {
-    const store = useWorkspaceStore.getState();
-    store.setActiveSurface(FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
-    store.selectWorktree(FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
+    setActiveSurface(fixtureRegistry, FIXTURE_PLACEMENT.worktreeId, FIXTURE_PLACEMENT.surfaceId);
+    selectWorktree(fixtureRegistry, FIXTURE_PLACEMENT.projectId, FIXTURE_PLACEMENT.worktreeId);
+    window.inspectorWorkbench = {
+      reassertPaneFocus: () => restoreActivePaneFocus(fixtureRegistry),
+    };
   }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       <FixtureShell runtime={runtime} engine={engine} />
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 
@@ -53,16 +89,18 @@ function FixtureShell({
   readonly runtime: InspectorRuntimeControls;
   readonly engine: ScriptedEngineControls;
 }) {
-  useWorkflowRuntimeSync();
   const runtimeIdentity = useRuntimeIdentity();
   const [scenario, setScenario] = useState<ScenarioKey>('waiting_questions');
+  const [terminalMounted, setTerminalMounted] = useState(false);
 
   // Published rather than written into the cache: a real client learns which run occupies a surface
-  // from the connection's snapshot, and it can only hear it once the live sync has subscribed.
+  // from the connection's snapshot. Sent once the runtime answers, as a connection would.
   useEffect(() => {
     if (runtimeIdentity === null) return;
-    publishWorkflowSignal({ type: 'connected' });
-    publishWorkflowSignal({ type: 'snapshot', summaries: [runtime.world().summary] });
+    publishWorkflowSignals(
+      { type: 'connected' },
+      { type: 'snapshot', summaries: [runtime.world().summary] },
+    );
   }, [runtime, runtimeIdentity]);
 
   /**
@@ -73,14 +111,18 @@ function FixtureShell({
   const replaceRun = (change: () => void) => {
     const previous = runtime.world().summary;
     change();
-    publishWorkflowSignal({ type: 'run_changed', summary: { ...previous, surfaceId: null } });
-    publishWorkflowSignal({ type: 'run_changed', summary: runtime.world().summary });
+    publishWorkflowSignals(
+      { type: 'run_changed', summary: { ...previous, surfaceId: null } },
+      { type: 'run_changed', summary: runtime.world().summary },
+    );
   };
 
   /** A runtime event, pushed as the runtime pushes one: the event, then the run's new summary. */
   const push = (event: WorkflowEventDto) => {
-    publishWorkflowSignal({ type: 'run_event', event });
-    publishWorkflowSignal({ type: 'run_changed', summary: runtime.world().summary });
+    publishWorkflowSignals(
+      { type: 'run_event', event },
+      { type: 'run_changed', summary: runtime.world().summary },
+    );
   };
 
   return (
@@ -157,7 +199,7 @@ function FixtureShell({
           onClick={() => {
             // An event the client already holds, delivered again. It is appended once.
             const last = runtime.world().events.at(-1);
-            if (last) publishWorkflowSignal({ type: 'run_event', event: last });
+            if (last) publishWorkflowSignals({ type: 'run_event', event: last });
           }}
         >
           Duplicate event
@@ -196,11 +238,19 @@ function FixtureShell({
         </button>
         <button
           type="button"
+          data-action="mount-terminal"
+          aria-pressed={terminalMounted}
+          className="rounded border border-line/40 px-1.5 py-0.5 font-mono text-fg-subtle"
+          onClick={() => setTerminalMounted(true)}
+        >
+          Agent terminal
+        </button>
+        <button
+          type="button"
           data-action="reconnect"
           className="rounded border border-line/40 px-1.5 py-0.5 font-mono text-fg-subtle"
           onClick={() => {
-            publishWorkflowSignal({ type: 'disconnected' });
-            publishWorkflowSignal({ type: 'connected' });
+            publishWorkflowSignals({ type: 'disconnected' }, { type: 'connected' });
           }}
         >
           Reconnect
@@ -210,13 +260,52 @@ function FixtureShell({
       {/* The work surface the inspector sits above, and the bar it opens from. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 p-3">
-          <div className="h-full rounded-md border border-line/28 bg-terminal-surface/80 p-4 font-mono text-[12.5px] text-fg-muted">
+          <div className="flex h-full flex-col rounded-md border border-line/28 bg-terminal-surface/80 p-4 font-mono text-[12.5px] text-fg-muted">
             <p className="text-green">$ isagi run release-check</p>
             <p className="text-fg-subtle">the work surface this inspector sits above</p>
+            {terminalMounted && <FakeAgentTerminal />}
           </div>
         </div>
         <WorkflowBarContainer inspectorEngineFactory={engine.factory} />
       </div>
     </main>
+  );
+}
+
+/**
+ * A stand-in for an agent terminal in the surface's active pane. Opt-in, so the specs about where
+ * focus goes when there is no pane keep their meaning.
+ *
+ * It is the pane's registered focus target, as `PaneTerminal` is, and it consumes Escape the way
+ * xterm's helper textarea does (sent to the agent, prevented and stopped), so an Escape typed while
+ * it holds focus never reaches anything above it.
+ */
+function FakeAgentTerminal() {
+  const registry = useRegistry();
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    setActivePane(registry, FIXTURE_PLACEMENT.surfaceId, FIXTURE_PLACEMENT.paneId);
+  }, [registry]);
+
+  usePaneFocusTarget({
+    surfaceId: FIXTURE_PLACEMENT.surfaceId,
+    paneId: FIXTURE_PLACEMENT.paneId,
+    priority: 100,
+    focus: () => inputRef.current?.focus(),
+  });
+
+  return (
+    <textarea
+      ref={inputRef}
+      aria-label="Agent terminal"
+      data-fixture-terminal
+      className="mt-2 min-h-0 flex-1 resize-none bg-transparent text-fg outline-none"
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    />
   );
 }

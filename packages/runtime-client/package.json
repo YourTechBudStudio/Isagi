@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@isagi/contracts": "workspace:*",
-    "effect": "^3.21.2"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

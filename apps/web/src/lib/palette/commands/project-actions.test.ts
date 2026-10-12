@@ -5,6 +5,7 @@ import { projectActionsCopy } from '../../../copy/index.js';
 import { project } from '../../workspace/tests/test-support.js';
 import { dispatchCommandEntry } from '../dispatcher.js';
 import { assembleEntries } from '../entries.js';
+import { paletteTestSession } from '../test-support.js';
 import type { ArgValues, PaletteContext } from '../types.js';
 import { deleteProjectCommand, projectIdFromValues } from './project-actions.js';
 import { workbenchActionCommands } from './workbench-actions.js';
@@ -102,6 +103,7 @@ function ctx(input: { readonly activeProject: PaletteContext['activeProject'] })
     activeWorktree: activeProject?.worktrees[0] ?? null,
     activeSurface: null,
     activePaneId: null,
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
   };

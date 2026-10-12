@@ -8,13 +8,15 @@ import { Effect } from 'effect';
 
 import type { ReconciliationFinding } from '@isagi/contracts';
 
-import type { GitService } from '../../git/index.js';
-import { createFixtureWorkspace, removeTree } from '../../git/tests/fixtures.js';
-import { RuntimeDatabase } from '../../persistence/index.js';
-import { surfacePanes, worktreeSurfaces } from '../../persistence/schema.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceService } from '../workspace.service.js';
-import { runWithLiveWorkspace } from './live-workspace-support.js';
+import type { SurfaceService } from '../../environment/index.js';
+import { surfacePanes, worktreeSurfaces } from '../../environment/tables.js';
+import type { Git } from '../../platform/git/index.js';
+import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
+import { RuntimeDatabase } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceService } from '../service.js';
+import { runWithLiveWorkspace } from '../testing.js';
 
 const workspace = createFixtureWorkspace('folder-reconciliation');
 afterAll(() => {
@@ -37,7 +39,7 @@ function gitRepository(name: string) {
 }
 
 const readRows = Effect.gen(function* () {
-  const repository = yield* WorkspaceRepository;
+  const repository = yield* ProjectRepository;
   return {
     projects: yield* repository.listProjects,
     worktrees: yield* repository.listWorktrees,
@@ -112,7 +114,7 @@ describe('a folder project through its whole presence lifecycle', () => {
     // the reconciliation windows below assert their own slice is empty, which is
     // the same claim scoped to where it holds.
     const gitCalls: string[][] = [];
-    const recordGit = (inner: GitService): GitService => ({
+    const recordGit = (inner: Git['Service']): Git['Service'] => ({
       run: (args, options) => {
         gitCalls.push([...args]);
         return inner.run(args, options);
@@ -124,7 +126,9 @@ describe('a folder project through its whole presence lifecycle', () => {
     // ownership permits the folder branch to touch it, so every worktree method
     // — reads included — is recorded and asserted empty per window.
     const worktreeCalls: string[] = [];
-    const recordRepository = (inner: WorkspaceRepositoryService): WorkspaceRepositoryService => {
+    const recordRepository = (
+      inner: ProjectRepository['Service'],
+    ): ProjectRepository['Service'] => {
       const record = <A extends unknown[], R>(name: string, method: (...args: A) => R) => {
         return (...args: A) => {
           worktreeCalls.push(name);
@@ -132,7 +136,7 @@ describe('a folder project through its whole presence lifecycle', () => {
         };
       };
       const recordValue = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) =>
-        Effect.zipRight(
+        Effect.andThen(
           Effect.sync(() => {
             worktreeCalls.push(name);
           }),
@@ -148,10 +152,6 @@ describe('a folder project through its whole presence lifecycle', () => {
           inner.findProjectWorktreeByBranch,
         ),
         deleteWorktree: record('deleteWorktree', inner.deleteWorktree),
-        readWorktreeDeleteDiagnostics: record(
-          'readWorktreeDeleteDiagnostics',
-          inner.readWorktreeDeleteDiagnostics,
-        ),
         reconcileProjectWorktrees: record(
           'reconcileProjectWorktrees',
           inner.reconcileProjectWorktrees,
@@ -169,13 +169,39 @@ describe('a folder project through its whole presence lifecycle', () => {
         // a call. `listWorktrees` is included: the assertions read it, but only
         // after each window has already been checked and closed.
         listWorktrees: recordValue('listWorktrees', inner.listWorktrees),
-        listDurableSessions: recordValue('listDurableSessions', inner.listDurableSessions),
       };
     };
+    // The delete-diagnostics read and the durable session inventory are worktree reads the
+    // workspace makes through their own services; they are recorded into the same window.
+    const recordDeleteDiagnostics = (
+      inner: WorktreeDeleteDiagnosticsReader['Service'],
+    ): WorktreeDeleteDiagnosticsReader['Service'] => ({
+      read: (worktreeId) =>
+        Effect.andThen(
+          Effect.sync(() => {
+            worktreeCalls.push('readWorktreeDeleteDiagnostics');
+          }),
+          inner.read(worktreeId),
+        ),
+    });
+    const recordSurfaces = (inner: SurfaceService['Service']): SurfaceService['Service'] => ({
+      ...inner,
+      listDurableSessions: Effect.andThen(
+        Effect.sync(() => {
+          worktreeCalls.push('listDurableSessions');
+        }),
+        inner.listDurableSessions,
+      ),
+    });
 
     await runWithLiveWorkspace(
       'folder-lifecycle',
-      { decorateGit: recordGit, decorateRepository: recordRepository },
+      {
+        decorateGit: recordGit,
+        decorateRepository: recordRepository,
+        decorateDeleteDiagnostics: recordDeleteDiagnostics,
+        decorateSurfaces: recordSurfaces,
+      },
       Effect.gen(function* () {
         const service = yield* WorkspaceService;
         const { projectId } = yield* service.registerProject({ path });
@@ -266,11 +292,11 @@ describe('the folder branch cannot reach Git or worktree membership', () => {
     const dyingGit = {
       run: (args: readonly string[]) =>
         Effect.die(new Error(`git must not run for a folder project: git ${args.join(' ')}`)),
-    } satisfies GitService;
+    } satisfies Git['Service'];
 
     const forbidWorktreeAccess = (
-      inner: WorkspaceRepositoryService,
-    ): WorkspaceRepositoryService => ({
+      inner: ProjectRepository['Service'],
+    ): ProjectRepository['Service'] => ({
       ...inner,
       findWorktree: () => Effect.die(new Error('worktree lookup must not run')),
       findProjectWorktree: () => Effect.die(new Error('project worktree lookup must not run')),
@@ -278,10 +304,17 @@ describe('the folder branch cannot reach Git or worktree membership', () => {
       findProjectWorktreeByBranch: () => Effect.die(new Error('branch lookup must not run')),
       listWorktrees: Effect.die(new Error('worktrees must not be listed')),
       deleteWorktree: () => Effect.die(new Error('worktree rows must not be deleted')),
-      readWorktreeDeleteDiagnostics: () => Effect.die(new Error('delete diagnostics must not run')),
       reconcileProjectWorktrees: () => Effect.die(new Error('membership must not be reconciled')),
       restoreProjectAtRootPath: () => Effect.die(new Error('restoration must not run')),
       moveProjectWorktreeOrder: () => Effect.die(new Error('worktree order must not move')),
+    });
+    const forbidDeleteDiagnostics = (): WorktreeDeleteDiagnosticsReader['Service'] => ({
+      read: () => Effect.die(new Error('delete diagnostics must not run')),
+    });
+    const forbidDurableSessions = (
+      inner: SurfaceService['Service'],
+    ): SurfaceService['Service'] => ({
+      ...inner,
       listDurableSessions: Effect.die(new Error('durable sessions must not be read')),
     });
 
@@ -291,9 +324,14 @@ describe('the folder branch cannot reach Git or worktree membership', () => {
     // project-scoped, so nothing here needs the forbidden methods either.
     const projects = await runWithLiveWorkspace(
       'forbidden-boundary',
-      { decorateGit: () => dyingGit, decorateRepository: forbidWorktreeAccess },
+      {
+        decorateGit: () => dyingGit,
+        decorateRepository: forbidWorktreeAccess,
+        decorateDeleteDiagnostics: forbidDeleteDiagnostics,
+        decorateSurfaces: forbidDurableSessions,
+      },
       Effect.gen(function* () {
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         // Fixture construction legitimately inserts the singleton; the
         // forbidden-operation claim is scoped to reconciliation below.
         const project = yield* repository.createProject({

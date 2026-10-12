@@ -3,12 +3,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Layer } from 'effect';
 
-import { DatabaseError } from '../../persistence/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { type CommandRunRow } from '../commands.repository.js';
-import { CommandService } from '../commands.service.js';
+import { InternalEvents } from '../../platform/events/index.js';
+import { EntityLock, type EntityLockKey } from '../../platform/locks/index.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
+import { type CommandRunRow } from '../repository.js';
+import { CommandService } from '../service.js';
 import {
   commandLaunchAllocation,
   commandPortProbe,
@@ -145,7 +146,7 @@ commands:
       () =>
         Effect.gen(function* () {
           yield* CommandService;
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_exited',
             ptyProcessId: 123,
@@ -191,7 +192,7 @@ commands:
       () =>
         Effect.gen(function* () {
           yield* CommandService;
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_killed',
             ptyProcessId: 123,
@@ -247,7 +248,7 @@ commands:
       () =>
         Effect.gen(function* () {
           yield* CommandService;
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_exited',
             ptyProcessId: 123,
@@ -305,7 +306,7 @@ commands:
       (service) =>
         Effect.gen(function* () {
           const action = yield* service.run({ worktreeId: 10, commandName: 'dev' });
-          const bus = yield* InternalRuntimeEventBus;
+          const bus = yield* InternalEvents;
           yield* bus.publish({
             type: 'pty_process_exited',
             ptyProcessId: 901,
@@ -744,6 +745,61 @@ test('resolving a pointerless running state preserves the ports it had', async (
       repair !== undefined && !('resolvedPorts' in repair),
       'pointerless-state repair must preserve the resolved snapshot by never naming it',
     );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('run, stop and restart hold the shared entity lock named for the command', async () => {
+  // Commands serialize on the runtime's one `EntityLock` rather than a registry of their own, so a change to the lock's
+  // semantics reaches every domain that needs per-entity exclusion.
+  const fixture = createFixture();
+  const keys: EntityLockKey[] = [];
+  let nextPtyProcessId = 55;
+  const recordingLock = Layer.effect(
+    EntityLock,
+    Effect.map(EntityLock, (lock) =>
+      EntityLock.of({
+        withLock: (key, run) =>
+          Effect.suspend(() => {
+            keys.push(key);
+            return lock.withLock(key, run);
+          }),
+      }),
+    ),
+  ).pipe(Layer.provide(EntityLock.layer));
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+    );
+
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) =>
+        Effect.gen(function* () {
+          yield* service.run({ worktreeId: 10, commandName: 'dev' });
+          yield* service.stop({ worktreeId: 10, commandName: 'dev' });
+          yield* service.restart({ worktreeId: 10, commandName: 'dev' });
+        }),
+      {
+        states: [commandState({ commandName: 'dev', status: 'stopped' })],
+        pty: {
+          allocateLaunch: () =>
+            Effect.succeed(
+              commandLaunchAllocation({ ptyProcessId: nextPtyProcessId++, cwd: fixture.rootPath }),
+            ),
+        },
+        entityLock: recordingLock,
+      },
+    );
+
+    const dev: EntityLockKey = { kind: 'command', worktreeId: 10, commandName: 'dev' };
+    assert.deepEqual(keys, [dev, dev, dev]);
   } finally {
     fixture.cleanup();
   }

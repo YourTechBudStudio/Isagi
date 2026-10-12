@@ -1,11 +1,6 @@
 import { Data } from 'effect';
 
-import {
-  RuntimeApiError,
-  RuntimeDecodeError,
-  RuntimeTransportError,
-  type RuntimeClientError,
-} from '@isagi/runtime-client';
+import type { RuntimeClientError } from '@isagi/runtime-client';
 
 import type { CliErrorCode } from './error-codes.js';
 
@@ -45,41 +40,35 @@ export function fromRuntimeError(
   error: RuntimeClientError,
   context: { readonly endpointId: string; readonly runtimeUrl: string },
 ): CliFailure {
-  if (error instanceof RuntimeApiError) {
-    const apiError = error.apiError as {
-      readonly code: string;
-      readonly message: string;
-      readonly requestId: string;
-      readonly data?: unknown;
-    };
-    const reason = reasonOf(apiError.data);
-    return new CliFailure({
-      document: {
-        code: apiError.code,
-        ...(reason === undefined ? {} : { reason }),
-        message: apiError.message,
-        requestId: apiError.requestId,
-        ...(apiError.data === undefined ? {} : { data: apiError.data }),
-      },
-    });
+  switch (error._tag) {
+    case 'RuntimeApiError': {
+      const { code, message, requestId, data } = error.apiError;
+      const reason = reasonOf(data);
+      return new CliFailure({
+        document: {
+          code,
+          ...(reason === undefined ? {} : { reason }),
+          message,
+          requestId,
+          ...(data === undefined ? {} : { data }),
+        },
+      });
+    }
+    case 'RuntimeDecodeError':
+      return CliFailure.of('runtime_response_invalid', error.message, {
+        endpointId: error.endpointId,
+      });
+    case 'RuntimeTransportError':
+      return CliFailure.of(
+        'runtime_unreachable',
+        `Could not reach the Isagi runtime at ${context.runtimeUrl}.`,
+        {
+          endpointId: context.endpointId,
+          runtimeUrl: context.runtimeUrl,
+          cause: causeText(error.cause),
+        },
+      );
   }
-  if (error instanceof RuntimeDecodeError) {
-    return CliFailure.of('runtime_response_invalid', error.message, {
-      endpointId: error.endpointId,
-    });
-  }
-  if (error instanceof RuntimeTransportError) {
-    return CliFailure.of(
-      'runtime_unreachable',
-      `Could not reach the Isagi runtime at ${context.runtimeUrl}.`,
-      {
-        endpointId: context.endpointId,
-        runtimeUrl: context.runtimeUrl,
-        cause: causeText(error.cause),
-      },
-    );
-  }
-  return CliFailure.of('runtime_response_invalid', String(error));
 }
 
 function reasonOf(data: unknown): string | undefined {

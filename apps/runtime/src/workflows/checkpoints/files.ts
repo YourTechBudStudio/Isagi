@@ -3,6 +3,7 @@ import type { Readable } from 'node:stream';
 
 import { Effect } from 'effect';
 
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { EngineRuntime } from '../engine/runtime.js';
 import { WorkflowEngineError } from '../errors.js';
 import { getCheckpoint, type CheckpointScope } from '../store/checkpoints.js';
@@ -21,45 +22,44 @@ export interface CheckpointFileContent {
   readonly filename: string | null;
 }
 
-export function openCheckpointFile(
+export const openCheckpointFile = Effect.fn('workflows.openCheckpointFile')(function* (
   rt: EngineRuntime,
   checkpointId: number,
   path: string,
-): Effect.Effect<CheckpointFileContent, unknown> {
-  return Effect.gen(function* () {
-    const checkpoint = yield* rt.read('workflow_read_checkpoint', (db) =>
-      getCheckpoint(db, checkpointId),
+): Effect.fn.Return<CheckpointFileContent, WorkflowEngineError | DatabaseError> {
+  const checkpoint = yield* rt.read('workflow_read_checkpoint', (db) =>
+    getCheckpoint(db, checkpointId),
+  );
+  if (!checkpoint) return yield* Effect.fail(checkpointNotFound(checkpointId));
+  const file = fromJson<CheckpointScope[]>(checkpoint.scopesJson)
+    .flatMap((scope) => scope.files)
+    .find((candidate) => candidate.path === path);
+  if (!file) {
+    return yield* Effect.fail(
+      new WorkflowEngineError({
+        code: 'workflow_checkpoint_file_not_found',
+        message: `Checkpoint ${checkpointId} has no captured file '${path}'.`,
+        checkpointId,
+        path,
+      }),
     );
-    if (!checkpoint) return yield* Effect.fail(checkpointNotFound(checkpointId));
-    const file = fromJson<CheckpointScope[]>(checkpoint.scopesJson)
-      .flatMap((scope) => scope.files)
-      .find((candidate) => candidate.path === path);
-    if (!file) {
-      return yield* Effect.fail(
+  }
+  const stream = yield* rt.deps.checkpoints.content.open(`sha256:${file.sha256}`).pipe(
+    Effect.catchTag('ContentUnavailable', (unavailable) =>
+      Effect.fail(
         new WorkflowEngineError({
-          code: 'workflow_checkpoint_file_not_found',
-          message: `Checkpoint ${checkpointId} has no captured file '${path}'.`,
+          code: 'workflow_checkpoint_content_unavailable',
+          message: `The saved copy of '${path}' in checkpoint ${checkpointId} is ${unavailable.cause}.`,
           checkpointId,
           path,
         }),
-      );
-    }
-    const stream = yield* rt.deps.checkpoints.content.open(`sha256:${file.sha256}`).pipe(
-      Effect.mapError(
-        (unavailable) =>
-          new WorkflowEngineError({
-            code: 'workflow_checkpoint_content_unavailable',
-            message: `The saved copy of '${path}' in checkpoint ${checkpointId} is ${unavailable.cause}.`,
-            checkpointId,
-            path,
-          }),
       ),
-    );
-    return {
-      stream,
-      mediaType: 'application/octet-stream',
-      byteSize: file.sizeBytes,
-      filename: posix.basename(file.path),
-    };
-  });
-}
+    ),
+  );
+  return {
+    stream,
+    mediaType: 'application/octet-stream',
+    byteSize: file.sizeBytes,
+    filename: posix.basename(file.path),
+  };
+});

@@ -13,9 +13,9 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { eq } from 'drizzle-orm';
 
-import { workflowEvents, workflowRuns } from '../../persistence/schema.js';
 import { WorkflowEngineError } from '../errors.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowEvents, workflowRuns } from '../tables.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
 /** Launch placement and environment preparation: what is created, recorded, and skipped on Retry. */

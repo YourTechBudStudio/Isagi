@@ -1,9 +1,9 @@
 import { Effect } from 'effect';
 
-import type { DatabaseError } from '../../persistence/index.js';
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import type { InternalEvents } from '../../platform/events/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { PtyBackendCatalog } from '../backend.js';
+import type { PtyRepository } from '../repository.js';
 import {
   isTerminalPtyProcessStatus,
   missingStatusReasonForBackend,
@@ -14,14 +14,27 @@ import {
 import type { ActiveAttachment } from './attachments.js';
 import { decodeBackendRef } from './backend-ref.js';
 import { transitionProcessAndPublish } from './events.js';
-import type { DurablePtyTerminationReason, PtyTerminations } from './lifecycle.js';
-import type { PtyRetryScheduler } from './retry.js';
+import {
+  isExitPending,
+  type DurablePtyTerminationReason,
+  type PtyPendingExits,
+  type PtyTerminations,
+} from './lifecycle.js';
+import type { PtyPersistenceRetry } from './retry.js';
 import { terminatePtyProcess } from './termination.js';
 
-// What this cleanup attempt established about the incarnation, and nothing
-// more. `terminated` means it killed something live; `already_terminal` means
-// the incarnation is durably finished — either it already was, or this attempt
-// verified there is nothing behind it to kill.
+// What this cleanup attempt established about the incarnation's process, and
+// nothing more. `terminated` means it killed something live. `already_terminal`
+// means nothing is left behind the incarnation to kill: its row is already
+// terminal, or this attempt verified that the backend has nothing (`inspect`
+// answered `missing`, or a kill found the process already gone), or the backend
+// has reported an exit that is about to be recorded (`isExitPending`).
+//
+// The outcome describes the process, not the row. When a kill found the
+// process already gone, or an exit is about to be recorded, the row can still
+// read `running` when the caller sees this outcome, until the incarnation's own
+// terminal fact lands; a caller must not re-read the row expecting a terminal
+// status.
 //
 // Deliberately *not* an outcome: "probably gone". Every case where the process
 // truth could not be established travels on the error channel, because both
@@ -36,12 +49,13 @@ export type PtyProcessCleanupError =
   | PtyTerminationInProgressError;
 
 export interface PtyCleanupDependencies {
-  readonly repository: PtyRepositoryService;
-  readonly catalog: PtyBackendCatalogService;
-  readonly eventBus: InternalRuntimeEventBusService;
+  readonly repository: PtyRepository['Service'];
+  readonly catalog: PtyBackendCatalog['Service'];
+  readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
-  readonly retry: PtyRetryScheduler;
+  readonly pendingExits: PtyPendingExits;
+  readonly retry: PtyPersistenceRetry;
 }
 
 /**
@@ -78,7 +92,7 @@ export function cleanupPtyProcess(
       // the adapter is probed first to keep a genuinely missing backend a
       // structured `backend_unavailable` rather than a raw kill failure — the
       // same rule termination follows.
-      const backend = deps.catalog.forBackend(session.backend);
+      const backend = yield* deps.catalog.forBackend(session.backend);
       if (!(yield* backend.available)) {
         return yield* Effect.fail(backendUnavailable(session.backend, session.id));
       }
@@ -95,16 +109,20 @@ export function cleanupPtyProcess(
     // alive | missing | unavailable, so probing first would only buy a second
     // round-trip to the same backend for an outcome it is about to report.
     const ref = yield* decodeBackendRef(session);
-    const inspection = yield* deps.catalog
-      .forBackend(session.backend)
+    const backend = yield* deps.catalog.forBackend(session.backend);
+    const inspection = yield* backend
       .inspect(ref)
-      .pipe(Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
+      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
 
     if (inspection.status === 'unavailable') {
       return yield* Effect.fail(backendUnavailable(session.backend, session.id));
     }
 
     if (inspection.status === 'missing') {
+      // The backend has reported this exit but the row does not record it yet. Nothing is left to kill, and the real
+      // exit code or signal is about to be written (by the supervisor, or by the retry it handed a failed write to), so
+      // this attempt writes nothing that could pre-empt it.
+      if (isExitPending(deps.pendingExits, session.id)) return 'already_terminal' as const;
       // Guarded: if some other observer already recorded this incarnation's
       // death, that first fact stands and this write is rejected. Either way
       // the process is accounted for.

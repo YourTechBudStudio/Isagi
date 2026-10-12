@@ -2,7 +2,6 @@ import { Trash2 } from 'lucide-react';
 
 import type { ContextMenuItem } from '../../components/ContextMenu.js';
 import { projectActionsCopy } from '../../copy/index.js';
-import { handleDispatchedCommandError } from '../../lib/palette/dispatcher.js';
 import type { ArgValues } from '../../lib/palette/types.js';
 
 /**
@@ -13,6 +12,7 @@ import type { ArgValues } from '../../lib/palette/types.js';
 export function projectMenuItems(
   projectId: number,
   dispatchCommand: (entryId: string, values: ArgValues) => Promise<void>,
+  onDispatchError: (error: unknown) => void,
 ): ContextMenuItem[] {
   return [
     {
@@ -21,7 +21,7 @@ export function projectMenuItems(
       danger: true,
       onSelect: () =>
         void dispatchCommand('delete-project', { projectId: String(projectId) }).catch(
-          handleDispatchedCommandError,
+          onDispatchError,
         ),
     },
   ];

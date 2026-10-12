@@ -1,111 +1,143 @@
-import { Data, Effect, Schema, type ManagedRuntime } from 'effect';
+import { Data, Effect, type Layer, Result, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
   apiEndpoints,
   commandLogStreamWebSocketEndpoint,
   ptyWebSocketInputMessageSchema,
-  type ApiError,
   type CommandLogStreamErrorCode,
   type CommandLogStreamOutputMessage,
 } from '@isagi/contracts';
 
-import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
-import { DatabaseError } from '../persistence/index.js';
-import { PtyServiceError } from '../pty-processes/index.js';
-import { registerPtyStreamRoute, type PtyStreamStrategy } from '../pty-processes/stream-route.js';
-import type { RuntimeServices } from '../runtime.layer.js';
-import { describeCommandCause } from './commands.diagnostics.js';
-import { CommandError } from './commands.errors.js';
-import { CommandService } from './commands.service.js';
-
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
+import {
+  errorMessage,
+  registerApiEndpoint,
+  type Rejection,
+  type RouteRuntime,
+} from '../platform/http/index.js';
+import {
+  type PtyService,
+  type PtyServiceError,
+  registerPtyStreamRoute,
+  type PtyStreamStrategy,
+} from '../pty-processes/index.js';
+import { type CommandError, type CommandServiceError } from './errors.js';
+import type { CommandsLayer } from './layer.js';
+import { CommandService } from './service.js';
 
 class CommandLogStreamProtocolError extends Data.TaggedError('CommandLogStreamProtocolError')<{
   readonly code: 'command_not_found' | 'read_only_stream';
   readonly message: string;
 }> {}
 
-export function registerCommandsApi(
+/** Every commands endpoint declares the same error union, so one rejection type serves them all. */
+type CommandsRejection = Rejection<typeof apiEndpoints.commands.listForWorktree>;
+
+/**
+ * The commands module's routes. Typed by the module's own layer plus `PtyService`, which the command log stream
+ * reads, so the module never imports the composition root.
+ *
+ * Every JSON endpoint maps `CommandError` to `worktree_commands_rejected`; `DatabaseError` passes through to the
+ * platform's `runtime_database_failed` mapping, which every commands endpoint declares.
+ */
+export function registerCommandsRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof CommandsLayer> | PtyService>,
 ) {
-  const run = runWithRuntime(runtime);
-
-  registerApiEndpoint(fastify, apiEndpoints.commands.listForWorktree, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const commands = yield* CommandService;
-        return yield* commands.listForWorktree(params.worktreeId);
+  registerApiEndpoint(fastify, runtime, apiEndpoints.commands.listForWorktree, (request) =>
+    CommandService.use((commands) => commands.listForWorktree(request.params.worktreeId)).pipe(
+      Effect.catchTags({
+        CommandError: (error) => request.reject(commandRejection(error)),
       }),
-    mapError: (error, context) => toCommandApiError(error, context),
-    run,
-  });
+    ),
+  );
 
-  registerApiEndpoint(fastify, apiEndpoints.commands.logMetadata, {
-    handle: (_input, _context, params, query) =>
-      Effect.gen(function* () {
-        const commands = yield* CommandService;
-        return yield* commands.readLogMetadata({
-          worktreeId: params.worktreeId,
-          commandName: query.commandName,
-        });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.commands.logMetadata, (request) =>
+    CommandService.use((commands) =>
+      commands.readLogMetadata({
+        worktreeId: request.params.worktreeId,
+        commandName: request.query.commandName,
       }),
-    mapError: (error, context) => toCommandApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.commands.run, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const commands = yield* CommandService;
-        return yield* commands.run({
-          worktreeId: params.worktreeId,
-          commandName: input.commandName,
-        });
+    ).pipe(
+      Effect.catchTags({
+        CommandError: (error) => request.reject(commandRejection(error)),
       }),
-    mapError: (error, context) => toCommandApiError(error, context),
-    run,
-  });
+    ),
+  );
 
-  registerApiEndpoint(fastify, apiEndpoints.commands.stop, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const commands = yield* CommandService;
-        return yield* commands.stop({
-          worktreeId: params.worktreeId,
-          commandName: input.commandName,
-        });
+  registerApiEndpoint(fastify, runtime, apiEndpoints.commands.run, (request) =>
+    CommandService.use((commands) =>
+      commands.run({
+        worktreeId: request.params.worktreeId,
+        commandName: request.body.commandName,
       }),
-    mapError: (error, context) => toCommandApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.commands.restart, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const commands = yield* CommandService;
-        return yield* commands.restart({
-          worktreeId: params.worktreeId,
-          commandName: input.commandName,
-        });
+    ).pipe(
+      Effect.catchTags({
+        CommandError: (error) => request.reject(commandRejection(error)),
       }),
-    mapError: (error, context) => toCommandApiError(error, context),
-    run,
-  });
+    ),
+  );
 
-  registerCommandLogStreamRoute(fastify, run);
+  registerApiEndpoint(fastify, runtime, apiEndpoints.commands.stop, (request) =>
+    CommandService.use((commands) =>
+      commands.stop({
+        worktreeId: request.params.worktreeId,
+        commandName: request.body.commandName,
+      }),
+    ).pipe(
+      Effect.catchTags({
+        CommandError: (error) => request.reject(commandRejection(error)),
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.commands.restart, (request) =>
+    CommandService.use((commands) =>
+      commands.restart({
+        worktreeId: request.params.worktreeId,
+        commandName: request.body.commandName,
+      }),
+    ).pipe(
+      Effect.catchTags({
+        CommandError: (error) => request.reject(commandRejection(error)),
+      }),
+    ),
+  );
+
+  registerCommandLogStreamRoute(fastify, runtime);
+}
+
+/** The contract rejection for a `CommandError`; every commands endpoint maps it with this, next to the endpoint. */
+function commandRejection(error: CommandError): CommandsRejection {
+  return {
+    code: 'worktree_commands_rejected',
+    status: commandRejectionStatus(error.code),
+    message: error.message,
+    data: {
+      reason: error.code,
+      ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+      ...(error.commandName ? { commandName: error.commandName } : {}),
+    },
+  };
+}
+
+function commandRejectionStatus(reason: CommandError['code']): 400 | 500 {
+  switch (reason) {
+    case 'worktree_not_found':
+    case 'command_config_invalid':
+    case 'command_not_found':
+      return 400;
+    // `command_action_failed` is an operational failure (a PTY termination that
+    // did not go through), not a request the caller can fix — surface it as a
+    // degraded-runtime 500 so it reads differently from validation/not-found.
+    case 'command_action_failed':
+      return 500;
+  }
 }
 
 function registerCommandLogStreamRoute(
   fastify: FastifyInstance,
-  run: ReturnType<typeof runWithRuntime>,
+  runtime: RouteRuntime<CommandService | PtyService>,
 ) {
   const strategy: PtyStreamStrategy<
     {
@@ -114,7 +146,9 @@ function registerCommandLogStreamRoute(
         { readonly type: 'command_log_state' }
       >;
     },
-    Extract<CommandLogStreamOutputMessage, { readonly type: 'command_log_state' }>
+    Extract<CommandLogStreamOutputMessage, { readonly type: 'command_log_state' }>,
+    CommandLogStreamProtocolError | CommandServiceError,
+    CommandService | PtyService
   > = {
     path: commandLogStreamWebSocketEndpoint.path,
     logLabel: 'Command log stream',
@@ -122,32 +156,19 @@ function registerCommandLogStreamRoute(
     closeOnExit: true,
     closeOnReplayOnly: true,
     closeOnClientError: true,
-    resolveTarget: (request) =>
-      Effect.gen(function* () {
-        const worktreeId = decodeWorktreeId(request.params);
-        const commandName = decodeCommandName(request.query);
-        if (worktreeId === null || commandName === null) {
-          return yield* Effect.fail(
-            new CommandLogStreamProtocolError({
-              code: 'command_not_found',
-              message: 'Command log stream target was invalid.',
-            }),
-          );
-        }
-        const commands = yield* CommandService;
-        const metadata = yield* commands.readLogMetadata({ worktreeId, commandName });
-        return {
-          metadata: {
-            type: 'command_log_state' as const,
-            worktreeId: metadata.worktreeId,
-            commandName: metadata.commandName,
-            status: metadata.status,
-            latestRun: metadata.latestRun,
-            live: false,
-          },
-          ptyProcessId: metadata.latestRun?.ptyProcessId ?? null,
-        };
-      }),
+    resolveTarget: (request) => {
+      const worktreeId = decodeWorktreeId(request.params);
+      const commandName = decodeCommandName(request.query);
+      if (worktreeId === null || commandName === null) {
+        return Effect.fail(
+          new CommandLogStreamProtocolError({
+            code: 'command_not_found',
+            message: 'Command log stream target was invalid.',
+          }),
+        );
+      }
+      return readLogStreamTarget(worktreeId, commandName);
+    },
     preamble: ({ target, plan }) => ({
       ...target.metadata,
       live: Boolean(plan?.live),
@@ -161,87 +182,40 @@ function registerCommandLogStreamRoute(
         }),
       ),
     beforeAttach: () => Effect.void,
+    // A backend that cannot attach falls back to the command's file log.
     recoverAttachFailure: ({ target, cause }) =>
-      Effect.gen(function* () {
-        if (!(cause instanceof PtyServiceError) || cause.code !== 'backend_attach_failed')
-          return null;
-
-        const commands = yield* CommandService;
-        const metadata = yield* commands.readLogMetadata({
-          worktreeId: target.metadata.worktreeId,
-          commandName: target.metadata.commandName,
-        });
-        return {
-          metadata: {
-            type: 'command_log_state' as const,
-            worktreeId: metadata.worktreeId,
-            commandName: metadata.commandName,
-            status: metadata.status,
-            latestRun: metadata.latestRun,
-            live: false,
-          },
-          ptyProcessId: metadata.latestRun?.ptyProcessId ?? null,
-        };
-      }),
+      cause._tag === 'PtyServiceError' && cause.code === 'backend_attach_failed'
+        ? readLogStreamTarget(target.metadata.worktreeId, target.metadata.commandName)
+        : Effect.succeed(null),
     supersede: () => true,
     displace: ({ controls }) =>
-      Effect.gen(function* () {
-        controls.send({ type: 'error', code: 'stream_superseded' });
-        yield* controls.detach;
-        controls.close();
-        yield* Effect.promise<void>(() => new Promise((resolve) => setImmediate(resolve)));
-      }),
+      controls
+        .send({ type: 'error', code: 'stream_superseded' })
+        .pipe(Effect.andThen(controls.detach), Effect.andThen(controls.close)),
     registerAttachment: () => Effect.succeed(() => {}),
     mapError: commandLogStreamError,
   };
 
-  registerPtyStreamRoute(fastify, run, strategy);
+  registerPtyStreamRoute(fastify, runtime, strategy);
 }
 
-function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {
-  if (error instanceof CommandError) {
-    // `command_action_failed` is an operational failure (a PTY termination that
-    // did not go through), not a request the caller can fix — surface it as a
-    // degraded-runtime 500 so it reads differently from validation/not-found.
-    const status = error.code === 'command_action_failed' ? 500 : 400;
-    return {
-      code: 'worktree_commands_rejected',
-      status,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: error.code,
-        ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-        ...(error.commandName ? { commandName: error.commandName } : {}),
-      },
-    };
-  }
-
-  if (error instanceof DatabaseError) {
-    return {
-      code: 'runtime_database_failed',
-      status: 500,
-      message: `Database operation failed: ${error.operation}`,
-      requestId: context.requestId,
-      data: { operation: error.operation },
-    };
-  }
-
-  // Sanitized like every other command-domain log: a defect reaching this
-  // boundary can still be a decode failure carrying persisted ref content. The
-  // cost — no stack trace for genuine bugs — is recorded as follow-up debt.
-  console.error(
-    `[runtime] Unhandled command API handler error during ${context.endpointId} cause=${describeCommandCause(error)}`,
+/** A command's log state as a stream target: the state frame, and the PTY process its latest run names. */
+const readLogStreamTarget = Effect.fnUntraced(function* (worktreeId: number, commandName: string) {
+  const metadata = yield* CommandService.use((commands) =>
+    commands.readLogMetadata({ worktreeId, commandName }),
   );
-
   return {
-    code: 'api_unhandled_error',
-    status: 500,
-    message: errorMessage(error),
-    requestId: context.requestId,
-    data: { endpointId: context.endpointId },
+    metadata: {
+      type: 'command_log_state' as const,
+      worktreeId: metadata.worktreeId,
+      commandName: metadata.commandName,
+      status: metadata.status,
+      latestRun: metadata.latestRun,
+      live: false,
+    },
+    ptyProcessId: metadata.latestRun?.ptyProcessId ?? null,
   };
-}
+});
 
 function decodeWorktreeId(params: unknown) {
   if (!params || typeof params !== 'object' || !('worktreeId' in params)) return null;
@@ -257,49 +231,62 @@ function decodeCommandName(query: unknown) {
 }
 
 function decodeClientMessage(raw: string) {
+  let parsed: unknown;
   try {
-    return Schema.decodeUnknownSync(ptyWebSocketInputMessageSchema)(JSON.parse(raw));
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
+  const decoded = Schema.decodeUnknownResult(ptyWebSocketInputMessageSchema)(parsed);
+  return Result.isSuccess(decoded) ? decoded.success : null;
 }
 
-function commandLogStreamError(error: unknown): {
+/** Everything a command log stream connection can fail with, mapped to its socket error frame. */
+function commandLogStreamError(
+  error: CommandLogStreamProtocolError | CommandServiceError | PtyServiceError,
+): {
   readonly code: CommandLogStreamErrorCode;
   readonly message?: string;
 } {
-  if (error instanceof CommandLogStreamProtocolError) {
-    return { code: error.code, message: error.message };
-  }
-  if (error instanceof CommandError) {
-    if (
-      error.code === 'worktree_not_found' ||
-      error.code === 'command_config_invalid' ||
-      error.code === 'command_not_found'
-    ) {
+  switch (error._tag) {
+    case 'CommandLogStreamProtocolError':
       return { code: error.code, message: error.message };
-    }
-    return { code: 'unknown', message: error.message };
+    case 'CommandError':
+      switch (error.code) {
+        case 'worktree_not_found':
+        case 'command_config_invalid':
+        case 'command_not_found':
+          return { code: error.code, message: error.message };
+        case 'command_action_failed':
+          return { code: 'unknown', message: error.message };
+      }
+    case 'PtyServiceError':
+      return ptyServiceStreamError(error);
+    case 'DatabaseError':
+      return {
+        code: 'pty_state_load_failed',
+        message: `PTY state load failed: ${error.operation}`,
+      };
   }
-  if (error instanceof PtyServiceError) {
-    switch (error.code) {
-      case 'backend_unavailable':
-      case 'backend_session_missing':
-      case 'backend_attach_failed':
-      case 'log_read_failed':
-        return { code: error.code, message: error.message };
-      case 'session_not_found':
-      case 'session_not_running':
-      case 'active_process_missing':
-      case 'active_process_not_running':
-      case 'session_already_attached':
-        return { code: 'backend_attach_failed', message: error.message };
-    }
+}
+
+function ptyServiceStreamError(error: PtyServiceError): {
+  readonly code: CommandLogStreamErrorCode;
+  readonly message?: string;
+} {
+  switch (error.code) {
+    case 'backend_unavailable':
+    case 'backend_session_missing':
+    case 'backend_attach_failed':
+    case 'log_read_failed':
+      return { code: error.code, message: error.message };
+    case 'session_not_found':
+    case 'session_not_running':
+    case 'active_process_missing':
+    case 'active_process_not_running':
+    case 'session_already_attached':
+      return { code: 'backend_attach_failed', message: error.message };
+    case 'worktree_not_found':
+      return { code: 'unknown', message: errorMessage(error) };
   }
-  if (error instanceof DatabaseError)
-    return {
-      code: 'pty_state_load_failed',
-      message: `PTY state load failed: ${error.operation}`,
-    };
-  return { code: 'unknown', message: errorMessage(error) };
 }

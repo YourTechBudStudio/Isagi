@@ -7,17 +7,21 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { branchPathHash, Git, type GitService } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { SurfaceService } from '../../environment/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
+import { branchPathHash, Git } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { WorktreeRow } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
-import type { WorktreeRow } from '../types.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   project,
   repositoryWith,
@@ -26,7 +30,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  testWorktreeDeleteDiagnostics,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -64,7 +68,7 @@ test('opening a missing branch without a base asks the client for base selection
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   try {
     const error = await Effect.runPromise(
@@ -73,13 +77,13 @@ test('opening a missing branch without a base asks the client for base selection
           const workspace = yield* WorkspaceService;
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
-          Effect.provide(WorkspaceServiceLive),
-          Effect.provide(WorkflowRunErasureLive),
+          Effect.provide(WorkspaceService.layerNoDeps),
+          Effect.provide(NoProjectDeletionParticipant),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
-          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-          Effect.provideService(WorkspaceRepository, repository),
-          Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(InternalEvents, testInternalEvents),
+          Effect.provideService(ProjectRepository, repository),
+          Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, missingBaseGit),
@@ -136,7 +140,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
         }
         return { added, missing: [] };
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const stateFile = stateFileWithWriteCounter(() => {});
   const openGit = {
     run: (args: readonly string[]) =>
@@ -169,7 +173,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   try {
     const output = await Effect.runPromise(
@@ -180,13 +184,13 @@ test('opening a missing branch creates it from a local branch base', async () =>
           request: { branch, base: { kind: 'branch', ref: 'main' } },
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layerNoDeps),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(InternalEvents, testInternalEvents),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
@@ -247,7 +251,7 @@ test('opening a missing branch can create it from the current detached worktree'
             }
           : null,
       ),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const stateFile = stateFileWithWriteCounter(() => {});
   const openGit = {
     run: (args: readonly string[]) =>
@@ -275,7 +279,7 @@ test('opening a missing branch can create it from the current detached worktree'
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   try {
     const output = await Effect.runPromise(
@@ -286,13 +290,13 @@ test('opening a missing branch can create it from the current detached worktree'
           request: { branch, base: { kind: 'detached_worktree', worktreeId: detachedWorktree.id } },
         });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layerNoDeps),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(InternalEvents, testInternalEvents),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
@@ -368,7 +372,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
         ...repositoryWith({ project: { ...project, rootPath: projectRoot }, worktree: null }),
         findWorktree: (worktreeId: number) =>
           Effect.succeed(worktreeId === scenario.baseWorktree.id ? scenario.baseWorktree : null),
-      } satisfies WorkspaceRepositoryService;
+      } satisfies ProjectRepository['Service'];
       const stateFile = stateFileWithWriteCounter(() => {});
       const invalidBaseGit = {
         run: (args: readonly string[]) =>
@@ -388,7 +392,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             }
             return { stdout: '', stderr: '' };
           }),
-      } satisfies GitService;
+      } satisfies Git['Service'];
 
       const error = await Effect.runPromise(
         Effect.flip(
@@ -402,13 +406,13 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
               },
             });
           }).pipe(
-            Effect.provide(WorkspaceServiceLive),
-            Effect.provide(WorkflowRunErasureLive),
+            Effect.provide(WorkspaceService.layerNoDeps),
+            Effect.provide(NoProjectDeletionParticipant),
             Effect.provideService(CommandService, testCommandService),
             Effect.provideService(PtyService, testPtyService),
-            Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-            Effect.provideService(WorkspaceRepository, repository),
-            Effect.provideService(SurfaceRepository, testSurfaceRepository),
+            Effect.provideService(InternalEvents, testInternalEvents),
+            Effect.provideService(ProjectRepository, repository),
+            Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
             Effect.provideService(SurfaceService, testSurfaceService),
             Effect.provideService(StateFile, stateFile),
             Effect.provideService(Git, invalidBaseGit),

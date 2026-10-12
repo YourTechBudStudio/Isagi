@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 
-import { workflowExecutions, workflowGraphInvocations } from '../../persistence/schema.js';
+import { workflowExecutions, workflowGraphInvocations } from '../tables.js';
 import { now, type Db, type ExecutionRow, type InvocationRow } from './rows.js';
 
 /** Graph invocations and node executions: the run's tree. */

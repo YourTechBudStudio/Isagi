@@ -8,28 +8,27 @@
     "check": "pnpm typecheck && pnpm build",
     "dev": "node scripts/vite-launcher.mjs dev",
     "preview": "pnpm build && node scripts/vite-launcher.mjs preview",
-    "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "test": "tsx --expose-gc --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "test:browser": "node browser/check-chromium.mjs && pnpm build && playwright test -c browser/playwright.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
+    "@effect/atom-react": "catalog:",
     "@fontsource-variable/fira-code": "^5.2.7",
     "@fontsource-variable/sora": "^5.2.8",
     "@fontsource-variable/source-sans-3": "^5.2.9",
     "@isagi/contracts": "workspace:*",
     "@isagi/runtime-client": "workspace:*",
-    "@tanstack/react-query": "^5.101.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
-    "effect": "^3.21.2",
+    "effect": "catalog:",
     "elkjs": "^0.12.0",
     "lucide-react": "^1.17.0",
     "motion": "^12.40.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router": "^7.18.0",
-    "zustand": "^5.0.14"
+    "react-router": "^7.18.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

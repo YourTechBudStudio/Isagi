@@ -1,10 +1,11 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
+import type { PtyBackendCatalog } from '../backend.js';
+import type { PtyRepository } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
-import { PtyServiceError, PtyTerminationInProgressError } from '../types.js';
+import { PtyServiceError, PtyTeardownError, PtyTerminationInProgressError } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { detachActiveAttachment } from './attachments.js';
 import { decodeBackendRef } from './backend-ref.js';
@@ -18,7 +19,7 @@ import {
   type PtyTerminations,
   type PtyTerminationState,
 } from './lifecycle.js';
-import type { PtyRetryScheduler } from './retry.js';
+import type { PtyPersistenceRetry } from './retry.js';
 
 // What this attempt actually did, never what the row happens to say afterwards.
 // `terminated_live` means this attempt killed a live process — the only outcome
@@ -27,13 +28,68 @@ import type { PtyRetryScheduler } from './retry.js';
 // really caused it. A failure carries no terminal evidence at all.
 export type PtyTerminateOutcome = 'terminated_live' | 'already_absent';
 
+/**
+ * Terminates several processes at once for an owner tearing down its durable entities (a deleted
+ * worktree, a deleted surface). Every termination runs concurrently and every failure is logged.
+ * `required` fails with `PtyTeardownError` naming every process that could not be stopped;
+ * `best_effort` logs and succeeds.
+ */
+export function terminatePtyProcesses<E>(
+  terminate: (input: {
+    readonly ptyProcessId: number;
+    readonly gracefulTimeoutMs: number;
+  }) => Effect.Effect<PtyTerminateOutcome, E>,
+  input: {
+    readonly failurePolicy: 'best_effort' | 'required';
+    readonly gracefulTimeoutMs: number;
+    readonly operation: string;
+    readonly ptyProcessIds: readonly number[];
+  },
+): Effect.Effect<void, PtyTeardownError> {
+  return Effect.gen(function* () {
+    const results = yield* Effect.all(
+      input.ptyProcessIds.map((ptyProcessId) =>
+        terminate({ ptyProcessId, gracefulTimeoutMs: input.gracefulTimeoutMs }).pipe(
+          Effect.result,
+          Effect.map((result) => ({ ptyProcessId, result })),
+        ),
+      ),
+      { concurrency: 'unbounded' },
+    );
+    const failures = results.flatMap(({ ptyProcessId, result }) =>
+      Result.isFailure(result) ? [{ ptyProcessId, cause: result.failure }] : [],
+    );
+    if (failures.length === 0) return;
+
+    for (const failure of failures) {
+      yield* Effect.logWarning('Failed to terminate PTY process').pipe(
+        Effect.annotateLogs({
+          operation: input.operation,
+          ptyProcessId: failure.ptyProcessId,
+          cause: describeOperationalCause(failure.cause),
+        }),
+      );
+    }
+
+    if (input.failurePolicy === 'required') {
+      return yield* Effect.fail(
+        new PtyTeardownError({
+          operation: input.operation,
+          ptyProcessIds: failures.map((failure) => failure.ptyProcessId),
+          cause: failures[0]?.cause,
+        }),
+      );
+    }
+  });
+}
+
 export function terminatePtyProcess(input: {
-  readonly repository: PtyRepositoryService;
-  readonly catalog: PtyBackendCatalogService;
-  readonly eventBus: InternalRuntimeEventBusService;
+  readonly repository: PtyRepository['Service'];
+  readonly catalog: PtyBackendCatalog['Service'];
+  readonly eventBus: InternalEvents['Service'];
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: PtyTerminations;
-  readonly retry: PtyRetryScheduler;
+  readonly retry: PtyPersistenceRetry;
   readonly ptyProcessId: number;
   readonly reason: DurablePtyTerminationReason;
   readonly gracefulTimeoutMs?: number | undefined;
@@ -65,12 +121,12 @@ export function terminatePtyProcess(input: {
 
 function runReservedTermination(
   input: {
-    readonly repository: PtyRepositoryService;
-    readonly catalog: PtyBackendCatalogService;
-    readonly eventBus: InternalRuntimeEventBusService;
+    readonly repository: PtyRepository['Service'];
+    readonly catalog: PtyBackendCatalog['Service'];
+    readonly eventBus: InternalEvents['Service'];
     readonly activeAttachments: Map<number, ActiveAttachment>;
     readonly terminations: PtyTerminations;
-    readonly retry: PtyRetryScheduler;
+    readonly retry: PtyPersistenceRetry;
     readonly reason: DurablePtyTerminationReason;
     readonly gracefulTimeoutMs?: number | undefined;
   },
@@ -89,7 +145,7 @@ function runReservedTermination(
     // current launch preference. Termination has no `unavailable` outcome of its
     // own, so the adapter is probed first to keep a genuinely missing backend a
     // structured `backend_unavailable` rather than a raw kill failure.
-    const backend = input.catalog.forBackend(session.backend);
+    const backend = yield* input.catalog.forBackend(session.backend);
     if (!(yield* restore(backend.available))) {
       return yield* Effect.fail(
         new PtyServiceError({
@@ -106,17 +162,17 @@ function runReservedTermination(
       backend.terminate
         ? backend.terminate({ ref, gracefulTimeoutMs: input.gracefulTimeoutMs ?? 2_000 })
         : backend.kill(ref),
-    ).pipe(Effect.either);
+    ).pipe(Effect.result);
 
     // Affirmative kill. The captured exit, if any, describes the death this
     // attempt caused, so it is discarded rather than persisted as an
     // independent fact.
-    if (Either.isRight(killResult) && killResult.right.terminated) {
-      const transition = yield* persistKilledTransition(input, session).pipe(Effect.either);
-      if (Either.isLeft(transition)) {
+    if (Result.isSuccess(killResult) && killResult.success.terminated) {
+      const transition = yield* persistKilledTransition(input, session).pipe(Effect.result);
+      if (Result.isFailure(transition)) {
         // The kill is real even though its write is not durable yet; the retry
         // takes over both the write and the reservation.
-        retryPersistKilledUntilSuccess(
+        yield* retryPersistKilledUntilSuccess(
           input.repository,
           input.eventBus,
           input.retry,
@@ -127,8 +183,12 @@ function runReservedTermination(
       } else {
         releaseTerminationFromAttempt(input.terminations, session.id, termination);
       }
-      console.info(
-        `[runtime] PTY process terminated ptyProcessId=${session.id} reason=${input.reason} outcome=terminated_live`,
+      yield* Effect.logInfo('PTY process terminated').pipe(
+        Effect.annotateLogs({
+          ptyProcessId: session.id,
+          reason: input.reason,
+          outcome: 'terminated_live',
+        }),
       );
       return 'terminated_live' as const;
     }
@@ -147,20 +207,23 @@ function runReservedTermination(
         termination,
         termination.exit,
       );
-      if (Either.isLeft(killResult)) {
-        console.info(
-          `[runtime] PTY termination found an independent exit ptyProcessId=${session.id} reason=${input.reason}`,
-          killResult.left,
+      if (Result.isFailure(killResult)) {
+        yield* Effect.logInfo('PTY termination found an independent exit').pipe(
+          Effect.annotateLogs({
+            ptyProcessId: session.id,
+            reason: input.reason,
+            cause: describeOperationalCause(killResult.failure),
+          }),
         );
       }
       return 'already_absent' as const;
     }
 
     releaseTerminationFromAttempt(input.terminations, session.id, termination);
-    if (Either.isLeft(killResult)) {
+    if (Result.isFailure(killResult)) {
       // Failed with no terminal evidence: the process may well still be alive,
       // so nothing is written and the caller decides what to do about it.
-      return yield* Effect.fail(killResult.left);
+      return yield* Effect.fail(killResult.failure);
     }
     return 'already_absent' as const;
   });
@@ -168,11 +231,11 @@ function runReservedTermination(
 
 function concludeReservation(
   input: {
-    readonly repository: PtyRepositoryService;
-    readonly eventBus: InternalRuntimeEventBusService;
+    readonly repository: PtyRepository['Service'];
+    readonly eventBus: InternalEvents['Service'];
     readonly activeAttachments: Map<number, ActiveAttachment>;
     readonly terminations: PtyTerminations;
-    readonly retry: PtyRetryScheduler;
+    readonly retry: PtyPersistenceRetry;
   },
   ptyProcessId: number,
   termination: PtyTerminationState,
@@ -197,7 +260,7 @@ function concludeReservation(
   });
 }
 
-function findPtyProcessOrFail(repository: PtyRepositoryService, ptyProcessId: number) {
+function findPtyProcessOrFail(repository: PtyRepository['Service'], ptyProcessId: number) {
   return Effect.gen(function* () {
     const session = yield* repository.findProcess(ptyProcessId);
     if (!session) {
@@ -215,8 +278,8 @@ function findPtyProcessOrFail(repository: PtyRepositoryService, ptyProcessId: nu
 
 function persistKilledTransition(
   input: {
-    readonly repository: PtyRepositoryService;
-    readonly eventBus: InternalRuntimeEventBusService;
+    readonly repository: PtyRepository['Service'];
+    readonly eventBus: InternalEvents['Service'];
     readonly reason: DurablePtyTerminationReason;
   },
   session: PtyProcessRecord,

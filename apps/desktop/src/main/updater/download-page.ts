@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+
 /**
  * The manual-install remedy. Only one composition can reach it — a packaged
  * Linux build that is not a writable AppImage — and its only possible
@@ -33,19 +35,22 @@ export type DownloadPageOutcome = 'opened' | 'failed';
  * again, so the intent has nothing to fail with — what changed is that the
  * snapshot now says so.
  */
-export async function openDownloadPage(dependencies: {
-  readonly openExternal: (url: string) => Promise<void>;
-  readonly beginAttempt: () => (outcome: DownloadPageOutcome) => Promise<void>;
-}): Promise<void> {
-  const report = dependencies.beginAttempt();
-  let outcome: DownloadPageOutcome = 'failed';
-  try {
-    await dependencies.openExternal(RELEASE_DOWNLOAD_PAGE_URL);
-    outcome = 'opened';
-  } catch {
-    // The raw rejection never leaves this function: it can quote provider URLs
-    // and shell detail. What crosses the boundary is the fixed outcome, and the
-    // recorder writes the fixed sanitized summary.
-  }
-  await report(outcome).catch(() => undefined);
-}
+export const openDownloadPage = Effect.fn('DesktopUpdater.openDownloadPage')(
+  function* (dependencies: {
+    readonly openExternal: (url: string) => Promise<void>;
+    readonly beginAttempt: Effect.Effect<(outcome: DownloadPageOutcome) => Effect.Effect<void>>;
+  }) {
+    const report = yield* dependencies.beginAttempt;
+    // The raw rejection never leaves this function: it can quote provider URLs and shell detail.
+    // What crosses the boundary is the fixed outcome, and the recorder writes the fixed sanitized
+    // summary. A launch that throws synchronously is a failure like any other.
+    const outcome: DownloadPageOutcome = yield* Effect.tryPromise(() =>
+      dependencies.openExternal(RELEASE_DOWNLOAD_PAGE_URL),
+    ).pipe(
+      Effect.as('opened' as const),
+      Effect.catch(() => Effect.succeed('failed' as const)),
+    );
+    // Recording cannot fail by type; a recorder that breaks anyway still does not fail the intent.
+    yield* report(outcome).pipe(Effect.catchDefect(() => Effect.void));
+  },
+);

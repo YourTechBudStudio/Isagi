@@ -1,5 +1,17 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 
 import type { WorkflowLaunchOrigin } from '@isagi/contracts';
 
@@ -33,6 +45,7 @@ import {
   isBusy,
   paletteReducer,
   callerRunningCopy,
+  type PaletteEvent,
 } from '../../lib/palette/machine.js';
 import {
   commandForEntryId,
@@ -41,33 +54,37 @@ import {
   recencyView,
 } from '../../lib/palette/model.js';
 import { outcomeActions } from '../../lib/palette/outcome.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
+import {
+  closePalette,
+  openPalette,
+  paletteAtom,
+  paletteSelectors,
+  pushRecent,
+} from '../../lib/palette/store.js';
 import type { ArgSpec, PaletteEntry, ReviewChoice } from '../../lib/palette/types.js';
 import {
   workflowFailurePresentation,
   workflowLaunchOutcome,
-  type WorkflowLaunchDeps,
 } from '../../lib/palette/workflow-failure.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
+import { disabledQuery } from '../../lib/state/policy.js';
+import { useAppRun, useRegistry } from '../../lib/state/registry.js';
+import { queryError } from '../../lib/state/result.js';
 import { restoreWorkbenchFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import { useSurfaceDetailQuery, useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
-import { awaitPreparation } from '../../lib/workspace/workflow/preparation.js';
+import {
+  paletteCommandsAtom,
+  readCommandsOnPaletteOpen,
+  surfaceDetailAtom,
+} from '../../lib/workspace/queries.js';
+import { activePaneBySurfaceAtom } from '../../lib/workspace/store.js';
+import { makeWorkflowLaunchDeps } from '../../lib/workspace/workflow/launch.js';
 import {
   useAttachedWorkflowRun,
-  useStartWorkflowMutation,
-  useWorkflowDescriptorsQuery,
-  useWorkflowRetryByIdMutation,
-  useWorkflowRunSummaryMutation,
+  workflowDescriptorsFor,
 } from '../../lib/workspace/workflow/queries.js';
 import { EntryList, OutcomePanel, RunningPanel, Tip } from './CommandPaletteViews.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
-
-// Command membership is file-backed with no config-change event. Open-only
-// polling bounds visible drift to ~10 s plus request latency; closing the
-// palette disables this interval.
-const COMMAND_CATALOG_POLL_MS = 10_000;
 
 function inputFlowDefaultIndex(spec: ArgSpec | null, screen: InputFlowScreen) {
   if (screen.kind === 'select' || screen.kind === 'combo') {
@@ -85,27 +102,34 @@ function inputFlowDefaultIndex(spec: ArgSpec | null, screen: InputFlowScreen) {
 }
 
 export function CommandPalette() {
-  const open = usePaletteStore((state) => state.open);
-  const autostartEntryId = usePaletteStore((state) => state.autostartEntryId);
-  const autostartValues = usePaletteStore((state) => state.autostartValues);
-  const recents = usePaletteStore((state) => state.recents);
-  const openPalette = usePaletteStore((state) => state.openPalette);
-  const closePalette = usePaletteStore((state) => state.closePalette);
-  const pushRecent = usePaletteStore((state) => state.pushRecent);
+  const registry = useRegistry();
+  const app = useAppRun();
+  const open = useAtomValue(paletteAtom, paletteSelectors.open);
+  const autostartEntryId = useAtomValue(paletteAtom, paletteSelectors.autostartEntryId);
+  const autostartValues = useAtomValue(paletteAtom, paletteSelectors.autostartValues);
+  const recents = useAtomValue(paletteAtom, paletteSelectors.recents);
+  const pushRecentEntry = useCallback(
+    (entryId: string) => pushRecent(registry, entryId),
+    [registry],
+  );
 
   const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
-  const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
+  const activePaneBySurfaceId = useAtomValue(activePaneBySurfaceAtom);
   const launchableHarnesses = useLaunchableHarnesses();
   const editorAvailable = useEditorAvailable();
   const baseCtx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
+        registry,
+        app,
         launchableHarnesses,
         editorAvailable,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
       }),
     [
+      registry,
+      app,
       projects,
       activeWorktreeId,
       launchableHarnesses,
@@ -115,9 +139,12 @@ export function CommandPalette() {
     ],
   );
   const activeSurfaceWorkflowSummary = useAttachedWorkflowRun(baseCtx.activeSurface?.id);
-  const activeSurfaceDetail = useSurfaceDetailQuery(baseCtx.activeSurface?.id ?? null, {
-    enabled: open && baseCtx.activeSurface !== null,
-  });
+  const activeSurfaceDetailResult = useAtomValue(
+    open && baseCtx.activeSurface !== null
+      ? surfaceDetailAtom(baseCtx.activeSurface.id)
+      : disabledQuery,
+  );
+  const activeSurfaceDetail = Option.getOrUndefined(AsyncResult.value(activeSurfaceDetailResult));
   // A worktree with no surface open is a valid origin: the run then gets its own
   // surface by default. With a surface open, wait for its detail so the origin
   // can name the pane and agent session in view.
@@ -126,68 +153,78 @@ export function CommandPalette() {
     if (!baseCtx.activeSurface) {
       return { worktreeId: baseCtx.activeWorktree.id, surfaceId: null };
     }
-    return activeSurfaceDetail.data
+    return activeSurfaceDetail
       ? workflowOriginFromSurfaceDetail({
           worktreeId: baseCtx.activeWorktree.id,
           surfaceId: baseCtx.activeSurface.id,
           activePaneId: baseCtx.activePaneId,
-          detail: activeSurfaceDetail.data,
+          detail: activeSurfaceDetail,
         })
       : null;
-  }, [
-    activeSurfaceDetail.data,
-    baseCtx.activePaneId,
-    baseCtx.activeSurface,
-    baseCtx.activeWorktree,
-  ]);
-  const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchOrigin, { enabled: open });
-  // A whole-list discovery failure is derived only from the current enabled query
-  // state: no launch context or a merely-pending query yields no failure row; a
-  // terminal error (including a failed refetch over stale data) overrides the
-  // cached descriptors via `assembleEntries` suppression.
+  }, [activeSurfaceDetail, baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree]);
+  const workflowDescriptors = useAtomValue(
+    open && workflowLaunchOrigin !== null
+      ? workflowDescriptorsFor(workflowLaunchOrigin)
+      : disabledQuery,
+  );
+  const workflowDescriptorsData = Option.getOrUndefined(AsyncResult.value(workflowDescriptors));
+  // A whole-list discovery failure is derived only from the current enabled read:
+  // no launch context or a merely-pending read yields no failure row; a terminal
+  // error (including a failed refetch over stale data) overrides the cached
+  // descriptors via `assembleEntries` suppression.
   const workflowFailure = useMemo(
     () =>
-      workflowLaunchOrigin !== null && workflowDescriptors.isError
-        ? workflowFailurePresentation(workflowDescriptors.error)
+      workflowLaunchOrigin !== null && workflowDescriptors._tag === 'Failure'
+        ? workflowFailurePresentation(queryError(workflowDescriptors))
         : undefined,
-    [workflowLaunchOrigin, workflowDescriptors.isError, workflowDescriptors.error],
+    [workflowLaunchOrigin, workflowDescriptors],
   );
-  // Override the shared 10 s staleTime for this observer so each open, and each
-  // worktree switch while open, starts a read; cached data may render meanwhile.
-  const worktreeCommandsQuery = useWorktreeCommandsQuery(activeWorktreeId, {
-    enabled: open,
-    staleTime: 0,
-    refetchInterval: COMMAND_CATALOG_POLL_MS,
-  });
+  // The palette's own view of the catalog: each open, and each worktree switch
+  // while open, starts a read (cached data may render meanwhile), and it polls
+  // while open. Closing the palette selects nothing, which stops the polling.
+  // A layout effect, so the read has started before the browser handles another
+  // event (an immediate Escape included).
+  useLayoutEffect(() => {
+    if (open && activeWorktreeId !== null) readCommandsOnPaletteOpen(registry, activeWorktreeId);
+  }, [open, activeWorktreeId, registry]);
+  const worktreeCommands = useAtomValue(
+    open && activeWorktreeId !== null ? paletteCommandsAtom(activeWorktreeId) : disabledQuery,
+  );
+  const worktreeCommandsData = Option.getOrUndefined(AsyncResult.value(worktreeCommands));
+  const worktreeCommandsFailed = worktreeCommands._tag === 'Failure';
   const configuredCommandsSection = useMemo(
     () =>
       configuredCommandSection({
-        data: worktreeCommandsQuery.data,
-        isError: worktreeCommandsQuery.isError,
+        data: worktreeCommandsData,
+        isError: worktreeCommandsFailed,
       }),
-    [worktreeCommandsQuery.data, worktreeCommandsQuery.isError],
+    [worktreeCommandsData, worktreeCommandsFailed],
   );
   const ctx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
+        registry,
+        app,
         launchableHarnesses,
         editorAvailable,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
-        workflowDescriptors: workflowDescriptors.data?.workflows,
+        workflowDescriptors: workflowDescriptorsData?.workflows,
         activeSurfaceWorkflowSummary,
         workflowFailure,
         configuredCommands: configuredCommandsSection.configuredCommands,
         configuredCommandsFailure: configuredCommandsSection.configuredCommandsFailure,
       }),
     [
+      registry,
+      app,
       projects,
       activeWorktreeId,
       launchableHarnesses,
       editorAvailable,
       activeSurfaceByWorktreeId,
       activePaneBySurfaceId,
-      workflowDescriptors.data?.workflows,
+      workflowDescriptorsData?.workflows,
       activeSurfaceWorkflowSummary,
       workflowFailure,
       configuredCommandsSection,
@@ -195,31 +232,33 @@ export function CommandPalette() {
   );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
 
-  const [machine, send] = useReducer(paletteReducer, initialPaletteState);
+  const [machine, dispatch] = useReducer(paletteReducer, initialPaletteState);
+  const seenEffectIds = useRef(new Set<number>());
+  const consumedEffectIds = useRef<number[]>([]);
+  // Every palette event goes through here. Effects the runner below has already
+  // started leave the queue in the same batch as the next real event, at that
+  // event's priority. Trimming them used to be an update of its own, dispatched
+  // from the runner's passive effect, so each path keystroke left a second,
+  // default-priority render behind it. Chromium runs queued keystrokes before that
+  // render's scheduler task, React counts every keystroke commit that leaves it
+  // pending as a nested update, and the 51st key of a fast burst threw "Maximum
+  // update depth exceeded" from its own dispatch and lost its character.
+  const send = useCallback((event: PaletteEvent) => {
+    const consumed = consumedEffectIds.current;
+    if (consumed.length > 0) {
+      consumedEffectIds.current = [];
+      dispatch({ type: 'effects-consumed', ids: consumed });
+    }
+    dispatch(event);
+  }, []);
   const [workflowFormEntryId, setWorkflowFormEntryId] = useState<string | null>(null);
-  const startWorkflowMutation = useStartWorkflowMutation();
-  const retryWorkflowMutation = useWorkflowRetryByIdMutation();
-  const runSummaryMutation = useWorkflowRunSummaryMutation();
-  // The three runtime calls the workflow adapter needs, and nothing else: the palette
-  // hands over the transport and the adapter owns every sentence formed from it. They
-  // stay separate because which one failed changes what is true about the run.
-  const startWorkflow = startWorkflowMutation.mutateAsync;
-  const retryWorkflow = retryWorkflowMutation.mutateAsync;
-  const readWorkflowRun = runSummaryMutation.mutateAsync;
-  const workflowLaunchDeps = useMemo(
-    (): WorkflowLaunchDeps => ({
-      start: startWorkflow,
-      retry: retryWorkflow,
-      awaitPrepared: (runId) => awaitPreparation(runId, readWorkflowRun),
-    }),
-    [startWorkflow, retryWorkflow, readWorkflowRun],
-  );
+  // The three runtime calls the workflow adapter needs, run against this app session.
+  const workflowLaunchDeps = useMemo(() => makeWorkflowLaunchDeps(app), [app]);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   // Live highlight index for event-time handlers (defined before the selection
   // hook); render reads `selection.selectedIndex` directly.
   const selectedIndexRef = useRef<number | null>(null);
-  const seenEffectIds = useRef(new Set<number>());
   const pathSuggestTimer = useRef<number | null>(null);
   const lastOpenRequest = useRef<{
     readonly entryId: string | null;
@@ -228,7 +267,7 @@ export function CommandPalette() {
 
   const closeCurrentPalette = useCallback(() => {
     send({ type: 'closed' });
-  }, []);
+  }, [send]);
 
   // A command's async run (or a workflow launch) is in flight. The machine stays
   // in search/step while the run effect resolves, so without this the palette
@@ -237,18 +276,25 @@ export function CommandPalette() {
   // below depends on it.
   const running = isBusy(machine);
 
-  useEffect(() => {
+  // The open/close transitions and the focus effect below are layout effects, in this order, so
+  // the palette owns keyboard focus before the browser handles another event. As passive effects
+  // they ran a frame or two after the open request (an "opened" render, then a focus render), and
+  // keys typed in that window landed behind the palette and were lost. Their relative order still
+  // matters: this close check must see `lastOpenRequest` before the reset below sets it. The
+  // early-typing specs in `browser/specs/command-palette.spec.ts` pin the outcome: the input is
+  // focused before the browser handles the task after the Mod+K keydown.
+  useLayoutEffect(() => {
     if (!open || machine.kind !== 'closed' || lastOpenRequest.current === null) {
       return;
     }
-    closePalette();
+    closePalette(registry);
     // The palette's single focus-relinquish point, so every close — drawer
     // handoffs, Mod+K, Escape, scrim click — routes to the current workbench
-    // owner. `closePalette()` must come first: it flips the store's `open`
+    // owner. `closePalette()` must come first: it flips the palette atom's `open`
     // synchronously, so the router and the scheduler's ownership guard both
     // see the palette as closed.
-    restoreWorkbenchFocus();
-  }, [closePalette, machine.kind, open]);
+    restoreWorkbenchFocus(registry);
+  }, [registry, machine.kind, open]);
 
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.
   useEffect(() => {
@@ -276,22 +322,22 @@ export function CommandPalette() {
         if (open) {
           closeCurrentPalette();
         } else {
-          openPalette();
+          openPalette(registry);
         }
       } else if (key === 'n') {
         event.preventDefault();
         if (running) {
           return;
         }
-        openPalette('add-project');
+        openPalette(registry, 'add-project');
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, openPalette, closeCurrentPalette, running]);
+  }, [open, registry, closeCurrentPalette, running]);
 
   // Reset on open; jump straight into a command flow when autostarted.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) {
       setWorkflowFormEntryId(null);
       lastOpenRequest.current = null;
@@ -341,8 +387,13 @@ export function CommandPalette() {
   const query = machine.kind === 'search' || machine.kind === 'step' ? machine.query : '';
   const commandError = inlineError(machine);
 
+  // A step whose command disappeared from the entries (the workspace changed under an open
+  // palette) can no longer be completed. Not while its run is in flight, though: a run can remove
+  // its own command (a relocation makes the project present, so "Set project path" is no longer
+  // offered), and the workspace re-read it triggers may render before the run settles. The run's
+  // own outcome decides then.
   useEffect(() => {
-    if (machine.kind !== 'step' || (command && spec)) {
+    if (machine.kind !== 'step' || running || (command && spec)) {
       return;
     }
     send({
@@ -352,7 +403,7 @@ export function CommandPalette() {
         body: paletteCopy.outcome.commandUnavailableBody,
       },
     });
-  }, [command, machine.kind, spec]);
+  }, [command, machine.kind, running, spec]);
 
   const view = useMemo(() => {
     if (running) {
@@ -410,11 +461,12 @@ export function CommandPalette() {
       allEntries,
       ctx,
       send,
-      pushRecent,
+      pushRecent: pushRecentEntry,
       pathSuggestTimer,
       seenEffectIds,
+      consumedEffectIds,
     });
-  }, [machine.effects, allEntries, ctx, pushRecent]);
+  }, [machine.effects, allEntries, ctx, send, pushRecentEntry]);
 
   const renderedLength =
     view.kind === 'running'
@@ -459,13 +511,13 @@ export function CommandPalette() {
   // the search input for list/text-bearing steps, the panel itself for screens
   // with no text input (review steps, outcomes). input-flow controls that own a
   // text input autofocus themselves; the workflow form manages its own focus.
-  useEffect(() => {
+  useLayoutEffect(() => {
     // `machine.kind === 'closed'` is a correctness guard, not polish, and `open`
     // cannot do its job. On the render where the machine transitions to closed,
     // this effect re-runs (its `view`/`viewKey` deps changed) and the earlier
     // close effect has already routed focus to the drawer — but React processes
-    // a store update scheduled inside a passive effect only after the current
-    // passive-effect traversal, so the captured `open` still reads true here.
+    // a store update scheduled inside an effect only after the current
+    // effect traversal, so the captured `open` still reads true here.
     // Without this guard the fall-through below would steal focus back from the
     // just-focused drawer, then drop it to the document body on unmount.
     // `machine.kind` belongs to the very render whose effects are flushing, so
@@ -514,7 +566,7 @@ export function CommandPalette() {
             inputs: answers,
             origin: workflowLaunchOrigin,
           },
-          { ...workflowLaunchDeps, onPrepared: () => pushRecent(entry.id) },
+          { ...workflowLaunchDeps, onPrepared: () => pushRecentEntry(entry.id) },
         ),
       running: paletteCopy.workflows.preparing,
     });

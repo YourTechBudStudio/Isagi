@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CommandError } from '../commands.errors.js';
+import { CommandError } from '../errors.js';
 import {
   commandService,
   delay,
@@ -106,7 +106,7 @@ test('command log stream maps unreadable commands to stable socket errors', asyn
     commandService({
       readLogMetadata: () =>
         Effect.sleep(1).pipe(
-          Effect.zipRight(
+          Effect.andThen(
             Effect.fail(
               new CommandError({
                 code: 'command_not_found',

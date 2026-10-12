@@ -1,9 +1,15 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { useWorkflowCheckpointFileContent } from '../../../lib/workspace/workflow/queries.js';
+import { disabledQuery } from '../../../lib/state/policy.js';
+import { useRegistry } from '../../../lib/state/registry.js';
+import { queryError } from '../../../lib/state/result.js';
+import { workflowCheckpointFileAtom } from '../../../lib/workspace/workflow/queries.js';
 import {
   baseName,
   imageMediaTypeForPath,
@@ -91,10 +97,13 @@ function ContentViewer({
   const [htmlMode, setHtmlMode] = useState<'source' | 'render'>('source');
 
   const wanted = downloading || requested || (previewable && withinCap);
-  const query = useWorkflowCheckpointFileContent(subject.checkpointId, subject.path, {
-    enabled: wanted,
-  });
-  const blob = query.data ?? null;
+  const registry = useRegistry();
+  const contentAtom = wanted
+    ? workflowCheckpointFileAtom([subject.checkpointId, subject.path])
+    : disabledQuery;
+  const content = useAtomValue(contentAtom);
+  const blob = Option.getOrNull(AsyncResult.value(content));
+  const error = queryError(content);
 
   useDownloadWhenReady({
     armed: downloading,
@@ -106,16 +115,16 @@ function ContentViewer({
   const download = (
     <DownloadButton
       byteSize={subject.byteSize}
-      pending={downloading && blob === null && query.error === null}
+      pending={downloading && blob === null && error === null}
       onClick={() => setDownloading(true)}
     />
   );
 
-  if (query.error !== null) {
-    return isContentUnavailable(query.error) ? (
+  if (error !== null) {
+    return isContentUnavailable(error) ? (
       <UnreadableContent subject={subject} />
     ) : (
-      <FailedRead onRetry={() => void query.refetch()} />
+      <FailedRead onRetry={() => registry.refresh(contentAtom)} />
     );
   }
 

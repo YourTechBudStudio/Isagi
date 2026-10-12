@@ -1,5 +1,8 @@
 import { ContextMenu } from '../../components/ContextMenu.js';
-import { useCommandDispatcher } from '../../lib/palette/dispatcher.js';
+import {
+  useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
+} from '../../lib/palette/dispatcher.js';
 import type { MissingProject } from '../../lib/workspace/types.js';
 import { projectMenuItems } from './project-menu.js';
 import { ProjectGlyph } from './ProjectGlyph.js';
@@ -21,8 +24,9 @@ export function DisconnectedProjectRow({
   onSelect: () => void;
 }) {
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   return (
-    <ContextMenu items={projectMenuItems(project.id, dispatchCommand)}>
+    <ContextMenu items={projectMenuItems(project.id, dispatchCommand, onDispatchError)}>
       <button
         type="button"
         onClick={onSelect}

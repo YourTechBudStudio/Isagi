@@ -1,30 +1,29 @@
 import { Schema } from 'effect';
 
 import { sessionStatusSchema } from '../processes/types.js';
-
-const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
+import { positiveInteger } from '../scalars.js';
 
 // ---------------------------------------------------------------------------
 // Provisioning
 // ---------------------------------------------------------------------------
 
-export const editorProvisioningFailureReasonSchema = Schema.Literal(
+export const editorProvisioningFailureReasonSchema = Schema.Literals([
   'unsupported_platform',
   'release_unavailable',
   'download_failed',
   'integrity_mismatch',
   'extract_failed',
   'install_unusable',
-);
+]);
 
 /**
  * `checking | downloading | verifying | extracting` are the transient states the
  * startup gate polls on; `ready`, `failed`, and `not_applicable` are settled.
  */
-export const editorProvisioningStateSchema = Schema.Union(
+export const editorProvisioningStateSchema = Schema.Union([
   Schema.Struct({ status: Schema.Literal('not_applicable') }),
   Schema.Struct({
-    status: Schema.Literal('checking', 'downloading', 'verifying', 'extracting'),
+    status: Schema.Literals(['checking', 'downloading', 'verifying', 'extracting']),
     version: Schema.String,
   }),
   Schema.Struct({ status: Schema.Literal('ready'), version: Schema.String }),
@@ -34,7 +33,7 @@ export const editorProvisioningStateSchema = Schema.Union(
     reason: editorProvisioningFailureReasonSchema,
     diagnostic: Schema.NullOr(Schema.String),
   }),
-);
+]);
 
 // ---------------------------------------------------------------------------
 // The three projected facts
@@ -46,16 +45,16 @@ export const editorProvisioningStateSchema = Schema.Union(
  * durable attempt reason and the `data.reason` of the `editor_launch_failed` API
  * error, so the record and the wire can never drift.
  */
-export const editorAttemptFailureReasonSchema = Schema.Literal(
+export const editorAttemptFailureReasonSchema = Schema.Literals([
   'port_allocation_failed',
   'session_socket_unavailable',
   'launch_allocation_failed',
   'launch_interrupted',
   'previous_incarnation_not_stopped',
   'launch_target_missing',
-);
+]);
 
-export const editorAttemptSchema = Schema.Union(
+export const editorAttemptSchema = Schema.Union([
   Schema.Struct({ state: Schema.Literal('none') }),
   Schema.Struct({ state: Schema.Literal('in_progress'), startedAt: Schema.String }),
   Schema.Struct({
@@ -63,36 +62,36 @@ export const editorAttemptSchema = Schema.Union(
     reason: editorAttemptFailureReasonSchema,
     detail: Schema.NullOr(Schema.String),
   }),
-);
+]);
 
 /**
  * Derived from the incarnation's process row. Deliberately a small editor-owned
  * union rather than `sessionDiagnosticCodeSchema`, which is harness-shaped and
  * would drag harness vocabulary onto an editor that has none.
  */
-export const editorProcessDiagnosticSchema = Schema.Literal(
+export const editorProcessDiagnosticSchema = Schema.Literals([
   'launch_failed',
   'attach_failed',
   'process_missing',
   'exited',
   'killed',
-);
+]);
 
-export const editorWorkbenchReadinessSchema = Schema.Literal(
+export const editorWorkbenchReadinessSchema = Schema.Literals([
   'pending',
   'ready',
   'unreachable',
   'unknown',
-);
+]);
 
 export const editorEndpointSchema = Schema.Struct({
-  host: Schema.String.pipe(Schema.minLength(1)),
-  port: Schema.Number.pipe(Schema.int(), Schema.between(1, 65_535)),
+  host: Schema.String.check(Schema.isMinLength(1)),
+  port: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 65_535 })),
   /**
    * Absolute loopback origin the pane frames. Composed by the runtime so no
    * client ever assembles a URL from parts.
    */
-  url: Schema.String.pipe(Schema.minLength(1)),
+  url: Schema.String.check(Schema.isMinLength(1)),
 });
 
 /**
@@ -102,15 +101,15 @@ export const editorEndpointSchema = Schema.Struct({
  * being one schema with a field the editor could never fill.
  */
 export const editorContextFactsSchema = Schema.Struct({
-  id: positiveIntegerSchema,
-  worktreeId: positiveIntegerSchema,
+  id: positiveInteger,
+  worktreeId: positiveInteger,
   /**
    * The current incarnation, or `null` when there is none. Exposed because the
    * pane needs an identity to key incarnation-scoped reads against: diagnostics
    * belong to one incarnation, and a replacement supersedes it. It is a fact the
    * runtime already owns, not a handle the client may operate on.
    */
-  activePtyProcessId: Schema.NullOr(positiveIntegerSchema),
+  activePtyProcessId: Schema.NullOr(positiveInteger),
   attempt: editorAttemptSchema,
   /** Absent whenever there is no incarnation pointer; never defaulted to `starting`. */
   processStatus: Schema.NullOr(sessionStatusSchema),
@@ -137,7 +136,7 @@ export const editorContextFactsSchema = Schema.Struct({
  * surfaces layer adds while composing surface detail.
  */
 export const editorContextMetadataSchema = Schema.Struct({
-  paneId: positiveIntegerSchema,
+  paneId: positiveInteger,
   ...editorContextFactsSchema.fields,
 });
 
@@ -146,7 +145,7 @@ export const editorContextMetadataSchema = Schema.Struct({
 // ---------------------------------------------------------------------------
 
 export const openEditorRouteParamsSchema = Schema.Struct({
-  worktreeId: positiveIntegerSchema,
+  worktreeId: positiveInteger,
 });
 
 /**
@@ -156,11 +155,11 @@ export const openEditorRouteParamsSchema = Schema.Struct({
  * placement whatever this says.
  */
 export const openEditorInputSchema = Schema.Struct({
-  intoSurfaceId: Schema.NullOr(positiveIntegerSchema),
+  intoSurfaceId: Schema.NullOr(positiveInteger),
 });
 
 export const editorContextRouteParamsSchema = Schema.Struct({
-  editorContextId: positiveIntegerSchema,
+  editorContextId: positiveInteger,
 });
 
 /**
@@ -168,14 +167,14 @@ export const editorContextRouteParamsSchema = Schema.Struct({
  * public "which surface holds the editor?" read.
  */
 export const openEditorOutputSchema = Schema.Struct({
-  worktreeId: positiveIntegerSchema,
-  surfaceId: positiveIntegerSchema,
-  paneId: positiveIntegerSchema,
-  editorContextId: positiveIntegerSchema,
+  worktreeId: positiveInteger,
+  surfaceId: positiveInteger,
+  paneId: positiveInteger,
+  editorContextId: positiveInteger,
 });
 
 export const ensureEditorRuntimeInputSchema = Schema.Struct({
-  intent: Schema.Literal('reuse', 'replace'),
+  intent: Schema.Literals(['reuse', 'replace']),
 });
 
 /**
@@ -201,16 +200,16 @@ export const editorDiagnosticsQuerySchema = Schema.Struct({
    * against the context's current pointer, so output can never be attributed to
    * the wrong incarnation after a replacement.
    */
-  ptyProcessId: positiveIntegerSchema,
+  ptyProcessId: positiveInteger,
 });
 
 export const editorDiagnosticsOutputSchema = Schema.Struct({
-  editorContextId: positiveIntegerSchema,
+  editorContextId: positiveInteger,
   /**
    * Echoed verbatim from the request, so a response can be matched to the
    * incarnation it describes even if it arrives late.
    */
-  ptyProcessId: positiveIntegerSchema,
+  ptyProcessId: positiveInteger,
   /**
    * The tail of the log. Empty string when the incarnation produced no output;
    * `null` when no log is retained at all.
@@ -218,30 +217,24 @@ export const editorDiagnosticsOutputSchema = Schema.Struct({
   excerpt: Schema.NullOr(Schema.String),
   /** True when output was dropped from the front of the excerpt. */
   truncated: Schema.Boolean,
-  totalBytes: Schema.NullOr(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
+  totalBytes: Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 });
 
-export type EditorProvisioningFailureReason = Schema.Schema.Type<
-  typeof editorProvisioningFailureReasonSchema
->;
-export type EditorProvisioningState = Schema.Schema.Type<typeof editorProvisioningStateSchema>;
-export type EditorAttemptFailureReason = Schema.Schema.Type<
-  typeof editorAttemptFailureReasonSchema
->;
-export type EditorAttempt = Schema.Schema.Type<typeof editorAttemptSchema>;
-export type EditorProcessDiagnostic = Schema.Schema.Type<typeof editorProcessDiagnosticSchema>;
-export type EditorWorkbenchReadiness = Schema.Schema.Type<typeof editorWorkbenchReadinessSchema>;
-export type EditorEndpoint = Schema.Schema.Type<typeof editorEndpointSchema>;
-export type EditorContextFacts = Schema.Schema.Type<typeof editorContextFactsSchema>;
-export type EditorContextMetadata = Schema.Schema.Type<typeof editorContextMetadataSchema>;
-export type OpenEditorRouteParams = Schema.Schema.Type<typeof openEditorRouteParamsSchema>;
-export type EditorContextRouteParams = Schema.Schema.Type<typeof editorContextRouteParamsSchema>;
-export type OpenEditorInput = Schema.Schema.Type<typeof openEditorInputSchema>;
-export type OpenEditorOutput = Schema.Schema.Type<typeof openEditorOutputSchema>;
-export type EnsureEditorRuntimeInput = Schema.Schema.Type<typeof ensureEditorRuntimeInputSchema>;
-export type EnsureEditorRuntimeOutput = Schema.Schema.Type<typeof ensureEditorRuntimeOutputSchema>;
-export type RetryEditorProvisioningOutput = Schema.Schema.Type<
-  typeof retryEditorProvisioningOutputSchema
->;
-export type EditorDiagnosticsQuery = Schema.Schema.Type<typeof editorDiagnosticsQuerySchema>;
-export type EditorDiagnosticsOutput = Schema.Schema.Type<typeof editorDiagnosticsOutputSchema>;
+export type EditorProvisioningFailureReason = typeof editorProvisioningFailureReasonSchema.Type;
+export type EditorProvisioningState = typeof editorProvisioningStateSchema.Type;
+export type EditorAttemptFailureReason = typeof editorAttemptFailureReasonSchema.Type;
+export type EditorAttempt = typeof editorAttemptSchema.Type;
+export type EditorProcessDiagnostic = typeof editorProcessDiagnosticSchema.Type;
+export type EditorWorkbenchReadiness = typeof editorWorkbenchReadinessSchema.Type;
+export type EditorEndpoint = typeof editorEndpointSchema.Type;
+export type EditorContextFacts = typeof editorContextFactsSchema.Type;
+export type EditorContextMetadata = typeof editorContextMetadataSchema.Type;
+export type OpenEditorRouteParams = typeof openEditorRouteParamsSchema.Type;
+export type EditorContextRouteParams = typeof editorContextRouteParamsSchema.Type;
+export type OpenEditorInput = typeof openEditorInputSchema.Type;
+export type OpenEditorOutput = typeof openEditorOutputSchema.Type;
+export type EnsureEditorRuntimeInput = typeof ensureEditorRuntimeInputSchema.Type;
+export type EnsureEditorRuntimeOutput = typeof ensureEditorRuntimeOutputSchema.Type;
+export type RetryEditorProvisioningOutput = typeof retryEditorProvisioningOutputSchema.Type;
+export type EditorDiagnosticsQuery = typeof editorDiagnosticsQuerySchema.Type;
+export type EditorDiagnosticsOutput = typeof editorDiagnosticsOutputSchema.Type;

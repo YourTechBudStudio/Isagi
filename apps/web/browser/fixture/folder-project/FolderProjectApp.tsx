@@ -1,18 +1,18 @@
-import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
 import { EmptyState } from '../../../src/components/EmptyState.js';
 import { MonoAside } from '../../../src/components/MonoAside.js';
 import { canvasCopy } from '../../../src/copy/index.js';
-import { usePaletteStore } from '../../../src/lib/palette/store.js';
-import { queryClient } from '../../../src/lib/query/client.js';
+import { openPalette } from '../../../src/lib/palette/store.js';
+import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
 import { ToastProvider } from '../../../src/lib/toast/index.js';
 import { useWorkspace, useWorkspaceSelectionSync } from '../../../src/lib/workspace/hooks.js';
-import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
+import { selectMissingProject, selectWorktree } from '../../../src/lib/workspace/store.js';
 import { Canvas } from '../../../src/routes/workspace/Canvas.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { Rail } from '../../../src/routes/workspace/Rail.js';
 import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
+import { fixtureRegistry } from './registry.js';
 import { ScenarioBar } from './ScenarioBar.js';
 import { DEFAULT_SCENARIO, scenarioById, type ScenarioId } from './seed.js';
 
@@ -42,7 +42,7 @@ import { DEFAULT_SCENARIO, scenarioById, type ScenarioId } from './seed.js';
  */
 export function FolderProjectApp() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       {/* The production toaster, wrapping the page exactly as the app wraps its
           own. Nothing on this page raises a toast deliberately — a restore is
           silent by design — but `useWorkspaceSelectionSync` does, and swallowing
@@ -50,7 +50,7 @@ export function FolderProjectApp() {
       <ToastProvider>
         <FolderProjectBody />
       </ToastProvider>
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 
@@ -60,10 +60,14 @@ function FolderProjectBody() {
   // way back to the missing state short of a page reload — and the missing state
   // is the one worth looking at repeatedly.
   const [scenario, setScenario] = useState({ id: DEFAULT_SCENARIO as ScenarioId, run: 0 });
-  const [ready, setReady] = useState(false);
+  // The run whose reset has fully landed (snapshot read, then selection), or null
+  // before the first one has. Published on the shell so a spec can wait for a
+  // scenario click to settle instead of racing its asynchronous reset: re-clicking
+  // the current scenario changes nothing visible, yet its late selection would
+  // overwrite whatever the spec selected in the meantime.
+  const [appliedRun, setAppliedRun] = useState<number | null>(null);
   // The production palette owns its own open state, its own cmd+k handling and
   // its own Escape. Nothing here duplicates them.
-  const openPalette = usePaletteStore((state) => state.openPalette);
 
   useWorkspaceSelectionSync();
   const { activeWorktree, activeMissingProject } = useWorkspace();
@@ -86,13 +90,12 @@ function FolderProjectBody() {
       await window.folderProjectFixture?.setScenario(scenario.id);
       if (cancelled) return;
       const { opens } = scenarioById(scenario.id);
-      const store = useWorkspaceStore.getState();
       if (opens.kind === 'worktree') {
-        store.selectWorktree(opens.projectId, opens.worktreeId);
+        selectWorktree(fixtureRegistry, opens.projectId, opens.worktreeId);
       } else {
-        store.selectMissingProject(opens.projectId);
+        selectMissingProject(fixtureRegistry, opens.projectId);
       }
-      setReady(true);
+      setAppliedRun(scenario.run);
     };
     void apply();
     // A rapid second click must not let the first switch finish after it.
@@ -104,19 +107,21 @@ function FolderProjectBody() {
   return (
     <div
       data-fixture-shell
+      data-scenario-run={scenario.run}
+      data-scenario-applied={appliedRun ?? undefined}
       className="grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-canvas text-fg"
     >
       <ScenarioBar
         scenarioId={scenario.id}
         onScenarioChange={(id) => setScenario((previous) => ({ id, run: previous.run + 1 }))}
-        onOpenPalette={() => openPalette()}
+        onOpenPalette={() => openPalette(fixtureRegistry)}
       />
 
       <div className="relative grid min-h-0 grid-cols-[236px_1fr]">
         {/* The production rail, with its drag engine, context menus, update
             footer and order notices intact — the parts phase 06's prototype
             deliberately left out and therefore could say nothing about. */}
-        {ready && <Rail />}
+        {appliedRun !== null && <Rail />}
 
         <div className="grid min-h-0 grid-rows-[1fr_auto]">
           <div className="relative min-h-0 overflow-hidden">

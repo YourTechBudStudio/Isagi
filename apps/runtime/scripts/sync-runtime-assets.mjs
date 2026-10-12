@@ -38,11 +38,11 @@ function syncAssets(assetRoot) {
   );
 
   copyFile(
-    resolve(runtimeRoot, 'src', 'runtime-config', 'runtime-config.schema.ts'),
+    resolve(runtimeRoot, 'src', 'runtime-config', 'config-schema.ts'),
     resolve(assetRoot, 'config-schemas', 'runtime-config.schema.ts'),
   );
   copyFile(
-    resolve(runtimeRoot, 'src', 'project-config', 'project-config.schema.ts'),
+    resolve(runtimeRoot, 'src', 'projects', 'config', 'config-schema.ts'),
     resolve(assetRoot, 'config-schemas', 'project-config.schema.ts'),
   );
 
@@ -50,17 +50,11 @@ function syncAssets(assetRoot) {
   // exactly the bytes the repository reviewed; a drift test asserts the two are
   // identical.
   copyFile(
-    resolve(runtimeRoot, 'src', 'editor-provisioning', 'code-server.manifest.json'),
+    resolve(runtimeRoot, 'src', 'editor', 'provisioning', 'code-server.manifest.json'),
     resolve(assetRoot, 'code-server.manifest.json'),
   );
 
-  const skillContentRoot = resolve(
-    runtimeRoot,
-    'src',
-    'agent-sessions',
-    'harness',
-    'skill-content',
-  );
+  const skillContentRoot = resolve(runtimeRoot, 'src', 'harnesses', 'skill-content');
   for (const name of [
     'SKILL.md',
     'config-global.md',

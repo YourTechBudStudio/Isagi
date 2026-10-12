@@ -1,8 +1,8 @@
 import { Schema } from 'effect';
 
+import { nonEmptyString, nonNegativeInteger, positiveInteger } from '../scalars.js';
 import { agentHarnessSchema } from '../surfaces/types.js';
 import { pagedSchema, paginationQueryFields } from './pagination.js';
-import { nonEmptyString, nonNegativeInteger, positiveInteger } from './primitives.js';
 
 /**
  * The operation log: one row per side-effecting `ctx` call a node function made.
@@ -11,20 +11,20 @@ import { nonEmptyString, nonNegativeInteger, positiveInteger } from './primitive
  * work, so a Retry that runs a node function again logs new rows.
  */
 
-export const workflowOperationKindSchema = Schema.Literal(
+export const workflowOperationKindSchema = Schema.Literals([
   'spawn_agent',
   'send_prompt',
   'run_headless',
   'close_pane',
-);
+]);
 
 /** `interrupted`: the runtime restarted or the run was cancelled while the operation was running. */
-export const workflowOperationStatusSchema = Schema.Literal(
+export const workflowOperationStatusSchema = Schema.Literals([
   'running',
   'completed',
   'failed',
   'interrupted',
-);
+]);
 
 /**
  * What a provider reported about the work it did, read verbatim. Every field is the provider's own
@@ -52,7 +52,7 @@ export const workflowOperationSchema = Schema.Struct({
   model: Schema.NullOr(Schema.String),
   effort: Schema.NullOr(Schema.String),
   /** The request as sent, including the full prompt text. */
-  request: Schema.Unknown,
+  request: Schema.optionalKey(Schema.Unknown),
   status: workflowOperationStatusSchema,
   /**
    * What the agent said: for a prompt, the last assistant text of the turn it started; for a
@@ -60,7 +60,7 @@ export const workflowOperationSchema = Schema.Struct({
    */
   responseText: Schema.NullOr(Schema.String),
   /** The call's structured result, such as a spawned session's handle or a headless exit. */
-  result: Schema.Unknown,
+  result: Schema.optionalKey(Schema.Unknown),
   harnessSessionId: Schema.NullOr(Schema.String),
   usage: Schema.NullOr(workflowOperationUsageSchema),
   startedAt: nonEmptyString,

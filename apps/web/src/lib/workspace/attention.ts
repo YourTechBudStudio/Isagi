@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { Atom, type AtomRegistry } from 'effect/reactivity';
 
 import type {
   AttentionSource,
@@ -11,37 +11,46 @@ import type { Project, Surface, Worktree } from './types.js';
 import type { AttachedRuns } from './workflow/attached.js';
 import { workflowRunAttention } from './workflow/derive.js';
 
-interface AttentionStore {
-  readonly sourcesByKey: Readonly<Record<string, AttentionSource>>;
-  readonly replaceSources: (sources: readonly AttentionSource[]) => void;
-  readonly upsertSource: (source: AttentionSource) => void;
-  readonly removeSource: (source: AttentionSourceIdentity) => void;
+/**
+ * Attention sources by `attentionSourceKey`, as the runtime-events socket last reported them. The
+ * runtime owns these facts; this is the client's live copy, one per app session (registry).
+ */
+export const attentionSourcesAtom = Atom.make<Readonly<Record<string, AttentionSource>>>({}).pipe(
+  Atom.keepAlive,
+);
+
+export function replaceAttentionSources(
+  registry: AtomRegistry.AtomRegistry,
+  sources: readonly AttentionSource[],
+): void {
+  registry.set(
+    attentionSourcesAtom,
+    Object.fromEntries(sources.map((source) => [attentionSourceKey(source.source), source])),
+  );
 }
 
-export const useAttentionStore = create<AttentionStore>((set) => ({
-  sourcesByKey: {},
-  replaceSources: (sources) =>
-    set({
-      sourcesByKey: Object.fromEntries(
-        sources.map((source) => [attentionSourceKey(source.source), source]),
-      ),
-    }),
-  upsertSource: (source) =>
-    set((state) => ({
-      sourcesByKey: {
-        ...state.sourcesByKey,
-        [attentionSourceKey(source.source)]: source,
-      },
-    })),
-  removeSource: (source) =>
-    set((state) => {
-      const key = attentionSourceKey(source);
-      if (!(key in state.sourcesByKey)) return {};
-      const next = { ...state.sourcesByKey };
-      delete next[key];
-      return { sourcesByKey: next };
-    }),
-}));
+export function upsertAttentionSource(
+  registry: AtomRegistry.AtomRegistry,
+  source: AttentionSource,
+): void {
+  registry.update(attentionSourcesAtom, (sourcesByKey) => ({
+    ...sourcesByKey,
+    [attentionSourceKey(source.source)]: source,
+  }));
+}
+
+export function removeAttentionSource(
+  registry: AtomRegistry.AtomRegistry,
+  source: AttentionSourceIdentity,
+): void {
+  registry.update(attentionSourcesAtom, (sourcesByKey) => {
+    const key = attentionSourceKey(source);
+    if (!(key in sourcesByKey)) return sourcesByKey;
+    const next = { ...sourcesByKey };
+    delete next[key];
+    return next;
+  });
+}
 
 export function attentionSourceKey(source: AttentionSourceIdentity) {
   return `${source.kind}:${source.id}`;

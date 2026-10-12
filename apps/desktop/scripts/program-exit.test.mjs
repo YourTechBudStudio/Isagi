@@ -24,15 +24,21 @@ test('a program cancelled by a signal reports the signal code without a cause', 
 
 test('a fault that arrives while unwinding an interruption is still reported', () => {
   const detachFailure = new Error('hdiutil detach failed');
-  const cause = Cause.sequential(Cause.interrupt(0), Cause.die(detachFailure));
+  const cause = Cause.combine(Cause.interrupt(0), Cause.die(detachFailure));
   const outcome = classifyProgramExit(Exit.failCause(cause), 'SIGINT');
   assert.equal(outcome.code, 1);
-  assert.deepEqual([...Cause.defects(outcome.cause)], [detachFailure]);
+  assert.deepEqual(
+    outcome.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect),
+    [detachFailure],
+  );
 });
 
 test('an ordinary packaging failure keeps its cause and fails with one', () => {
   const failure = new Error('verification failed');
   const outcome = classifyProgramExit(Exit.fail(failure), undefined);
   assert.equal(outcome.code, 1);
-  assert.deepEqual([...Cause.failures(outcome.cause)], [failure]);
+  assert.deepEqual(
+    outcome.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error),
+    [failure],
+  );
 });

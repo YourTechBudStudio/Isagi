@@ -12,6 +12,7 @@ import { Effect } from 'effect';
 import { parseCanonicalVersion } from './release-version-contract.mjs';
 import {
   createPackageVersionPlan,
+  PackageVersionSyncError,
   syncPackageVersions,
   verifyPackageVersions,
 } from './sync-package-versions.mjs';
@@ -285,6 +286,10 @@ test('verification CLI help does not discover the repository', async () => {
   assert.equal(stderr, '');
 });
 
+/**
+ * @param {import('node:test').TestContext} context
+ * @param {{ patterns?: string[]; workspaceFile?: string; workspaces?: Array<[string, Record<string, unknown>]> }} [options]
+ */
 async function createFixtureRepository(
   context,
   { patterns = ['apps/*', 'packages/*'], workspaceFile, workspaces } = {},
@@ -314,10 +319,12 @@ async function createFixtureRepository(
   return repoRoot;
 }
 
+/** @returns {[string, Record<string, unknown>]} */
 function workflowSdk(version = '4.0.0') {
   return ['packages/workflow-sdk', { name: '@yourtechbudstudio/isagi-workflow-sdk', version }];
 }
 
+/** @returns {[string, Record<string, unknown>]} */
 function workflowVerifier(version = '5.0.0') {
   return [
     'packages/workflow-verifier',
@@ -329,6 +336,7 @@ function instrumentedFileSystem(writes) {
   return {
     readFile,
     readdir,
+    /** @param {Parameters<typeof writeFile>} args */
     writeFile: async (...args) => {
       writes.push(args[0]);
       return writeFile(...args);
@@ -338,6 +346,7 @@ function instrumentedFileSystem(writes) {
 
 async function assertEffectFailure(effect, expectedMessage) {
   await assert.rejects(Effect.runPromise(effect), (error) => {
+    assert.ok(error instanceof PackageVersionSyncError);
     assert.match(String(error), new RegExp(escapeRegExp(expectedMessage)));
     return true;
   });

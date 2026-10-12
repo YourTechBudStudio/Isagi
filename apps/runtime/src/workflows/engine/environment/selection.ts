@@ -9,7 +9,7 @@ import type { WorkflowOrigin } from '../../types.js';
 import { makePlacementContext, type DiscoveryDeps } from './discovery.js';
 import type { LaunchProject, PlacementSelection } from './types.js';
 
-const decodePlacementRequest = Schema.decodeUnknown(workflowPlacementRequestSchema);
+const decodePlacementRequest = Schema.decodeUnknownEffect(workflowPlacementRequestSchema);
 
 /** Longest title `validateSurfaceTitle` accepts. */
 const surfaceTitleMaxLength = 80;
@@ -89,10 +89,12 @@ export function selectPlacement(
       origin: input.origin,
       project: input.project,
     });
-    const raw = yield* Effect.tryPromise({
-      try: async () => hook(context, input.parameters),
-      catch: selectionFailed(input.workflowKey),
-    }).pipe(Effect.ensuring(Effect.sync(close)));
+    const raw = yield* deps.bridge
+      .call('placement', () => hook(context, input.parameters))
+      .pipe(
+        Effect.mapError((failed) => selectionFailed(input.workflowKey)(failed.cause)),
+        Effect.ensuring(Effect.sync(close)),
+      );
 
     const request = yield* decodePlacementRequest(raw).pipe(
       Effect.mapError(selectionFailed(input.workflowKey)),

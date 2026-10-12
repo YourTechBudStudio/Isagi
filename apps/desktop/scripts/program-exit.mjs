@@ -18,6 +18,6 @@ export function signalExitCode(signal) {
 // reported, because that fault is the operator's actionable evidence.
 export function classifyProgramExit(exit, receivedSignal) {
   if (Exit.isSuccess(exit)) return { code: exit.value };
-  if (Cause.isInterruptedOnly(exit.cause)) return { code: signalExitCode(receivedSignal) };
+  if (Cause.hasInterruptsOnly(exit.cause)) return { code: signalExitCode(receivedSignal) };
   return { cause: exit.cause, code: 1 };
 }

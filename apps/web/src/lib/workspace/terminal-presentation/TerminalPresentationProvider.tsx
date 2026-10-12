@@ -1,19 +1,20 @@
-import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import type { TerminalSettings } from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { controlPlaneQueryKey } from '../../control-plane/queries.js';
-import { unwrapRuntimeFailure } from '../../runtime/run.js';
+import { keys } from '../../state/keys.js';
+import { useRegistry } from '../../state/registry.js';
+import { invalidateKeys, runApp } from '../../state/runtime.js';
 import { isLaunchBlockCode } from '../pane-session/view.js';
-import { surfaceDetailQueryKey } from '../query-keys.js';
+import { fetchDurableSessions } from '../runtime-data.js';
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
 import { createScopedLifecycle } from '../terminal-cache/scoped-lifecycle.js';
 import type { TerminalPresentationController } from './controller.js';
 import { createTerminalWorkspaceCoordinator } from './coordinator.js';
 import { createTerminalDiagnosticsCollector } from './diagnostics.js';
 import { browserTerminalEnvironment, type TerminalPresentationEnvironment } from './environment.js';
+import { terminalFactsAtom } from './facts.js';
 import {
   TerminalPresentationContext,
   type TerminalPresentationWorkspace,
@@ -30,7 +31,7 @@ export function TerminalPresentationProvider({
   readonly environment?: TerminalPresentationEnvironment | undefined;
   readonly children: ReactNode;
 }) {
-  const queryClient = useQueryClient();
+  const registry = useRegistry();
   const workspace = useMemo<TerminalPresentationWorkspace>(() => {
     const lifecycle = createScopedLifecycle();
     const parkingRoot = document.createElement('div');
@@ -95,32 +96,31 @@ export function TerminalPresentationProvider({
                 entry.identity.sessionId === identity.sessionId,
             )?.placement;
           if (placement) {
-            void queryClient.invalidateQueries({
-              queryKey: surfaceDetailQueryKey(placement.surfaceId),
-            });
+            invalidateKeys(registry, [keys.surface(placement.surfaceId)]);
           }
           return;
         }
         if (event.type !== 'resolve_failed') return;
-        const failure = unwrapRuntimeFailure(event.error);
+        const failure = event.error;
         if (
           failure instanceof RuntimeApiError &&
           failure.apiError.code === 'session_launch_rejected' &&
           isLaunchBlockCode(readErrorReason(failure.apiError.data))
         ) {
-          void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+          invalidateKeys(registry, [keys.controlPlane]);
         }
       },
     };
     const coordinator = createTerminalWorkspaceCoordinator({
       workspace: ownedWorkspace,
-      queryClient,
+      facts: registry.get(terminalFactsAtom),
+      fetchInventory: (signal) => runApp(registry, fetchDurableSessions(), { signal }),
     });
     start = coordinator.start;
     lifecycle.addFinalizer(coordinator.dispose);
     return ownedWorkspace;
   }, [
-    queryClient,
+    registry,
     settings.scrollbackLines,
     settings.cache.idleTtlMinutes,
     settings.cache.maxHiddenSessions,

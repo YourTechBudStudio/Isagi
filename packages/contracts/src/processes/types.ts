@@ -12,12 +12,12 @@ import { Schema } from 'effect';
  * roughly forty runtime and web files for no behavioural gain. It is a clean
  * mechanical follow-up, deliberately not bundled with the editor work.
  */
-export const sessionStatusSchema = Schema.Literal(
+export const sessionStatusSchema = Schema.Literals([
   'starting',
   'running',
   'exited',
   'failed',
   'killed',
-);
+]);
 
-export type SessionStatus = Schema.Schema.Type<typeof sessionStatusSchema>;
+export type SessionStatus = typeof sessionStatusSchema.Type;

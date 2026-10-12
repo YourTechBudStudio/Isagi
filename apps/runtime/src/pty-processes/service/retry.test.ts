@@ -1,106 +1,168 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Deferred, Effect, Exit, Fiber, Ref, Scope } from 'effect';
+import { TestClock } from 'effect/testing';
 
-import { makePtyRetryScheduler } from './retry.js';
+import { makeLogCapture } from '../../../test/test-support.js';
+import { makePersistenceRetry } from './retry.js';
 
-// Deferred terminal writes outlive the call that schedules them, so the thing
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
+
+// Deferred terminal writes outlive the call that submits them, so the thing
 // under test here is ownership: the PTY service scope decides when this work
-// stops, and it must stop while the repository is still open.
+// stops, and it must stop while the repository is still open. Time is the
+// TestClock's; the default backoff is one second.
 
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-test('a scheduled job runs after its delay', async () => {
-  const scheduler = makePtyRetryScheduler({ delayMs: 0 });
-  let ran = 0;
-
-  scheduler.schedule(
-    'killed ptyProcessId=1',
-    Effect.sync(() => {
-      ran += 1;
-    }),
+const failingUntil = (attempts: Ref.Ref<number>, succeedOn: number) =>
+  Ref.updateAndGet(attempts, (n) => n + 1).pipe(
+    Effect.flatMap((n) => (n >= succeedOn ? Effect.void : Effect.fail(new Error('SQLITE_BUSY')))),
   );
-  await delay(5);
 
-  assert.equal(ran, 1);
-  await Effect.runPromise(scheduler.shutdown);
-});
+test('a submitted attempt runs after its delay', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const retry = yield* makePersistenceRetry;
+      const attempts = yield* Ref.make(0);
 
-test('shutdown runs queued work instead of dropping it', async () => {
-  const scheduler = makePtyRetryScheduler({ delayMs: 60_000 });
-  let ran = 0;
+      yield* retry.submit('killed ptyProcessId=1', failingUntil(attempts, 1));
+      yield* TestClock.adjust('999 millis');
+      assert.equal(yield* Ref.get(attempts), 0);
+      yield* TestClock.adjust('1 millis');
+      assert.equal(yield* Ref.get(attempts), 1);
 
-  scheduler.schedule(
-    'killed ptyProcessId=1',
-    Effect.sync(() => {
-      ran += 1;
+      // Settled: nothing is retried again.
+      yield* TestClock.adjust('1 minute');
+      assert.equal(yield* Ref.get(attempts), 1);
     }),
+  ));
+
+test('a failed attempt is logged and retried every delay until it succeeds', () => {
+  const logs = makeLogCapture();
+  return runWithTestClock(
+    Effect.gen(function* () {
+      const retry = yield* makePersistenceRetry;
+      const attempts = yield* Ref.make(0);
+
+      yield* retry.submit('exit ptyProcessId=2', failingUntil(attempts, 3));
+      yield* TestClock.adjust('10 seconds');
+
+      assert.equal(yield* Ref.get(attempts), 3);
+      assert.deepEqual(
+        logs.lines.map((line) => [line.level, line.message, line.annotations.label]),
+        [
+          ['Warn', 'PTY persistence retry failed', 'exit ptyProcessId=2'],
+          ['Warn', 'PTY persistence retry failed', 'exit ptyProcessId=2'],
+        ],
+      );
+    }).pipe(Effect.provide(logs.layer)),
   );
-  await Effect.runPromise(scheduler.shutdown);
-
-  // The delay was backoff, not a reason to discard the write: shutdown is the
-  // last moment the repository is open, so the queued attempt happens here.
-  assert.equal(ran, 1);
 });
 
-test('a queued job that fails during shutdown is abandoned out loud', async () => {
-  const scheduler = makePtyRetryScheduler({ delayMs: 60_000 });
-  const warnings: string[] = [];
-  const originalWarn = console.warn;
-  console.warn = (message: unknown) => {
-    warnings.push(String(message));
-  };
-  let attempts = 0;
-  const job: Effect.Effect<void> = Effect.sync(() => {
-    attempts += 1;
-    // Still failing, so it asks for another attempt — which no longer exists.
-    scheduler.schedule('killed ptyProcessId=1', job);
-  });
+test('closing the scope runs a waiting retry instead of dropping it', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const retry = yield* makePersistenceRetry;
+          yield* retry.submit('killed ptyProcessId=1', failingUntil(attempts, 1));
+        }),
+      );
 
-  scheduler.schedule('killed ptyProcessId=1', job);
-  try {
-    await Effect.runPromise(scheduler.shutdown);
-  } finally {
-    console.warn = originalWarn;
-  }
+      // The delay was backoff, not a reason to discard the write: scope close is
+      // the last moment the repository is open, so the attempt happens there,
+      // without the clock moving.
+      assert.equal(yield* Ref.get(attempts), 1);
+    }),
+  ));
 
-  assert.equal(attempts, 1);
-  assert.deepEqual(warnings, [
-    '[runtime] Abandoning PTY persistence retry after shutdown killed ptyProcessId=1',
-  ]);
+test('pending launch retries are cancelled when the scope closes', () => {
+  const logs = makeLogCapture();
+  return runWithTestClock(
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const retry = yield* makePersistenceRetry;
+          yield* retry.submit('exit ptyProcessId=3', failingUntil(attempts, Infinity));
+          yield* TestClock.adjust('1 second');
+          assert.equal(yield* Ref.get(attempts), 1);
+        }),
+      );
+
+      // Scope close cut the pending backoff short for one final attempt, which
+      // failed, so the retry was abandoned out loud.
+      assert.equal(yield* Ref.get(attempts), 2);
+      assert.deepEqual(
+        logs.lines.map((line) => [line.level, line.message]),
+        [
+          ['Warn', 'PTY persistence retry failed'],
+          ['Warn', 'PTY persistence retry failed'],
+          ['Warn', 'Abandoning PTY persistence retry after shutdown'],
+        ],
+      );
+
+      // Nothing runs after the scope closed, however far the clock moves.
+      yield* TestClock.adjust('1 hour');
+      assert.equal(yield* Ref.get(attempts), 2);
+    }).pipe(Effect.provide(logs.layer)),
+  );
 });
 
-test('shutdown waits for an in-flight job and refuses the retry it schedules', async () => {
-  const scheduler = makePtyRetryScheduler({ delayMs: 0 });
-  let started = 0;
-  let finished = 0;
-  let release = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const job: Effect.Effect<void> = Effect.promise(async () => {
-    started += 1;
-    await gate;
-    finished += 1;
-    // A job that failed again asks for another attempt. Past shutdown there is
-    // nobody left to serve it.
-    scheduler.schedule('killed ptyProcessId=1', job);
-  });
+test('scope close waits for an in-flight attempt and abandons it when it fails', () => {
+  const logs = makeLogCapture();
+  return runWithTestClock(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const retry = yield* makePersistenceRetry.pipe(Scope.provide(scope));
+      const entered = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const attempts = yield* Ref.make(0);
+      const attempt = Ref.update(attempts, (n) => n + 1).pipe(
+        Effect.andThen(Deferred.succeed(entered, undefined)),
+        Effect.andThen(Deferred.await(gate)),
+        Effect.andThen(Effect.fail(new Error('SQLITE_BUSY'))),
+      );
 
-  scheduler.schedule('killed ptyProcessId=1', job);
-  await delay(5);
-  assert.equal(started, 1);
+      yield* retry.submit('killed ptyProcessId=4', attempt);
+      yield* TestClock.adjust('1 second');
+      yield* Deferred.await(entered);
 
-  const shutdown = Effect.runPromise(scheduler.shutdown);
-  release();
-  await shutdown;
-  await delay(20);
+      const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* Effect.yieldNow;
+      // The write that is already touching the database is waited for.
+      assert.equal(closing.pollUnsafe(), undefined);
 
-  // The write that was already touching the database completed before the scope
-  // released it; the follow-up it asked for never ran.
-  assert.equal(finished, 1);
-  assert.equal(started, 1);
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(closing);
+
+      // It failed while draining, so it gets no further attempt.
+      assert.equal(yield* Ref.get(attempts), 1);
+      assert.deepEqual(
+        logs.lines.at(-1)?.message,
+        'Abandoning PTY persistence retry after shutdown',
+      );
+    }).pipe(Effect.provide(logs.layer)),
+  );
+});
+
+test('a retry submitted after scope close is abandoned out loud and never attempted', () => {
+  const logs = makeLogCapture();
+  return runWithTestClock(
+    Effect.gen(function* () {
+      const retry = yield* Effect.scoped(makePersistenceRetry);
+      const attempts = yield* Ref.make(0);
+
+      yield* retry.submit('killed ptyProcessId=5', failingUntil(attempts, 1));
+      yield* TestClock.adjust('1 minute');
+
+      assert.equal(yield* Ref.get(attempts), 0);
+      assert.deepEqual(
+        logs.lines.map((line) => [line.level, line.message, line.annotations.label]),
+        [['Warn', 'Abandoning PTY persistence retry after shutdown', 'killed ptyProcessId=5']],
+      );
+    }).pipe(Effect.provide(logs.layer)),
+  );
 });

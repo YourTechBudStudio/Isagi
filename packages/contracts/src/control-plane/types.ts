@@ -13,55 +13,61 @@ export const harnessPolicySchema = Schema.Struct({
   claude: harnessPolicyEntrySchema,
   codex: harnessPolicyEntrySchema,
 });
-export const executableAvailabilitySchema = Schema.Literal(
+export const executableAvailabilitySchema = Schema.Literals([
   'available',
   'missing',
   'incompatible',
   'probe_failed',
-);
-export const docsReconciliationActionSchema = Schema.Literal(
+]);
+export const docsReconciliationActionSchema = Schema.Literals([
   'installed',
   'replaced',
   'unchanged',
   'untouched',
   'failed',
-);
-export const docsReconciliationReasonSchema = Schema.Literal(
+]);
+export const docsReconciliationReasonSchema = Schema.Literals([
   'not_requested',
   'environment_capture_failed',
   'target_resolution_failed',
   'transaction_evidence',
   'publication_failed',
   'rollback_failed',
-);
+]);
 // Whether the runtime would create a process for this harness right now, and if
 // not, why. Availability is kept as a separate fact; this projection folds
 // onboarding/config/policy/inventory/availability into the single launchability
 // answer the runtime enforces, so the web never re-derives that ladder. It
 // carries no diagnostic string — diagnostics stay on the runtime and, for panes,
 // on the last socket/claim error.
-export const harnessLaunchProjectionSchema = Schema.Union(
+export const harnessLaunchProjectionSchema = Schema.Union([
   Schema.Struct({ status: Schema.Literal('launchable') }),
   Schema.Struct({ status: Schema.Literal('blocked'), reason: harnessLaunchBlockReasonSchema }),
-);
+]);
 export const harnessControlPlaneEntrySchema = Schema.Struct({
   harness: agentHarnessSchema,
-  availability: Schema.Literal('pending', 'available', 'missing', 'incompatible', 'probe_failed'),
+  availability: Schema.Literals([
+    'pending',
+    'available',
+    'missing',
+    'incompatible',
+    'probe_failed',
+  ]),
   policy: harnessPolicyEntrySchema,
   launch: harnessLaunchProjectionSchema,
 });
 export const docsHarnessResultSchema = Schema.Struct({
   harness: agentHarnessSchema,
-  availability: Schema.Literal('available', 'missing', 'incompatible', 'probe_failed'),
+  availability: Schema.Literals(['available', 'missing', 'incompatible', 'probe_failed']),
   action: docsReconciliationActionSchema,
   reason: Schema.NullOr(docsReconciliationReasonSchema),
   destination: Schema.NullOr(Schema.String),
   diagnostic: Schema.NullOr(Schema.String),
 });
 export const docsReconciliationResultSchema = Schema.Struct({
-  outcome: Schema.Literal('succeeded', 'partially_failed', 'failed'),
+  outcome: Schema.Literals(['succeeded', 'partially_failed', 'failed']),
   policyRevision: Schema.String,
-  inventoryGeneration: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  inventoryGeneration: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
   fingerprint: Schema.String,
   results: Schema.Array(docsHarnessResultSchema),
 });
@@ -74,17 +80,17 @@ export const reconciliationStatusSchema = Schema.Struct({
 });
 export const controlPlaneSnapshotSchema = Schema.Struct({
   onboardingComplete: Schema.Boolean,
-  configStatus: Schema.Literal('missing', 'valid', 'invalid'),
+  configStatus: Schema.Literals(['missing', 'valid', 'invalid']),
   configDiagnostic: Schema.NullOr(Schema.String),
   policyRevision: Schema.String,
-  inventory: Schema.Union(
+  inventory: Schema.Union([
     Schema.Struct({ status: Schema.Literal('pending') }),
     Schema.Struct({
       status: Schema.Literal('ready'),
-      generation: Schema.Number.pipe(Schema.int(), Schema.positive()),
-      environment: Schema.Literal('trusted', 'probe_failed'),
+      generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+      environment: Schema.Literals(['trusted', 'probe_failed']),
     }),
-  ),
+  ]),
   harnesses: Schema.Array(harnessControlPlaneEntrySchema),
   reconciliation: reconciliationStatusSchema,
   editorProvisioning: editorProvisioningStateSchema,
@@ -94,23 +100,23 @@ export const acceptHarnessPolicyInputSchema = Schema.Struct({
   policy: harnessPolicySchema,
 });
 export const refreshInventoryOutputSchema = Schema.Struct({
-  generation: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
 });
 export const acceptHarnessPolicyOutputSchema = Schema.Struct({
   acceptedPolicyRevision: Schema.String,
   reconciledPolicyRevision: Schema.String,
-  inventoryGeneration: Schema.Number.pipe(Schema.int(), Schema.positive()),
-  disposition: Schema.Literal('applied', 'superseded'),
+  inventoryGeneration: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  disposition: Schema.Literals(['applied', 'superseded']),
   reconciliation: docsReconciliationResultSchema,
 });
-export type HarnessPolicy = Schema.Schema.Type<typeof harnessPolicySchema>;
-export type HarnessLaunchProjection = Schema.Schema.Type<typeof harnessLaunchProjectionSchema>;
-export type HarnessControlPlaneEntry = Schema.Schema.Type<typeof harnessControlPlaneEntrySchema>;
-export type ControlPlaneSnapshot = Schema.Schema.Type<typeof controlPlaneSnapshotSchema>;
-export type DocsReconciliationResult = Schema.Schema.Type<typeof docsReconciliationResultSchema>;
-export type DocsHarnessResult = Schema.Schema.Type<typeof docsHarnessResultSchema>;
-export type DocsReconciliationAction = Schema.Schema.Type<typeof docsReconciliationActionSchema>;
-export type DocsReconciliationReason = Schema.Schema.Type<typeof docsReconciliationReasonSchema>;
-export type AcceptHarnessPolicyInput = Schema.Schema.Type<typeof acceptHarnessPolicyInputSchema>;
-export type AcceptHarnessPolicyOutput = Schema.Schema.Type<typeof acceptHarnessPolicyOutputSchema>;
-export type RefreshInventoryOutput = Schema.Schema.Type<typeof refreshInventoryOutputSchema>;
+export type HarnessPolicy = typeof harnessPolicySchema.Type;
+export type HarnessLaunchProjection = typeof harnessLaunchProjectionSchema.Type;
+export type HarnessControlPlaneEntry = typeof harnessControlPlaneEntrySchema.Type;
+export type ControlPlaneSnapshot = typeof controlPlaneSnapshotSchema.Type;
+export type DocsReconciliationResult = typeof docsReconciliationResultSchema.Type;
+export type DocsHarnessResult = typeof docsHarnessResultSchema.Type;
+export type DocsReconciliationAction = typeof docsReconciliationActionSchema.Type;
+export type DocsReconciliationReason = typeof docsReconciliationReasonSchema.Type;
+export type AcceptHarnessPolicyInput = typeof acceptHarnessPolicyInputSchema.Type;
+export type AcceptHarnessPolicyOutput = typeof acceptHarnessPolicyOutputSchema.Type;
+export type RefreshInventoryOutput = typeof refreshInventoryOutputSchema.Type;

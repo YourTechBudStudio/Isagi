@@ -1,10 +1,9 @@
+export { registerRuntimeConfigRoutes } from './api.js';
+export type { RuntimeConfigPtyBackend } from './config-schema.js';
+export type { RuntimeHarnessPolicy, RuntimeHarnessPolicyState } from './policy.js';
 export {
   RuntimeConfig,
   RuntimeConfigConflict,
   RuntimeConfigError,
-  RuntimeConfigLive,
   RuntimeHarnessConfigInvalid,
-} from './runtime-config.service.js';
-export type { RuntimeConfigService } from './runtime-config.service.js';
-export * from './runtime-config.schema.js';
-export * from './runtime-config.policy.js';
+} from './service.js';

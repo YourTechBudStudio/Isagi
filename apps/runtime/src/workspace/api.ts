@@ -1,522 +1,477 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError, type WorktreeSetupRejectionReason } from '@isagi/contracts';
-
 import {
-  infrastructureApiError,
-  registerApiEndpoint,
-  type ApiRouteContext,
-  errorMessage,
-} from '../lib/api/index.js';
-import { ProjectConfigError } from '../project-config/project-config.service.js';
-import type { RuntimeServices } from '../runtime.layer.js';
-import { WorktreeSetupError } from '../worktree-setup/index.js';
+  apiEndpoints,
+  type WorkspaceActiveContextRejectionReason,
+  type WorktreeDeleteRejectionReason,
+  type WorktreeOperationRejectionReason,
+  type WorktreeSetupRejectionReason,
+} from '@isagi/contracts';
+
+import { registerApiEndpoint, type RouteRuntime } from '../platform/http/index.js';
+import type { ProjectConfigError } from '../projects/index.js';
+import { workspaceRejections } from './api-errors.js';
 import {
-  ProjectOrderError,
-  WorkspaceError,
-  WorkspaceService,
-  WorktreeOrderError,
-} from './index.js';
+  activeContextReasons,
+  projectDeleteReasons,
+  projectOperationReasons,
+  reconcileReasons,
+  relocationReasons,
+  setupProjectReasons,
+  withReason,
+  worktreeDeleteReasons,
+  worktreeOperationReasons,
+} from './api-reasons.js';
+import type { WorkspaceError } from './errors.js';
+import type { WorkspaceLayer } from './layer.js';
+import { registerPathsApi } from './path-suggestions-api.js';
+import { WorkspaceService } from './service.js';
+import type { WorktreeSetupError } from './setup/service.js';
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
-
-export function registerWorkspaceApi(
+/** The workspace module's routes: projects, worktrees, the workspace snapshot and path suggestions. */
+export function registerWorkspaceRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof WorkspaceLayer>>,
 ) {
-  const run = runWithRuntime(runtime);
-
-  registerApiEndpoint(fastify, apiEndpoints.workspace.get, {
-    handle: () =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.get;
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workspace.getActiveContext, {
-    handle: () =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.getActiveContext;
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workspace.durableSessions, {
-    handle: () =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.durableSessions;
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workspace.setActiveContext, {
-    handle: (input) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.setActiveContext(input);
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.workspace.reconcile, {
-    handle: (input) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.reconcileWorkspace(input);
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.projects.add, {
-    handle: (input) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.registerProject(input);
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.projects.relocate, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.relocateProject({ projectId: params.projectId, path: input.path });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.projects.delete, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.deleteProject(params.projectId);
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.projects.moveOrder, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.moveProjectOrder({
-          projectId: params.projectId,
-          beforeProjectId: input.beforeProjectId,
-        });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.moveOrder, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.moveWorktreeOrder({
-          projectId: params.projectId,
-          worktreeId: params.worktreeId,
-          beforeWorktreeId: input.beforeWorktreeId,
-        });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.branches, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.listProjectBranches({ projectId: params.projectId });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.setupPreflight, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.preflightWorktreeSetup({ projectId: params.projectId });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.setupTrust, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.trustWorktreeSetup({ projectId: params.projectId, request: input });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.open, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.openWorktree({ projectId: params.projectId, request: input });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.deletePreflight, {
-    handle: (_input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.preflightDeleteWorktree({
-          projectId: params.projectId,
-          worktreeId: params.worktreeId,
-        });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.worktrees.delete, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const workspace = yield* WorkspaceService;
-        return yield* workspace.deleteWorktree({
-          projectId: params.projectId,
-          worktreeId: params.worktreeId,
-          request: input,
-        });
-      }),
-    mapError: (error, context) => toWorkspaceApiError(error, context),
-    run,
-  });
+  registerWorkspaceApi(fastify, runtime);
+  registerPathsApi(fastify, runtime);
 }
 
-function relocationRejectionReason(error: WorkspaceError) {
-  switch (error.code) {
-    case 'project_not_found':
-    case 'project_not_missing':
-    case 'project_path_already_registered':
-    case 'command_cleanup_failed':
-    case 'relocation_not_supported':
-      return error.code;
-    default:
-      return 'project_not_found';
-  }
+/**
+ * Each endpoint maps the failures of its one service method next to it. The service methods share one
+ * declared failure union, so every endpoint names every tag in it: a tag the endpoint's contract describes becomes that
+ * rejection, and a tag its method never produces dies (`notProduced`), which the request pipeline answers as
+ * `api_unhandled_error`. Git, database and data-directory failures the contract declares pass through to the platform
+ * mapping.
+ */
+export function registerWorkspaceApi(
+  fastify: FastifyInstance,
+  runtime: RouteRuntime<WorkspaceService>,
+) {
+  registerApiEndpoint(fastify, runtime, apiEndpoints.workspace.get, (request) =>
+    WorkspaceService.use((workspace) => workspace.get).pipe(
+      Effect.catchTags({
+        StateFileError: (error) => request.reject(workspaceRejections.stateFile(error)),
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+        WorkspaceError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.workspace.durableSessions, (request) =>
+    WorkspaceService.use((workspace) => workspace.durableSessions).pipe(
+      Effect.catchTags({
+        StateFileError: (error) => request.reject(workspaceRejections.stateFile(error)),
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+        WorkspaceError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.workspace.getActiveContext, (request) =>
+    WorkspaceService.use((workspace) => workspace.getActiveContext).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(activeContextReasons, error, (reason) =>
+            request.reject(activeContextRejection(error, reason)),
+          ),
+        StateFileError: (error) => request.reject(workspaceRejections.stateFile(error)),
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.workspace.setActiveContext, (request) =>
+    WorkspaceService.use((workspace) => workspace.setActiveContext(request.body)).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(activeContextReasons, error, (reason) =>
+            request.reject(activeContextRejection(error, reason)),
+          ),
+        StateFileError: (error) => request.reject(workspaceRejections.stateFile(error)),
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.workspace.reconcile, (request) =>
+    WorkspaceService.use((workspace) => workspace.reconcileWorkspace(request.body)).pipe(
+      Effect.catchTags({
+        // The contract requires the project, and every reconcile rejection names the one it was about.
+        WorkspaceError: (error) =>
+          withReason(reconcileReasons, error, (reason) =>
+            error.projectId === undefined
+              ? Effect.die(error)
+              : request.reject({
+                  code: 'workspace_reconcile_rejected',
+                  status: 400,
+                  message: error.message,
+                  data: { reason, projectId: error.projectId },
+                }),
+          ),
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.projects.add, (request) =>
+    WorkspaceService.use((workspace) => workspace.registerProject(request.body)).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(projectOperationReasons, error, (reason) =>
+            request.reject({
+              code: 'project_operation_rejected',
+              status: 400,
+              message: error.message,
+              data: { reason, ...projectAndWorktree(error) },
+            }),
+          ),
+        StateFileError: (error) => request.reject(workspaceRejections.stateFile(error)),
+        ProjectConfigError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.projects.relocate, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.relocateProject({ projectId: request.params.projectId, path: request.body.path }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(relocationReasons, error, (reason) =>
+            request.reject({
+              code: 'project_relocation_rejected',
+              status: error.code === 'project_path_already_registered' ? 409 : 400,
+              message: error.message,
+              data: {
+                reason,
+                projectId: request.params.projectId,
+                ...(error.path ? { path: error.path } : {}),
+                ...(error.conflictingProjectId
+                  ? { conflictingProjectId: error.conflictingProjectId }
+                  : {}),
+              },
+            }),
+          ),
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.projects.delete, (request) =>
+    WorkspaceService.use((workspace) => workspace.deleteProject(request.params.projectId)).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(projectDeleteReasons, error, (reason) =>
+            request.reject({
+              code: 'project_delete_rejected',
+              status: 400,
+              message: error.message,
+              data: { reason, ...projectAndWorktree(error) },
+            }),
+          ),
+        GitCommandError: notProduced,
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  // The reorder rejections already carry their contract reason, so they map straight through.
+  registerApiEndpoint(fastify, runtime, apiEndpoints.projects.moveOrder, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.moveProjectOrder({
+        projectId: request.params.projectId,
+        beforeProjectId: request.body.beforeProjectId,
+      }),
+    ).pipe(
+      Effect.catchTags({
+        ProjectOrderError: (error) =>
+          request.reject({
+            code: 'project_order_rejected',
+            status: 400,
+            message: error.message,
+            data: {
+              reason: error.reason,
+              projectId: error.projectId,
+              ...(error.beforeProjectId ? { beforeProjectId: error.beforeProjectId } : {}),
+            },
+          }),
+        GitCommandError: notProduced,
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+        WorkspaceError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.moveOrder, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.moveWorktreeOrder({
+        projectId: request.params.projectId,
+        worktreeId: request.params.worktreeId,
+        beforeWorktreeId: request.body.beforeWorktreeId,
+      }),
+    ).pipe(
+      Effect.catchTags({
+        WorktreeOrderError: (error) =>
+          request.reject({
+            code: 'worktree_order_rejected',
+            status: 400,
+            message: error.message,
+            data: {
+              reason: error.reason,
+              projectId: error.projectId,
+              worktreeId: error.worktreeId,
+              ...(error.beforeWorktreeId ? { beforeWorktreeId: error.beforeWorktreeId } : {}),
+            },
+          }),
+        GitCommandError: notProduced,
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+        WorkspaceError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.branches, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.listProjectBranches({ projectId: request.params.projectId }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(worktreeOperationReasons, error, (reason) =>
+            request.reject({
+              code: 'worktree_branch_list_rejected',
+              status: 400,
+              message: error.message,
+              data: { reason, ...(error.projectId ? { projectId: error.projectId } : {}) },
+            }),
+          ),
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.setupPreflight, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.preflightWorktreeSetup({ projectId: request.params.projectId }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(setupProjectReasons, error, (reason) =>
+            request.reject(setupProjectRejection(error, reason)),
+          ),
+        ProjectConfigError: (error) => request.reject(workspaceRejections.projectConfig(error)),
+        WorktreeSetupError: (error) => request.reject(workspaceRejections.worktreeSetup(error)),
+        GitCommandError: notProduced,
+        StateFileError: notProduced,
+        ProjectPathValidationError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.setupTrust, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.trustWorktreeSetup({ projectId: request.params.projectId, request: request.body }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(setupProjectReasons, error, (reason) =>
+            request.reject(setupProjectRejection(error, reason)),
+          ),
+        ProjectConfigError: (error) => request.reject(workspaceRejections.projectConfig(error)),
+        WorktreeSetupError: (error) => request.reject(workspaceRejections.worktreeSetup(error)),
+        GitCommandError: notProduced,
+        StateFileError: notProduced,
+        ProjectPathValidationError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.open, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.openWorktree({ projectId: request.params.projectId, request: request.body }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(worktreeOperationReasons, error, (reason) =>
+            request.reject({
+              code: 'worktree_open_rejected',
+              status: worktreeOpenStatus(error.code),
+              message: error.message,
+              data: {
+                reason,
+                ...projectAndWorktree(error),
+                ...(error.branch ? { branch: error.branch } : {}),
+                ...(error.path ? { path: error.path } : {}),
+              },
+            }),
+          ),
+        // Opening reports a setup failure as part of *opening*: these two read as `worktree_open_rejected` here,
+        // where every other endpoint that can meet them uses `workspaceRejections`.
+        ProjectConfigError: (error) =>
+          request.reject(openSetupRejection(error, 'setup_config_invalid')),
+        WorktreeSetupError: (error) => {
+          switch (error.code) {
+            case 'setup_config_invalid':
+            case 'setup_trust_required':
+            case 'setup_trust_mismatch':
+              return request.reject(openSetupRejection(error, error.code));
+            // Only the trust update refuses for missing hooks; opening treats them as "no setup".
+            case 'setup_not_configured':
+              return Effect.die(error);
+          }
+        },
+        StateFileError: notProduced,
+        ProjectPathValidationError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.deletePreflight, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.preflightDeleteWorktree({
+        projectId: request.params.projectId,
+        worktreeId: request.params.worktreeId,
+      }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(worktreeDeleteReasons, error, (reason) =>
+            request.reject(worktreeDeleteRejection(error, reason)),
+          ),
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+
+  registerApiEndpoint(fastify, runtime, apiEndpoints.worktrees.delete, (request) =>
+    WorkspaceService.use((workspace) =>
+      workspace.deleteWorktree({
+        projectId: request.params.projectId,
+        worktreeId: request.params.worktreeId,
+        request: request.body,
+      }),
+    ).pipe(
+      Effect.catchTags({
+        WorkspaceError: (error) =>
+          withReason(worktreeDeleteReasons, error, (reason) =>
+            request.reject(worktreeDeleteRejection(error, reason)),
+          ),
+        StateFileError: notProduced,
+        ProjectConfigError: notProduced,
+        ProjectPathValidationError: notProduced,
+        WorktreeSetupError: notProduced,
+      }),
+    ),
+  );
+}
+
+/**
+ * A failure the shared service union names but this endpoint's method never produces. Reaching it is a runtime bug,
+ * so it is a defect, logged and answered `api_unhandled_error` by the request pipeline.
+ */
+function notProduced(error: unknown) {
+  return Effect.die(error);
+}
+
+function activeContextRejection(
+  error: WorkspaceError,
+  reason: WorkspaceActiveContextRejectionReason,
+) {
+  return {
+    code: 'workspace_active_context_rejected',
+    status: 400,
+    message: error.message,
+    data: { reason, ...projectAndWorktree(error) },
+  } as const;
+}
+
+/** Both setup endpoints refuse a project the same way before the setup service is reached. */
+function setupProjectRejection(error: WorkspaceError, reason: WorktreeSetupRejectionReason) {
+  return {
+    code: 'worktree_setup_rejected',
+    status: 400,
+    message: error.message,
+    data: { reason, ...(error.projectId ? { projectId: error.projectId } : {}) },
+  } as const;
+}
+
+function worktreeDeleteRejection(error: WorkspaceError, reason: WorktreeDeleteRejectionReason) {
+  return {
+    code: 'worktree_delete_rejected',
+    status: 400,
+    message: error.message,
+    data: {
+      reason,
+      ...projectAndWorktree(error),
+      ...(error.path ? { path: error.path } : {}),
+    },
+  } as const;
+}
+
+function openSetupRejection(
+  error: ProjectConfigError | WorktreeSetupError,
+  reason: WorktreeOperationRejectionReason,
+) {
+  return {
+    code: 'worktree_open_rejected',
+    status: 400,
+    message: error.message,
+    data: { reason, ...(error.projectId ? { projectId: error.projectId } : {}) },
+  } as const;
 }
 
 /**
  * The open-worktree rejections that mean "something is already there", as opposed to "your request
- * was malformed". All four describe a resource this call would have had to take over, which is what
- * 409 says and 400 does not — and it keeps the answer consistent with the workflow boundary, where
- * `workflow_environment_collision` is already a 409 for the same underlying condition.
+ * was malformed", answer 409: each describes a resource this call would have had to take over. That
+ * keeps the answer consistent with the workflow boundary, where `workflow_environment_collision` is
+ * already a 409 for the same underlying condition. A checkout parent the runtime could not create is
+ * the runtime's failure, 500.
  */
-function isWorktreeOpenConflict(code: WorkspaceError['code']) {
-  return (
-    code === 'checkout_path_exists' ||
-    code === 'checkout_path_registered' ||
-    code === 'branch_exists' ||
-    code === 'worktree_exists'
-  );
+const worktreeOpenConflicts: ReadonlySet<WorkspaceError['code']> = new Set([
+  'checkout_path_exists',
+  'checkout_path_registered',
+  'branch_exists',
+  'worktree_exists',
+]);
+
+function worktreeOpenStatus(code: WorkspaceError['code']) {
+  if (worktreeOpenConflicts.has(code)) return 409;
+  return code === 'checkout_parent_unavailable' ? 500 : 400;
 }
 
-function worktreeRejectionReason(error: WorkspaceError) {
-  switch (error.code) {
-    case 'project_not_found':
-    case 'project_not_present':
-    case 'branch_not_found':
-    case 'new_branch_requires_base':
-    case 'invalid_branch_name':
-    case 'base_ref_not_found':
-    case 'branch_exists':
-    case 'worktree_exists':
-    case 'checkout_path_exists':
-    case 'checkout_path_registered':
-    case 'checkout_parent_unavailable':
-    case 'worktree_not_found':
-    case 'setup_config_invalid':
-    case 'setup_trust_required':
-    case 'setup_trust_mismatch':
-    case 'command_cleanup_failed':
-    case 'worktrees_not_supported':
-      return error.code;
-    default:
-      return 'project_not_found';
-  }
-}
-
-function worktreeDeleteRejectionReason(error: WorkspaceError) {
-  switch (error.code) {
-    case 'project_not_found':
-    case 'project_not_present':
-    case 'worktree_not_found':
-    case 'root_worktree_not_deletable':
-    case 'dirty_checkout_requires_force':
-    case 'root_worktree_not_found':
-    case 'command_cleanup_failed':
-    case 'pty_teardown_failed':
-    case 'worktrees_not_supported':
-      return error.code;
-    default:
-      return 'project_not_found';
-  }
-}
-
-/**
- * The `WorkspaceError` codes both setup endpoints can produce before their
- * service reaches `WorktreeSetupService`. Shared so the two paths cannot drift,
- * and a switch rather than a chain of ternaries so the next reason is added in
- * one obvious place.
- */
-function worktreeSetupProjectRejectionReason(error: WorkspaceError): WorktreeSetupRejectionReason {
-  switch (error.code) {
-    case 'project_not_present':
-    case 'worktrees_not_supported':
-      return error.code;
-    default:
-      return 'project_not_found';
-  }
-}
-
-function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError {
-  // Handled before the broad errors below: the reason is already the contract
-  // reason, so these map straight through with no endpoint switch and no
-  // default branch that could relabel an unmapped case.
-  if (error instanceof ProjectOrderError) {
-    return {
-      code: 'project_order_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: error.reason,
-        projectId: error.projectId,
-        ...(error.beforeProjectId ? { beforeProjectId: error.beforeProjectId } : {}),
-      },
-    };
-  }
-
-  if (error instanceof WorktreeOrderError) {
-    return {
-      code: 'worktree_order_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: error.reason,
-        projectId: error.projectId,
-        worktreeId: error.worktreeId,
-        ...(error.beforeWorktreeId ? { beforeWorktreeId: error.beforeWorktreeId } : {}),
-      },
-    };
-  }
-
-  /**
-   * Opening a worktree reports a setup failure as part of *opening*, not as a setup request.
-   *
-   * That is the one thing about these two classes that depends on which endpoint ran, so it is the
-   * one thing that stays here. Everything else about them is endpoint-independent and is answered by
-   * `infrastructureApiError` below, which is also what the workflow boundary calls.
-   */
-  if (
-    context.endpointId === 'worktrees.open' &&
-    (error instanceof ProjectConfigError || error instanceof WorktreeSetupError)
-  ) {
-    return {
-      code: 'worktree_open_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: error instanceof ProjectConfigError ? 'setup_config_invalid' : error.code,
-        ...(error.projectId ? { projectId: error.projectId } : {}),
-      },
-    };
-  }
-
-  if (error instanceof WorkspaceError) {
-    if (context.endpointId === 'projects.add' && error.code === 'command_cleanup_failed') {
-      return {
-        code: 'project_operation_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: 'command_cleanup_failed',
-          ...(error.projectId ? { projectId: error.projectId } : {}),
-          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-        },
-      };
-    }
-
-    if (context.endpointId === 'projects.delete' && error.code === 'command_cleanup_failed') {
-      return {
-        code: 'project_delete_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: 'command_cleanup_failed',
-          ...(error.projectId ? { projectId: error.projectId } : {}),
-          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-        },
-      };
-    }
-
-    if (context.endpointId === 'projects.relocate' && error.projectId) {
-      return {
-        code: 'project_relocation_rejected',
-        status: error.code === 'project_path_already_registered' ? 409 : 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: relocationRejectionReason(error),
-          projectId: error.projectId,
-          ...(error.path ? { path: error.path } : {}),
-          ...(error.conflictingProjectId
-            ? { conflictingProjectId: error.conflictingProjectId }
-            : {}),
-        },
-      };
-    }
-
-    if (
-      context.endpointId === 'workspace.reconcile' &&
-      error.code === 'project_not_found' &&
-      error.projectId
-    ) {
-      return {
-        code: 'workspace_reconcile_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: { reason: 'project_not_found', projectId: error.projectId },
-      };
-    }
-
-    if (
-      context.endpointId === 'workspace.reconcile' &&
-      error.code === 'command_cleanup_failed' &&
-      error.projectId
-    ) {
-      return {
-        code: 'workspace_reconcile_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: 'command_cleanup_failed',
-          projectId: error.projectId,
-        },
-      };
-    }
-
-    if (
-      context.endpointId === 'worktrees.setupPreflight' ||
-      context.endpointId === 'worktrees.setupTrust'
-    ) {
-      return {
-        code: 'worktree_setup_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: worktreeSetupProjectRejectionReason(error),
-          ...(error.projectId ? { projectId: error.projectId } : {}),
-        },
-      };
-    }
-
-    if (context.endpointId === 'worktrees.branches') {
-      return {
-        code: 'worktree_branch_list_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: worktreeRejectionReason(error),
-          ...(error.projectId ? { projectId: error.projectId } : {}),
-        },
-      };
-    }
-
-    if (context.endpointId === 'worktrees.open') {
-      return {
-        code: 'worktree_open_rejected',
-        status: isWorktreeOpenConflict(error.code)
-          ? 409
-          : error.code === 'checkout_parent_unavailable'
-            ? 500
-            : 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: worktreeRejectionReason(error),
-          ...(error.projectId ? { projectId: error.projectId } : {}),
-          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-          ...(error.branch ? { branch: error.branch } : {}),
-          ...(error.path ? { path: error.path } : {}),
-        },
-      };
-    }
-
-    if (
-      context.endpointId === 'worktrees.deletePreflight' ||
-      context.endpointId === 'worktrees.delete'
-    ) {
-      return {
-        code: 'worktree_delete_rejected',
-        status: 400,
-        message: error.message,
-        requestId: context.requestId,
-        data: {
-          reason: worktreeDeleteRejectionReason(error),
-          ...(error.projectId ? { projectId: error.projectId } : {}),
-          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-          ...(error.path ? { path: error.path } : {}),
-        },
-      };
-    }
-
-    return {
-      code: 'workspace_active_context_rejected',
-      status: 400,
-      message: error.message,
-      requestId: context.requestId,
-      data: {
-        reason: error.code,
-        ...(error.projectId ? { projectId: error.projectId } : {}),
-        ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-      },
-    };
-  }
-
-  const infrastructure = infrastructureApiError(error, context);
-  if (infrastructure) return infrastructure;
-
-  console.error(`[runtime] Unhandled API handler error during ${context.endpointId}`, error);
-
+function projectAndWorktree(error: WorkspaceError) {
   return {
-    code: 'api_unhandled_error',
-    status: 500,
-    message: errorMessage(error),
-    requestId: context.requestId,
-    data: { endpointId: context.endpointId },
+    ...(error.projectId ? { projectId: error.projectId } : {}),
+    ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
   };
 }

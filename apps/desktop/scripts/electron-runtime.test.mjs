@@ -80,7 +80,7 @@ test('reports installer exit details', async () => {
       prepareElectronExecutable({ desktopRoot: fixture.desktopRoot }),
     );
 
-    assert.equal(Exit.isFailure(exit), true);
+    assert.ok(Exit.isFailure(exit));
     assert.match(Cause.pretty(exit.cause), /exit code 7/);
     assert.match(Cause.pretty(exit.cause), /fixture installer exploded/);
   } finally {

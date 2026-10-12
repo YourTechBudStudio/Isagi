@@ -1,20 +1,18 @@
-import type { QueryClient } from '@tanstack/react-query';
+import { Cause, Effect, Exit, Option } from 'effect';
+import { AtomRegistry } from 'effect/reactivity';
 
-import { queryClient } from '../query/client.js';
 import { classifyRuntimeFailure } from '../runtime/classify.js';
-import { runRuntimeEffect } from '../runtime/run.js';
+import type { RuntimeApi } from '../runtime/client.js';
+import { refreshAndRead } from '../state/policy.js';
 import { showToast } from '../toast/index.js';
-import type { WorkspaceData } from './model.js';
-import { workspaceQueryKey } from './query-keys.js';
-import { anyRailOrderPending, isRailOrderPending, useRailOrderStore } from './rail-order-state.js';
+import { cachedWorkspaceData, workspaceReadAtom } from './queries.js';
 import {
-  applyRailMove,
-  railMoveSiteExists,
-  railSiblingIds,
-  restoreRailOrder,
-  scopeKey,
-  type RailMoveIntent,
-} from './rail-order.js';
+  anyRailOrderPending,
+  railOrderAtom,
+  withoutEntry,
+  type RailOrderEntry,
+} from './rail-order-state.js';
+import { applyRailMove, railMoveSiteExists, scopeKey, type RailMoveIntent } from './rail-order.js';
 import {
   formatRuntimeErrorSummary,
   moveProjectOrder,
@@ -23,157 +21,138 @@ import {
 } from './runtime-data.js';
 
 /**
- * Commit one rail reorder: project it into the workspace cache, persist it, and
- * recover locally if the runtime refuses.
+ * Commit one rail reorder: show it at once, persist it, and recover locally if the runtime refuses.
  *
- * The interesting problem here is not the mutation, it is that three independent
- * sibling scopes share **one** cached snapshot. A per-scope lock stops a second
- * drop in the same list, but it does nothing about a surface reorder and a
- * project reorder overlapping: both write the same cache entry, and either one's
- * refresh would fetch away the other's optimistic order. So the discipline is:
+ * The interesting problem is not the write, it is that three independent sibling scopes share
+ * **one** workspace read, and that read is refreshed by many things (runtime events,
+ * reconciliation, focus) that know nothing about reorders. A refresh that read the runtime before a
+ * move committed answers with the old order; installing it unchanged would yank the dragged row
+ * back under the user's cursor.
  *
- * 1. Cancel any in-flight workspace fetch before projecting, so a refresh
- *    already on the wire cannot land on top of this move.
- * 2. Re-read the cache *after* cancelling and re-decide, because the drop
- *    decision was made against whatever was on screen a moment ago.
- * 3. Refresh only when no reorder remains pending in **any** scope, so the last
- *    operation to settle is the one that reconciles with the runtime.
+ * So the read never holds the projection. `workspaceAtom` is the latest read with the rail's moves
+ * replayed on top (`projectRailOrder`): a pending move over every read, an accepted one over every
+ * read that began before the acceptance. Whenever a read started or landed, it cannot display an
+ * order that lacks a pending or accepted move, and no in-flight read has to be cancelled.
  *
- * Cancelling only covers fetches already running, and this workflow is not the
- * only thing that refreshes the workspace. A fetch started *after* the cancel —
- * by a runtime event, or by reconciliation finishing — would arrive carrying the
- * pre-move order. That is why the pending intent is kept in the scope store and
- * replayed over every snapshot the query decodes (`applyPendingRailMoves`), for
- * as long as the write is outstanding. Replay stops the moment a move settles,
- * so settling also cancels the workspace query even when the refresh itself is
- * deferred to a still-pending scope — otherwise a request that read the runtime
- * before this write committed could land and undo it.
- *
- * The runtime emits no event for a reorder (Phase 03), so that final refresh is
- * the only thing that converges this client with the durable order.
+ * 1. Gate, no-op check and claim happen in one synchronous step, so two drops in a scope can never
+ *    both claim it. The claim *is* the optimistic projection.
+ * 2. The write is uninterruptible: once it reaches the runtime it is never aborted client-side.
+ * 3. Accepted → the move moves from pending to accepted. Refused → the pending entry is dropped,
+ *    which re-derives only this list from the latest read, and the refusal is reported.
+ * 4. Once no scope is pending, one convergence read reconciles with the runtime (which emits no
+ *    event for a reorder) and retires the accepted moves that read already contains.
  */
 
 /**
- * What the commit did. Phase 05 drives its feedback from the scope store rather
- * than this value; it exists so the outcome is assertable and so a caller can
- * tell "nothing to do" apart from "refused".
+ * What the commit did. The rail drives its feedback from `railOrderAtom` rather than this value; it
+ * exists so the outcome is assertable and so a caller can tell "nothing to do" apart from "refused".
  */
 export type RailMoveOutcome = 'committed' | 'failed' | 'skipped' | 'blocked';
 
-export interface RailMoveCommitOptions {
-  readonly intent: RailMoveIntent;
-  readonly client?: QueryClient | undefined;
-  /** Injectable persistence, so the workflow is testable without a fetch mock. */
-  readonly move?: ((intent: RailMoveIntent) => Promise<unknown>) | undefined;
-}
+/** The durable write for one intent (injectable, so the workflow is testable without a network). */
+export type PersistRailMove = (intent: RailMoveIntent) => Effect.Effect<unknown, Error, RuntimeApi>;
 
-export async function commitRailMove(options: RailMoveCommitOptions): Promise<RailMoveOutcome> {
-  const { intent } = options;
-  const client = options.client ?? queryClient;
-  const move = options.move ?? persistRailMove;
+export const commitRailMove = Effect.fn('commitRailMove')(function* (
+  intent: RailMoveIntent,
+  persist: PersistRailMove = persistRailMove,
+) {
   const key = scopeKey(intent.scope);
+  const registry = yield* AtomRegistry.AtomRegistry;
 
-  // A list already awaiting a persisted move refuses another. The drag engine
-  // also declines the gesture, but the lock lives here so the invariant holds
-  // however the intent arrived.
-  if (isRailOrderPending(key)) return 'blocked';
-  if (isNoOp(client, intent)) return 'skipped';
+  const decision = yield* Effect.sync(() => claim(registry, key, intent));
+  if (decision !== 'claimed') return decision;
 
-  // Claimed synchronously, before the first await, so two drops in this scope
-  // cannot both get past the check above.
-  useRailOrderStore.getState().beginRailOrder(key, intent);
-
-  try {
-    await client.cancelQueries({ queryKey: workspaceQueryKey, exact: true });
-
-    // The drop was aimed at the rail as it looked before that cancel resolved.
-    // Re-deciding here is what keeps a move honest when a concurrent refresh or
-    // another scope's settlement changed the snapshot in between.
-    const current = client.getQueryData<WorkspaceData>(workspaceQueryKey);
-    const projected = current ? applyRailMove(current, intent) : undefined;
-    if (!current || !projected || projected === current) {
-      useRailOrderStore.getState().clearRailOrder(key);
-      return 'skipped';
-    }
-
-    // Captured after the cancel, from the snapshot actually being modified —
-    // capturing before would restore an order that was already superseded.
-    const captured = railSiblingIds(current, intent.scope) ?? [];
-    client.setQueryData<WorkspaceData>(workspaceQueryKey, projected);
-
-    try {
-      await move(intent);
-      useRailOrderStore.getState().clearRailOrder(key);
-      return 'committed';
-    } catch (error) {
-      rollback(client, intent, captured);
-      reportFailure(client, intent, key, error);
-      return 'failed';
-    }
-  } finally {
-    // Every path that reaches here cancelled a workspace fetch, so it owes the
-    // query a chance to converge — including the post-cancel no-op. The common
-    // no-op returns above, before any cancel, and costs nothing at all.
-    await refreshWhenAllSettled(client);
+  const exit = yield* Effect.exit(Effect.uninterruptible(persist(intent)));
+  if (Exit.isSuccess(exit)) {
+    registry.update(railOrderAtom, (rail) => {
+      // A read that began before this acceptance has `startedAt < acceptedAt` and gets the move
+      // replayed; one that begins after has `startedAt === acceptedAt` and already carries it.
+      const clock = rail.clock + 1;
+      return {
+        ...withoutEntry(rail, key),
+        clock,
+        accepted: [...rail.accepted, { intent, acceptedAt: clock }],
+      };
+    });
+  } else {
+    const error = Cause.squash(exit.cause);
+    yield* Effect.sync(() => rollBackAndReport(registry, intent, key, error));
+    // The runtime's own message is diagnostic and never rendered; it belongs here.
+    yield* Effect.logError('[workspace] rail reorder failed', { scope: key, intent, error });
   }
-}
+
+  yield* refreshWhenAllSettled;
+  const outcome: RailMoveOutcome = Exit.isSuccess(exit) ? 'committed' : 'failed';
+  return outcome;
+});
 
 /**
- * A drop that lands an item where it already sits changes nothing a person can
- * see, so it makes no durable request (ADR 0002 — cost should match the action).
- * The runtime would accept it and use the write to compact ranks migrated as
- * ties, but that repair happens on the first genuine move in the list anyway.
- */
-function isNoOp(client: QueryClient, intent: RailMoveIntent): boolean {
-  const data = client.getQueryData<WorkspaceData>(workspaceQueryKey);
-  return !data || applyRailMove(data, intent) === data;
-}
-
-/** Restore only the failed list, against whatever the cache holds now. */
-function rollback(client: QueryClient, intent: RailMoveIntent, captured: readonly number[]) {
-  const latest = client.getQueryData<WorkspaceData>(workspaceQueryKey);
-  if (!latest) return;
-  client.setQueryData<WorkspaceData>(
-    workspaceQueryKey,
-    restoreRailOrder(latest, intent.scope, captured),
-  );
-}
-
-/**
- * Put the refusal where the user is looking.
+ * The gate, the no-op check and the claim, in one synchronous block that no other fiber can
+ * interleave.
  *
- * Normally that is the list itself, inline (ADR 0004). The exception is when the
- * thing they dragged is no longer on screen to hold a message — either because
- * the runtime told us so, or because the rolled-back cache no longer contains
- * it. Then, and only then, it becomes a toast.
+ * A list already awaiting a persisted move refuses another; the drag engine also declines the
+ * gesture, but the lock lives here so the invariant holds however the intent arrived. A drop that
+ * lands an item where it already sits changes nothing a person can see, so it makes no durable
+ * request (ADR 0002 — cost should match the action); the runtime would accept it and use the write
+ * to compact ranks migrated as ties, but that repair happens on the first genuine move in the list
+ * anyway. A new claim also replaces an earlier refusal in this scope: the user has moved on.
  */
-function reportFailure(client: QueryClient, intent: RailMoveIntent, key: string, error: unknown) {
+function claim(
+  registry: AtomRegistry.AtomRegistry,
+  key: string,
+  intent: RailMoveIntent,
+): 'claimed' | 'blocked' | 'skipped' {
+  const rail = registry.get(railOrderAtom);
+  if (rail.entries[key]?.status === 'pending') return 'blocked';
+  const shown = cachedWorkspaceData(registry);
+  if (shown === undefined || applyRailMove(shown, intent) === shown) return 'skipped';
+  registry.set(railOrderAtom, {
+    ...rail,
+    entries: { ...rail.entries, [key]: { status: 'pending', movedId: intent.movedId, intent } },
+  });
+  return 'claimed';
+}
+
+/**
+ * Roll back only this list and put the refusal where the user is looking.
+ *
+ * Dropping the pending entry re-derives this list from the latest read; every other scope's
+ * pending and accepted moves are untouched. Normally the refusal then goes inline at the list
+ * (ADR 0004). The exception is when the thing they dragged is no longer on screen to hold a message
+ * — either because the runtime said so, or because the rolled-back workspace no longer contains
+ * it. Then, and only then, it becomes a toast, and the scope is left clear: a failed entry would
+ * keep the message alive at a list that is no longer there to show it.
+ */
+function rollBackAndReport(
+  registry: AtomRegistry.AtomRegistry,
+  intent: RailMoveIntent,
+  key: string,
+  error: unknown,
+): void {
+  registry.update(railOrderAtom, (rail) => withoutEntry(rail, key));
   const message = formatRuntimeErrorSummary(error);
-  const latest = client.getQueryData<WorkspaceData>(workspaceQueryKey);
+  const shown = cachedWorkspaceData(registry);
   const siteGone =
-    rejectionRemovedSite(intent, error) || !(latest && railMoveSiteExists(latest, intent));
+    rejectionRemovedSite(intent, error) || !(shown && railMoveSiteExists(shown, intent));
 
   if (siteGone) {
-    // The scope has to be released either way. A failed entry would keep the
-    // message alive at a list that is no longer there to show it — and, worse,
-    // a pending one would lock that list and stall every scope's refresh.
-    useRailOrderStore.getState().clearRailOrder(key);
-    showToast({ id: `rail-order-failed:${key}`, kind: 'warning', title: message });
+    showToast(registry, { id: `rail-order-failed:${key}`, kind: 'warning', title: message });
   } else {
-    useRailOrderStore.getState().failRailOrder(key, intent.movedId, message);
+    const failed: RailOrderEntry = { status: 'failed', movedId: intent.movedId, message };
+    registry.update(railOrderAtom, (rail) => ({
+      ...rail,
+      entries: { ...rail.entries, [key]: failed },
+    }));
   }
-  // The runtime's own message is diagnostic and never rendered; it belongs here.
-  console.error('[workspace] rail reorder failed', { scope: key, intent, error });
 }
 
 /**
  * Whether the rejection itself proves the dragged row or its list is gone.
  *
- * Only source and parent reasons qualify. A `before_*` reason means the *anchor*
- * vanished, which leaves the initiating row perfectly able to host the message,
- * and a mismatch or pinned-root reason means the target exists and the client
- * asked for something illegal. Transport and decode failures carry no domain
- * fact at all, so they fall through to the cache check in `reportFailure`.
+ * Only source and parent reasons qualify. A `before_*` reason means the *anchor* vanished, which
+ * leaves the initiating row perfectly able to host the message, and a mismatch or pinned-root
+ * reason means the target exists and the client asked for something illegal. Transport and decode
+ * failures carry no domain fact at all, so they fall through to the workspace check.
  */
 function rejectionRemovedSite(intent: RailMoveIntent, error: unknown): boolean {
   const classified = classifyRuntimeFailure(error);
@@ -206,49 +185,40 @@ function rejectionRemovedSite(intent: RailMoveIntent, error: unknown): boolean {
 /**
  * Reconcile with the runtime once every scope has settled.
  *
- * Invalidation refetches the active rail query and supersedes an older refetch,
- * and a scope that is still mid-write would have its optimistic order fetched
- * away — hence the guard. A failure *here* is ordinary query-layer staleness: an
- * accepted mutation is never rolled back because its follow-up refresh failed.
+ * While another scope is still pending, nothing happens: that scope's own settlement converges
+ * everything, and a stale read landing meanwhile has this move replayed onto it (it is accepted
+ * now), so nothing needs cancelling. Otherwise one read, begun now, replaces whatever is in flight;
+ * the accepted moves it began after are in the runtime's own order and stop being replayed.
  *
- * Deferring is not the same as doing nothing. This move has just settled, so its
- * intent is no longer replayed onto arriving snapshots — and a fetch that read
- * the runtime *before* this write committed is still on the wire, carrying the
- * order from before it. Handing the deferral to the last scope without
- * cancelling would let that answer land and erase a move the runtime has already
- * accepted, until the final refresh eventually put it back. So a deferred
- * settlement still cancels: any fetch started after this point is by definition
- * fresh enough to see this move, and the remaining scope's own refresh is what
- * converges the rest.
+ * A failure *here* is ordinary read staleness, not a failed drag: the runtime already accepted (or
+ * refused) the move and the user has been told, so it is logged and swallowed. The workspace read
+ * reports its own failure through ordinary query state, still showing the projected last success.
  */
-async function refreshWhenAllSettled(client: QueryClient) {
-  if (anyRailOrderPending()) {
-    await client.cancelQueries({ queryKey: workspaceQueryKey, exact: true });
-    return;
-  }
-  try {
-    await client.invalidateQueries({ queryKey: workspaceQueryKey, exact: true });
-  } catch (error) {
-    // Swallowed deliberately. The runtime already accepted (or refused) the move
-    // and the user has been told; a convergence refresh that could not even be
-    // started must not surface at the drop site as though the drag failed. The
-    // workspace query reports its own staleness through ordinary query state.
-    console.error('[workspace] rail reorder refresh failed', error);
-  }
-}
+const refreshWhenAllSettled = Effect.gen(function* () {
+  const registry = yield* AtomRegistry.AtomRegistry;
+  if (anyRailOrderPending(registry.get(railOrderAtom))) return;
+  const read = yield* refreshAndRead(workspaceReadAtom).pipe(
+    Effect.map(Option.some),
+    Effect.catch((error) =>
+      Effect.as(Effect.logError('[workspace] rail reorder refresh failed', error), Option.none()),
+    ),
+  );
+  if (Option.isNone(read)) return;
+  const startedAt = read.value.startedAt;
+  registry.update(railOrderAtom, (rail) => ({
+    ...rail,
+    accepted: rail.accepted.filter((accepted) => accepted.acceptedAt > startedAt),
+  }));
+});
 
-function persistRailMove(intent: RailMoveIntent): Promise<unknown> {
+function persistRailMove(intent: RailMoveIntent): Effect.Effect<unknown, Error, RuntimeApi> {
   const { scope, beforeId } = intent;
   switch (scope.kind) {
     case 'projects':
-      return runRuntimeEffect(moveProjectOrder(intent.movedId, { beforeProjectId: beforeId }));
+      return moveProjectOrder(intent.movedId, { beforeProjectId: beforeId });
     case 'worktrees':
-      return runRuntimeEffect(
-        moveWorktreeOrder(scope.projectId, intent.movedId, { beforeWorktreeId: beforeId }),
-      );
+      return moveWorktreeOrder(scope.projectId, intent.movedId, { beforeWorktreeId: beforeId });
     case 'surfaces':
-      return runRuntimeEffect(
-        moveSurfaceOrder(scope.worktreeId, intent.movedId, { beforeSurfaceId: beforeId }),
-      );
+      return moveSurfaceOrder(scope.worktreeId, intent.movedId, { beforeSurfaceId: beforeId });
   }
 }

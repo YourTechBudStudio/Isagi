@@ -5,19 +5,18 @@ import { Data, Effect } from 'effect';
 
 import type { WorktreeDestinationIssue } from '@isagi/contracts';
 
-import { diagnosticPhase } from '../diagnostics/phase.js';
-import { Git, type GitCommandError, type GitService, listGitWorktrees } from '../git/index.js';
-import type { DatabaseError } from '../persistence/index.js';
+import { diagnosticPhase } from '../platform/diagnostics/index.js';
+import { Git, type GitCommandError, listGitWorktrees } from '../platform/git/index.js';
+import type { DatabaseError } from '../platform/persistence/index.js';
+import type { ProjectRow, ProjectRepository } from '../projects/index.js';
 import { directoryAvailability } from './directory-availability.js';
+import type { WorkspaceError } from './errors.js';
 import { checkNewDirectory } from './new-directory.js';
-import type { ProjectRow } from './types.js';
-import type { WorkspaceRepositoryService } from './workspace.repository.js';
 
 /**
- * Detached creation fails with its own tagged error rather than new `WorkspaceError` codes, for the
- * reason `ProjectOrderError` does: `WorkspaceError` is shared by endpoint mappers that end in a
- * catch-all default, so an unmapped code would be reported as some other failure. Callers switch on
- * `reason` exhaustively.
+ * Detached creation fails with its own tagged error rather than new `WorkspaceError` codes: it has no
+ * workspace endpoint, its callers (workflow checkpoints) switch on `reason` exhaustively, and its fields
+ * (destination issue, whether anything was created) mean nothing to a `WorkspaceError` mapper.
  */
 export class DetachedWorktreeError extends Data.TaggedError('DetachedWorktreeError')<{
   readonly reason:
@@ -55,10 +54,12 @@ export interface DetachedWorktree {
 }
 
 export interface DetachedWorktreeDependencies {
-  readonly repository: WorkspaceRepositoryService;
-  readonly git: GitService;
+  readonly repository: ProjectRepository['Service'];
+  readonly git: Git['Service'];
   /** The service's own post-create reconciliation, passed in so it stays private and single. */
-  readonly reconcile: (project: ProjectRow) => Effect.Effect<unknown, unknown>;
+  readonly reconcile: (
+    project: ProjectRow,
+  ) => Effect.Effect<unknown, WorkspaceError | DatabaseError>;
 }
 
 /**
@@ -151,7 +152,7 @@ function requireRepository(
  * this project counted as a checkout too, including worktrees Isagi has not reconciled yet.
  */
 function checkDestination(
-  repository: WorkspaceRepositoryService,
+  repository: ProjectRepository['Service'],
   input: DetachedWorktreeInput,
   listedPaths: readonly string[],
 ) {
@@ -173,7 +174,12 @@ function checkDestination(
  * or success naming some other object. Anything else means Git could not answer and passes through
  * as `GitCommandError`, so a broken repository is never reported as a discarded commit.
  */
-function verifyCommit(git: GitService, project: ProjectRow, commit: string, destination: string) {
+function verifyCommit(
+  git: Git['Service'],
+  project: ProjectRow,
+  commit: string,
+  destination: string,
+) {
   const notFound = new DetachedWorktreeError({
     reason: 'commit_not_found',
     message: `Commit ${commit} is not in the repository at ${project.rootPath}.`,
@@ -215,9 +221,14 @@ function createParent(projectId: number, destination: string) {
 }
 
 /** Step 6. Git refuses a non-empty or registered path itself, which covers a race with the preflight. */
-function addWorktree(git: GitService, project: ProjectRow, destination: string, commit: string) {
+function addWorktree(
+  git: Git['Service'],
+  project: ProjectRow,
+  destination: string,
+  commit: string,
+) {
   return git.run(['-C', project.rootPath, 'worktree', 'add', '--detach', destination, commit]).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.fail(
         new DetachedWorktreeError({
           reason: 'git_add_failed',

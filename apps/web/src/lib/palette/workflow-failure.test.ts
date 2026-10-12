@@ -49,12 +49,13 @@ const dbError = {
 
 test('a source-scan rejection becomes the discovery presentation with a framed source path', () => {
   const presentation = workflowFailurePresentation(
-    new RuntimeApiError(
-      workflowRejected(
+    new RuntimeApiError({
+      endpointId: 'workflows.start',
+      apiError: workflowRejected(
         { reason: 'workflow_discovery_failed', workflowSourceDirectory: '/roots/extra' },
         'req-disc',
       ),
-    ),
+    }),
   );
 
   assert.equal(presentation.label, failure.discovery.label);
@@ -66,20 +67,26 @@ test('a source-scan rejection becomes the discovery presentation with a framed s
   assert.ok(presentation.content.diagnostic?.detail.includes('request req-disc'));
 });
 
-test('discovery classification unwraps an Effect fiber failure', async () => {
-  const wrapped = await Effect.runPromise(
+test('discovery classification reads an Effect promise rejection as-is', async () => {
+  const rejection = await Effect.runPromise(
     Effect.fail(
-      new RuntimeApiError(
-        workflowRejected({ reason: 'workflow_discovery_failed', workflowSourceDirectory: '/r' }),
-      ),
+      new RuntimeApiError({
+        endpointId: 'workflows.start',
+        apiError: workflowRejected({
+          reason: 'workflow_discovery_failed',
+          workflowSourceDirectory: '/r',
+        }),
+      }),
     ),
   ).catch((cause: unknown) => cause);
-  assert.equal(workflowFailurePresentation(wrapped).content.title, failure.discovery.title);
+  assert.equal(workflowFailurePresentation(rejection).content.title, failure.discovery.title);
 });
 
 test('a non-discovery workflow rejection uses generic chrome with reason-specific body', () => {
   const apiError = workflowRejected({ reason: 'workflow_surface_busy' }, 'req-busy');
-  const presentation = workflowFailurePresentation(new RuntimeApiError(apiError));
+  const presentation = workflowFailurePresentation(
+    new RuntimeApiError({ endpointId: 'workflows.start', apiError }),
+  );
 
   assert.equal(presentation.label, failure.generic.label);
   assert.equal(presentation.content.title, failure.generic.title);
@@ -89,20 +96,24 @@ test('a non-discovery workflow rejection uses generic chrome with reason-specifi
 });
 
 test('a non-workflow API error uses generic chrome with a code/request diagnostic', () => {
-  const presentation = workflowFailurePresentation(new RuntimeApiError(dbError));
+  const presentation = workflowFailurePresentation(
+    new RuntimeApiError({ endpointId: 'workflows.start', apiError: dbError }),
+  );
   assert.equal(presentation.content.body, runtimeErrorCopy.fromApiError(dbError));
   assert.equal(presentation.content.diagnostic?.detail, 'runtime_database_failed · request req-db');
 });
 
 test('a transport failure is generic with transport body and no diagnostic', () => {
-  const presentation = workflowFailurePresentation(new RuntimeTransportError('down', null));
+  const presentation = workflowFailurePresentation(
+    new RuntimeTransportError({ endpointId: 'workflows.start', cause: null }),
+  );
   assert.equal(presentation.content.body, runtimeErrorCopy.transport);
   assert.equal(presentation.content.diagnostic, undefined);
 });
 
 test('a decode failure frames the endpoint as diagnostic evidence', () => {
   const presentation = workflowFailurePresentation(
-    new RuntimeDecodeError('workflows.descriptors', null),
+    new RuntimeDecodeError({ endpointId: 'workflows.descriptors', cause: null }),
   );
   assert.equal(presentation.content.body, runtimeErrorCopy.decode);
   assert.equal(presentation.content.diagnostic?.detail, 'Endpoint: workflows.descriptors');
@@ -124,7 +135,9 @@ test('start failure keeps structured paths for API errors', () => {
     },
     'req-start',
   );
-  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+  const content = workflowStartFailureContent(
+    new RuntimeApiError({ endpointId: 'workflows.start', apiError }),
+  );
 
   assert.equal(content.title, paletteCopy.workflows.startFailed.title);
   assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
@@ -141,7 +154,9 @@ test("a workflow's launch refusal keeps fixed copy and quotes its message in the
     'req-parse',
     `  ${refusal}\n`,
   );
-  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+  const content = workflowStartFailureContent(
+    new RuntimeApiError({ endpointId: 'workflows.start', apiError }),
+  );
 
   assert.equal(content.title, paletteCopy.workflows.startRefused.title);
   assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
@@ -155,7 +170,9 @@ test("a workflow's launch refusal keeps fixed copy and quotes its message in the
 
 test('a launch refusal with no message keeps the plain diagnostic line', () => {
   const apiError = workflowRejected({ reason: 'workflow_parse_rejected' }, 'req-parse', '   ');
-  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+  const content = workflowStartFailureContent(
+    new RuntimeApiError({ endpointId: 'workflows.start', apiError }),
+  );
 
   assert.equal(content.title, paletteCopy.workflows.startRefused.title);
   assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
@@ -166,7 +183,9 @@ test('parameters parse could not store keep a fixed body and put the runtime mes
   const message =
     "The workflow's parse returned a value that cannot be stored at parameters.when: a Date.";
   const apiError = workflowRejected({ reason: 'workflow_parameters_invalid' }, 'req-p', message);
-  const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+  const content = workflowStartFailureContent(
+    new RuntimeApiError({ endpointId: 'workflows.start', apiError }),
+  );
 
   assert.equal(content.title, paletteCopy.workflows.startFailed.title);
   assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
@@ -181,7 +200,9 @@ for (const reason of ['workflow_command_failed', 'workflow_placement_failed'] as
   test(`${reason} keeps its fixed body and quotes the workflow's message only as a diagnostic`, () => {
     const message = 'origin.worktreeId is not a worktree I know';
     const apiError = workflowRejected({ reason }, 'req-hook', message);
-    const content = workflowStartFailureContent(new RuntimeApiError(apiError));
+    const content = workflowStartFailureContent(
+      new RuntimeApiError({ endpointId: 'workflows.start', apiError }),
+    );
 
     assert.equal(content.title, paletteCopy.workflows.startFailed.title);
     assert.equal(content.body, runtimeErrorCopy.fromApiError(apiError));
@@ -194,7 +215,9 @@ for (const reason of ['workflow_command_failed', 'workflow_placement_failed'] as
 }
 
 test('start failure omits the diagnostic for transport and unknown, frames endpoint for decode', () => {
-  const transport = workflowStartFailureContent(new RuntimeTransportError('down', null));
+  const transport = workflowStartFailureContent(
+    new RuntimeTransportError({ endpointId: 'workflows.start', cause: null }),
+  );
   assert.equal(transport.body, runtimeErrorCopy.transport);
   assert.equal(transport.diagnostic, undefined);
 
@@ -202,7 +225,9 @@ test('start failure omits the diagnostic for transport and unknown, frames endpo
   assert.equal(unknown.body, runtimeErrorCopy.unknown);
   assert.equal(unknown.diagnostic, undefined);
 
-  const decode = workflowStartFailureContent(new RuntimeDecodeError('workflows.start', null));
+  const decode = workflowStartFailureContent(
+    new RuntimeDecodeError({ endpointId: 'workflows.start', cause: null }),
+  );
   assert.equal(decode.body, runtimeErrorCopy.decode);
   assert.equal(decode.diagnostic?.detail, 'Endpoint: workflows.start');
 });
@@ -396,9 +421,13 @@ test('a launch rejected before any run offers no Retry, because nothing changed 
     deps({
       start: () =>
         Promise.reject(
-          new RuntimeApiError(
-            workflowRejected({ reason: 'workflow_environment_collision', collision: 'branch' }),
-          ),
+          new RuntimeApiError({
+            endpointId: 'workflows.start',
+            apiError: workflowRejected({
+              reason: 'workflow_environment_collision',
+              collision: 'branch',
+            }),
+          }),
         ),
     }),
   );
@@ -413,9 +442,13 @@ test('a refused retry is reported as a retry failure, not as a failed start', as
     deps({
       retry: () =>
         Promise.reject(
-          new RuntimeApiError(
-            workflowRejected({ reason: 'workflow_control_unavailable', control: 'retry' }),
-          ),
+          new RuntimeApiError({
+            endpointId: 'workflows.start',
+            apiError: workflowRejected({
+              reason: 'workflow_control_unavailable',
+              control: 'retry',
+            }),
+          }),
         ),
     }),
   );
@@ -427,7 +460,10 @@ test('a refused retry is reported as a retry failure, not as a failed start', as
 test('a launch whose run could not be read never claims the workflow did not start', async () => {
   const outcome = await workflowLaunchOutcome(
     launchInput,
-    deps({ awaitPrepared: () => Promise.reject(new RuntimeTransportError('socket gone', null)) }),
+    deps({
+      awaitPrepared: () =>
+        Promise.reject(new RuntimeTransportError({ endpointId: 'workflows.start', cause: null })),
+    }),
   );
   const content = outcome.kind === 'error' ? outcome.content : null;
   assert.equal(content?.title, environmentCopy.summaryUnreadableTitle);
@@ -446,7 +482,7 @@ test('asking again after an unreadable run reports the run, not the read', async
     awaitPrepared: () => {
       reads += 1;
       return reads === 1
-        ? Promise.reject(new RuntimeTransportError('socket gone', null))
+        ? Promise.reject(new RuntimeTransportError({ endpointId: 'workflows.start', cause: null }))
         : Promise.resolve(summary({ status: 'running' }));
     },
   });

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 
-import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
-import type { CommandRunRow, CommandStateRow } from '../commands.repository.js';
+import { PtyKillError, PtyServiceError } from '../../pty-processes/index.js';
+import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
   commandRun,
   commandState,
@@ -59,7 +59,7 @@ async function audit(
         // Boot convergence already ran during construction. Everything recorded
         // below therefore belongs to the delete itself.
         Effect.sync(() => recorder.reset()).pipe(
-          Effect.zipRight(
+          Effect.andThen(
             (input.prune
               ? service.cleanupBeforeWorktreePrune({ worktreeId: 10 })
               : service.cleanupBeforeWorktreeDelete({ worktreeId: 10 })
@@ -89,7 +89,7 @@ async function audit(
 
 function failureCode(exit: Exit.Exit<void, unknown>) {
   if (Exit.isSuccess(exit)) return null;
-  const error = exit.cause._tag === 'Fail' ? exit.cause.error : null;
+  const error = Option.getOrNull(Cause.findErrorOption(exit.cause));
   return (error as { readonly code?: string } | null)?.code ?? null;
 }
 

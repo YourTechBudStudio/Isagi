@@ -222,6 +222,24 @@ test('manual replay stays covered through synchronized output and drains held li
     .toBe(1);
 });
 
+test('a focused terminal owns the keyboard once its cold restore is revealed', async ({
+  page,
+}, testInfo) => {
+  await openFixture(page, testInfo.project.name, 'manual=1&recipe=shell');
+  // `dispatchEvent`, not `click`: the fixture's controls must not take focus themselves, so the
+  // only candidate owner is the focused terminal.
+  const control = (action: string) =>
+    page.locator(`[data-action="${action}"]`).dispatchEvent('click');
+  await control('open-socket');
+  await control('replay-start');
+  await control('replay-chunks');
+  // Every focus attempt so far met an inert, covered host.
+  await expect(page.locator('[data-terminal-cover]')).toHaveCount(1);
+  await control('replay-end');
+  await revealed(page);
+  await expect(page.locator('[data-session="1"] .xterm-helper-textarea')).toBeFocused();
+});
+
 test('alternate buffer and ED3 report honest public-buffer state', async ({ page }, testInfo) => {
   await openFixture(page, testInfo.project.name);
   await revealed(page);

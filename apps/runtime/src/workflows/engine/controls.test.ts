@@ -17,14 +17,9 @@ import {
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import {
-  workflowEvents,
-  workflowExecutions,
-  workflowOperations,
-  workflowRuns,
-} from '../../persistence/schema.js';
 import { WorkflowEngineError } from '../errors.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowEvents, workflowExecutions, workflowOperations, workflowRuns } from '../tables.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
 /** Pause, Resume, Retry, Cancel, Dismiss and Advance, and the code reload behind Resume and Retry. */
@@ -280,6 +275,46 @@ test('Resume reloads the latest build and routes with it', async () => {
     assert.equal(run.status, 'completed');
     assert.equal(run.artifactHash, newHash);
     assert.equal(JSON.parse(run.outcomeJson!).output, 'right');
+  });
+});
+
+/** The last summary pushed for a run on the public socket: all a client that follows it can show. */
+const lastPushedSummary = (harness: EngineHarness, runId: number) =>
+  harness.events
+    .flatMap((event) => (event.type === 'workflow_run_changed' ? [event.payload] : []))
+    .filter((summary) => summary.runId === runId)
+    .at(-1);
+
+test('Resume onto a wait that is still open pushes the waiting summary, not the transient running one', async () => {
+  await withEngine(async (harness) => {
+    harness.registry.publish(
+      'hold',
+      workflow(
+        createGraph<{ n: number }>({
+          key: 'hold',
+          title: 'Hold',
+          init: () => ({ n: 0 }),
+          state: { n: reduce.replace<number>() } as never,
+          entry: 'hold',
+          nodes: { hold: operation(async () => suspend({ wait: wait.userContinue('Approve') })) },
+          edges: { out: edge({ from: 'hold', to: ['done'], choose: () => ({ to: 'done' }) }) },
+          outcomes: { done: outcome({ kind: 'success', output: () => 'done' }) },
+        }),
+      ),
+    );
+    const runId = await harness.launch('hold');
+    assert.equal(lastPushedSummary(harness, runId)?.status, 'waiting');
+
+    await harness.run(harness.engine.pause(runId));
+    assert.equal(lastPushedSummary(harness, runId)?.status, 'paused');
+
+    await harness.run(harness.engine.resume(runId));
+    // The driver re-checks the wait, finds it still open and parks the run again. The execution was
+    // already waiting, so parking appends no event; the summary must be pushed all the same.
+    assert.equal(runRow(harness, runId).status, 'waiting');
+    const pushed = lastPushedSummary(harness, runId);
+    assert.equal(pushed?.status, 'waiting');
+    assert.deepEqual(pushed?.current?.wait, { kind: 'user_continue', label: 'Approve' });
   });
 });
 

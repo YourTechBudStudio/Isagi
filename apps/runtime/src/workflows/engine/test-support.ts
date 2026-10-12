@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import BetterSqlite from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { Effect, Exit, Layer, Scope } from 'effect';
+import { Cause, Context, Effect, Exit, Layer, Scope } from 'effect';
 
 import type {
   RuntimeEvent,
@@ -14,28 +14,25 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
-import { Git, GitLive } from '../../git/index.js';
+import { HarnessObserverRefreshError } from '../../harnesses/index.js';
+import { InternalEvents, type RuntimeEvents } from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
 import {
   DatabaseError,
-  type RuntimeDatabaseService,
   type RuntimeDrizzleDatabase,
-} from '../../persistence/database.service.js';
-import { migrationsDirectory } from '../../persistence/migrations.js';
-import * as schema from '../../persistence/schema.js';
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-  type InternalRuntimeEventBusService,
-  type RuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import { DetachedWorktreeError } from '../../workspace/detached-worktree.js';
-import { checkNewDirectory } from '../../workspace/new-directory.js';
-import { WorkspaceError } from '../../workspace/workspace.service.js';
+  migrationsDirectory,
+  type RuntimeDatabase,
+} from '../../platform/persistence/index.js';
+import { makeRuntimeDatabase } from '../../platform/persistence/testing.js';
+import { PtyServiceError } from '../../pty-processes/index.js';
+import { DetachedWorktreeError, WorkspaceError } from '../../workspace/index.js';
+import { checkNewDirectory } from '../../workspace/testing.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
+import { WorkflowOperationFailed } from '../errors.js';
 import {
   makeWorkflowContentStore,
   type WorkflowContentStoreInstance,
-  type WorkflowContentStoreService,
+  type WorkflowContentStore,
 } from '../store/content-store.js';
 import type { Db } from '../store/rows.js';
 import {
@@ -45,7 +42,7 @@ import {
   type LoadedWorkflowArtifact,
   type PublishedWorkflowArtifact,
 } from '../structure/loader.js';
-import type { DiscoveredWorkflowEntry, WorkflowRegistryService } from '../structure/registry.js';
+import type { DiscoveredWorkflowEntry, WorkflowRegistry } from '../structure/registry.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import type { TurnEdge } from '../waits/latest-turn.js';
 import type {
@@ -78,7 +75,7 @@ export interface EngineHarness {
   readonly headless: FakeHeadless;
   /** The seeded worktree's checkout, where operation and checkpoint nodes work. */
   readonly worktreePath: string;
-  readonly internalEvents: InternalRuntimeEventBusService;
+  readonly internalEvents: InternalEvents['Service'];
   /** Makes the next write with this operation name fail and roll back, as a full disk would. */
   readonly failNextWrite: (operation: string) => void;
   /**
@@ -101,6 +98,8 @@ export interface EngineHarness {
       readonly placement?: WorkflowPlacementRequestDto;
     },
   ) => Promise<number>;
+  /** Stops the engine, as app shutdown does, without starting a new one. */
+  readonly stop: () => Promise<void>;
   readonly restart: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -110,37 +109,35 @@ export interface EngineHarness {
  * `harness.registry` is then unused.
  */
 export async function makeEngineHarness(
-  options: { readonly registry?: WorkflowRegistryService } = {},
+  options: { readonly registry?: WorkflowRegistry['Service'] } = {},
 ): Promise<EngineHarness> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-workflow-engine-')));
   const client = new BetterSqlite(join(root, 'isagi.db'));
   client.pragma('journal_mode = WAL');
   client.pragma('foreign_keys = ON');
-  const drizzled = drizzle(client, { schema }) as RuntimeDrizzleDatabase;
+  const drizzled: RuntimeDrizzleDatabase = drizzle(client);
   migrate(drizzled, { migrationsFolder: migrationsDirectory() });
   const failingWrites = new Set<string>();
   const beforeWrites = new Map<string, () => Promise<void>>();
-  const database: RuntimeDatabaseService = {
-    use: (operation, run) =>
-      Effect.try({
-        try: () => run(drizzled),
-        catch: (cause) => new DatabaseError({ operation, cause }),
-      }),
+  const real = makeRuntimeDatabase(drizzled);
+  const database: RuntimeDatabase['Service'] = {
+    use: real.use,
     transaction: (operation, run) => {
-      const write = Effect.try({
-        try: () => {
-          if (failingWrites.delete(operation)) throw new Error(`Injected failure of ${operation}.`);
-          return drizzled.transaction((transaction) =>
-            run(transaction as unknown as RuntimeDrizzleDatabase),
-          );
-        },
-        catch: (cause) => new DatabaseError({ operation, cause }),
-      });
+      const write = Effect.suspend(() =>
+        failingWrites.delete(operation)
+          ? Effect.fail(
+              new DatabaseError({
+                operation,
+                cause: new Error(`Injected failure of ${operation}.`),
+              }),
+            )
+          : real.transaction(operation, run),
+      );
       return Effect.suspend(() => {
         const before = beforeWrites.get(operation);
         if (!before) return write;
         beforeWrites.delete(operation);
-        return Effect.promise(before).pipe(Effect.zipRight(write));
+        return Effect.promise(before).pipe(Effect.andThen(write));
       });
     },
   };
@@ -148,16 +145,11 @@ export async function makeEngineHarness(
   const worktreePath = join(root, 'worktree');
   mkdirSync(worktreePath, { recursive: true });
   const busScope = Effect.runSync(Scope.make());
-  const busContext = await Effect.runPromise(
-    Layer.buildWithScope(InternalRuntimeEventBusLive, busScope),
-  );
-  const internalEvents = busContext.unsafeMap.get(InternalRuntimeEventBus.key) as
-    | InternalRuntimeEventBusService
-    | undefined;
-  if (!internalEvents) throw new Error('The internal event bus did not build.');
+  const busContext = await Effect.runPromise(Layer.buildWithScope(InternalEvents.layer, busScope));
+  const internalEvents: InternalEvents['Service'] = Context.get(busContext, InternalEvents);
 
   const events: RuntimeEvent[] = [];
-  const publicEvents: RuntimeEventBusService = {
+  const publicEvents: RuntimeEvents['Service'] = {
     publish: (event) => Effect.sync(() => void events.push(event)),
     subscribe: Effect.die('Tests read published events from the array.'),
   };
@@ -171,7 +163,7 @@ export async function makeEngineHarness(
   let scope = Effect.runSync(Scope.make());
   const start = () =>
     Effect.runPromise(
-      Scope.extend(
+      Scope.provide(
         startEngine({
           database,
           events: publicEvents,
@@ -213,7 +205,11 @@ export async function makeEngineHarness(
       const exit = await Effect.runPromiseExit(effect);
       await harness.settle();
       if (Exit.isSuccess(exit)) throw new Error('Expected the call to fail, and it succeeded.');
-      const failure = exit.cause._tag === 'Fail' ? exit.cause.error : exit.cause;
+      const [only] = exit.cause.reasons;
+      const failure =
+        exit.cause.reasons.length === 1 && only && Cause.isFailReason(only)
+          ? only.error
+          : exit.cause;
       return failure;
     },
     settle: () => Effect.runPromise(engine.awaitIdle),
@@ -228,10 +224,13 @@ export async function makeEngineHarness(
       );
       return runId;
     },
-    restart: async () => {
-      // Deliberately no settle first: a restart can cut off a node function mid-run.
+    stop: async () => {
       await Effect.runPromise(Scope.close(scope, Exit.void));
       scope = Effect.runSync(Scope.make());
+    },
+    restart: async () => {
+      // Deliberately no settle first: a restart can cut off a node function mid-run.
+      await harness.stop();
       engine = await start();
       await harness.settle();
     },
@@ -263,11 +262,13 @@ export class FakeClock {
   }
 }
 
+type WorkflowRegistryShape = WorkflowRegistry['Service'];
+
 /**
  * Discovery in memory. `publish` registers a new build of a workflow and makes it the latest one,
  * which is what Resume and Retry reload; earlier builds stay loadable by hash.
  */
-export class FakeRegistry implements WorkflowRegistryService {
+export class FakeRegistry implements WorkflowRegistryShape {
   private readonly latest = new Map<string, PublishedWorkflowArtifact>();
   private readonly byHash = new Map<string, LoadedWorkflowArtifact>();
   private builds = 0;
@@ -286,7 +287,7 @@ export class FakeRegistry implements WorkflowRegistryService {
     return hash;
   }
 
-  discover: WorkflowRegistryService['discover'] = () =>
+  discover: WorkflowRegistry['Service']['discover'] = () =>
     Effect.sync(() => {
       const entries: DiscoveredWorkflowEntry[] = [...this.latest.entries()].map(
         ([workflowKey, build]) => ({
@@ -309,7 +310,7 @@ export class FakeRegistry implements WorkflowRegistryService {
       return { entries, find: (key) => entries.find((entry) => entry.workflowKey === key) };
     });
 
-  loadPinned: WorkflowRegistryService['loadPinned'] = (artifactHash, workflowKey) => {
+  loadPinned: WorkflowRegistry['Service']['loadPinned'] = (artifactHash, workflowKey) => {
     const artifact = this.byHash.get(artifactHash);
     return artifact
       ? Effect.succeed(artifact)
@@ -431,12 +432,12 @@ export class FakePlaces {
    * over these rows; a detached worktree is a real `git worktree add --detach` from the seeded
    * worktree, registered here instead of by reconciliation.
    */
-  checkpointsPort(content: WorkflowContentStoreService): CheckpointsPort {
+  checkpointsPort(content: WorkflowContentStore['Service']): CheckpointsPort {
     const repository = {
       listProjects: Effect.sync(() => [{ rootPath: this.root }] as never),
       listWorktrees: Effect.sync(() => [...this.worktrees.values()] as never),
     };
-    const git = Effect.runSync(Effect.provide(Git, GitLive));
+    const git = Effect.runSync(Effect.provide(Git, Git.layer));
     const checkNew = (path: string) => checkNewDirectory(repository, path);
     return makeCheckpointsPort({
       git,
@@ -444,7 +445,7 @@ export class FakePlaces {
       workspace: {
         checkNewDirectory: checkNew,
         createDetachedWorktree: (input) =>
-          Effect.gen(this, function* () {
+          Effect.gen({ self: this }, function* () {
             const failure = (
               reason: DetachedWorktreeError['reason'],
               message: string,
@@ -473,8 +474,8 @@ export class FakePlaces {
             );
             const verified = yield* git
               .run(['-C', source, 'cat-file', '-e', `${input.commit}^{commit}`])
-              .pipe(Effect.either);
-            if (verified._tag === 'Left') {
+              .pipe(Effect.result);
+            if (verified._tag === 'Failure') {
               return yield* Effect.fail(
                 failure('commit_not_found', `Commit ${input.commit} is not in the repository.`),
               );
@@ -569,7 +570,7 @@ export class FakePlaces {
             return this.setup();
           }),
       } as PlacesPort['workspaceService'],
-      surfaceRepository: {
+      surfaceReads: {
         findSurface: (id) => Effect.sync(() => (this.surfaces.get(id) ?? null) as never),
         listWorkspaceSurfaceMetadata: Effect.sync(() => [...this.surfaces.values()] as never),
       },
@@ -630,7 +631,7 @@ export class FakeAgents {
 
   constructor(
     private readonly clock: FakeClock,
-    private readonly bus: InternalRuntimeEventBusService,
+    private readonly bus: InternalEvents['Service'],
   ) {}
 
   /** An agent session that already exists, such as the one a workflow is launched from. */
@@ -650,7 +651,7 @@ export class FakeAgents {
   port(): AgentPort {
     return {
       spawn: (input) =>
-        Effect.gen(this, function* () {
+        Effect.gen({ self: this }, function* () {
           const agentSessionId = this.nextSession++;
           this.sessions.set(agentSessionId, {
             harness: input.harness,
@@ -668,7 +669,11 @@ export class FakeAgents {
       send: (input) =>
         Effect.suspend(() => {
           const session = this.sessions.get(input.agentSessionId);
-          if (!session) return Effect.fail(new Error(`No agent session ${input.agentSessionId}.`));
+          if (!session) {
+            return Effect.fail(
+              new WorkflowOperationFailed({ message: `No agent session ${input.agentSessionId}.` }),
+            );
+          }
           const sentAt = this.clock.now();
           this.prompts.push({
             kind: 'send',
@@ -691,7 +696,14 @@ export class FakeAgents {
         }),
       turnEdges: (agentSessionId, refresh) =>
         refresh && this.refreshFails
-          ? Effect.fail(new Error('The harness records could not be read.'))
+          ? Effect.fail(
+              new HarnessObserverRefreshError({
+                agentSessionId,
+                failedSources: [],
+                failedOperations: [],
+                message: 'The harness records could not be read.',
+              }),
+            )
           : Effect.succeed([...(this.sessions.get(agentSessionId)?.edges ?? [])]),
       isAlive: (agentSessionId) =>
         Effect.succeed(this.sessions.get(agentSessionId)?.alive ?? false),
@@ -799,7 +811,7 @@ export class FakeHeadless {
   private readonly outputs = new Map<number, string>();
   private nextProcess = 1;
 
-  constructor(private readonly bus: InternalRuntimeEventBusService) {}
+  constructor(private readonly bus: InternalEvents['Service']) {}
 
   port(): HeadlessPort {
     return {
@@ -813,7 +825,11 @@ export class FakeHeadless {
       exitOf: (ptyProcessId) => Effect.succeed(this.exits.get(ptyProcessId) ?? null),
       capture: (input) =>
         this.captureFails
-          ? Effect.fail(new Error(`The log of process ${input.ptyProcessId} is unreadable.`))
+          ? Effect.fail(
+              new WorkflowOperationFailed({
+                message: `The log of process ${input.ptyProcessId} is unreadable.`,
+              }),
+            )
           : Effect.succeed({
               output: this.outputs.get(input.ptyProcessId) ?? '',
               semanticError: null,
@@ -823,7 +839,13 @@ export class FakeHeadless {
       // A successful stop is a killed process, as the PTY service reports it.
       terminate: (ptyProcessId) =>
         this.terminateFails
-          ? Effect.fail(new Error(`Process ${ptyProcessId} would not stop.`))
+          ? Effect.fail(
+              new PtyServiceError({
+                code: 'backend_unavailable',
+                message: `Process ${ptyProcessId} would not stop.`,
+                ptyProcessId,
+              }),
+            )
           : Effect.sync(() => {
               this.terminated.push(ptyProcessId);
               this.exits.set(ptyProcessId, { status: 'killed', exitCode: null });

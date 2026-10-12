@@ -13,10 +13,11 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { eq } from 'drizzle-orm';
 
-import { projects, workflowGraphInvocations, workflowRuns } from '../../persistence/schema.js';
+import { projects } from '../../projects/tables.js';
 import { WorkflowEngineError } from '../errors.js';
 import { deleteRunsOfProject } from '../store/runs.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowGraphInvocations, workflowRuns } from '../tables.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
 /**

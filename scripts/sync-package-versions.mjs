@@ -18,6 +18,21 @@ const defaultFileSystem = { readFile, readdir, writeFile };
 
 export class PackageVersionSyncError extends Data.TaggedError('PackageVersionSyncError') {}
 
+/**
+ * @typedef {object} PackageVersionFileSystem
+ * @property {typeof readFile} readFile
+ * @property {typeof readdir} readdir
+ * @property {typeof writeFile} writeFile
+ */
+
+/**
+ * @typedef {object} PackageVersionOptions
+ * @property {string} repoRoot
+ * @property {string} [requestedVersion]
+ * @property {PackageVersionFileSystem} [fileSystem]
+ */
+
+/** @param {PackageVersionOptions} options */
 export function createPackageVersionPlan({
   repoRoot,
   requestedVersion,
@@ -83,6 +98,7 @@ export function createPackageVersionPlan({
   });
 }
 
+/** @param {PackageVersionOptions} options */
 export function verifyPackageVersions(options) {
   return Effect.flatMap(createPackageVersionPlan(options), (plan) => {
     if (plan.changes.length === 0) {
@@ -96,6 +112,7 @@ export function verifyPackageVersions(options) {
   });
 }
 
+/** @param {PackageVersionOptions} options */
 export function syncPackageVersions(options) {
   const fileSystem = options.fileSystem ?? defaultFileSystem;
   return Effect.flatMap(createPackageVersionPlan({ ...options, fileSystem }), (plan) =>
@@ -281,6 +298,10 @@ function fail(message) {
   return Effect.fail(new PackageVersionSyncError({ message }));
 }
 
+/**
+ * @param {string[]} args
+ * @returns {Effect.Effect<{ help: true } | { help: false; requestedVersion: string | undefined }, PackageVersionSyncError>}
+ */
 function parseSyncArguments(args) {
   if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
     return Effect.succeed({ help: true });
@@ -309,22 +330,22 @@ async function runCli() {
   const exit = await Effect.runPromiseExit(
     Effect.gen(function* () {
       const parsedArguments = yield* parseSyncArguments(process.argv.slice(2));
-      if (parsedArguments.help) {
+      if (parsedArguments.help === true) {
         return parsedArguments;
       }
       const plan = yield* syncPackageVersions({
         repoRoot: repositoryRoot,
         requestedVersion: parsedArguments.requestedVersion,
       });
-      return { help: false, plan };
+      return /** @type {const} */ ({ help: false, plan });
     }),
   );
   if (Exit.isFailure(exit)) {
-    console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+    console.error(Cause.pretty(exit.cause));
     process.exitCode = 1;
     return;
   }
-  if (exit.value.help) {
+  if (exit.value.help === true) {
     console.log(syncHelpText());
     return;
   }

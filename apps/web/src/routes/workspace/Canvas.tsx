@@ -3,8 +3,9 @@ import { Plus } from 'lucide-react';
 import { Button } from '../../components/Button.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { canvasCopy } from '../../copy/index.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
+import { openPalette } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import type { Worktree } from '../../lib/workspace/types.js';
 import { MissingProjectState } from './MissingProjectState.js';
@@ -38,14 +39,18 @@ export function Canvas() {
 }
 
 function FreshEmptyState() {
-  const openPalette = usePaletteStore((state) => state.openPalette);
+  const registry = useRegistry();
 
   return (
     <EmptyState
       title={canvasCopy.freshEmpty.title}
       body={canvasCopy.freshEmpty.body}
       actions={
-        <Button icon={Plus} shortcut={`${modKey}N`} onClick={() => openPalette('add-project')}>
+        <Button
+          icon={Plus}
+          shortcut={`${modKey}N`}
+          onClick={() => openPalette(registry, 'add-project')}
+        >
           Add project
         </Button>
       }

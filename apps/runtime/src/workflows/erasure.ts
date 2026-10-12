@@ -1,26 +1,15 @@
-import { Context, Layer } from 'effect';
+import { Layer } from 'effect';
 
-import type { RuntimeDrizzleDatabase } from '../persistence/index.js';
+import { ProjectDeletionParticipant } from '../workspace/index.js';
 import { deleteRunsOfProject } from './store/runs.js';
 
 /**
  * Project deletion's workflow participant. The workspace owns the transaction that deletes a
  * project; the workflows domain owns the SQL that erases the project's runs inside it (ADR 0008).
- * A stateless leaf, so the workspace can depend on it without importing the engine.
+ * It deletes every run of the project inside the caller's open transaction (children cascade) and
+ * returns the number of runs erased. Stateless, and wired only by the composition root.
  */
-export interface WorkflowRunErasureService {
-  /**
-   * Deletes every run of the project inside the caller's open transaction; children cascade.
-   * Synchronous by design: it runs inside a better-sqlite3 transaction callback.
-   * Returns the number of runs erased. Must not be called outside a transaction.
-   */
-  readonly eraseProjectRunsInTransaction: (db: RuntimeDrizzleDatabase, projectId: number) => number;
-}
-
-export const WorkflowRunErasure = Context.GenericTag<WorkflowRunErasureService>(
-  'isagi/WorkflowRunErasure',
+export const WorkflowProjectErasure = Layer.succeed(
+  ProjectDeletionParticipant,
+  ProjectDeletionParticipant.of({ eraseInTransaction: deleteRunsOfProject }),
 );
-
-export const WorkflowRunErasureLive = Layer.succeed(WorkflowRunErasure, {
-  eraseProjectRunsInTransaction: deleteRunsOfProject,
-});

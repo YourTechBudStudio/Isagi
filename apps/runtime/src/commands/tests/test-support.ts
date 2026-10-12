@@ -3,51 +3,31 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import websocket from '@fastify/websocket';
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import Fastify from 'fastify';
+import { Cause, Effect, Layer, Logger, References } from 'effect';
+import type { FastifyInstance } from 'fastify';
 
-import { DatabaseError, DataDirectory } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import {
-  PtyRepository,
-  PtyService,
-  type PtyProcessAllocation,
-  type PtyRepositoryService,
-  type PtyServiceShape,
-} from '../../pty-processes/index.js';
+import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
+import { withApiServer } from '../../platform/http/testing.js';
+import { EntityLock } from '../../platform/locks/index.js';
+import { LoopbackPortProbe, LoopbackPortUnavailable } from '../../platform/net/index.js';
+import { DatabaseError, DataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { PtyService, type PtyProcessAllocation } from '../../pty-processes/index.js';
 import type { PtyProcessRow } from '../../pty-processes/index.js';
-import type { PtyAttachment } from '../../pty-processes/pty.service.js';
-import { fakePtyAllocation } from '../../pty-processes/test-support.js';
-import type { PtyProcessLaunchMetadata } from '../../pty-processes/types.js';
-import {
-  InternalRuntimeEventBus,
-  InternalRuntimeEventBusLive,
-  RuntimeEventBus,
-  RuntimeEventBusLive,
-  type InternalRuntimeEventBusService,
-  type RuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../workspace/index.js';
-import { registerCommandsApi } from '../api.js';
-import {
-  CommandPortAllocationError,
-  CommandPortProbe,
-  type CommandPortProbeService,
-  type ResolvedPortEntry,
-} from '../commands.ports.js';
+import type { PtyAttachment, PtyProcessLaunchMetadata } from '../../pty-processes/testing.js';
+import { fakePtyAllocation, fakeTerminateMany } from '../../pty-processes/testing.js';
+import { registerCommandsRoutes } from '../api.js';
+import type { ResolvedPortEntry } from '../ports.js';
 import {
   CommandRepository,
   type CommandFinalizeResult,
   type CommandPtyLink,
-  type CommandRepositoryService,
   type CommandRunRow,
   type CommandStateRow,
-} from '../commands.repository.js';
-import {
-  CommandService,
-  CommandServiceLive,
-  type CommandService as CommandServiceShape,
-} from '../commands.service.js';
+} from '../repository.js';
+import { CommandService } from '../service.js';
+import { CommandSettings, type CommandTimings } from '../settings.js';
 
 // ---------------------------------------------------------------------------
 // API / websocket test support
@@ -66,30 +46,27 @@ export const idleLogMetadata = {
   latestRun: null,
 };
 
-export async function withCommandsApi<A>(
-  service: CommandServiceShape,
-  run: (fastify: Fastify.FastifyInstance) => Promise<A>,
-  options: { readonly pty?: PtyServiceShape | undefined } = {},
+export function withCommandsApi<A>(
+  service: CommandService['Service'],
+  run: (fastify: FastifyInstance) => Promise<A>,
+  options: { readonly pty?: Partial<PtyService['Service']> | undefined } = {},
 ) {
-  const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(
+  return withApiServer(
     Layer.mergeAll(
       Layer.succeed(CommandService, service),
-      Layer.succeed(PtyService, options.pty ?? fakeCommandLogPtyService()),
+      Layer.mock(PtyService)(options.pty ?? fakeCommandLogPtyService()),
     ),
+    async (fastify, runtime) => {
+      await fastify.register(websocket);
+      registerCommandsRoutes(fastify, runtime);
+    },
+    run,
   );
-  try {
-    await fastify.register(websocket);
-    registerCommandsApi(fastify, runtime as never);
-    await fastify.ready();
-    return await run(fastify);
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
 }
 
-export function commandService(overrides: Partial<CommandServiceShape> = {}): CommandServiceShape {
+export function commandService(
+  overrides: Partial<CommandService['Service']> = {},
+): CommandService['Service'] {
   return {
     listForWorktree: (worktreeId) =>
       Effect.succeed({ status: 'configured', worktreeId, commands: [], removedCommands: [] }),
@@ -108,13 +85,11 @@ export function delayedSucceed<A>(value: A) {
   return Effect.sleep(1).pipe(Effect.as(value));
 }
 
+/** The PTY members a command log stream reads; anything else is unimplemented (`Layer.mock`). */
 export function fakeCommandLogPtyService(
-  overrides: Partial<PtyServiceShape> = {},
-): PtyServiceShape {
+  overrides: Partial<PtyService['Service']> = {},
+): Partial<PtyService['Service']> {
   return {
-    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
-    readLogTail: () => Effect.die('readLogTail is not used'),
-    launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({
         session: fakePtyProcess(),
@@ -122,14 +97,7 @@ export function fakeCommandLogPtyService(
         live: true,
         replaySource: 'file_log',
       }),
-    attach: () => Effect.die('attach is not used'),
     replay: () => Effect.void,
-    write: () => Effect.die('write is not used'),
-    writeInput: () => Effect.die('writeInput is not used'),
-    resize: () => Effect.die('resize is not used'),
-    kill: () => Effect.die('kill is not used'),
-    terminate: () => Effect.die('terminate is not used'),
-    cleanupProcess: () => Effect.die('cleanupProcess is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     isPinned: () => Effect.succeed(false),
@@ -144,14 +112,13 @@ export function fakeAttachment(overrides: Partial<PtyAttachment> = {}): PtyAttac
     replayBytes: 0,
     live: true,
     detach: Effect.void,
-    unsubscribe: () => {},
     ...overrides,
   };
 }
 
 export function fakePtyProcess(
-  overrides: Partial<Parameters<PtyServiceShape['replay']>[0]['session']> = {},
-): Parameters<PtyServiceShape['replay']>[0]['session'] {
+  overrides: Partial<Parameters<PtyService['Service']['replay']>[0]['session']> = {},
+): Parameters<PtyService['Service']['replay']>[0]['session'] {
   return {
     id: 20,
     paneId: 1,
@@ -215,7 +182,7 @@ export interface CommandRepositoryOptions {
   readonly runningStates?: readonly CommandStateRow[] | undefined;
   readonly runs?: CommandRunRow[] | undefined;
   readonly latestRun?: CommandRunRow | null | undefined;
-  readonly pty?: Partial<PtyServiceShape> | undefined;
+  readonly pty?: Partial<PtyService['Service']> | undefined;
   // The PTY row the launch handshake re-reads after linking its run. Defaults to
   // absent, which is what every pre-existing test expects.
   readonly ptyProcess?: PtyProcessRow | null | undefined;
@@ -255,7 +222,7 @@ export interface CommandRepositoryOptions {
   // Replaces the public event bus. Scenario harnesses pass a synchronous
   // recording bus so a published event is observable the instant the service
   // publishes it, with no drain fiber and no settle window.
-  readonly eventBus?: Layer.Layer<RuntimeEventBusService> | undefined;
+  readonly eventBus?: Layer.Layer<RuntimeEvents> | undefined;
   // Fires with the repository's own mutable state rows immediately after a
   // worktree listing, which is the snapshot point every lifecycle pass plans
   // from. Splicing that array — or rewriting the config file — from here is how
@@ -286,12 +253,19 @@ export interface CommandRepositoryOptions {
         readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
       }) => void)
     | undefined;
+  // Replaces the loggers for the whole run — layer construction included, so boot
+  // convergence and the event-driven passes log into it too.
+  readonly logger?: Layer.Layer<never> | undefined;
+  // The commands module's tunables; the production defaults when omitted.
+  readonly settings?: CommandTimings | undefined;
   // The loopback probe the command service runs endpoint resolution on.
   // Defaults to a stub that dies on contact, so every launch test whose command
   // declares no allocated ports proves — globally, without its own assertion —
   // that the launch performed no socket IO. A test that wants allocation builds
   // its own `commandPortProbe(...)` and keeps the `calls` recorder.
-  readonly portProbe?: CommandPortProbeService | undefined;
+  readonly portProbe?: LoopbackPortProbe['Service'] | undefined;
+  // The lock the command service serializes per-command work on; a fresh `EntityLock.layer` when omitted.
+  readonly entityLock?: Layer.Layer<EntityLock> | undefined;
 }
 
 export async function runCommandService(rootPath: string, options: CommandRepositoryOptions = {}) {
@@ -301,46 +275,49 @@ export async function runCommandService(rootPath: string, options: CommandReposi
 export async function runCommandServiceEffect<A>(
   rootPath: string,
   effect: (
-    service: import('../commands.service.js').CommandService,
+    service: import('../service.js').CommandService['Service'],
   ) => Effect.Effect<
     A,
     unknown,
-    | import('../commands.service.js').CommandService
-    | InternalRuntimeEventBusService
-    | RuntimeEventBusService
+    import('../service.js').CommandService | InternalEvents | RuntimeEvents
   >,
   options: CommandRepositoryOptions = {},
 ) {
-  return Effect.runPromise(
-    CommandService.pipe(
-      Effect.flatMap(effect),
-      Effect.provide(CommandServiceLive),
-      Effect.provide(Layer.succeed(WorkspaceRepository, repository(rootPath))),
-      Effect.provide(Layer.succeed(CommandRepository, commandRepository(options))),
-      Effect.provide(
-        Layer.succeed(
-          PtyRepository,
-          ptyRepository(
-            options.ptyProcess ?? null,
-            options.ptyProcessReadFault,
-            options.ptyProcessById,
-          ),
+  return CommandService.pipe(
+    Effect.flatMap(effect),
+    Effect.provide(CommandService.layerNoDeps),
+    Effect.provide(options.entityLock ?? EntityLock.layer),
+    Effect.provide(Layer.mock(ProjectRepository)(repository(rootPath))),
+    Effect.provide(Layer.mock(CommandRepository)(commandRepository(options))),
+    Effect.provide(
+      Layer.mock(PtyService)({
+        ...ptyService(options.pty),
+        ...ptyProcessReads(
+          options.ptyProcess ?? null,
+          options.ptyProcessReadFault,
+          options.ptyProcessById,
         ),
-      ),
-      Effect.provide(Layer.succeed(PtyService, ptyService(options.pty))),
-      Effect.provide(
-        Layer.succeed(CommandPortProbe, options.portProbe ?? untouchableCommandPortProbe()),
-      ),
-      Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
-      Effect.provide(options.eventBus ?? RuntimeEventBusLive),
-      Effect.provide(InternalRuntimeEventBusLive),
+      }),
     ),
+    Effect.provide(
+      Layer.succeed(LoopbackPortProbe, options.portProbe ?? untouchableCommandPortProbe()),
+    ),
+    Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
+    Effect.provide(options.eventBus ?? RuntimeEvents.layer),
+    Effect.provide(InternalEvents.layer),
+    Effect.provide(
+      options.settings ? Layer.succeed(CommandSettings, options.settings) : Layer.empty,
+    ),
+    Effect.provide(options.logger ?? Layer.empty),
+    Effect.scoped,
+    Effect.runPromise,
   );
 }
 
+/** An in-memory `CommandRepository` (provided with `Layer.mock`; `ensureState` is unimplemented). */
 export function commandRepository(
   options: CommandRepositoryOptions = {},
-): CommandRepositoryService {
+): Omit<CommandRepository['Service'], 'ensureState'> {
   const states = [...(options.states ?? [])];
   const runs = options.runs ?? [];
 
@@ -487,7 +464,6 @@ export function commandRepository(
     listLinklessRunningRuns: Effect.sync(() =>
       runs.filter((run) => run.status === 'running' && run.ptyProcessId === null),
     ),
-    ensureState: () => Effect.die('ensureState is not used'),
     transitionState: (input) => writeState({ ...input, resolvedPorts: undefined }),
     markLaunchInProgress: (input) =>
       writeState({
@@ -669,7 +645,7 @@ export function commandRepository(
           }
           return stale;
         });
-        return injected ? Effect.zipRight(injected, body) : body;
+        return injected ? Effect.andThen(injected, body) : body;
       }),
   };
 }
@@ -787,16 +763,16 @@ export function fakePtyProcessRow(overrides: Partial<PtyProcessRow> = {}): PtyPr
   };
 }
 
-export function ptyRepository(
+/** The PTY row reads commands make (`PtyService.findProcess`), answered from fixtures. */
+export function ptyProcessReads(
   process: PtyProcessRow | null = null,
   readFault?: (() => DatabaseError | null | undefined) | undefined,
   // Per-id lookup for fixtures with more than one incarnation — divergence and
   // multi-link audits need each row to answer for itself. Falls back to the
   // single-row shape every earlier test uses.
   byId?: ((ptyProcessId: number) => PtyProcessRow | null | undefined) | undefined,
-): PtyRepositoryService {
+): Pick<PtyService['Service'], 'findProcess'> {
   return {
-    createProcessMetadata: () => Effect.die('createProcessMetadata is not used'),
     findProcess: (ptyProcessId) =>
       Effect.suspend(() => {
         const fault = readFault?.();
@@ -804,30 +780,29 @@ export function ptyRepository(
         const found = byId?.(ptyProcessId);
         return Effect.succeed(found === undefined ? process : found);
       }),
-    listProcessLogPaths: Effect.succeed([]),
-    listOrphanProcesses: Effect.succeed([]),
-    listProcesses: () => Effect.succeed([]),
-    deleteProcess: () => Effect.void,
-    updateBackendRef: () => Effect.void,
-    updateBackendMetadata: () => Effect.void,
-    transitionProcess: () => Effect.succeed({ applied: true, row: null }),
   };
 }
 
-export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
+/**
+ * The PTY members the command service uses, with neutral defaults. Provided with `Layer.mock`, so a member left
+ * out (`allocateLaunch` and `launch` unless overridden, the attach/log members always) is unimplemented.
+ */
+export function ptyService(
+  overrides: Partial<PtyService['Service']> = {},
+): Partial<PtyService['Service']> {
+  const terminate: PtyService['Service']['terminate'] =
+    overrides.terminate ?? (() => Effect.succeed('terminated_live' as const));
   return {
-    allocateLaunch:
-      overrides.allocateLaunch ?? (() => Effect.die('pty allocateLaunch is not used')),
-    readLogTail: () => Effect.die('readLogTail is not used'),
-    launch: overrides.launch ?? (() => Effect.die('launch is not used')),
-    getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
-    attach: () => Effect.die('attach is not used'),
+    ...(overrides.allocateLaunch ? { allocateLaunch: overrides.allocateLaunch } : {}),
+    ...(overrides.launch ? { launch: overrides.launch } : {}),
     replay: () => Effect.void,
     write: () => Effect.void,
     writeInput: () => Effect.void,
     resize: () => Effect.void,
     kill: () => Effect.succeed('terminated_live' as const),
-    terminate: overrides.terminate ?? (() => Effect.succeed('terminated_live' as const)),
+    terminate,
+    terminateMany: overrides.terminateMany ?? fakeTerminateMany(terminate),
+    findProcess: overrides.findProcess ?? (() => Effect.succeed(null)),
     // Neutral by default: "there was nothing left to stop". Boot convergence
     // runs during every service construction, so a fixture that is not about
     // boot must be able to be built without stating a cleanup outcome — and the
@@ -840,9 +815,14 @@ export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyService
   };
 }
 
-export function repository(rootPath: string): WorkspaceRepositoryService {
+/** A `ProjectRepository` knowing one worktree (id 10) at `rootPath`; provided with `Layer.mock`. */
+export function repository(
+  rootPath: string,
+): Omit<
+  ProjectRepository['Service'],
+  'createProject' | 'moveProjectOrder' | 'moveProjectWorktreeOrder'
+> {
   return {
-    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: () => Effect.succeed(null),
     findProjectByRootPath: () => Effect.succeed(null),
     findWorktree: (worktreeId) =>
@@ -867,27 +847,11 @@ export function repository(rootPath: string): WorkspaceRepositoryService {
     findProjectWorktreeByPath: () => Effect.succeed(null),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
-    readWorktreeDeleteDiagnostics: () =>
-      Effect.succeed({
-        agentSessionCount: 0,
-        agentSessionActivePtyProcessIds: [],
-        commandRunCount: 0,
-        commandRunPtyProcessIds: [],
-        commandStateCount: 0,
-        commandStateActivePtyProcessIds: [],
-        paneCount: 0,
-        surfaceCount: 0,
-        terminalSessionCount: 0,
-        terminalSessionActivePtyProcessIds: [],
-      }),
-    createProject: () => Effect.die('workspace createProject is not used by command tests'),
     listProjects: Effect.succeed([]),
     listWorktrees: Effect.succeed([]),
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
     restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
     setProjectStatus: () => Effect.void,
-    moveProjectOrder: () => Effect.die('project reorder is not used by command tests'),
-    moveProjectWorktreeOrder: () => Effect.die('worktree reorder is not used by command tests'),
   };
 }
 
@@ -918,6 +882,7 @@ export interface CommandScenarioRecorder {
     readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
   }>;
   readonly published: Array<{ readonly commandName: string; readonly status: string }>;
+  // The runtime's Effect log lines, rendered `<level> <message> <key>=<value>…`.
   readonly logs: string[];
   readonly terminated: number[];
   // Generic cleanup attempts, in order, with the flags the caller chose. Boot
@@ -945,25 +910,21 @@ export interface CommandScenarioRecorder {
 }
 
 /**
- * Drives the real `CommandServiceLive` with everything a lifecycle scenario
+ * Drives the real `CommandService.layerNoDeps` with everything a lifecycle scenario
  * needs to observe: durable state transitions, published `command_changed`
  * events, the runtime's own log lines (which are also how a pass signals it
  * finished), terminate calls, and re-adoptions.
  *
- * Console output is captured rather than printed, so the log lines a scenario
- * asserts on are the same ones a user would see in support.
+ * Effect log output is captured rather than printed, so the log lines a scenario
+ * asserts on carry the same message and annotations a user would see in support.
  */
 export async function runCommandScenario<A>(
   rootPath: string,
   body: (input: {
-    readonly service: CommandServiceShape;
-    readonly internalEvents: InternalRuntimeEventBusService;
+    readonly service: CommandService['Service'];
+    readonly internalEvents: InternalEvents['Service'];
     readonly recorder: CommandScenarioRecorder;
-  }) => Effect.Effect<
-    A,
-    unknown,
-    CommandServiceShape | InternalRuntimeEventBusService | RuntimeEventBusService
-  >,
+  }) => Effect.Effect<A, unknown, CommandService | InternalEvents | RuntimeEvents>,
   options: CommandRepositoryOptions = {},
 ) {
   const recorder: CommandScenarioRecorder = {
@@ -985,61 +946,57 @@ export async function runCommandScenario<A>(
       recorder.launched.length = 0;
     },
   };
-  const restore = captureConsole(recorder.logs);
-  try {
-    const result = await runCommandServiceEffect(
-      rootPath,
-      (service) =>
-        Effect.gen(function* () {
-          const internalEvents = yield* InternalRuntimeEventBus;
-          return yield* body({ service, internalEvents, recorder });
-        }),
-      {
-        ...options,
-        eventBus: recordingEventBus(recorder.published),
-        runs: recorder.runs,
-        onTransition: (input) => {
-          recorder.transitions.push(input);
-          options.onTransition?.(input);
-        },
-        onReadopt: (input) => {
-          recorder.readopted.push(input);
-          options.onReadopt?.(input);
-        },
-        pty: {
-          ...options.pty,
-          terminate: (input) =>
-            Effect.suspend(() => {
-              recorder.terminated.push(input.ptyProcessId);
-              return options.pty?.terminate
-                ? options.pty.terminate(input)
-                : Effect.succeed('terminated_live' as const);
-            }),
-          cleanupProcess: (input) =>
-            Effect.suspend(() => {
-              recorder.cleaned.push({
-                ptyProcessId: input.ptyProcessId,
-                reason: input.reason,
-                ensureBackendAbsence: input.ensureBackendAbsence ?? false,
-              });
-              return options.pty?.cleanupProcess
-                ? options.pty.cleanupProcess(input)
-                : Effect.succeed('already_terminal' as const);
-            }),
-          allocateLaunch: (input) =>
-            Effect.suspend(() => {
-              recorder.launched.push(input.args.at(-1) ?? input.command);
-              return options.pty?.allocateLaunch
-                ? options.pty.allocateLaunch(input)
-                : Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: input.cwd }));
-            }),
-        },
+  const result = await runCommandServiceEffect(
+    rootPath,
+    (service) =>
+      Effect.gen(function* () {
+        const internalEvents = yield* InternalEvents;
+        return yield* body({ service, internalEvents, recorder });
+      }),
+    {
+      ...options,
+      logger: recordingLogger(recorder.logs),
+      eventBus: recordingEventBus(recorder.published),
+      runs: recorder.runs,
+      onTransition: (input) => {
+        recorder.transitions.push(input);
+        options.onTransition?.(input);
       },
-    );
-    return { result, recorder };
-  } finally {
-    restore();
-  }
+      onReadopt: (input) => {
+        recorder.readopted.push(input);
+        options.onReadopt?.(input);
+      },
+      pty: {
+        ...options.pty,
+        terminate: (input) =>
+          Effect.suspend(() => {
+            recorder.terminated.push(input.ptyProcessId);
+            return options.pty?.terminate
+              ? options.pty.terminate(input)
+              : Effect.succeed('terminated_live' as const);
+          }),
+        cleanupProcess: (input) =>
+          Effect.suspend(() => {
+            recorder.cleaned.push({
+              ptyProcessId: input.ptyProcessId,
+              reason: input.reason,
+              ensureBackendAbsence: input.ensureBackendAbsence ?? false,
+            });
+            return options.pty?.cleanupProcess
+              ? options.pty.cleanupProcess(input)
+              : Effect.succeed('already_terminal' as const);
+          }),
+        allocateLaunch: (input) =>
+          Effect.suspend(() => {
+            recorder.launched.push(input.args.at(-1) ?? input.command);
+            return options.pty?.allocateLaunch
+              ? options.pty.allocateLaunch(input)
+              : Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: input.cwd }));
+          }),
+      },
+    },
+  );
+  return { result, recorder };
 }
 
 /**
@@ -1075,7 +1032,8 @@ const scenarioPollLimit = 1_000;
 export function recordingEventBus(
   published: Array<{ readonly commandName: string; readonly status: string }>,
 ) {
-  return Layer.succeed(RuntimeEventBus, {
+  // `subscribe` is unimplemented: the recording bus has no subscribers.
+  return Layer.mock(RuntimeEvents)({
     publish: (event) =>
       Effect.sync(() => {
         if (event.type === 'command_changed') {
@@ -1085,29 +1043,30 @@ export function recordingEventBus(
           });
         }
       }),
-    subscribe: Effect.die('the recording event bus has no subscribers'),
-  } satisfies RuntimeEventBusService);
+  });
 }
 
 function scenarioTick() {
   return Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
 }
 
-function captureConsole(lines: string[]) {
-  const original = { info: console.info, warn: console.warn, error: console.error };
-  const record =
-    (level: 'info' | 'warn' | 'error') =>
-    (...args: unknown[]) => {
-      lines.push(`${level} ${args.map((arg) => String(arg)).join(' ')}`);
-    };
-  console.info = record('info');
-  console.warn = record('warn');
-  console.error = record('error');
-  return () => {
-    console.info = original.info;
-    console.warn = original.warn;
-    console.error = original.error;
-  };
+/**
+ * A logger that renders each Effect log line as `<level> <message> <key>=<value>…`
+ * (annotations in the order they were added, then a cause if one was attached)
+ * into `lines`. It replaces the default loggers, so nothing is printed.
+ */
+export function recordingLogger(lines: string[]) {
+  return Logger.layer([
+    Logger.make(({ logLevel, message, cause, fiber }) => {
+      const text = (Array.isArray(message) ? message : [message]).map(String).join(' ');
+      const annotations = Object.entries(fiber.getRef(References.CurrentLogAnnotations)).map(
+        ([key, value]) => `${key}=${String(value)}`,
+      );
+      const parts = [logLevel.toLowerCase(), text, ...annotations];
+      if (cause.reasons.length > 0) parts.push(Cause.pretty(cause));
+      lines.push(parts.join(' '));
+    }),
+  ]);
 }
 
 // Mirrors `distinctCommandPtyLinks` in the real repository: the distinct union
@@ -1155,8 +1114,13 @@ export interface CommandPortProbeCalls {
   readonly assignments: () => number;
 }
 
+/** A Node system error, the shape the loopback adapter's bind failures carry as their cause. */
+export function systemError(code: string) {
+  return Object.assign(new Error(`listen ${code}: 127.0.0.1`), { code });
+}
+
 /**
- * A `CommandPortProbeService` that answers from the test's script and records
+ * A `LoopbackPortProbe` that answers from the test's script and records
  * what policy asked of it.
  *
  * Defaults are the boring case: nothing is reusable, and every fresh assignment
@@ -1172,15 +1136,16 @@ export function commandPortProbe(
     // than a silent fallback to the default sequence.
     readonly assign?: readonly number[] | undefined;
     readonly probeFault?: ((port: number) => boolean) | undefined;
-    readonly assignFailure?: string | undefined;
+    // The adapter's structured cause (see `systemError`); the resolver renders it.
+    readonly assignFailure?: Error | undefined;
   } = {},
-): { readonly service: CommandPortProbeService; readonly calls: CommandPortProbeCalls } {
+): { readonly service: LoopbackPortProbe['Service']; readonly calls: CommandPortProbeCalls } {
   const probed: number[] = [];
   let assignments = 0;
   const inactive = new Set(overrides.inactive ?? []);
   const assign = [...(overrides.assign ?? [])];
 
-  const service: CommandPortProbeService = {
+  const service: LoopbackPortProbe['Service'] = {
     probeInactive: (port) =>
       Effect.sync(() => {
         probed.push(port);
@@ -1192,7 +1157,7 @@ export function commandPortProbe(
     obtainEphemeralPort: Effect.suspend(() => {
       assignments += 1;
       if (overrides.assignFailure !== undefined) {
-        return Effect.fail(new CommandPortAllocationError({ detail: overrides.assignFailure }));
+        return Effect.fail(new LoopbackPortUnavailable({ cause: overrides.assignFailure }));
       }
       if (overrides.assign === undefined) return Effect.succeed(40_000 + assignments);
       const next = assign.shift();
@@ -1218,7 +1183,7 @@ export function commandPortProbe(
  * The messages are method-specific so an accidental call says which half of the
  * policy ran — a remembered-port probe, or a fresh assignment.
  */
-function untouchableCommandPortProbe(): CommandPortProbeService {
+function untouchableCommandPortProbe(): LoopbackPortProbe['Service'] {
   return {
     probeInactive: (port) =>
       Effect.die(

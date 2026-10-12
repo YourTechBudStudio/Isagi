@@ -20,20 +20,20 @@ import {
   hashDescriptor,
   workflowStructureDescriptorVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
-import { Effect, Either, Layer, Ref } from 'effect';
+import { Effect, Result, Layer, Ref } from 'effect';
 
-import { DataDirectory, type IsagiDataDirectory } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import { defaultRuntimeConfig, RuntimeConfig } from '../../runtime-config/index.js';
+import { makeLogCapture } from '../../../test/test-support.js';
+import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import { RuntimeConfig } from '../../runtime-config/index.js';
+import { defaultRuntimeConfig } from '../../runtime-config/testing.js';
 import { scanWorkflowSource } from './discovery.js';
 import { WorkflowLoadError } from './loader.js';
 import {
   createFilesystemWorkflowRegistry,
   WorkflowRegistry,
   WorkflowRegistryError,
-  WorkflowRegistryLive,
   type WorkflowRegistryContext,
-  type WorkflowRegistryService,
 } from './registry.js';
 
 test('live registry captures configured sources once at layer construction', async () => {
@@ -49,7 +49,7 @@ test('live registry captures configured sources once at layer construction', asy
         workflows: { additionalDirectories: [initial] },
       }),
     );
-    const registryLayer = WorkflowRegistryLive.pipe(
+    const registryLayer = WorkflowRegistry.layer.pipe(
       Layer.provide(Layer.succeed(DataDirectory, { paths: dataDirectoryPaths(root) })),
       Layer.provide(
         Layer.succeed(RuntimeConfig, {
@@ -268,10 +268,10 @@ test('deduplicates normalized sources and preserves the highest-priority occurre
   }
 });
 
-test('warns once for a missing explicitly configured source and stays silent for implicit roots', async (t) => {
+test('warns once for a missing explicitly configured source and stays silent for implicit roots', async () => {
   const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-missing-source-'));
   try {
-    const warn = t.mock.method(console, 'warn', () => {});
+    const logs = makeLogCapture();
     const configured = join(root, 'configured-missing');
     const registry = createFilesystemWorkflowRegistry(
       join(root, 'core-missing'),
@@ -281,11 +281,14 @@ test('warns once for a missing explicitly configured source and stays silent for
       },
     );
 
-    await Effect.runPromise(registry.discover());
-    await Effect.runPromise(registry.discover());
+    await Effect.runPromise(Effect.scoped(registry.discover().pipe(Effect.provide(logs.layer))));
+    await Effect.runPromise(Effect.scoped(registry.discover().pipe(Effect.provide(logs.layer))));
 
-    assert.equal(warn.mock.callCount(), 1);
-    assert.deepEqual(warn.mock.calls[0]?.arguments[1], {
+    assert.deepEqual(
+      logs.lines.map((line) => [line.level, line.message]),
+      [['Warn', 'Configured workflow directory is missing']],
+    );
+    assert.deepEqual(logs.lines[0]?.annotations, {
       operation: 'workflow.discover.scan_source',
       workflowSourceDirectory: configured,
     });
@@ -294,12 +297,12 @@ test('warns once for a missing explicitly configured source and stays silent for
   }
 });
 
-test('retains configured missing-path warning policy when a project source wins deduplication', async (t) => {
+test('retains configured missing-path warning policy when a project source wins deduplication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-deduped-warning-'));
   try {
     const project = join(root, 'project');
     const projectWorkflows = join(project, '.isagi', 'workflows');
-    const warn = t.mock.method(console, 'warn', () => {});
+    const logs = makeLogCapture();
     const registry = createFilesystemWorkflowRegistry(
       join(root, 'core-missing'),
       join(root, 'cache'),
@@ -308,10 +311,15 @@ test('retains configured missing-path warning policy when a project source wins 
       },
     );
 
-    await Effect.runPromise(registry.discover({ projectId: 1, projectRoot: project }));
+    await Effect.runPromise(
+      Effect.scoped(
+        registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.provide(logs.layer)),
+      ),
+    );
 
-    assert.equal(warn.mock.callCount(), 1);
-    assert.equal(warn.mock.calls[0]?.arguments[1]?.workflowSourceDirectory, projectWorkflows);
+    assert.equal(logs.lines.length, 1);
+    assert.equal(logs.lines[0]?.level, 'Warn');
+    assert.equal(logs.lines[0]?.annotations.workflowSourceDirectory, projectWorkflows);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -330,13 +338,13 @@ test('maps injected scan failures through the registry with typed source context
       },
     });
 
-    const result = await Effect.runPromise(registry.discover().pipe(Effect.either));
+    const result = await Effect.runPromise(registry.discover().pipe(Effect.result));
 
-    assert.ok(Either.isLeft(result));
-    assert.ok(result.left instanceof WorkflowRegistryError);
-    assert.equal(result.left.code, 'scan_failed');
-    assert.equal(result.left.sourceKind, 'additional');
-    assert.equal(result.left.workflowSourceDirectory, configured);
+    assert.ok(Result.isFailure(result));
+    assert.ok(result.failure instanceof WorkflowRegistryError);
+    assert.equal(result.failure.code, 'scan_failed');
+    assert.equal(result.failure.sourceKind, 'additional');
+    assert.equal(result.failure.workflowSourceDirectory, configured);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -429,16 +437,16 @@ test('rejects a complete discovery when a later source cannot be scanned', async
     const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
 
     const result = await Effect.runPromise(
-      registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.either),
+      registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.result),
     );
 
-    assert.ok(Either.isLeft(result));
-    assert.ok(result.left instanceof WorkflowRegistryError);
-    assert.equal(result.left.code, 'scan_failed');
-    assert.equal(result.left.sourceKind, 'project');
-    assert.equal(result.left.workflowSourceDirectory, join(project, '.isagi', 'workflows'));
+    assert.ok(Result.isFailure(result));
+    assert.ok(result.failure instanceof WorkflowRegistryError);
+    assert.equal(result.failure.code, 'scan_failed');
+    assert.equal(result.failure.sourceKind, 'project');
+    assert.equal(result.failure.workflowSourceDirectory, join(project, '.isagi', 'workflows'));
     assert.equal(
-      result.left.message,
+      result.failure.message,
       `Could not scan workflow directory: ${join(project, '.isagi', 'workflows')}.`,
     );
   } finally {
@@ -446,22 +454,29 @@ test('rejects a complete discovery when a later source cannot be scanned', async
   }
 });
 
-test('logs a discovered project collision once per registry instance and context', async (t) => {
+test('logs a discovered project collision once per registry instance and context', async () => {
   const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-shadow-log-'));
   try {
     const workflows = join(root, 'global');
     const project = join(root, 'project');
     await writePackage(join(workflows, 'shared'), artifact);
     await writePackage(join(project, '.isagi', 'workflows', 'shared'), artifact);
-    const info = t.mock.method(console, 'info', () => {});
+    const logs = makeLogCapture();
     const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
     const context = { projectId: 1, projectRoot: project };
 
-    await Effect.runPromise(registry.discover(context));
-    await Effect.runPromise(registry.discover(context));
+    await Effect.runPromise(
+      Effect.scoped(registry.discover(context).pipe(Effect.provide(logs.layer))),
+    );
+    await Effect.runPromise(
+      Effect.scoped(registry.discover(context).pipe(Effect.provide(logs.layer))),
+    );
 
-    assert.equal(info.mock.callCount(), 1);
-    assert.deepEqual(info.mock.calls[0]?.arguments[1], {
+    assert.deepEqual(
+      logs.lines.map((line) => [line.level, line.message]),
+      [['Info', 'Workflow source collision resolved by precedence']],
+    );
+    assert.deepEqual(logs.lines[0]?.annotations, {
       workflowKey: 'shared',
       winningSourceKind: 'project',
       workflowPackageDirectory: join(project, '.isagi', 'workflows', 'shared'),
@@ -611,7 +626,7 @@ async function reason(effect: Effect.Effect<unknown, unknown>) {
 }
 
 function discoverAndLoad(
-  registry: WorkflowRegistryService,
+  registry: WorkflowRegistry['Service'],
   workflowKey: string,
   context?: WorkflowRegistryContext,
 ) {
@@ -624,10 +639,10 @@ function discoverAndLoad(
 }
 
 async function failure(effect: Effect.Effect<unknown, unknown>) {
-  const result = await Effect.runPromise(Effect.either(effect));
-  assert.equal(Either.isLeft(result), true);
-  assert.ok(Either.isLeft(result) && result.left instanceof WorkflowLoadError);
-  return result.left;
+  const result = await Effect.runPromise(Effect.result(effect));
+  assert.equal(Result.isFailure(result), true);
+  assert.ok(Result.isFailure(result) && result.failure instanceof WorkflowLoadError);
+  return result.failure;
 }
 
 async function writePackage(

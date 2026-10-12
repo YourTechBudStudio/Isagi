@@ -2,53 +2,44 @@
 
 ## What This Lens Protects
 
-This lens protects trust in completed work. Changes should be easy for humans and review agents to understand, verify, and maintain.
+Trust in completed work. Changes should be easy for humans and review agents to understand, verify and maintain, especially when an agent produced them.
 
 ## Review Questions
 
-- Does the change explain its own shape through clear module boundaries, names, and flow?
-- Can a reviewer identify the important behavior without reading unrelated scaffolding?
-- Does verification match the risk of the change?
-- Does verification match risk in both directions — is low-risk or cosmetic output pinned by brittle assertions that churn on rewording rather than catch defects?
-- Were meaningful degraded or failure paths checked when runtime behavior changed?
-- When runtime API contracts change, were success and representative error paths checked across contract, runtime, and client code?
-- Are contracts, runtime behavior, and user-visible states verified at the right level?
-- Does the final summary distinguish what was verified from what was not?
-- Are new dependencies justified by the problem they solve?
-- Does the change avoid broad churn unrelated to the goal?
-- Are generated/build artifacts excluded unless they are intentionally part of the change?
-- Are known limitations or tradeoffs surfaced instead of hidden?
+- Does the change explain its own shape through clear boundaries, names and flow, without unrelated scaffolding in the way?
+- Does verification match the risk in both directions: enough evidence for risky behavior, and no brittle assertions pinning cosmetic output that churn on rewording without catching defects?
+- Were degraded and failure paths checked when runtime behavior changed?
+- When API contracts changed, were success and representative error paths checked across contract, runtime and client?
+- Are contracts, runtime behavior and user-visible states verified at the right level?
+- Does the summary separate what was verified from what was not, and surface known limitations and tradeoffs?
+- Is each new dependency justified by the problem it solves?
+- Does the change avoid broad churn unrelated to its goal, and leave generated or build artifacts out unless they are intended?
 
 ## Isagi-Specific Notes
 
-- Root `pnpm check` is the default verification command after code changes.
-- Package-level checks can be useful while iterating, but final confidence should match the change scope.
-- Do not start long-running dev servers as verification.
-- Runtime lifecycle and API boundary changes need stronger evidence than static UI copy changes.
-- Verification matching risk cuts both ways: trivial or cosmetic output (literal copy strings, thin framework round-trips) rarely needs exhaustive assertions. Prefer behavioral or exhaustiveness checks over literal-string equality.
-- Completed work should be easy for a human maintainer to trust, especially when produced by an agent.
+- Runtime lifecycle and API boundary changes need stronger evidence than copy changes.
+- Prefer behavioral or exhaustiveness checks over literal-string equality for copy and thin framework round-trips.
+- Package-level checks help while iterating; final confidence should match the change's scope.
 
 ## Severity Mapping
 
 ### Blocker
 
-- The change cannot be reasonably reviewed for correctness because behavior ownership or flow is materially obscured.
-- A high-risk runtime, API contract, persistence, or process change has no meaningful verification.
-- The change introduces broad unrelated churn that hides the actual behavior change.
-- A new dependency materially changes runtime, packaging, security, or maintenance risk without justification.
+- Correctness cannot reasonably be reviewed because behavior ownership or flow is materially obscured.
+- A high-risk runtime, API contract, persistence or process change has no meaningful verification.
+- Broad unrelated churn hides the actual behavior change.
+- A new dependency materially changes runtime, packaging, security or maintenance risk without justification.
 
 ### Concern
 
-- Working code is hard to review or explain, but the main behavior can still be assessed.
-- Verification does not match the risk of the change.
-- Failure paths, degraded states, or representative API error responses were not checked where they are likely to matter.
-- The final summary overstates confidence or omits important residual risk.
-- A dependency is probably acceptable but its role or footprint is not explained.
+- Working code is hard to review or explain, though the main behavior can still be assessed.
+- Verification does not match the risk, or likely failure paths, degraded states or representative API errors went unchecked.
+- The summary overstates confidence or omits important residual risk.
+- A dependency is probably fine but its role or footprint is unexplained.
 
 ### Nit
 
-- A summary could be clearer.
+- A summary, test name, assertion or fixture could be clearer.
 - A low-risk manual check could be mentioned.
-- A small test name, assertion, or fixture could be easier to read.
-- A brittle assertion pins cosmetic output (such as exact copy text) and will churn without catching defects; a behavioral or exhaustiveness check would be sturdier.
+- A brittle assertion pins cosmetic output where a behavioral check would be sturdier.
 - Minor unrelated cleanup should be split out next time.

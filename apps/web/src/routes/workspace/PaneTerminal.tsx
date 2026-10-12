@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
+import { useRegistry } from '../../lib/state/registry.js';
 import { restoreActivePaneFocus, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import type { TerminalPresentationController } from '../../lib/workspace/terminal-presentation/controller.js';
 import { TerminalRevealSlot } from './terminal-reveal/index.js';
@@ -17,6 +18,7 @@ export function PaneTerminal({
   readonly presentation: TerminalPresentationController;
 }) {
   const destinationRef = useRef<HTMLDivElement | null>(null);
+  const registry = useRegistry();
   const focusTerminal = useCallback(() => presentation.focus(), [presentation]);
   const snapshot = useSyncExternalStore(
     presentation.subscribe,
@@ -40,13 +42,17 @@ export function PaneTerminal({
 
   useEffect(() => {
     presentation.setFocused(focused);
-    if (focused) restoreActivePaneFocus();
-  }, [focused, presentation]);
+    if (focused) restoreActivePaneFocus(registry);
+  }, [focused, presentation, registry]);
 
-  return (
-    <TerminalRevealSlot
-      revealed={snapshot.readiness.phase === 'revealed'}
-      hostRef={destinationRef}
-    />
-  );
+  // While covered the host is `inert`, so every focus attempt made before the reveal (the effect
+  // above, the activation frame's self-assert, the focus router's deferred call) lands nowhere and
+  // keys go to whatever held focus before. Re-assert once the reveal has un-inerted the host;
+  // `setFocused` keeps the overlay-ownership gate, so an open palette or drawer keeps focus.
+  const revealed = snapshot.readiness.phase === 'revealed';
+  useEffect(() => {
+    if (revealed && focused) presentation.setFocused(true);
+  }, [revealed, focused, presentation]);
+
+  return <TerminalRevealSlot revealed={revealed} hostRef={destinationRef} />;
 }

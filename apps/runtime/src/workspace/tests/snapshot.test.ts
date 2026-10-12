@@ -4,45 +4,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, Stream } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { Git, GitCommandError } from '../../git/index.js';
-import {
-  DataDirectory,
-  StateFile,
-  stateFromActiveContext,
-  type WorkspaceState,
-} from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
-import {
-  InternalRuntimeEventBus,
-  type InternalRuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import {
-  SurfaceService,
-  SurfaceRepository,
-  type SurfaceRepositoryService,
-  type SurfaceServiceShape,
-} from '../../surfaces/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import {
-  WorktreeSetupRepository,
-  WorktreeSetupService,
-  type WorktreeSetupRepositoryService,
-  type WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../../worktree-setup/index.js';
-import type { ProjectRow, WorktreeRow } from '../types.js';
-import {
-  prunedWorktreeIds,
-  WorkspaceRepository,
-  type WorkspaceRepositoryService,
-} from '../workspace.repository.js';
-import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
-import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../workspace.snapshot.js';
+import { CommandService } from '../../commands/index.js';
+import { SurfaceService } from '../../environment/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
+import { Git, GitCommandError } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { ProjectRow, WorktreeRow } from '../../projects/index.js';
+import { prunedWorktreeIds } from '../../projects/testing.js';
+import { PtyService } from '../../pty-processes/index.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../snapshot.js';
+import { StateFile, stateFromActiveContext, type WorkspaceState } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
+import { testWorktreeDeleteDiagnostics } from './test-support.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>
@@ -58,7 +41,7 @@ const testWorktreeSetup = {
       ...(input.request.action === 'disable_hooks' ? {} : { hash: input.request.hash ?? '' }),
     }),
   validateTrustForOpen: () => Effect.succeed({ status: 'not_configured' as const }),
-} satisfies WorktreeSetupServiceShape;
+} satisfies WorktreeSetupService['Service'];
 
 const testWorktreeSetupRepository = {
   findTrust: () => Effect.succeed(null),
@@ -66,40 +49,14 @@ const testWorktreeSetupRepository = {
   disableHooks: () => Effect.void,
   createRunWithSteps: () => Effect.succeed(1),
   listRunSteps: () => Effect.succeed([]),
-} satisfies WorktreeSetupRepositoryService;
-
-const testSurfaceRepository = {
-  worktreeExists: () => Effect.succeed(false),
-  findSurface: () => Effect.succeed(null),
-  findPane: () => Effect.succeed(null),
-  findWorktreePath: () => Effect.succeed(null),
-  findEnvironmentFocus: () => Effect.succeed(null),
-  listWorkspaceSurfaceMetadata: Effect.succeed([]),
-  listEnvironmentFocusStates: Effect.succeed([]),
-  listPanesForSurface: () => Effect.succeed([]),
-  listAgentSessionsForPanes: () => Effect.succeed([]),
-  listTerminalSessionsForPanes: () => Effect.succeed([]),
-  listEditorContextsForPanes: () => Effect.succeed([]),
-  listPaneSessionBindings: Effect.succeed([]),
-  findPaneForSession: () => Effect.succeed(null),
-  findSurfaceDeleteTarget: () => Effect.succeed(null),
-  renameSurface: () => Effect.die('surface rename is not used by workspace snapshot tests'),
-  deleteSurface: () => Effect.die('surface delete is not used by workspace snapshot tests'),
-  deleteSurfacePane: () =>
-    Effect.die('surface pane delete is not used by workspace snapshot tests'),
-  createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
-  createEmptySurface: () => Effect.die('surface creation is not used by workspace tests'),
-  startSurfacePane: () => Effect.die('surface pane start is not used by workspace tests'),
-  listSessionsBoundTo: () => Effect.succeed({ agents: [], terminals: [] }),
-  splitSurfacePane: () => Effect.die('surface split is not used by workspace tests'),
-  setSurfaceLayout: () => Effect.die('surface layout update is not used by workspace tests'),
-  setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
-  claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
-  setEnvironmentFocus: (input) => Effect.succeed(input),
-  moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace snapshot tests'),
-} satisfies SurfaceRepositoryService;
+} satisfies WorktreeSetupRepository['Service'];
 
 const testSurfaceService = {
+  findSurface: () => Effect.succeed(null),
+  listWorkspaceSurfaceMetadata: Effect.succeed([]),
+  listEnvironmentFocusStates: Effect.succeed([]),
+  listDurableSessions: Effect.succeed({ sessions: [] }),
+  restorePaneBoundSessions: Effect.die('session restore is not used by workspace snapshot tests'),
   getSurfaceDetail: () => Effect.die('surface detail is not used by workspace snapshot tests'),
   renameSurface: () => Effect.die('surface rename is not used by workspace snapshot tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace snapshot tests'),
@@ -116,7 +73,7 @@ const testSurfaceService = {
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
   moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
   openEditor: () => Effect.die('openEditor is not used by workspace tests'),
-} satisfies SurfaceServiceShape;
+} satisfies SurfaceService['Service'];
 
 const testCommandService = {
   listForWorktree: () => Effect.die('command list is not used by workspace snapshot tests'),
@@ -127,7 +84,7 @@ const testCommandService = {
   runPostCreateLifecycle: () => Effect.void,
   cleanupBeforeWorktreeDelete: () => Effect.void,
   cleanupBeforeWorktreePrune: () => Effect.void,
-} satisfies CommandServiceShape;
+} satisfies CommandService['Service'];
 
 const testPtyService = {
   allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
@@ -142,20 +99,18 @@ const testPtyService = {
   resize: () => Effect.die('pty resize is not used by workspace snapshot tests'),
   kill: () => Effect.succeed('terminated_live' as const),
   terminate: () => Effect.succeed('terminated_live' as const),
+  terminateMany: () => Effect.die('pty terminateMany is not used by workspace snapshot tests'),
+  findProcess: () => Effect.die('pty findProcess is not used by workspace snapshot tests'),
   pin: () => Effect.void,
   unpin: () => Effect.void,
   cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
   isPinned: () => Effect.succeed(false),
-} satisfies PtyServiceShape;
+} satisfies PtyService['Service'];
 
 const testInternalEvents = {
   publish: () => Effect.void,
-  subscribe: () =>
-    Effect.succeed({
-      take: Effect.never,
-      unsubscribe: Effect.void,
-    }),
-} satisfies InternalRuntimeEventBusService;
+  subscribe: () => Effect.succeed(Stream.never),
+} satisfies InternalEvents['Service'];
 
 const project: ProjectRow = {
   id: 1,
@@ -413,7 +368,6 @@ test('workspace reads known rows without reconciling Git state', async () => {
   ];
 
   const repository = {
-    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: (projectId) =>
       Effect.succeed(projectId === currentProject.id ? currentProject : null),
     findProjectByRootPath: () => Effect.succeed(currentProject),
@@ -448,19 +402,6 @@ test('workspace reads known rows without reconciling Git state', async () => {
       ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
-    readWorktreeDeleteDiagnostics: () =>
-      Effect.succeed({
-        agentSessionCount: 0,
-        agentSessionActivePtyProcessIds: [],
-        commandRunCount: 0,
-        commandRunPtyProcessIds: [],
-        commandStateCount: 0,
-        commandStateActivePtyProcessIds: [],
-        paneCount: 0,
-        surfaceCount: 0,
-        terminalSessionCount: 0,
-        terminalSessionActivePtyProcessIds: [],
-      }),
     createProject: () => Effect.succeed(project),
     listProjects: Effect.sync(() => [currentProject]),
     listWorktrees: Effect.succeed([...worktrees]),
@@ -485,7 +426,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
     moveProjectOrder: () => Effect.die('project reorder is not used by workspace snapshot tests'),
     moveProjectWorktreeOrder: () =>
       Effect.die('worktree reorder is not used by workspace snapshot tests'),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
 
   const git = {
     run: (args: readonly string[], options: { readonly cwd?: string | undefined } = {}) =>
@@ -532,13 +473,13 @@ test('workspace reads known rows without reconciling Git state', async () => {
         const service = yield* WorkspaceService;
         return yield* service.get;
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layerNoDeps),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(InternalEvents, testInternalEvents),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),

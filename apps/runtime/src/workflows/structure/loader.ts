@@ -258,21 +258,18 @@ async function readSourceInputs(root: string, input: { readonly workflowKey: str
   await visit(root, 'tests', entries, input);
   for (const name of ['package.json', 'tsconfig.json']) {
     const path = join(root, name);
-    try {
-      const stat = await lstat(path);
-      if (stat.isSymbolicLink() || !stat.isFile())
-        throw new Error(`${name} is not a regular file.`);
-      entries.push({ path: name, bytes: await readFile(path) });
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw failure(
-          'invalid_package',
-          input,
-          `Could not read workflow source input ${name}.`,
-          cause,
-        );
-      }
-    }
+    const unreadable = (cause?: unknown) =>
+      failure('invalid_package', input, `Could not read workflow source input ${name}.`, cause);
+    // An absent input is simply not part of the source, even if it vanishes between the two reads.
+    const absentOr = (cause: unknown) => {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw unreadable(cause);
+    };
+    const stat = await lstat(path).catch(absentOr);
+    if (stat === null) continue;
+    if (stat.isSymbolicLink() || !stat.isFile()) throw unreadable();
+    const bytes = await readFile(path).catch(absentOr);
+    if (bytes !== null) entries.push({ path: name, bytes });
   }
   return entries.filter((entry) => isWorkflowSourcePath(entry.path));
 }
@@ -309,20 +306,20 @@ async function publishArtifact(
 ) {
   const destination = artifactCachePath(cacheRoot, hash);
   await mkdir(dirname(destination), { recursive: true });
+  const notReusable = (cause?: unknown) =>
+    failure('artifact_load_failed', input, 'Could not reuse workflow artifact cache entry.', cause);
+  let existing: Buffer | null;
   try {
     await access(destination, constants.F_OK);
-    const existing = await readFile(destination);
-    if (hashArtifact(existing) !== hash) throw new Error('Existing cache entry is corrupt.');
-    return;
+    existing = await readFile(destination);
   } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw failure(
-        'artifact_load_failed',
-        input,
-        'Could not reuse workflow artifact cache entry.',
-        cause,
-      );
-    }
+    if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw notReusable(cause);
+    existing = null;
+  }
+  if (existing !== null) {
+    // A corrupt entry is refused rather than replaced: the cache is immutable once published.
+    if (hashArtifact(existing) !== hash) throw notReusable();
+    return;
   }
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try {
@@ -376,16 +373,7 @@ async function importCachedArtifact(
   } catch (cause) {
     loadedDefinitions.delete(cacheKey);
     if (cause instanceof WorkflowLoadError) throw cause;
-    const reason =
-      cause instanceof InvalidWorkflowExport ? 'invalid_export' : 'artifact_load_failed';
-    throw failure(
-      reason,
-      input,
-      cause instanceof InvalidWorkflowExport
-        ? cause.message
-        : 'Could not import workflow artifact.',
-      cause,
-    );
+    throw failure('artifact_load_failed', input, 'Could not import workflow artifact.', cause);
   }
 }
 
@@ -449,8 +437,6 @@ function collectLiveGraphs(
   return graphs;
 }
 
-class InvalidWorkflowExport extends Error {}
-
 function artifactCachePath(cacheRoot: string, hash: string) {
   return join(cacheRoot, hash, 'index.mjs');
 }
@@ -466,13 +452,15 @@ async function readRegularFile(
   input: { readonly workflowKey?: string | undefined; readonly artifactHash?: string | undefined },
   reason: WorkflowLoadFailureReason,
 ) {
-  try {
-    const stat = await lstat(path);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Path is not a regular file.');
-    return await readFile(path);
-  } catch (cause) {
-    throw failure(reason, input, 'Workflow artifact is unavailable.', cause);
-  }
+  const unavailable = (cause?: unknown) =>
+    failure(reason, input, 'Workflow artifact is unavailable.', cause);
+  const stat = await lstat(path).catch((cause: unknown) => {
+    throw unavailable(cause);
+  });
+  if (stat.isSymbolicLink() || !stat.isFile()) throw unavailable();
+  return await readFile(path).catch((cause: unknown) => {
+    throw unavailable(cause);
+  });
 }
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

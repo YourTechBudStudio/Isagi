@@ -4,12 +4,13 @@ import { basename, join, relative } from 'node:path';
 import process from 'node:process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type { PtyProcessLogMode, PtyStreamOutputMessageSet } from '@isagi/contracts';
 
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { replayUtf8LogFile } from '../log-replay.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyRepository } from '../repository.js';
 import type { PtyProcessRecord } from '../types.js';
 import { PtyServiceError } from '../types.js';
 
@@ -22,29 +23,24 @@ export interface OrphanPtyLogCleanupStats {
   readonly failed: readonly string[];
 }
 
-export function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
+export function reportOrphanPtyLogs(repository: PtyRepository['Service'], sessionsPath: string) {
   return detectOrphanPtyLogs(repository, sessionsPath).pipe(
     Effect.tap((orphans) =>
-      Effect.sync(() => {
-        if (orphans.length === 0) {
-          return;
-        }
-        const sample = orphans.slice(0, orphanLogSampleSize).join(', ');
-        const suffix = orphans.length > orphanLogSampleSize ? ', ...' : '';
-        console.warn(
-          `[runtime] Found ${orphans.length} orphan PTY log file(s) under sessions/: ${sample}${suffix}`,
-        );
-      }),
+      orphans.length === 0
+        ? Effect.void
+        : Effect.logWarning('Found orphan PTY log files under sessions/').pipe(
+            Effect.annotateLogs({ count: orphans.length, sample: sampleOf(orphans) }),
+          ),
     ),
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        console.warn('[runtime] Could not inspect PTY process logs for orphans', error);
-      }),
+    Effect.catch((error) =>
+      Effect.logWarning('Could not inspect PTY process logs for orphans').pipe(
+        Effect.annotateLogs({ cause: describeOperationalCause(error) }),
+      ),
     ),
   );
 }
 
-export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
+export function detectOrphanPtyLogs(repository: PtyRepository['Service'], sessionsPath: string) {
   return Effect.gen(function* () {
     const referencedLogPaths = new Set((yield* repository.listProcessLogPaths).map(normalizePath));
     const entries = yield* Effect.try({
@@ -66,7 +62,7 @@ export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
 }
 
 export function cleanupOrphanPtyLogs(
-  repository: PtyRepositoryService,
+  repository: PtyRepository['Service'],
   sessionsPath: string,
   options: { readonly minAgeMs: number; readonly nowMs?: number | undefined },
 ) {
@@ -97,14 +93,20 @@ export function cleanupOrphanPtyLogs(
         continue;
       }
 
-      let stat: ReturnType<typeof statSync>;
-      try {
-        stat = statSync(path);
-      } catch (error) {
+      const statResult = yield* Effect.result(
+        Effect.try({ try: () => statSync(path), catch: (error) => error }),
+      );
+      if (Result.isFailure(statResult)) {
         failed.push(relativePath);
-        console.warn(`[runtime] Could not inspect orphan PTY log ${relativePath}`, error);
+        yield* Effect.logWarning('Could not inspect orphan PTY log').pipe(
+          Effect.annotateLogs({
+            path: relativePath,
+            cause: describeOperationalCause(statResult.failure),
+          }),
+        );
         continue;
       }
+      const stat = statResult.success;
 
       if (!stat.isFile()) {
         continue;
@@ -115,16 +117,28 @@ export function cleanupOrphanPtyLogs(
         continue;
       }
 
-      try {
-        unlinkSync(path);
+      const unlinked = yield* Effect.result(
+        Effect.try({ try: () => unlinkSync(path), catch: (error) => error }),
+      );
+      if (Result.isSuccess(unlinked)) {
         deleted.push(relativePath);
-      } catch (error) {
+      } else {
         failed.push(relativePath);
-        console.warn(`[runtime] Could not delete orphan PTY log ${relativePath}`, error);
+        yield* Effect.logWarning('Could not delete orphan PTY log').pipe(
+          Effect.annotateLogs({
+            path: relativePath,
+            cause: describeOperationalCause(unlinked.failure),
+          }),
+        );
       }
     }
 
-    logOrphanPtyLogCleanupSummary({ inspected: candidates.length, deleted, skippedYoung, failed });
+    yield* logOrphanPtyLogCleanupSummary({
+      inspected: candidates.length,
+      deleted,
+      skippedYoung,
+      failed,
+    });
 
     return {
       inspected: candidates.length,
@@ -274,19 +288,21 @@ function relativeProcessLogPath(sessionsPath: string, path: string) {
 }
 
 function logOrphanPtyLogCleanupSummary(stats: OrphanPtyLogCleanupStats) {
-  if (stats.deleted.length > 0) {
-    const sample = stats.deleted.slice(0, orphanLogSampleSize).join(', ');
-    const suffix = stats.deleted.length > orphanLogSampleSize ? ', ...' : '';
-    console.info(
-      `[runtime] Deleted ${stats.deleted.length} orphan PTY log file(s): ${sample}${suffix}`,
-    );
-  }
+  return Effect.gen(function* () {
+    if (stats.deleted.length > 0) {
+      yield* Effect.logInfo('Deleted orphan PTY log files').pipe(
+        Effect.annotateLogs({ count: stats.deleted.length, sample: sampleOf(stats.deleted) }),
+      );
+    }
+    if (stats.failed.length > 0) {
+      yield* Effect.logWarning('Failed to clean orphan PTY log files').pipe(
+        Effect.annotateLogs({ count: stats.failed.length, sample: sampleOf(stats.failed) }),
+      );
+    }
+  });
+}
 
-  if (stats.failed.length > 0) {
-    const sample = stats.failed.slice(0, orphanLogSampleSize).join(', ');
-    const suffix = stats.failed.length > orphanLogSampleSize ? ', ...' : '';
-    console.warn(
-      `[runtime] Failed to clean ${stats.failed.length} orphan PTY log file(s): ${sample}${suffix}`,
-    );
-  }
+function sampleOf(paths: readonly string[]) {
+  const sample = paths.slice(0, orphanLogSampleSize).join(', ');
+  return paths.length > orphanLogSampleSize ? `${sample}, ...` : sample;
 }

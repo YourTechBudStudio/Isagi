@@ -9,9 +9,10 @@
   "scripts": {
     "build": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && vite build && node scripts/sync-runtime-assets.mjs --dist",
     "check": "pnpm typecheck && pnpm test && pnpm build",
+    "db:generate": "cross-env NODE_OPTIONS=--conditions=import drizzle-kit generate",
     "dev": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
+    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node ../../scripts/test-exit-watchdog.mjs 240 -- node --import tsx --import ./test/dump-handles-on-signal.mjs --test --experimental-test-isolation=none \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
     "typecheck": "pnpm workspace-deps && tsc --noEmit -p tsconfig.json",
     "workspace-deps": "pnpm -C ../../packages/workflow-sdk build && pnpm -C ../../packages/workflow-verifier build && pnpm -C ../cli build"
   },
@@ -23,7 +24,7 @@
     "@yourtechbudstudio/isagi-workflow-verifier": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
-    "effect": "^3.21.2",
+    "effect": "catalog:",
     "fastify": "^5.8.5",
     "node-pty": "1.2.0-beta.15",
     "tinyglobby": "^0.2.17",

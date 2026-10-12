@@ -9,6 +9,7 @@ import {
   configuredCommandSection,
   type ConfiguredCommandEntryDeps,
 } from './configured-commands.js';
+import { paletteTestSession } from './test-support.js';
 import type { PaletteContext } from './types.js';
 
 const WORKTREE_ID = 11;
@@ -300,6 +301,7 @@ function ctx(options: Partial<PaletteContext> = {}): PaletteContext {
     },
     activeSurface: null,
     activePaneId: null,
+    ...paletteTestSession(),
     launchableHarnesses: [],
     editorAvailable: false,
     ...options,

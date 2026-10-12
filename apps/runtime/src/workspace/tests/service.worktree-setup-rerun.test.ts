@@ -3,11 +3,12 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { WorktreeSetupError } from '../../worktree-setup/index.js';
-import type { WorktreeSetupService } from '../../worktree-setup/worktree-setup.service.js';
-import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupError } from '../setup/service.js';
+import type { WorktreeSetupService } from '../setup/service.js';
+import type { LiveWorkspaceOptions } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
-import type { LiveWorkspaceOptions } from './live-workspace-support.js';
 import { testWorktreeSetup, testWorktreeSetupRepository } from './test-support.js';
 
 /**
@@ -24,7 +25,9 @@ afterAll(() => {
   fixture.cleanup();
 });
 
-type TrustPlan = Effect.Effect.Success<ReturnType<WorktreeSetupService['validateTrustForOpen']>>;
+type TrustPlan = Effect.Success<
+  ReturnType<WorktreeSetupService['Service']['validateTrustForOpen']>
+>;
 type TrustAnswer = Effect.Effect<TrustPlan, WorktreeSetupError>;
 
 /**
@@ -86,7 +89,7 @@ function withWorktreeThenRerun<A, E>(
   label: string,
   harness: ReturnType<typeof recordingHarness>,
   rerun: (input: {
-    readonly service: Effect.Effect.Success<typeof WorkspaceService>;
+    readonly service: (typeof WorkspaceService)['Service'];
     readonly projectId: number;
     readonly worktreeId: number;
   }) => Effect.Effect<A, E>,

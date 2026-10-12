@@ -5,8 +5,9 @@ import { Button } from '../../components/Button.js';
 import { Overline } from '../../components/Overline.js';
 import { useEditorAvailable } from '../../lib/control-plane/queries.js';
 import { surfaceTransition } from '../../lib/motion.js';
-import { usePaletteStore } from '../../lib/palette/store.js';
+import { openPalette } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { scopeKey, type RailOrderScope } from '../../lib/workspace/rail-order.js';
 import type { MissingProject, PresentProject } from '../../lib/workspace/types.js';
@@ -69,7 +70,7 @@ function RailBody() {
     activeSurfaceByWorktreeId,
   } = useWorkspace();
   const editorAvailable = useEditorAvailable();
-  const openPalette = usePaletteStore((state) => state.openPalette);
+  const registry = useRegistry();
   const rail = useRailDragLayer();
   // One switch for every project wrapper, including the disconnected ones: a
   // nested worktree or surface collapse changes a project's height too, so
@@ -103,7 +104,7 @@ function RailBody() {
         </span>
       </div>
 
-      <AddProjectButton onOpen={() => openPalette('add-project')} />
+      <AddProjectButton onOpen={() => openPalette(registry, 'add-project')} />
 
       <div
         ref={rail.scrollRef}

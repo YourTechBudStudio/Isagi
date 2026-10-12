@@ -1,15 +1,18 @@
+import { useAtomValue } from '@effect/atom-react';
 import type { CSSProperties, PointerEvent, ReactNode, RefObject } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { SurfaceDetail, SurfaceLayoutNode, SurfacePane } from '@isagi/contracts';
 
+import { useRegistry } from '../../lib/state/registry.js';
+import { runApp } from '../../lib/state/runtime.js';
 import { activatePane, syncActivePaneFromSurfaceDetail } from '../../lib/workspace/activation.js';
+import { setSplitWeightsFromSurface } from '../../lib/workspace/commits.js';
 import {
   resolveActivePaneId,
   resolvePaneFocusAfterDetailChange,
 } from '../../lib/workspace/model.js';
-import { setSplitWeightsFromSurface } from '../../lib/workspace/queries.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { activePaneBySurfaceAtom } from '../../lib/workspace/store.js';
 import { EmptySurface } from './EmptySurface.js';
 
 const MIN_PANE_SIZE_PX = 160;
@@ -52,7 +55,12 @@ interface DividerGeom {
  * restructures. Dividers are an absolutely-positioned overlay over the inter-pane gutters.
  */
 export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
-  const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
+  const registry = useRegistry();
+  const selectStoredPaneId = useCallback(
+    (activePaneBySurfaceId: Readonly<Record<number, number>>) => activePaneBySurfaceId[detail.id],
+    [detail.id],
+  );
+  const storedPaneId = useAtomValue(activePaneBySurfaceAtom, selectStoredPaneId);
   const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
   const previousPaneIds = useRef<ReadonlySet<number> | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -74,7 +82,7 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
     });
     previousPaneIds.current = new Set(detail.panes.map((pane) => pane.id));
     if (nextFocusedPaneId !== null) {
-      syncActivePaneFromSurfaceDetail({
+      syncActivePaneFromSurfaceDetail(registry, {
         worktreeId: detail.worktreeId,
         surfaceId: detail.id,
         panes: detail.panes,
@@ -82,7 +90,7 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
         preferredPaneId: nextFocusedPaneId,
       });
     }
-  }, [detail.id, detail.worktreeId, detail.panes, detail.activePaneId, storedPaneId]);
+  }, [registry, detail.id, detail.worktreeId, detail.panes, detail.activePaneId, storedPaneId]);
 
   useEffect(() => {
     for (const paneId of layoutDiagnostics.missingPaneIds) {
@@ -131,10 +139,13 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
     dragState.current = null;
     if (!drag) return;
     const weights = drag.latestWeights ?? drag.weights;
-    void setSplitWeightsFromSurface({
-      surfaceId: detail.id,
-      weights: { nodeId: drag.nodeId, weights },
-    })
+    void runApp(
+      registry,
+      setSplitWeightsFromSurface({
+        surfaceId: detail.id,
+        weights: { nodeId: drag.nodeId, weights },
+      }),
+    )
       .catch((error: unknown) => {
         console.warn('[surface] split resize commit failed', {
           surfaceId: detail.id,
@@ -160,7 +171,7 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
               pane,
               focused: pane.id === focusedPaneId,
               onFocus: () =>
-                activatePane({
+                activatePane(registry, {
                   worktreeId: detail.worktreeId,
                   surfaceId: detail.id,
                   paneId: pane.id,

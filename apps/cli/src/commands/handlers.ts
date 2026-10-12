@@ -1,8 +1,9 @@
 import type { Effect } from 'effect';
 
-import type { CliIo } from '../context.js';
+import type { RuntimeClient } from '@isagi/runtime-client';
+
+import type { CliContext } from '../context.js';
 import type { CliFailure } from '../errors.js';
-import type { RuntimeApiService } from '../runtime-api.js';
 import type { CommandArguments, CommandId } from './table.js';
 
 /**
@@ -11,7 +12,7 @@ import type { CommandArguments, CommandId } from './table.js';
  */
 export type CommandHandler<Id extends CommandId> = (
   args: CommandArguments<Id>,
-) => Effect.Effect<unknown, CliFailure, RuntimeApiService | CliIo>;
+) => Effect.Effect<unknown, CliFailure, RuntimeClient | CliContext>;
 
 /** Exactly the handlers of one group: a missing, extra or misspelled command fails to typecheck. */
 export type GroupHandlers<Group extends string> = {

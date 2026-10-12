@@ -1,34 +1,20 @@
 # Isagi
 
-## What this is
-
-Isagi is a desktop app for resumable worktree-based development environments. Electron is the client; the runtime owns operational work.
-
-## Structure
-
-- `apps/desktop` is the Electron shell.
-- `apps/web` is the React frontend.
-- `apps/runtime` is the local-or-remote runtime server.
-- `packages/contracts` contains shared versioned API contracts and schemas.
-- `packages/workflow-sdk` is the independently versioned public workflow authoring contract.
-- `packages/workflow-verifier` owns workflow verification, build receipts, and the canonical scaffold.
-- `apps/runtime/src/workflows` discovers, loads, and executes verified workflows.
-- `apps/runtime/src/agent-sessions/harness/skill-content` is the source of the shipped `isagi-docs` skill for configuring Isagi and authoring workflows.
-- `docs/issue-tracking-guidance.md` defines how epics and stories are represented in GitHub issues, including how to label, relate, maintain, and close them.
+Isagi is a desktop app for resumable worktree-based development environments. Electron is only a client: the runtime (`apps/runtime`, local or remote) owns all operational work, including Git, worktrees, PTYs, commands, agent sessions, workflows and persistence.
 
 ## Rules
 
 - Always start by reading:
-  - docs/engineering-guidance/README.md
-  - docs/engineering-guidance/principles.md
-  - docs/engineering-guidance/how-to-use.md
-  - docs/adrs/README.md (use it as an index; read only ADRs relevant to the task)
-  - Additionally, make sure to read any relevant engineering guidance files before starting to code.
-- It is possible that the user doesn't know or remember the code and current architecutre. So always include relevant explaination to bring the user to the same level of understanding as you. Use simple language for this to keep cognitive burden low.
+  - `docs/engineering-guidance/README.md`
+  - `docs/engineering-guidance/principles.md`
+  - `docs/engineering-guidance/how-to-use.md`
+  - `docs/adrs/README.md` (an index: read only the ADRs relevant to the task)
+  - any engineering guidance relevant to the change, before you start coding.
+- The user may not know or remember the code and current architecture. Always include the explanation needed to bring them to your level of understanding, in simple language that keeps their cognitive load low.
 - Never hard-wrap prose in Markdown files. Keep each paragraph and list item on one source line.
-- After code changes, run `pnpm check`. Each package has its own `check` command. Use `pnpm fix` to fix formatting issues.
-- Never start run `pnpm run dev` or `pnpm run start` to run the Isagi app yourself. Instead suggest the user to run those commands instead.
-- Don't run state-changing Git commands unless the user explicitly asks; read-only Git (diffs, status, commit history, etc.) is allowed.
-- We haven't launched yet, so prefer bold refactors for better maitainability and correctness over backwards compatibility.
-- Isagi ships an agent skill, `isagi-docs`, that teaches a user's coding agent how to configure Isagi and author workflows. Its source is `apps/runtime/src/agent-sessions/harness/skill-content/`. Any change to Isagi's user-configurable **surface** must ship skill coverage in the same change: an index row in `SKILL.md` plus reference content.
-- Workflow contract changes must keep the SDK exports/types, verifier behavior and receipt format, runtime loader, workflow documentation, shipped configuration skill, and canonical fixtures synchronized. Treat those surfaces as one cross-cutting public contract even though their package versions and release timing differ. We are talking about `@yourtechbudstudio/isagi-workflow-sdk` and `@yourtechbudstudio/isagi-workflow-verifier` packages
+- After code changes, run `pnpm check` (each package also has its own `check` command). Use `pnpm fix` to fix formatting issues.
+- Never run `pnpm run dev` or `pnpm run start` to run the Isagi app yourself; suggest that the user run them.
+- Don't run state-changing Git commands unless the user explicitly asks. Read-only Git (diffs, status, commit history, etc.) is allowed.
+- Isagi hasn't launched yet, so prefer bold refactors for maintainability and correctness over backwards compatibility.
+- Isagi ships an agent skill, `isagi-docs`, that teaches a user's coding agent how to configure Isagi and author workflows. Its source is `apps/runtime/src/harnesses/skill-content/`. Any change to Isagi's user-configurable **surface** must ship skill coverage in the same change: an index row in `SKILL.md` plus reference content.
+- The workflow SDK and verifier (`@yourtechbudstudio/isagi-workflow-sdk`, `@yourtechbudstudio/isagi-workflow-verifier`) form one cross-cutting public contract with the runtime loader, workflow documentation, the `isagi-docs` skill and the canonical scaffold (`packages/workflow-verifier/fixtures/minimal-workflow`). A change to SDK exports or types, verifier behavior or the receipt format keeps all of those in sync, even though their package versions and release timing differ. Do not bump either package for unrelated app releases.

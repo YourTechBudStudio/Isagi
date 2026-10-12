@@ -1,16 +1,22 @@
 import assert from 'node:assert/strict';
 import { describe, it, type TestContext } from 'node:test';
 
-import { QueryClient } from '@tanstack/react-query';
+import { Effect } from 'effect';
 
-import { terminalSettingsDefaults, type DurableSessionInventory } from '@isagi/contracts';
+import {
+  terminalSettingsDefaults,
+  type DurableSessionInventory,
+  type SurfaceDetail,
+} from '@isagi/contracts';
 
-import { surfaceDetailQueryKey } from '../query-keys.js';
+import { makeChannel, type Channel } from '../../state/channel.js';
+import { flush, makeTestRegistry } from '../../state/testing.js';
+import { surfaceDetailAtom } from '../queries.js';
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
 import type { TerminalPresentationController } from './controller.js';
-import { publishTerminalWorkspaceFact } from './coordinator-events.js';
 import { createTerminalWorkspaceCoordinator } from './coordinator.js';
 import { createTerminalDiagnosticsCollector } from './diagnostics.js';
+import { terminalFactsAtom, type TerminalWorkspaceFact } from './facts.js';
 import type { TerminalPresentationWorkspace } from './workspace-context.js';
 
 const identity = { kind: 'agent_session', sessionId: 7 } as const;
@@ -26,7 +32,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function setup(t: TestContext, fetches: ReturnType<typeof deferred<DurableSessionInventory>>[]) {
+function setup(
+  t: TestContext,
+  fetches: ReturnType<typeof deferred<DurableSessionInventory>>[],
+  facts: Channel<TerminalWorkspaceFact> = makeChannel<TerminalWorkspaceFact>(),
+) {
   const cache = createTerminalPresentationCache<TerminalPresentationController>({
     settings: terminalSettingsDefaults.cache,
   });
@@ -45,15 +55,14 @@ function setup(t: TestContext, fetches: ReturnType<typeof deferred<DurableSessio
     onAttachmentEvent: () => {},
   } as TerminalPresentationWorkspace;
   let index = 0;
-  const queryClient = new QueryClient();
   const coordinator = createTerminalWorkspaceCoordinator({
     workspace,
-    queryClient,
+    facts,
     fetchInventory: () => fetches[index++]!.promise,
   });
   t.after(() => coordinator.dispose());
   coordinator.start();
-  return { cache, coordinator, diagnostics, queryClient, session };
+  return { cache, coordinator, diagnostics, facts, session };
 }
 
 describe('terminal workspace inventory reconciliation', () => {
@@ -89,8 +98,8 @@ describe('terminal workspace inventory reconciliation', () => {
 
   it('rejects a deletion event carrying the wrong durable scope', (t) => {
     const request = deferred<DurableSessionInventory>();
-    const { cache, coordinator, diagnostics } = setup(t, [request]);
-    publishTerminalWorkspaceFact({
+    const { cache, coordinator, diagnostics, facts } = setup(t, [request]);
+    facts.publish({
       type: 'durable_identity_deleted',
       identity: { ...identity, worktreeId: 2 },
     });
@@ -101,11 +110,11 @@ describe('terminal workspace inventory reconciliation', () => {
 
   it('drops a terminal deleted by another client the moment the runtime says so', (t) => {
     const request = deferred<DurableSessionInventory>();
-    const { cache } = setup(t, [request]);
+    const { cache, facts } = setup(t, [request]);
 
     // Nothing local happened here: the runtime published this because a different connected
     // client deleted the worktree that owned the session.
-    publishTerminalWorkspaceFact({
+    facts.publish({
       type: 'runtime_event',
       event: {
         id: 'evt-1',
@@ -198,22 +207,26 @@ describe('surface projection excludes editor panes', () => {
     },
   } as const;
 
-  function publishSurface(queryClient: QueryClient, panes: readonly unknown[]): void {
-    queryClient.setQueryData(surfaceDetailQueryKey(placement.surfaceId), {
+  const surfaceWith = (panes: readonly unknown[]) =>
+    ({
       id: placement.surfaceId,
       worktreeId: placement.worktreeId,
       title: 'Surface',
       layout: { kind: 'leaf', nodeId: 'n1', paneId: placement.paneId, collapsed: false },
       activePaneId: placement.paneId,
       panes,
-    });
+    }) as unknown as SurfaceDetail;
+
+  /** A landed surface-detail read, as `surfaceDetailAtom` publishes it. */
+  function publishSurface(facts: Channel<TerminalWorkspaceFact>, panes: readonly unknown[]): void {
+    facts.publish({ type: 'surface_detail_loaded', detail: surfaceWith(panes) });
   }
 
   it('registers no identity or placement for an editor pane', async (t) => {
-    const { cache, queryClient } = setup(t, [deferred<DurableSessionInventory>()]);
+    const { cache, facts } = setup(t, [deferred<DurableSessionInventory>()]);
     const before = cache.getSnapshot().entries.length;
 
-    publishSurface(queryClient, [agentPane, editorPane]);
+    publishSurface(facts, [agentPane, editorPane]);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const entries = cache.getSnapshot().entries;
@@ -232,9 +245,9 @@ describe('surface projection excludes editor panes', () => {
   });
 
   it('leaves a neighbouring PTY placement intact when an editor pane appears', async (t) => {
-    const { cache, queryClient } = setup(t, [deferred<DurableSessionInventory>()]);
+    const { cache, facts } = setup(t, [deferred<DurableSessionInventory>()]);
 
-    publishSurface(queryClient, [agentPane, editorPane]);
+    publishSurface(facts, [agentPane, editorPane]);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     const entry = cache
@@ -245,15 +258,36 @@ describe('surface projection excludes editor panes', () => {
   });
 
   it('does not unplace a PTY session merely because an editor pane is present', async (t) => {
-    const { cache, queryClient } = setup(t, [deferred<DurableSessionInventory>()]);
+    const { cache, facts } = setup(t, [deferred<DurableSessionInventory>()]);
 
     // The agent pane is still in the projection; only the editor is new. A
     // genuine disappearance still unplaces — that is reconciliation working —
     // but an editor's presence is not a disappearance.
-    publishSurface(queryClient, [agentPane, editorPane]);
+    publishSurface(facts, [agentPane, editorPane]);
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(cache.getSnapshot().entries.length, 1);
     assert.ok(cache.getSnapshot().entries[0]?.placement);
+  });
+
+  it('a surface-detail read that lands re-derives placements through the facts channel', async (t) => {
+    // The production wiring end to end: the session's facts channel, fed by `surfaceDetailAtom`.
+    const registry = makeTestRegistry({
+      api: { getSurfaceDetail: () => Effect.succeed(surfaceWith([editorPane])) },
+    });
+    t.after(() => registry.dispose());
+    const { cache } = setup(
+      t,
+      [deferred<DurableSessionInventory>()],
+      registry.get(terminalFactsAtom),
+    );
+    assert.ok(cache.getSnapshot().entries[0]?.placement);
+
+    const release = registry.mount(surfaceDetailAtom(placement.surfaceId));
+    t.after(release);
+    await flush();
+
+    // The agent pane is gone from the fresh projection, so its placement is withdrawn.
+    assert.equal(cache.getSnapshot().entries[0]?.placement, null);
   });
 });

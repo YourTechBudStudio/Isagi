@@ -1,6 +1,6 @@
-import { Schema } from 'effect';
+import { Schema, SchemaTransformation } from 'effect';
 
-import { nonEmptyString, positiveInteger } from './primitives.js';
+import { nonEmptyString, positiveInteger } from '../scalars.js';
 
 /**
  * Shared query vocabulary.
@@ -9,10 +9,11 @@ import { nonEmptyString, positiveInteger } from './primitives.js';
  * free-text query field must accept that number back as text. Without this a file named `2024` or
  * a scope named `1` would be refused as a type error.
  */
-export const queryTextSchema = Schema.transform(
-  Schema.Union(nonEmptyString, Schema.Number),
-  nonEmptyString,
-  { strict: true, decode: (value) => String(value), encode: (value) => value },
+export const queryTextSchema = Schema.Union([nonEmptyString, Schema.Number]).pipe(
+  Schema.decodeTo(
+    nonEmptyString,
+    SchemaTransformation.transform({ decode: (value) => String(value), encode: (value) => value }),
+  ),
 );
 
 /**
@@ -29,14 +30,14 @@ export const workflowListPageLimitMaximum = 500;
 export const paginationQueryFields = {
   cursor: Schema.optional(cursorSchema),
   limit: Schema.optional(
-    positiveInteger.pipe(Schema.lessThanOrEqualTo(workflowListPageLimitMaximum)),
+    positiveInteger.check(Schema.isLessThanOrEqualTo(workflowListPageLimitMaximum)),
   ),
 };
 
 export const paginationQuerySchema = Schema.Struct(paginationQueryFields);
 
 /** The envelope every list route returns. */
-export const pagedSchema = <Item extends Schema.Schema.Any>(item: Item) =>
+export const pagedSchema = <Item extends Schema.Top>(item: Item) =>
   Schema.Struct({ items: Schema.Array(item), nextCursor: Schema.NullOr(cursorSchema) });
 
 export type PaginationQuery = typeof paginationQuerySchema.Type;

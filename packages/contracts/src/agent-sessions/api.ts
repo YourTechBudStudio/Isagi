@@ -11,10 +11,10 @@ export const agentSessionActivityUnavailableErrorSchema = Schema.Struct({
   requestId: Schema.String,
 });
 
-export const agentSessionActivityApiErrorSchema = Schema.Union(
+export const agentSessionActivityApiErrorSchema = Schema.Union([
   agentSessionActivityUnavailableErrorSchema,
   apiInfrastructureErrorSchema,
-);
+]);
 
 export const agentSessionsEndpoints = {
   activity: {

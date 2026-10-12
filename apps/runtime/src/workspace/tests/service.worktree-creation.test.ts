@@ -5,18 +5,19 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect } from 'effect';
 
-import { branchPathHash } from '../../git/index.js';
-import { createFixtureWorkspace } from '../../git/tests/fixtures.js';
-import { WorkspaceRepository } from '../workspace.repository.js';
-import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
+import { branchPathHash } from '../../platform/git/index.js';
+import { createFixtureWorkspace } from '../../platform/git/testing.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
+import type { LiveWorkspaceOptions } from '../testing.js';
 import { createGitProjectFixture, withRegisteredGitProject } from './live-git-support.js';
-import type { LiveWorkspaceOptions } from './live-workspace-support.js';
 
 /**
  * These exercise the owner-side operations the workflow engine composes, against real Git.
  *
  * Everything asserted here is a fact only Git holds — which branches exist, what a ref resolves to,
- * which commit a new checkout starts from — so a stubbed `GitService` would answer them by
+ * which commit a new checkout starts from — so a stubbed `Git` would answer them by
  * restating the assumption under test. `service.worktree-new-branch.test.ts` keeps the stubbed
  * cases, where the point is which Git commands the service chooses to run.
  */
@@ -57,7 +58,7 @@ describe('preflightWorktreeCreation', () => {
       (projectId) =>
         Effect.gen(function* () {
           const service = yield* WorkspaceService;
-          const repository = yield* WorkspaceRepository;
+          const repository = yield* ProjectRepository;
           const preflight = yield* service.preflightWorktreeCreation({
             projectId,
             branch,
@@ -184,7 +185,7 @@ describe('preflightWorktreeCreation', () => {
             projectId,
             request: { branch, base: { kind: 'branch', ref: 'main' } },
           });
-          const created = yield* (yield* WorkspaceRepository).findProjectWorktreeByBranch({
+          const created = yield* (yield* ProjectRepository).findProjectWorktreeByBranch({
             projectId,
             branch,
           });
@@ -277,7 +278,7 @@ describe('openWorktree with a resolved commit base', () => {
       (projectId) =>
         Effect.gen(function* () {
           const service = yield* WorkspaceService;
-          const repository = yield* WorkspaceRepository;
+          const repository = yield* ProjectRepository;
           // The decision was made against `baseCommit`; `main` moves before it is acted on. A
           // creation that re-resolved the ref here would silently branch from somewhere else.
           const movedTip = yield* Effect.sync(() => fixture.commit('moves the tip'));

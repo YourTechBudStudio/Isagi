@@ -1,24 +1,25 @@
-import type { QueryClient } from '@tanstack/react-query';
-
 import type {
   DurableSessionIdentity,
   DurableSessionInventory,
   SurfaceDetail,
 } from '@isagi/contracts';
 
-import { runRuntimeEffect } from '../../runtime/run.js';
-import { fetchDurableSessions } from '../runtime-data.js';
+import type { Channel } from '../../state/channel.js';
 import { terminalSessionKey } from '../terminal-cache/index.js';
-import {
-  subscribeTerminalWorkspaceFacts,
-  type TerminalWorkspaceFact,
-} from './coordinator-events.js';
+import type { TerminalWorkspaceFact } from './facts.js';
 import type { TerminalPresentationWorkspace } from './workspace-context.js';
 
+/**
+ * Keeps the terminal presentation cache consistent with the runtime's durable sessions.
+ *
+ * Inputs are the session's fact channel (runtime events, workspace commits, landed surface-detail
+ * reads) and a durable-session inventory read. The inventory read is a plain Promise function so
+ * this module stays free of the app runtime; the provider builds it with `runApp`.
+ */
 export function createTerminalWorkspaceCoordinator(input: {
   readonly workspace: TerminalPresentationWorkspace;
-  readonly queryClient: QueryClient;
-  readonly fetchInventory?: ((signal: AbortSignal) => Promise<DurableSessionInventory>) | undefined;
+  readonly facts: Channel<TerminalWorkspaceFact>;
+  readonly fetchInventory: (signal: AbortSignal) => Promise<DurableSessionInventory>;
 }) {
   const { cache } = input.workspace;
   let disposed = false;
@@ -61,18 +62,12 @@ export function createTerminalWorkspaceCoordinator(input: {
     const captured = cache.captureIncarnations();
     const controller = new AbortController();
     abort = controller;
-    void input.queryClient
-      .fetchQuery({
-        queryKey: ['terminal', 'durable-session-inventory', generation],
-        staleTime: 0,
-        gcTime: 0,
-        queryFn: ({ signal }) => {
-          const linked = AbortSignal.any([signal, controller.signal]);
-          return input.fetchInventory
-            ? input.fetchInventory(linked)
-            : runRuntimeEffect(fetchDurableSessions(), { signal: linked });
-        },
-      })
+    // Every refresh is a fresh read (the old `staleTime: 0`, `gcTime: 0` query): nothing is
+    // cached between generations, and disposal aborts the one in flight. A read that throws
+    // instead of rejecting is still just a failed read.
+    void new Promise<DurableSessionInventory>((resolve) =>
+      resolve(input.fetchInventory(controller.signal)),
+    )
       .then((inventory) => {
         if (disposed || generation !== requestGeneration) return;
         const byKey = new Map<string, number>();
@@ -121,6 +116,10 @@ export function createTerminalWorkspaceCoordinator(input: {
 
   const handleFact = (fact: TerminalWorkspaceFact) => {
     if (disposed) return;
+    if (fact.type === 'surface_detail_loaded') {
+      applySurfaceProjection(fact.detail);
+      return;
+    }
     if (fact.type === 'runtime_connected' || fact.type === 'durable_inventory_refresh_requested') {
       refreshInventory();
       return;
@@ -212,21 +211,7 @@ export function createTerminalWorkspaceCoordinator(input: {
     }
   };
 
-  const unsubscribeFacts = subscribeTerminalWorkspaceFacts(handleFact);
-  const unsubscribeQueries = input.queryClient.getQueryCache().subscribe((event) => {
-    const key = event.query.queryKey;
-    const data = event.query.state.data;
-    if (
-      key[0] === 'surface' &&
-      data &&
-      typeof data === 'object' &&
-      'id' in data &&
-      'worktreeId' in data &&
-      'panes' in data
-    ) {
-      applySurfaceProjection(data as SurfaceDetail);
-    }
-  });
+  const unsubscribeFacts = input.facts.subscribe(handleFact);
   const unsubscribeMembership = cache.subscribeMembership(() => {
     if (running) dirty = true;
   });
@@ -240,7 +225,6 @@ export function createTerminalWorkspaceCoordinator(input: {
       abort?.abort();
       abort = null;
       unsubscribeFacts();
-      unsubscribeQueries();
       unsubscribeMembership();
     },
   };

@@ -104,7 +104,13 @@ const worktreeRow = (page: Page, projectId: number, worktreeId: number) =>
     .first();
 
 async function scenario(page: Page, id: string) {
+  // A scenario click resets asynchronously: the fixture awaits the new snapshot
+  // and only then applies the scenario's selection. Wait for that reset to land,
+  // or it can overwrite a selection the spec makes right after the click.
+  const shell = page.locator('[data-fixture-shell]');
+  const run = Number(await shell.getAttribute('data-scenario-run'));
   await page.locator(`[data-scenario="${id}"]`).click();
+  await expect(shell).toHaveAttribute('data-scenario-applied', String(run + 1));
 }
 
 async function outcome(page: Page, id: string) {
@@ -114,6 +120,11 @@ async function outcome(page: Page, id: string) {
 async function openPalette(page: Page) {
   await page.keyboard.press('Meta+k');
   await expect(palette(page)).toBeVisible();
+  // The palette takes focus in the same commit as the open (layout effects; the
+  // early-typing specs in command-palette.spec.ts pin that keys pressed straight
+  // after Mod+K are not lost). This wait is a stability guard for the specs below,
+  // which assert where focus is, not a workaround for lost keys.
+  await expect(palette(page).locator('input')).toBeFocused();
 }
 
 test.beforeEach(async ({ page }) => {

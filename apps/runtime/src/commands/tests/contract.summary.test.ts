@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Either, Schema } from 'effect';
+import { Result, Schema } from 'effect';
 
 import { commandRunDiagnosticReasonSchema, commandSummarySchema } from '@isagi/contracts';
 
@@ -14,10 +14,10 @@ import { commandRunDiagnosticReasonSchema, commandSummarySchema } from '@isagi/c
  * the decoder the API boundary uses.
  */
 
-const decode = Schema.decodeUnknownEither(commandSummarySchema);
+const decode = Schema.decodeUnknownResult(commandSummarySchema);
 
 test('the legacy numeric port summary is rejected at the contract boundary', () => {
-  assert.ok(Either.isLeft(decode({ name: 'dev', status: 'running', ports: [5173] })));
+  assert.ok(Result.isFailure(decode({ name: 'dev', status: 'running', ports: [5173] })));
 });
 
 test('a structured port summary decodes at the contract boundary', () => {
@@ -33,11 +33,11 @@ test('a structured port summary decodes at the contract boundary', () => {
     ],
   });
 
-  assert.ok(Either.isRight(decoded));
+  assert.ok(Result.isSuccess(decoded));
 });
 
 test('a null port summary decodes as honest unknown degradation', () => {
-  assert.ok(Either.isRight(decode({ name: 'dev', status: 'running', ports: null })));
+  assert.ok(Result.isSuccess(decode({ name: 'dev', status: 'running', ports: null })));
 });
 
 test('the allocation-failure reason crosses the diagnostic contract boundary', () => {
@@ -45,8 +45,11 @@ test('the allocation-failure reason crosses the diagnostic contract boundary', (
   // typo either side is a silent blank notice rather than a type error at the
   // point of use. Pinning the exact string here is what makes the two ends one
   // contract.
-  const decodeReason = Schema.decodeUnknownEither(commandRunDiagnosticReasonSchema);
+  const decodeReason = Schema.decodeUnknownResult(commandRunDiagnosticReasonSchema);
 
-  assert.deepEqual(decodeReason('port_allocation_failed'), Either.right('port_allocation_failed'));
-  assert.ok(Either.isLeft(decodeReason('port_allocation_failure')));
+  assert.deepEqual(
+    decodeReason('port_allocation_failed'),
+    Result.succeed('port_allocation_failed'),
+  );
+  assert.ok(Result.isFailure(decodeReason('port_allocation_failure')));
 });

@@ -1,6 +1,6 @@
 import { type InferSelectModel } from 'drizzle-orm';
 
-import { ptyProcesses } from '../persistence/schema.js';
+import { ptyProcesses } from './tables.js';
 import type { PtyProcessRow } from './types.js';
 
 type PtyProcessTableRow = InferSelectModel<typeof ptyProcesses>;

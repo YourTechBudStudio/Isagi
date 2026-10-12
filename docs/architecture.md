@@ -4,13 +4,13 @@
 
 Isagi is a desktop app with a server/client architecture.
 
-Electron is the client. The core runtime is a server-style process that owns worktree, worktree-environment, process, PTY, agent-session, and persistence responsibilities.
+Electron (hosting the React web app) is the client. The core runtime is a server-style process that owns worktree, worktree-environment, process, PTY, agent-session, and persistence responsibilities.
 
 This separation keeps the desktop experience local and direct while leaving room for remote execution later.
 
 ## Client
 
-The Electron client owns the interactive workbench experience:
+The client is the React web app, hosted by the Electron desktop shell. The web app owns the interactive workbench experience:
 
 - project/worktree/surface navigation
 - command palette

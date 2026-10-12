@@ -1,537 +1,589 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { Effect, Exit, Fiber } from 'effect';
-
 import {
-  UpdaterCoordinator,
-  updaterSchedule,
-  type UpdaterAdapter,
-  type UpdaterTimers,
-} from './coordinator.js';
-import type { UpdaterDiagnosticRecord, UpdaterDiagnosticSink } from './diagnostics.js';
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Stream,
+  SubscriptionRef,
+  type Scope,
+} from 'effect';
+import type { HttpClientError } from 'effect/http';
+import { TestClock } from 'effect/testing';
 
-class FakeUpdater extends EventEmitter implements UpdaterAdapter {
-  // Every flag starts at the opposite of what `start` must set, so a
-  // configuration that silently stopped being applied cannot pass.
-  allowPrerelease = true;
-  autoDownload = true;
-  autoInstallOnAppQuit = true;
-  autoRunAppAfterInstall = false;
-  checks = 0;
-  downloads = 0;
-  installs = 0;
-  rejection: Error | undefined;
-  downloadRejection: Error | undefined;
+import { updaterSchedule } from './coordinator.js';
+import { UpdaterDiagnostics, type UpdaterDiagnosticRecord } from './diagnostics.js';
+import { DesktopUpdater } from './service.js';
+import {
+  activityResponse,
+  buildUpdater,
+  FakeUpdater,
+  fakeRuntimeHttp,
+  recordingDiagnostics,
+  settle,
+  testConfig,
+} from './test-support.js';
 
-  checkForUpdates() {
-    this.checks += 1;
-    return this.rejection ? Promise.reject(this.rejection) : Promise.resolve(null);
-  }
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
-  downloadUpdate() {
-    this.downloads += 1;
-    return this.downloadRejection ? Promise.reject(this.downloadRejection) : Promise.resolve(null);
-  }
+type Readiness = 'clear' | 'unknown' | { readonly workingAgents: number };
 
-  quitAndInstall() {
-    this.installs += 1;
-  }
-
-  override on(event: Parameters<UpdaterAdapter['on']>[0], listener: (...args: unknown[]) => void) {
-    return super.on(event, listener);
-  }
-
-  override off(
-    event: Parameters<UpdaterAdapter['off']>[0],
-    listener: (...args: unknown[]) => void,
-  ) {
-    return super.off(event, listener);
-  }
-}
-
-class FakeTimers implements UpdaterTimers {
-  #next = 1;
-  readonly timeouts = new Map<number, { callback: () => void; milliseconds: number }>();
-  readonly intervals = new Map<number, { callback: () => void; milliseconds: number }>();
-
-  setTimeout(callback: () => void, milliseconds: number) {
-    const handle = this.#next++;
-    this.timeouts.set(handle, { callback, milliseconds });
-    return handle;
-  }
-
-  clearTimeout(handle: unknown) {
-    this.timeouts.delete(handle as number);
-  }
-
-  setInterval(callback: () => void, milliseconds: number) {
-    const handle = this.#next++;
-    this.intervals.set(handle, { callback, milliseconds });
-    return handle;
-  }
-
-  clearInterval(handle: unknown) {
-    this.intervals.delete(handle as number);
-  }
-
-  fireTimeout(milliseconds: number) {
-    const match = [...this.timeouts].find(([, timer]) => timer.milliseconds === milliseconds);
-    assert.ok(match);
-    this.timeouts.delete(match[0]);
-    match[1].callback();
-  }
-
-  fireInterval(milliseconds: number) {
-    const match = [...this.intervals.values()].find((timer) => timer.milliseconds === milliseconds);
-    assert.ok(match);
-    match.callback();
-  }
-}
-
-function harness(
+/**
+ * The self-updating composition over a fake electron-updater, an in-memory diagnostic trail and a
+ * fake runtime. Building it is starting it; `stop` closes its scope.
+ */
+const harness = Effect.fnUntraced(function* (
   options: {
-    readiness?: import('./restart-readiness.js').RestartReadiness;
-    readRestartReadiness?: () => Effect.Effect<import('./restart-readiness.js').RestartReadiness>;
-    exitCommitted?: () => boolean;
-    requestInstall?: () => void;
+    readonly readiness?: Readiness;
+    readonly respond?: () => Effect.Effect<Response, HttpClientError.HttpClientError>;
+    readonly exitCommitted?: () => boolean;
+    readonly requestInstall?: (install: () => void) => void;
+    readonly diagnostics?: Layer.Layer<UpdaterDiagnostics>;
   } = {},
 ) {
-  const updater = new FakeUpdater();
-  const timers = new FakeTimers();
-  const diagnostics: UpdaterDiagnosticRecord[] = [];
-  let flushes = 0;
-  const sink: UpdaterDiagnosticSink = {
-    write: (record) => {
-      diagnostics.push(record);
-      return Promise.resolve();
-    },
-    flush: () => {
-      flushes += 1;
-      return Promise.resolve();
-    },
-  };
-  const coordinator = new UpdaterCoordinator({
-    updater,
-    timers,
-    diagnostics: sink,
-    platform: 'darwin',
-    installedVersion: '1.2.3',
-    readRestartReadiness:
-      options.readRestartReadiness ??
-      (() => Effect.succeed(options.readiness ?? { kind: 'clear' })),
-    isExitCommitted: options.exitCommitted ?? (() => false),
-    requestInstall: options.requestInstall ?? (() => undefined),
-  });
-  return { coordinator, diagnostics, flushes: () => flushes, timers, updater };
+  const adapter = new FakeUpdater();
+  const trail = recordingDiagnostics();
+  const respond = options.respond ?? (() => Effect.succeed(readinessResponse(options.readiness)));
+  const subject = yield* buildUpdater(
+    DesktopUpdater.layerSelfUpdating.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          testConfig({
+            loadUpdater: () => adapter,
+            isExitCommitted: options.exitCommitted ?? (() => false),
+            requestInstall: options.requestInstall ?? (() => undefined),
+          }),
+          options.diagnostics ?? trail.layer,
+          fakeRuntimeHttp(respond),
+        ),
+      ),
+    ),
+  );
+  return { ...subject, adapter, diagnostics: trail.records };
+});
+
+type Subject = Effect.Success<ReturnType<typeof harness>>;
+
+function readinessResponse(readiness: Readiness = 'clear') {
+  if (readiness === 'clear') return activityResponse(0);
+  if (readiness === 'unknown')
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 'agent_session_activity_unavailable',
+          status: 500,
+          message: 'Agent session activity could not be read.',
+          requestId: 'request-1',
+        },
+      }),
+      { status: 500 },
+    );
+  return activityResponse(readiness.workingAgents);
 }
 
-test('start is idempotent, never downloads on its own, and checks at once', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  await Effect.runPromise(subject.coordinator.start());
-  assert.equal(subject.updater.allowPrerelease, false);
-  // The whole point of the surface: finding an update must produce news to act
-  // on, never a silent fetch the user only learns about once it has finished.
-  assert.equal(subject.updater.autoDownload, false);
-  assert.equal(subject.updater.autoInstallOnAppQuit, false);
-  assert.equal(subject.updater.autoRunAppAfterInstall, true);
-  assert.equal(subject.updater.listenerCount('error'), 1);
+/** Emits an electron-updater event and lets the updater apply it. */
+const emit = (subject: Subject, event: string, value?: unknown) =>
+  Effect.sync(() => subject.adapter.emit(event, value)).pipe(Effect.andThen(settle));
 
-  // No waiting timer at all — the launch check has already gone out, and it
-  // announces itself so the rail can say that Isagi looked.
-  assert.equal(subject.updater.checks, 1);
-  assert.equal(snapshotState(subject.coordinator), 'checking');
-  assert.deepEqual([...subject.timers.timeouts.values()], []);
-  assert.deepEqual(
-    [...subject.timers.intervals.values()].map((timer) => timer.milliseconds),
-    [14_400_000],
-  );
+/** Advances virtual time and lets the fibers it woke run. */
+const advance = (duration: Duration.Input) =>
+  TestClock.adjust(duration).pipe(Effect.andThen(settle));
 
-  // Nobody asked for the launch check, so its outcome is not spent on the rail.
-  subject.updater.emit('update-not-available', { version: '1.2.3' });
-  assert.equal(snapshotState(subject.coordinator), 'idle');
-  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
-  assert.equal(subject.updater.checks, 2);
-});
+const run = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.andThen(settle));
 
-test('a launch check that fails takes its own token back down without reporting', async () => {
-  // The user did not ask, so they do not see the failure — but they must not be
-  // left looking at `checking…` for the rest of the session either.
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  assert.equal(snapshotState(subject.coordinator), 'checking');
+test('start is idempotent, never downloads on its own, and checks at once', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      assert.equal(subject.adapter.allowPrerelease, false);
+      // The whole point of the surface: finding an update must produce news to act
+      // on, never a silent fetch the user only learns about once it has finished.
+      assert.equal(subject.adapter.autoDownload, false);
+      assert.equal(subject.adapter.autoInstallOnAppQuit, false);
+      assert.equal(subject.adapter.autoRunAppAfterInstall, true);
+      // Building the layer is the only start there is: one set of listeners, one launch check.
+      assert.equal(subject.adapter.listenerCount('error'), 1);
 
-  subject.updater.emit('error', new Error('no provider'));
+      // No waiting timer at all — the launch check has already gone out, and it
+      // announces itself so the rail can say that Isagi looked.
+      assert.equal(subject.adapter.checks, 1);
+      assert.equal(subject.snapshot().state, 'checking');
 
-  assert.equal(snapshotState(subject.coordinator), 'idle');
-  assert.deepEqual(
-    subject.diagnostics.map((record) => record.code),
-    ['updater_error'],
-  );
-});
+      // Nobody asked for the launch check, so its outcome is not spent on the rail.
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      assert.equal(subject.snapshot().state, 'idle');
+      // The poll is four-hourly, starting one period after launch.
+      yield* advance(Duration.subtract(updaterSchedule.repeatCheck, Duration.millis(1)));
+      assert.equal(subject.adapter.checks, 1);
+      yield* advance(Duration.millis(1));
+      assert.equal(subject.adapter.checks, 2);
+    }),
+  ));
 
-test('manual no-update is visible for five seconds and a new check cancels that timer', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-not-available', { version: '1.2.3' });
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
-  assert.equal(snapshotState(subject.coordinator), 'checking');
-  subject.updater.emit('update-not-available', { version: '1.2.3' });
-  assert.equal(snapshotState(subject.coordinator), 'up_to_date');
-  assert.equal(
-    [...subject.timers.timeouts.values()].some((timer) => timer.milliseconds === 5_000),
-    true,
-  );
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
-  assert.equal(snapshotState(subject.coordinator), 'checking');
-  assert.equal(
-    [...subject.timers.timeouts.values()].some((timer) => timer.milliseconds === 5_000),
-    false,
-  );
-});
+test('a launch check that fails takes its own token back down without reporting', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      // The user did not ask, so they do not see the failure — but they must not be
+      // left looking at `checking…` for the rest of the session either.
+      const subject = yield* harness();
+      assert.equal(subject.snapshot().state, 'checking');
 
-function snapshotState(coordinator: UpdaterCoordinator) {
-  return coordinator.snapshot.state;
+      yield* emit(subject, 'error', new Error('no provider'));
+
+      assert.equal(subject.snapshot().state, 'idle');
+      assert.deepEqual(
+        subject.diagnostics.map((record) => record.code),
+        ['updater_error'],
+      );
+    }),
+  ));
+
+test('manual no-update is visible for five seconds and a new check cancels that timer', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      yield* run(subject.updater.checkForUpdates);
+      assert.equal(subject.snapshot().state, 'checking');
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      assert.equal(subject.snapshot().state, 'up_to_date');
+
+      // A new check three seconds in takes the token down and cancels the return to idle.
+      yield* advance('3 seconds');
+      assert.equal(subject.snapshot().state, 'up_to_date');
+      yield* run(subject.updater.checkForUpdates);
+      assert.equal(subject.snapshot().state, 'checking');
+
+      // Its own answer gets a full five seconds: the cancelled window does not cut it short.
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      assert.equal(subject.snapshot().state, 'up_to_date');
+      yield* advance('2 seconds');
+      assert.equal(subject.snapshot().state, 'up_to_date');
+      yield* advance('3 seconds');
+      assert.equal(subject.snapshot().state, 'idle');
+    }),
+  ));
+
+test('a found update waits for the user, and only then does the download own the lock', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      yield* emit(subject, 'update-available', { version: '2.0.0' });
+
+      // Found, and nothing fetched. This is the state the rail exists to show.
+      assert.deepEqual(subject.snapshot(), {
+        protocolVersion: 2,
+        revision: 2,
+        state: 'update_available',
+        installedVersion: '1.2.3',
+        targetVersion: '2.0.0',
+      });
+      assert.equal(subject.adapter.downloads, 0);
+
+      yield* run(subject.updater.downloadUpdate);
+      assert.equal(subject.adapter.downloads, 1);
+      assert.deepEqual(subject.snapshot(), {
+        protocolVersion: 2,
+        revision: 3,
+        state: 'downloading',
+        installedVersion: '1.2.3',
+        targetVersion: '2.0.0',
+        progressPercent: 0,
+      });
+
+      // A download in flight owns the lock: neither a second check nor a second
+      // press may start anything alongside it.
+      yield* run(subject.updater.checkForUpdates);
+      yield* run(subject.updater.downloadUpdate);
+      assert.equal(subject.adapter.checks, 1);
+      assert.equal(subject.adapter.downloads, 1);
+      yield* emit(subject, 'download-progress', { percent: Number.POSITIVE_INFINITY });
+      assert.equal(progressPercent(subject), 0);
+      yield* emit(subject, 'download-progress', { percent: 140 });
+      assert.equal(progressPercent(subject), 100);
+      yield* emit(subject, 'update-downloaded', { version: '2.0.0' });
+      assert.equal(subject.snapshot().state, 'ready');
+      yield* advance(updaterSchedule.repeatCheck);
+      assert.equal(subject.adapter.checks, 1);
+    }),
+  ));
+
+function progressPercent(subject: Subject) {
+  const snapshot = subject.snapshot();
+  return snapshot.state === 'downloading' ? snapshot.progressPercent : -1;
 }
 
-test('a found update waits for the user, and only then does the download own the lock', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', { version: '2.0.0' });
+test('a scheduled check never occupies the slot while a download waits to be pressed', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      // The control is enabled and the rail says nothing about a background check,
+      // so a poll that claimed the in-flight slot would turn the press into a
+      // silent no-op — and republish identical facts, so not even a revision would
+      // arrive for the client to recover on.
+      const subject = yield* harness();
+      yield* emit(subject, 'update-available', { version: '2.0.0' });
 
-  // Found, and nothing fetched. This is the state the rail exists to show.
-  assert.deepEqual(subject.coordinator.snapshot, {
-    protocolVersion: 2,
-    revision: 2,
-    state: 'update_available',
-    installedVersion: '1.2.3',
-    targetVersion: '2.0.0',
-  });
-  assert.equal(subject.updater.downloads, 0);
+      yield* advance(updaterSchedule.repeatCheck);
+      assert.equal(subject.adapter.checks, 1, 'a scheduled check ran while an update was on offer');
 
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  assert.equal(subject.updater.downloads, 1);
-  assert.deepEqual(subject.coordinator.snapshot, {
-    protocolVersion: 2,
-    revision: 3,
-    state: 'downloading',
-    installedVersion: '1.2.3',
-    targetVersion: '2.0.0',
-    progressPercent: 0,
-  });
+      yield* run(subject.updater.downloadUpdate);
+      assert.equal(subject.adapter.downloads, 1);
+      assert.equal(subject.snapshot().state, 'downloading');
+    }),
+  ));
 
-  // A download in flight owns the lock: neither a second check nor a second
-  // press may start anything alongside it.
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  assert.equal(subject.updater.checks, 1);
-  assert.equal(subject.updater.downloads, 1);
-  subject.updater.emit('download-progress', { percent: Number.POSITIVE_INFINITY });
-  assert.equal(
-    subject.coordinator.snapshot.state === 'downloading'
-      ? subject.coordinator.snapshot.progressPercent
-      : -1,
-    0,
-  );
-  subject.updater.emit('download-progress', { percent: 140 });
-  assert.equal(
-    subject.coordinator.snapshot.state === 'downloading'
-      ? subject.coordinator.snapshot.progressPercent
-      : -1,
-    100,
-  );
-  subject.updater.emit('update-downloaded', { version: '2.0.0' });
-  assert.equal(subject.coordinator.snapshot.state, 'ready');
-  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
-  assert.equal(subject.updater.checks, 1);
-});
+test('a scheduled check never occupies the slot while a failed download waits to be retried', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      yield* emit(subject, 'update-available', { version: '2.0.0' });
+      yield* run(subject.updater.downloadUpdate);
+      yield* emit(subject, 'error', new Error('download failed'));
+      assert.equal(subject.snapshot().state, 'failed');
 
-test('a scheduled check never occupies the slot while a download waits to be pressed', async () => {
-  // The control is enabled and the rail says nothing about a background check,
-  // so a poll that claimed the in-flight slot would turn the press into a
-  // silent no-op — and republish identical facts, so not even a revision would
-  // arrive for the client to recover on.
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', { version: '2.0.0' });
+      yield* advance(updaterSchedule.repeatCheck);
+      assert.equal(subject.adapter.checks, 1, 'a scheduled check ran while a retry was on offer');
 
-  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
-  assert.equal(subject.updater.checks, 1, 'a scheduled check ran while an update was on offer');
+      yield* run(subject.updater.downloadUpdate);
+      assert.equal(subject.adapter.downloads, 2);
+      assert.equal(subject.snapshot().state, 'downloading');
+    }),
+  ));
 
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  assert.equal(subject.updater.downloads, 1);
-  assert.equal(subject.coordinator.snapshot.state, 'downloading');
-});
+test('scheduled failures preserve an older manual failure and scheduled success replaces it', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      yield* run(subject.updater.checkForUpdates);
+      yield* emit(subject, 'error', new Error('manual failed'));
+      assert.equal(subject.snapshot().state, 'failed');
 
-test('a scheduled check never occupies the slot while a failed download waits to be retried', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', { version: '2.0.0' });
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  subject.updater.emit('error', new Error('download failed'));
-  assert.equal(subject.coordinator.snapshot.state, 'failed');
+      yield* advance(updaterSchedule.repeatCheck);
+      assert.equal(subject.adapter.checks, 3);
+      yield* emit(subject, 'error', new Error('scheduled failed'));
+      assert.equal(subject.snapshot().state, 'failed');
+      yield* advance(updaterSchedule.repeatCheck);
+      assert.equal(subject.adapter.checks, 4);
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      assert.equal(subject.snapshot().state, 'idle');
+      assert.equal(subject.diagnostics.length, 2);
+    }),
+  ));
 
-  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
-  assert.equal(subject.updater.checks, 1, 'a scheduled check ran while a retry was on offer');
+test('download errors stay visible and name what they failed to fetch', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      yield* emit(subject, 'update-available', { version: '2.0.0' });
+      yield* run(subject.updater.downloadUpdate);
+      yield* emit(subject, 'error', new Error('download failed'));
+      const snapshot = subject.snapshot();
+      assert.equal(snapshot.state, 'failed');
+      assert.equal(snapshot.state === 'failed' ? snapshot.operation : '', 'download');
+      // The version survives the transition off `downloading`, so the failure can
+      // name what it failed to fetch.
+      assert.equal(
+        snapshot.state === 'failed' && snapshot.operation === 'download'
+          ? snapshot.targetVersion
+          : '',
+        '2.0.0',
+      );
+    }),
+  ));
 
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  assert.equal(subject.updater.downloads, 2);
-  assert.equal(subject.coordinator.snapshot.state, 'downloading');
-});
+test('a download failure without a usable provider version still produces a snapshot', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      // A malformed provider event should degrade the sentence the user reads, not
+      // leave the coordinator unable to report the failure at all.
+      const subject = yield* harness();
+      yield* emit(subject, 'update-available', {});
+      yield* run(subject.updater.downloadUpdate);
+      yield* emit(subject, 'error', new Error('download failed'));
+      const snapshot = subject.snapshot();
 
-test('scheduled failures preserve an older manual failure and scheduled success replaces it', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-not-available', { version: '1.2.3' });
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
-  subject.updater.emit('error', new Error('manual failed'));
-  assert.equal(subject.coordinator.snapshot.state, 'failed');
+      assert.equal(
+        snapshot.state === 'failed' && snapshot.operation === 'download'
+          ? snapshot.targetVersion
+          : 'x',
+        '',
+      );
+    }),
+  ));
 
-  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
-  subject.updater.emit('error', new Error('scheduled failed'));
-  assert.equal(subject.coordinator.snapshot.state, 'failed');
-  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
-  subject.updater.emit('update-not-available', { version: '1.2.3' });
-  assert.equal(subject.coordinator.snapshot.state, 'idle');
-  assert.equal(subject.diagnostics.length, 2);
-});
+test('the download page failure is recorded on the same diagnostic trail as every other failure', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      const report = yield* subject.updater.beginDownloadPageAttempt;
+      yield* report('failed');
 
-test('download errors stay visible and name what they failed to fetch', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', { version: '2.0.0' });
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  subject.updater.emit('error', new Error('download failed'));
-  const snapshot = subject.coordinator.snapshot;
-  assert.equal(snapshot.state, 'failed');
-  assert.equal(snapshot.state === 'failed' ? snapshot.operation : '', 'download');
-  // The version survives the transition off `downloading`, so the failure can
-  // name what it failed to fetch.
-  assert.equal(
-    snapshot.state === 'failed' && snapshot.operation === 'download' ? snapshot.targetVersion : '',
-    '2.0.0',
-  );
-});
+      assert.deepEqual(subject.diagnostics, [
+        {
+          operation: 'lifecycle',
+          platform: 'darwin',
+          installedVersion: '1.2.3',
+          code: 'download_page_rejected',
+          summary: 'The release download page could not be opened.',
+        },
+      ]);
+    }),
+  ));
 
-test('a download failure without a usable provider version still produces a snapshot', async () => {
-  // A malformed provider event should degrade the sentence the user reads, not
-  // leave the coordinator unable to report the failure at all.
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', {});
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  subject.updater.emit('error', new Error('download failed'));
-  const snapshot = subject.coordinator.snapshot;
+test('a self-updating build has no manual state for a launch outcome to land on', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      // This composition never publishes `manual_update_required`, so there is
+      // nothing for a success to retract and nothing for a failure to overlay. The
+      // failure is still worth a line in the trail; the success is not.
+      const subject = yield* harness();
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      const report = yield* subject.updater.beginDownloadPageAttempt;
+      yield* run(report('opened'));
 
-  assert.equal(
-    snapshot.state === 'failed' && snapshot.operation === 'download' ? snapshot.targetVersion : 'x',
-    '',
-  );
-});
+      assert.deepEqual(subject.diagnostics, []);
+      assert.equal(subject.snapshot().state, 'idle');
+      assert.equal(subject.snapshot().revision, 2);
+    }),
+  ));
 
-test('the download page failure is recorded on the same diagnostic trail as every other failure', async () => {
-  const subject = harness();
-  await subject.coordinator.beginDownloadPageAttempt()('failed');
+test('promise rejection and idle error events are diagnosed without duplicate visible transitions', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const subject = yield* harness();
+      yield* emit(subject, 'update-not-available', { version: '1.2.3' });
+      subject.adapter.rejection = new Error('https://user:secret@example.test/?token=hidden');
+      yield* run(subject.updater.checkForUpdates);
+      assert.equal(subject.snapshot().state, 'failed');
+      yield* emit(subject, 'error', new Error('late idle error'));
+      assert.deepEqual(
+        subject.diagnostics.map((record) => record.code),
+        ['check_rejected', 'idle_error'],
+      );
+    }),
+  ));
 
-  assert.deepEqual(subject.diagnostics, [
-    {
-      operation: 'lifecycle',
-      platform: 'darwin',
-      installedVersion: '1.2.3',
-      code: 'download_page_rejected',
-      summary: 'The release download page could not be opened.',
-    },
-  ]);
-});
+test('revisions change only with visible facts and stop suppresses late events and flushes diagnostics', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      // The trail holds every write until the test opens it, so a write is in flight at stop.
+      const gate = yield* Deferred.make<void>();
+      const written: UpdaterDiagnosticRecord[] = [];
+      const gatedTrail = Layer.succeed(
+        UpdaterDiagnostics,
+        UpdaterDiagnostics.of({
+          write: (record) =>
+            Deferred.await(gate).pipe(Effect.andThen(Effect.sync(() => void written.push(record)))),
+        }),
+      );
+      const subject = yield* harness({ diagnostics: gatedTrail });
+      const revisions: number[] = [];
+      // The current snapshot first (the launch check's `checking`), then every change.
+      yield* SubscriptionRef.changes(subject.updater.status).pipe(
+        Stream.runForEach((snapshot) => Effect.sync(() => void revisions.push(snapshot.revision))),
+        Effect.forkScoped,
+      );
+      yield* settle;
+      yield* emit(subject, 'update-available', { version: '2.0.0' });
+      yield* run(subject.updater.downloadUpdate);
+      yield* emit(subject, 'download-progress', { percent: 10 });
+      yield* emit(subject, 'download-progress', { percent: 10 });
+      assert.deepEqual(revisions, [1, 2, 3, 4]);
 
-test('a self-updating build has no manual state for a launch outcome to land on', async () => {
-  // This composition never publishes `manual_update_required`, so there is
-  // nothing for a success to retract and nothing for a failure to overlay. The
-  // failure is still worth a line in the trail; the success is not.
-  const subject = harness();
-  await subject.coordinator.beginDownloadPageAttempt()('opened');
+      const report = yield* subject.updater.beginDownloadPageAttempt;
+      yield* Effect.forkChild(report('failed'));
+      yield* settle;
+      let stopped = false;
+      const stopping = yield* Effect.forkChild(
+        subject.stop.pipe(Effect.andThen(Effect.sync(() => (stopped = true)))),
+      );
+      yield* settle;
+      assert.equal(stopped, false, 'stop returned before the diagnostic in flight was written');
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(stopping);
+      assert.equal(written.length, 1);
+      yield* subject.stop;
 
-  assert.deepEqual(subject.diagnostics, []);
-  assert.equal(subject.coordinator.snapshot.state, 'idle');
-});
-
-test('promise rejection and idle error events are diagnosed without duplicate visible transitions', async () => {
-  const subject = harness();
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-not-available', { version: '1.2.3' });
-  subject.updater.rejection = new Error('https://user:secret@example.test/?token=hidden');
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
-  await Promise.resolve();
-  assert.equal(subject.coordinator.snapshot.state, 'failed');
-  subject.updater.emit('error', new Error('late idle error'));
-  assert.deepEqual(
-    subject.diagnostics.map((record) => record.code),
-    ['check_rejected', 'idle_error'],
-  );
-});
-
-test('revisions change only with visible facts and stop suppresses late events and flushes diagnostics', async () => {
-  const subject = harness();
-  const revisions: number[] = [];
-  subject.coordinator.subscribe((snapshot) => revisions.push(snapshot.revision));
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', { version: '2.0.0' });
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  subject.updater.emit('download-progress', { percent: 10 });
-  subject.updater.emit('download-progress', { percent: 10 });
-  assert.deepEqual(revisions, [1, 2, 3, 4]);
-  await Effect.runPromise(subject.coordinator.stop());
-  await Effect.runPromise(subject.coordinator.stop());
-  subject.updater.emit('update-downloaded', { version: '2.0.0' });
-  assert.equal(subject.coordinator.snapshot.state, 'downloading');
-  assert.equal(subject.timers.timeouts.size, 0);
-  assert.equal(subject.timers.intervals.size, 0);
-  assert.equal(subject.updater.listenerCount('error'), 0);
-  assert.equal(subject.flushes(), 1);
-});
+      yield* emit(subject, 'update-downloaded', { version: '2.0.0' });
+      assert.equal(subject.snapshot().state, 'downloading');
+      assert.equal(subject.adapter.listenerCount('error'), 0);
+      yield* advance(updaterSchedule.repeatCheck);
+      assert.equal(subject.adapter.checks, 1, 'the poll outlived stop');
+    }),
+  ));
 
 /** checking (1) · update_available (2) · downloading (3) · ready (4). */
-async function reachReady(subject: ReturnType<typeof harness>) {
-  await Effect.runPromise(subject.coordinator.start());
-  subject.updater.emit('update-available', { version: '2.0.0' });
-  await Effect.runPromise(subject.coordinator.downloadUpdate());
-  subject.updater.emit('update-downloaded', { version: '2.0.0' });
-}
-
-test('clear restart readiness installs while working and unknown readiness require confirmation', async () => {
-  let clearInstalls = 0;
-  const clear = harness({ requestInstall: () => (clearInstalls += 1) });
-  await reachReady(clear);
-  await Effect.runPromise(clear.coordinator.requestRestart());
-  assert.equal(clear.coordinator.snapshot.state, 'installing');
-  assert.equal(clearInstalls, 1);
-
-  const working = harness({
-    readiness: { kind: 'working_agents', workingAgentCount: 2 },
-  });
-  await reachReady(working);
-  await Effect.runPromise(working.coordinator.requestRestart());
-  assert.deepEqual(working.coordinator.snapshot, {
-    protocolVersion: 2,
-    revision: 5,
-    state: 'restart_confirmation',
-    installedVersion: '1.2.3',
-    targetVersion: '2.0.0',
-    activity: { kind: 'working', workingAgentCount: 2 },
+const reachReady = (subject: Subject) =>
+  Effect.gen(function* () {
+    yield* emit(subject, 'update-available', { version: '2.0.0' });
+    yield* run(subject.updater.downloadUpdate);
+    yield* emit(subject, 'update-downloaded', { version: '2.0.0' });
   });
 
-  const unknown = harness({ readiness: { kind: 'unknown' } });
-  await reachReady(unknown);
-  await Effect.runPromise(unknown.coordinator.requestRestart());
-  assert.equal(
-    unknown.coordinator.snapshot.state === 'restart_confirmation'
-      ? unknown.coordinator.snapshot.activity.kind
-      : '',
-    'unknown',
-  );
-});
+test('clear restart readiness installs while working and unknown readiness require confirmation', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const handedOver: (() => void)[] = [];
+      const clear = yield* harness({ requestInstall: (install) => void handedOver.push(install) });
+      yield* reachReady(clear);
+      yield* clear.updater.requestRestart;
+      assert.equal(clear.snapshot().state, 'installing');
+      assert.equal(handedOver.length, 1);
+      // What main is handed is the updater's own installer.
+      handedOver[0]!();
+      assert.equal(clear.adapter.installs, 1);
 
-test('restart cancellation preserves the target and confirmation installs without rechecking', async () => {
-  let reads = 0;
-  let installs = 0;
-  const subject = harness({
-    readRestartReadiness: () =>
-      Effect.sync(() => {
-        reads += 1;
-        return { kind: 'working_agents', workingAgentCount: 1 } as const;
-      }),
-    requestInstall: () => (installs += 1),
-  });
-  await reachReady(subject);
-  await Effect.runPromise(subject.coordinator.requestRestart());
-  await Effect.runPromise(subject.coordinator.cancelRestart());
-  assert.deepEqual(subject.coordinator.snapshot, {
-    protocolVersion: 2,
-    revision: 6,
-    state: 'ready',
-    installedVersion: '1.2.3',
-    targetVersion: '2.0.0',
-  });
-  await Effect.runPromise(subject.coordinator.requestRestart());
-  await Effect.runPromise(subject.coordinator.confirmRestart());
-  await Effect.runPromise(subject.coordinator.confirmRestart());
-  assert.equal(subject.coordinator.snapshot.state, 'installing');
-  assert.equal(reads, 2);
-  assert.equal(installs, 1);
-});
+      const working = yield* harness({ readiness: { workingAgents: 2 } });
+      yield* reachReady(working);
+      yield* working.updater.requestRestart;
+      assert.deepEqual(working.snapshot(), {
+        protocolVersion: 2,
+        revision: 5,
+        state: 'restart_confirmation',
+        installedVersion: '1.2.3',
+        targetVersion: '2.0.0',
+        activity: { kind: 'working', workingAgentCount: 2 },
+      });
 
-test('committed exit and stop suppress restart work and checks in terminal restart states', async () => {
-  let committed = false;
-  let installs = 0;
-  const subject = harness({
-    exitCommitted: () => committed,
-    requestInstall: () => (installs += 1),
-  });
-  await reachReady(subject);
-  committed = true;
-  await Effect.runPromise(subject.coordinator.requestRestart());
-  assert.equal(subject.coordinator.snapshot.state, 'ready');
-  assert.equal(installs, 0);
+      const unknown = yield* harness({ readiness: 'unknown' });
+      yield* reachReady(unknown);
+      yield* unknown.updater.requestRestart;
+      const snapshot = unknown.snapshot();
+      assert.equal(
+        snapshot.state === 'restart_confirmation' ? snapshot.activity.kind : '',
+        'unknown',
+      );
+      // The runtime answered with an error envelope: diagnosed as an HTTP failure.
+      assert.deepEqual(unknown.diagnostics, [
+        {
+          operation: 'readiness',
+          platform: 'darwin',
+          installedVersion: '1.2.3',
+          code: 'restart_readiness_http',
+          summary: 'Restart readiness failed during http.',
+        },
+      ]);
+    }),
+  ));
 
-  committed = false;
-  await Effect.runPromise(subject.coordinator.requestRestart());
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
-  assert.equal(subject.updater.checks, 1);
-});
+test('restart cancellation preserves the target and confirmation installs without rechecking', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      let reads = 0;
+      let installs = 0;
+      const subject = yield* harness({
+        respond: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return activityResponse(1);
+          }),
+        requestInstall: () => (installs += 1),
+      });
+      yield* reachReady(subject);
+      yield* subject.updater.requestRestart;
+      yield* subject.updater.cancelRestart;
+      assert.deepEqual(subject.snapshot(), {
+        protocolVersion: 2,
+        revision: 6,
+        state: 'ready',
+        installedVersion: '1.2.3',
+        targetVersion: '2.0.0',
+      });
+      yield* subject.updater.requestRestart;
+      yield* subject.updater.confirmRestart;
+      yield* subject.updater.confirmRestart;
+      assert.equal(subject.snapshot().state, 'installing');
+      assert.equal(reads, 2);
+      assert.equal(installs, 1);
+    }),
+  ));
 
-test('a readiness read that dies or is interrupted leaves restart requestable', async () => {
-  let mode: 'die' | 'hang' | 'clear' = 'die';
-  let installs = 0;
-  const subject = harness({
-    readRestartReadiness: () =>
-      mode === 'die'
-        ? Effect.die(new Error('readiness defect'))
-        : mode === 'hang'
-          ? Effect.never
-          : Effect.succeed({ kind: 'clear' } as const),
-    requestInstall: () => (installs += 1),
-  });
-  await reachReady(subject);
+test('committed exit and stop suppress restart work and checks in terminal restart states', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      let committed = false;
+      let installs = 0;
+      const subject = yield* harness({
+        exitCommitted: () => committed,
+        requestInstall: () => (installs += 1),
+      });
+      yield* reachReady(subject);
+      committed = true;
+      yield* subject.updater.requestRestart;
+      assert.equal(subject.snapshot().state, 'ready');
+      assert.equal(installs, 0);
 
-  assert.equal(
-    Exit.isFailure(await Effect.runPromiseExit(subject.coordinator.requestRestart())),
-    true,
-  );
-  assert.equal(subject.coordinator.snapshot.state, 'ready');
+      committed = false;
+      yield* subject.updater.requestRestart;
+      yield* run(subject.updater.checkForUpdates);
+      assert.equal(subject.adapter.checks, 1);
+    }),
+  ));
 
-  mode = 'hang';
-  await Effect.runPromise(Fiber.interrupt(Effect.runFork(subject.coordinator.requestRestart())));
-  assert.equal(subject.coordinator.snapshot.state, 'ready');
+test('a readiness read that dies or is interrupted leaves restart requestable', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      let mode: 'die' | 'hang' | 'clear' = 'die';
+      let installs = 0;
+      const subject = yield* harness({
+        respond: () =>
+          mode === 'die'
+            ? Effect.die(new Error('readiness defect'))
+            : mode === 'hang'
+              ? Effect.never
+              : Effect.succeed(activityResponse(0)),
+        requestInstall: () => (installs += 1),
+      });
+      yield* reachReady(subject);
 
-  // Neither outcome may keep the single-flight marker set: the next request
-  // still has to reach a decision.
-  mode = 'clear';
-  await Effect.runPromise(subject.coordinator.requestRestart());
-  assert.equal(subject.coordinator.snapshot.state, 'installing');
-  assert.equal(installs, 1);
-});
+      assert.equal(Exit.isFailure(yield* Effect.exit(subject.updater.requestRestart)), true);
+      assert.equal(subject.snapshot().state, 'ready');
 
-test('restart readiness is single-flight and a result arriving after stop is ignored', async () => {
-  let reads = 0;
-  let resolveRead!: (value: import('./restart-readiness.js').RestartReadiness) => void;
-  const pending = new Promise<import('./restart-readiness.js').RestartReadiness>((resolve) => {
-    resolveRead = resolve;
-  });
-  const subject = harness({
-    readRestartReadiness: () => {
-      reads += 1;
-      return Effect.promise(() => pending);
-    },
-  });
-  await reachReady(subject);
-  const first = Effect.runPromise(subject.coordinator.requestRestart());
-  const duplicate = Effect.runPromise(subject.coordinator.requestRestart());
-  await Promise.resolve();
-  assert.equal(reads, 1);
-  await Effect.runPromise(subject.coordinator.stop());
-  resolveRead({ kind: 'clear' });
-  await Promise.all([first, duplicate]);
-  assert.equal(subject.coordinator.snapshot.state, 'ready');
-});
+      mode = 'hang';
+      const hanging = yield* Effect.forkChild(subject.updater.requestRestart);
+      yield* settle;
+      yield* Fiber.interrupt(hanging);
+      assert.equal(subject.snapshot().state, 'ready');
+
+      // Neither outcome may keep the single-flight marker set: the next request
+      // still has to reach a decision.
+      mode = 'clear';
+      yield* subject.updater.requestRestart;
+      assert.equal(subject.snapshot().state, 'installing');
+      assert.equal(installs, 1);
+    }),
+  ));
+
+test('restart readiness is single-flight and a result arriving after stop is ignored', () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      let reads = 0;
+      let resolveRead!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        resolveRead = resolve;
+      });
+      const subject = yield* harness({
+        respond: () =>
+          Effect.suspend(() => {
+            reads += 1;
+            return Effect.promise(() => pending);
+          }),
+      });
+      yield* reachReady(subject);
+      const first = yield* Effect.forkChild(subject.updater.requestRestart);
+      const duplicate = yield* Effect.forkChild(subject.updater.requestRestart);
+      yield* settle;
+      assert.equal(reads, 1);
+      yield* subject.stop;
+      resolveRead(activityResponse(0));
+      yield* Fiber.join(first);
+      yield* Fiber.join(duplicate);
+      assert.equal(subject.snapshot().state, 'ready');
+    }),
+  ));

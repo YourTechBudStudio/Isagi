@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
+
+import { Effect } from 'effect';
 
 import type { SessionStatus, SurfaceDetail } from '@isagi/contracts';
 
-import { queryClient } from '../../query/client.js';
+import { makeTestRegistry } from '../../state/testing.js';
 import { formatRuntimeError } from '../../workspace/runtime-data.js';
+import { paletteTestSession } from '../test-support.js';
 import {
   deleteActivePaneCommand,
   deleteActiveSurfaceCommand,
@@ -15,24 +18,16 @@ const originalFetch = globalThis.fetch;
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
-  queryClient.clear();
   Reflect.deleteProperty(globalThis, 'window');
 });
 
-test('delete-active-pane preflight falls back to the first pane when no active pane is stored', async () => {
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      isagi: {
-        getRuntimeUrl: () => Promise.resolve('http://runtime.test'),
-      },
-    },
-  });
-  globalThis.fetch = mockJsonFetch(surfaceDetail({ activePaneId: null }));
+test('delete-active-pane preflight falls back to the first pane when no active pane is stored', async (t) => {
+  const session = surfaceSession(t, surfaceDetail({ activePaneId: null }));
 
   const preflight = await deleteActivePaneCommand.preflight?.(
     {
       projects: [],
+      ...session,
       launchableHarnesses: [],
       editorAvailable: false,
       activeProject: null,
@@ -75,6 +70,7 @@ test('rename-active-surface validation surfaces inline copy', async () => {
       { surfaceId: '501', title: '   ' },
       {
         projects: [],
+        ...paletteTestSession(),
         launchableHarnesses: [],
         editorAvailable: false,
         activeProject: null,
@@ -95,22 +91,16 @@ test('rename-active-surface validation surfaces inline copy', async () => {
   assert.equal(formatRuntimeError(error), 'Surface title cannot be empty.');
 });
 
-test('delete-active-pane preflight runs directly for a running fallback pane', async () => {
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      isagi: {
-        getRuntimeUrl: () => Promise.resolve('http://runtime.test'),
-      },
-    },
-  });
-  globalThis.fetch = mockJsonFetch(
+test('delete-active-pane preflight runs directly for a running fallback pane', async (t) => {
+  const session = surfaceSession(
+    t,
     surfaceDetail({ activePaneId: 602, firstStatus: 'exited', secondStatus: 'running' }),
   );
 
   const preflight = await deleteActivePaneCommand.preflight?.(
     {
       projects: [],
+      ...session,
       launchableHarnesses: [],
       editorAvailable: false,
       activeProject: null,
@@ -146,14 +136,19 @@ test('delete-active-pane preflight runs directly for a running fallback pane', a
   });
 });
 
-test('delete-active-surface preflight runs directly without loading session status', async () => {
-  globalThis.fetch = (() => {
-    throw new Error('delete-active-surface preflight should not fetch surface detail');
-  }) as typeof fetch;
+test('delete-active-surface preflight runs directly without loading session status', async (t) => {
+  const registry = makeTestRegistry({
+    api: {
+      getSurfaceDetail: () =>
+        Effect.die(new Error('delete-active-surface preflight should not fetch surface detail')),
+    },
+  });
+  t.after(() => registry.dispose());
 
   const preflight = await deleteActiveSurfaceCommand.preflight?.(
     {
       projects: [],
+      ...paletteTestSession(registry),
       launchableHarnesses: [],
       editorAvailable: false,
       activeProject: null,
@@ -189,15 +184,19 @@ test('delete-active-surface preflight runs directly without loading session stat
   });
 });
 
-function mockJsonFetch(data: SurfaceDetail) {
-  return ((input) => {
-    assert.equal(String(input), 'http://runtime.test/api/v1/surfaces/501');
-    return Promise.resolve(
-      new Response(JSON.stringify({ data, meta: { requestId: 'surface-detail' } }), {
-        status: 200,
-      }),
-    );
-  }) as typeof fetch;
+/** A palette session whose runtime answers surface 501's detail with `data`. */
+function surfaceSession(t: TestContext, data: SurfaceDetail) {
+  const registry = makeTestRegistry({
+    api: {
+      getSurfaceDetail: (surfaceId) =>
+        Effect.sync(() => {
+          assert.equal(surfaceId, 501);
+          return data;
+        }),
+    },
+  });
+  t.after(() => registry.dispose());
+  return paletteTestSession(registry);
 }
 
 function surfaceDetail({

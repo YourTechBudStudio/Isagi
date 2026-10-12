@@ -4,25 +4,23 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { Git } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
-import { PtyService } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
+import { SurfaceService } from '../../environment/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
 import {
-  WorkspaceRepository,
+  ProjectRepository,
   type ProjectOrderMoveResult,
-  type WorkspaceRepositoryService,
   type WorktreeOrderMoveResult,
-} from '../workspace.repository.js';
-import {
-  ProjectOrderError,
-  WorkspaceService,
-  WorkspaceServiceLive,
-  WorktreeOrderError,
-} from '../workspace.service.js';
+} from '../../projects/index.js';
+import { PtyService } from '../../pty-processes/index.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { ProjectOrderError, WorktreeOrderError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   git,
   project,
@@ -32,7 +30,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  testWorktreeDeleteDiagnostics,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -50,18 +48,18 @@ import {
  */
 
 function runWithRepository<A, E>(
-  repository: WorkspaceRepositoryService,
+  repository: ProjectRepository['Service'],
   build: Effect.Effect<A, E, WorkspaceService>,
 ) {
   return Effect.runPromise(
     build.pipe(
-      Effect.provide(WorkspaceServiceLive),
-      Effect.provide(WorkflowRunErasureLive),
+      Effect.provide(WorkspaceService.layerNoDeps),
+      Effect.provide(NoProjectDeletionParticipant),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
-      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-      Effect.provideService(WorkspaceRepository, repository),
-      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(InternalEvents, testInternalEvents),
+      Effect.provideService(ProjectRepository, repository),
+      Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(
         StateFile,
@@ -79,7 +77,7 @@ function orderRepository(overrides: {
   readonly project?: ProjectOrderMoveResult;
   readonly worktree?: WorktreeOrderMoveResult;
   readonly onCall?: (name: string) => void;
-}): WorkspaceRepositoryService {
+}): ProjectRepository['Service'] {
   const base = repositoryWith({ project, worktree });
   return {
     ...base,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Cause, Effect, Option } from 'effect';
 
 import { RuntimeApiError } from '@isagi/runtime-client';
 
@@ -10,7 +10,10 @@ import {
   workflowExecutionDetailFixture,
   workflowSummaryFixture,
 } from '../workspace/workflow/test-support.js';
-import { createRuntimeClient } from './client.js';
+import { makeRuntimeApi } from './client.js';
+
+/** The runtime API against one fixed URL. */
+const runtimeApiAt = (url: string) => makeRuntimeApi(Effect.succeed(url));
 
 /**
  * The workflow half of the runtime client, checked against the real endpoint definitions: the path,
@@ -103,8 +106,9 @@ test('a refused control keeps its own reason rather than collapsing to a generic
       ),
     )) as typeof fetch;
 
-  const exit = await Effect.runPromiseExit(createRuntimeClient(runtimeUrl).pauseWorkflow(77));
-  const failure = exit._tag === 'Failure' ? causeFailure(exit.cause) : null;
+  const exit = await Effect.runPromiseExit(runtimeApiAt(runtimeUrl).pauseWorkflow(77));
+  const failure =
+    exit._tag === 'Failure' ? Option.getOrNull(Cause.findErrorOption(exit.cause)) : null;
   assert.ok(failure instanceof RuntimeApiError);
   assert.equal(
     (apiErrorData(failure as RuntimeApiError<never>) as { readonly reason: string }).reason,
@@ -119,21 +123,40 @@ test('checkpoint file bytes are fetched raw by path, with the download variant a
     return Promise.resolve(new Response('saved bytes', { status: 200 }));
   }) as typeof fetch;
 
-  const client = createRuntimeClient(runtimeUrl);
+  const client = runtimeApiAt(runtimeUrl);
   const blob = await Effect.runPromise(
     client.fetchWorkflowCheckpointFile(1, 'notes/a b.md') as Effect.Effect<Blob, never>,
   );
   assert.equal(await blob.text(), 'saved bytes');
   assert.equal(seen, `${runtimeUrl}/api/v1/workflows/checkpoints/1/file?path=notes%2Fa+b.md`);
   assert.equal(
-    client.workflowCheckpointFileUrl(1, 'notes/a b.md', { download: true }),
+    Effect.runSync(client.workflowCheckpointFileUrl(1, 'notes/a b.md', { download: true })),
     `${runtimeUrl}/api/v1/workflows/checkpoints/1/file?path=notes%2Fa+b.md&download=true`,
   );
 });
 
+test('checkpoint file bytes keep the content type the runtime served them with', async () => {
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      }),
+    )) as typeof fetch;
+
+  const blob = await Effect.runPromise(
+    runtimeApiAt(runtimeUrl).fetchWorkflowCheckpointFile(1, 'shot.png') as Effect.Effect<
+      Blob,
+      never
+    >,
+  );
+  assert.equal(blob.type, 'image/png');
+  assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [137, 80, 78, 71]);
+});
+
 async function capture<Output>(
   data: unknown,
-  call: (client: ReturnType<typeof createRuntimeClient>) => Effect.Effect<Output, unknown>,
+  call: (client: ReturnType<typeof runtimeApiAt>) => Effect.Effect<Output, unknown>,
 ) {
   let recorded: { url: string; method: string; body: string } | null = null;
   globalThis.fetch = ((input, init) => {
@@ -147,18 +170,13 @@ async function capture<Output>(
     );
   }) as typeof fetch;
 
-  await Effect.runPromise(call(createRuntimeClient(runtimeUrl)) as Effect.Effect<Output, never>);
+  await Effect.runPromise(call(runtimeApiAt(runtimeUrl)) as Effect.Effect<Output, never>);
   assert.ok(recorded, 'the call should have reached the transport');
   return recorded as unknown as { url: string; method: string; body: string };
 }
 
 function apiErrorData(failure: RuntimeApiError<never>): unknown {
   return (failure.apiError as { readonly data?: unknown }).data;
-}
-
-function causeFailure(cause: unknown): unknown {
-  const failures = (cause as { readonly error?: unknown }).error;
-  return failures ?? cause;
 }
 
 function structureOutput() {

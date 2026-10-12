@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { createUpdaterDiagnosticSink, sanitizeText } from './diagnostics.js';
+import { Effect, Layer } from 'effect';
+
+import { makeLogCapture } from '../log-capture-test-support.js';
+import { sanitizeText, UpdaterDiagnostics, type UpdaterDiagnosticRecord } from './diagnostics.js';
+import { testConfig } from './test-support.js';
+
+/** The real trail, writing under `directory`, with its log lines captured. */
+function trail(directory: string) {
+  const logs = makeLogCapture();
+  const layer = UpdaterDiagnostics.layer.pipe(
+    Layer.provide(testConfig({ logsDirectory: () => directory })),
+    Layer.provideMerge(logs.layer),
+  );
+  return { logs: logs.lines, layer };
+}
 
 const credentialBearingSamples = [
   {
@@ -83,12 +97,12 @@ test('updater diagnostics keep non-secret failure context readable', () => {
 
 test('diagnostics serialize writes, redact before truncation, and rotate by UTF-8 bytes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'isagi-updater-diagnostics-'));
-  const warnings: string[] = [];
-  const sink = createUpdaterDiagnosticSink(directory, (message) => warnings.push(message));
+  const subject = trail(directory);
   const secret =
     'https://user:password@example.test/release?token=hidden&X-Amz-Signature=signaturevalue ghp_0123456789abcdefghijklmnopqrstuvwxyz {"api_key":"jsonsecret"}';
-  const writes = Array.from({ length: 80 }, (_, index) =>
-    sink.write({
+  const records = Array.from(
+    { length: 80 },
+    (_, index): UpdaterDiagnosticRecord => ({
       operation: 'download',
       platform: 'darwin',
       installedVersion: '1.2.3',
@@ -97,8 +111,15 @@ test('diagnostics serialize writes, redact before truncation, and rotate by UTF-
       summary: `${secret} ${'界'.repeat(2_000)}`,
     }),
   );
-  await Promise.all(writes);
-  await sink.flush();
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const diagnostics = yield* UpdaterDiagnostics;
+        // Started together: the trail itself serializes them.
+        yield* Effect.all(records.map(diagnostics.write), { concurrency: 'unbounded' });
+      }).pipe(Effect.provide(subject.layer)),
+    ),
+  );
 
   const currentPath = join(directory, 'updater.jsonl');
   const previousPath = join(directory, 'updater.previous.jsonl');
@@ -110,7 +131,61 @@ test('diagnostics serialize writes, redact before truncation, and rotate by UTF-
   assert.equal(combined.includes('jsonsecret'), false);
   assert.equal((await stat(currentPath)).size <= 256 * 1024, true);
   assert.equal((await stat(previousPath)).size <= 256 * 1024, true);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(subject.logs, []);
   for (const line of combined.split('\n').filter(Boolean))
     assert.doesNotThrow(() => JSON.parse(line));
+});
+
+test('a trail that cannot be written warns once and never fails the updater', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'isagi-updater-diagnostics-'));
+  // A file where the logs directory should be: every append fails.
+  const blocked = join(directory, 'logs');
+  await writeFile(blocked, 'not a directory');
+  const subject = trail(blocked);
+  const record: UpdaterDiagnosticRecord = {
+    operation: 'check',
+    platform: 'darwin',
+    installedVersion: '1.2.3',
+    code: 'updater_error',
+    summary: 'no provider',
+  };
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const diagnostics = yield* UpdaterDiagnostics;
+        yield* diagnostics.write(record);
+        yield* diagnostics.write(record);
+      }).pipe(Effect.provide(subject.layer)),
+    ),
+  );
+  assert.deepEqual(
+    subject.logs.map((line) => [line.level, line.message]),
+    [['Warn', 'Updater diagnostics could not be persisted.']],
+  );
+});
+
+test('the logs directory is not asked for until the first record is written', async () => {
+  // A development build never writes one, so it never asks Electron for its logs path.
+  let asked = 0;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* UpdaterDiagnostics;
+      }).pipe(
+        Effect.provide(
+          UpdaterDiagnostics.layer.pipe(
+            Layer.provide(
+              testConfig({
+                logsDirectory: () => {
+                  asked += 1;
+                  return tmpdir();
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  assert.equal(asked, 0);
 });

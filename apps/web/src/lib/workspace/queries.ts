@@ -1,803 +1,292 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Effect } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
+import { Duration, Effect, Option } from 'effect';
+import { AsyncResult, Atom, AtomRegistry } from 'effect/reactivity';
 
-import type {
-  AgentHarness,
-  CommandActionOutput,
-  CreateSurfaceOutput,
-  DeleteWorktreeInput,
-  DeleteWorktreeOutput,
-  DeletePaneOutput,
-  DeleteSurfaceOutput,
-  OpenWorktreeInput,
-  OpenWorktreeOutput,
-  ReconciliationFinding,
-  SetSplitWeightsInput,
-  SetSplitWeightsOutput,
-  SplitPaneInput,
-  StartPaneInput,
-  SurfaceDetail,
-} from '@isagi/contracts';
+import type { CommandActionOutput } from '@isagi/contracts';
 
-import { toastCopy } from '../../copy/index.js';
-import { queryClient } from '../query/client.js';
-import { runRuntimeEffect } from '../runtime/run.js';
-import { showToast } from '../toast/index.js';
+import type { RuntimeApi } from '../runtime/client.js';
+import { keys } from '../state/keys.js';
 import {
-  activatePane,
-  cancelWorkbenchFocusPersistence,
-  restoreActivePaneFocus,
-} from './activation.js';
-import { handleReconciliationFindings, scheduleWorkspaceReconcile } from './background-sync.js';
+  patch,
+  peek,
+  pollWhile,
+  query,
+  queryRetryAtom,
+  revalidate,
+  revalidationSignalAtom,
+  type Query,
+} from '../state/policy.js';
+import { queryError } from '../state/result.js';
+import { appRuntime } from '../state/runtime.js';
+import * as commits from './commits.js';
+import { workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
+import { projectRailOrder, railOrderAtom, type WorkspaceRead } from './rail-order-state.js';
 import {
-  defaultSelection,
-  reconcileSelection,
-  workspaceDataFromSnapshot,
-  type WorkspaceData,
-} from './model.js';
-import {
-  activeContextQueryKey,
-  commandLogMetadataQueryKey,
-  surfaceDetailQueryKey,
-  workspaceQueryKey,
-  worktreeCommandsQueryKey,
-} from './query-keys.js';
-import { applyPendingRailMoves } from './rail-order-state.js';
-import {
-  addProject,
-  deleteSurface,
-  deleteSurfacePane,
-  deleteProject,
-  deleteWorktree,
   fetchActiveContext,
   fetchCommandLogMetadata,
   fetchWorktreeCommands,
   fetchWorkspace,
   formatRuntimeError,
   getSurfaceDetail,
-  launchAgentSession,
-  launchTerminalSession,
-  openWorktree,
-  renameSurfaceTitle,
   restartCommand,
   runCommand,
-  relocateProject,
-  reconcileWorkspace,
-  setSplitWeights,
-  splitPane,
-  startPane,
   stopCommand,
 } from './runtime-data.js';
-import { useWorkspaceStore } from './store.js';
-import { publishTerminalWorkspaceFact } from './terminal-presentation/coordinator-events.js';
+import { publishTerminalFactEffect } from './terminal-presentation/facts.js';
+
+// --- Workspace ------------------------------------------------------------------------------------
+//
+// The workspace is two atoms: `workspaceReadAtom` holds what the runtime answered,
+// tagged with the rail clock at the moment each read began, and `workspaceAtom` is that read
+// projected through `railOrderAtom` (pending and accepted-but-unconverged reorders). The cache never
+// holds the projection, so a read can land at any time without erasing a move it did not know about.
+// Every commit and hook reads the workspace through `workspaceAtom`, `cachedWorkspaceData` and
+// `refreshWorkspace`; writes to the held read go through `patchWorkspaceData`.
 
 /**
- * Fetch, decode, and install-shape the workspace snapshot.
- *
- * The pending-reorder replay belongs here rather than at each call site because
- * this is the one place a fresh snapshot enters the cache: a move still being
- * persisted must survive a refresh started by anything else (ADR 0001 — the
- * runtime owns the durable order, the client owns what the rail shows while it
- * waits). Exported so the reorder tests can drive this exact path.
+ * The runtime's workspace snapshot, decoded to the UI shape, with the rail clock at the moment the
+ * read began (`get.once`: a rail change never re-reads). Default freshness policy, refreshed by
+ * `keys.workspace` only (a workspace refresh does not re-read the active context).
  */
-export function loadWorkspaceData(signal?: AbortSignal | undefined): Promise<WorkspaceData> {
-  return runRuntimeEffect(
-    fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot), Effect.map(applyPendingRailMoves)),
-    { signal },
-  );
-}
-
-export function useWorkspaceQuery() {
-  return useQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => loadWorkspaceData(signal),
-  });
-}
-
-/**
- * The worktree's configured-command catalog. All three options are per-observer,
- * so a caller that wants stricter freshness than the always-mounted consumers
- * (the palette, which reads on open and polls only while it is visible) gets it
- * without changing anyone else's behavior. Omitted options leave the TanStack
- * defaults in place, which is why they are spread conditionally rather than
- * passed as `undefined`.
- */
-export function useWorktreeCommandsQuery(
-  worktreeId: number | null,
-  options: {
-    readonly enabled?: boolean | undefined;
-    readonly staleTime?: number | undefined;
-    readonly refetchInterval?: number | undefined;
-  } = {},
-) {
-  return useQuery({
-    queryKey: worktreeCommandsQueryKey(worktreeId),
-    enabled: (options.enabled ?? true) && worktreeId !== null,
-    ...(options.staleTime !== undefined ? { staleTime: options.staleTime } : {}),
-    ...(options.refetchInterval !== undefined ? { refetchInterval: options.refetchInterval } : {}),
-    queryFn: ({ signal }) => {
-      if (worktreeId === null) {
-        throw new Error('Worktree command query requires an active worktree.');
-      }
-      return runRuntimeEffect(fetchWorktreeCommands(worktreeId), { signal });
-    },
-  });
-}
-
-export function useCommandLogMetadataQuery(worktreeId: number | null, commandName: string | null) {
-  return useQuery({
-    queryKey: commandLogMetadataQueryKey(worktreeId, commandName),
-    enabled: worktreeId !== null && commandName !== null,
-    queryFn: ({ signal }) => {
-      if (worktreeId === null || commandName === null) {
-        throw new Error('Command log metadata query requires a worktree and command name.');
-      }
-      return runRuntimeEffect(fetchCommandLogMetadata(worktreeId, commandName), { signal });
-    },
-  });
-}
-
-export function useRunCommandMutation(worktreeId: number | null) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (commandName: string) => {
-      if (worktreeId === null) throw new Error('Command run requires an active worktree.');
-      return runRuntimeEffect(runCommand(worktreeId, commandName));
-    },
-    onSettled: async (_output, _error, commandName) => {
-      await invalidateCommandQueries(client, worktreeId, commandName);
-    },
-  });
-}
-
-export function useStopCommandMutation(worktreeId: number | null) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (commandName: string) => {
-      if (worktreeId === null) throw new Error('Command stop requires an active worktree.');
-      return runRuntimeEffect(stopCommand(worktreeId, commandName));
-    },
-    onSettled: async (_output, _error, commandName) => {
-      await invalidateCommandQueries(client, worktreeId, commandName);
-    },
-  });
-}
-
-export function useRestartCommandMutation(worktreeId: number | null) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (commandName: string) => {
-      if (worktreeId === null) throw new Error('Command restart requires an active worktree.');
-      return runRuntimeEffect(restartCommand(worktreeId, commandName));
-    },
-    onSettled: async (_output, _error, commandName) => {
-      await invalidateCommandQueries(client, worktreeId, commandName);
-    },
-  });
-}
-
-export function useActiveContextQuery() {
-  return useQuery({
-    queryKey: activeContextQueryKey,
-    queryFn: ({ signal }) => runRuntimeEffect(fetchActiveContext(), { signal }),
-  });
-}
-
-export async function invalidateCommandQueries(
-  client: QueryClient,
-  worktreeId: number | null,
-  commandName?: string | null,
-) {
-  await client.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId), exact: true });
-  if (commandName) {
-    await client.invalidateQueries({
-      queryKey: commandLogMetadataQueryKey(worktreeId, commandName),
-    });
-  }
-}
-
-export function useSurfaceDetailQuery(
-  surfaceId: number | null,
-  options: { readonly enabled?: boolean | undefined } = {},
-) {
-  return useQuery({
-    queryKey: surfaceDetailQueryKey(surfaceId),
-    gcTime: Infinity,
-    enabled: (options.enabled ?? true) && surfaceId !== null,
-    queryFn: ({ signal }) => {
-      if (surfaceId === null) {
-        throw new Error('Surface detail query requires an active surface.');
-      }
-      return runRuntimeEffect(getSurfaceDetail(surfaceId), { signal });
-    },
-  });
-}
-
-export function useAddProjectMutation() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (path: string) => runRuntimeEffect(addProject(path)),
-    onSuccess: (output) => commitAddProjectSuccess(client, { projectId: output.projectId }),
-  });
-}
-
-/**
- * What a same-path recheck established about one project.
- *
- * There is deliberately no `failed` member. A check that could not be completed
- * produces *no* result at all — the operation rejects — so the surface can never
- * report an absence on evidence it does not have. The three outcomes the user
- * must be able to tell apart (restored, confirmed still unavailable, and "we
- * could not find out") are therefore distinct by construction rather than
- * inferred from a flag.
- *
- * `projectId` names the operation's target. It stays independent of whichever
- * project the UI happens to be showing when the answer arrives.
- */
-export type ProjectRecheckResult =
-  | { readonly status: 'restored'; readonly projectId: number }
-  | { readonly status: 'still_unavailable'; readonly projectId: number };
-
-/**
- * Look again at a folder project's own path, and answer with what a *fresh*
- * snapshot says.
- *
- * A folder project cannot be relocated, so the only honest recovery is to
- * reconcile the project the user is looking at and then read the workspace
- * back. Three properties make the answer trustworthy, and all three are easy to
- * lose:
- *
- * 1. **The refresh is an awaited read that can fail.** `invalidateQueries` is
- *    not one — it wraps each refetch in `catch(noop)` unless `throwOnError` is
- *    set — so a reconcile that restored the folder followed by a failed read
- *    would resolve successfully against stale missing-project data and be
- *    reported as "Still not there". `fetchQuery` throws, so that outcome reaches
- *    the caller as a rejection instead.
- * 2. **The read cannot be an older one.** `fetchQuery` alone is not enough:
- *    `Query.fetch` returns the in-flight retryer promise when a fetch is already
- *    running, and `staleTime` has no say over that. The workspace query refetches
- *    on window focus and after active-context persistence, so a read started
- *    *before* the reconcile committed is an ordinary thing to have in flight
- *    when this runs — and being handed it would produce exactly the false
- *    negative point 1 exists to prevent. Cancelling first leaves the query idle
- *    so the fetch below is genuinely new. The cancel is `exact` because
- *    `workspaceQueryKey` is a prefix of `activeContextQueryKey`, and a fuzzy
- *    match would abort an unrelated live request.
- * 3. **The findings are not evidence.** An empty findings list is returned both
- *    when nothing changed and when the project was already present, so
- *    `reconcile` discards its result and is typed to return nothing. The verdict
- *    comes from the snapshot.
- *
- * The guarantee this buys is *causal*, not durable: the read began after the
- * reconcile completed, so it reflects that reconcile's work. It does not promise
- * the folder is still there by the time the user reads the answer.
- *
- * Selection is never written here. A restored project reaches its environment
- * through the ordinary refreshed-snapshot path (`useWorkspaceSelectionSync` →
- * `reconcileSelection`), which is what keeps a newer selection made while this
- * was in flight from being overwritten.
- */
-export async function runProjectRecheck(input: {
-  readonly client: QueryClient;
-  readonly projectId: number;
-  readonly reconcile?: (projectId: number) => Promise<void>;
-  readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
-}): Promise<ProjectRecheckResult> {
-  const { client, projectId } = input;
-  const reconcile = input.reconcile ?? reconcileProjectPresence;
-  const fetchWorkspaceData = input.fetchWorkspaceData ?? loadWorkspaceData;
-
-  await reconcile(projectId);
-
-  await client.cancelQueries({ queryKey: workspaceQueryKey, exact: true });
-  const data = await client.fetchQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceData(signal),
-    staleTime: 0,
-  });
-
-  publishTerminalWorkspaceFact({ type: 'durable_inventory_refresh_requested' });
-
-  const project = data.projects.find((candidate) => candidate.id === projectId);
-  return project && project.status !== 'missing'
-    ? { status: 'restored', projectId }
-    : { status: 'still_unavailable', projectId };
-}
-
-/**
- * The default reconcile step. Returns nothing on purpose: the findings this
- * discards are not evidence of presence, and a `void` result means the operation
- * above cannot derive its verdict from them even by accident. Findings remain
- * available to the callers that legitimately consume them, such as
- * {@link commitRelocateProjectSuccess}.
- */
-async function reconcileProjectPresence(projectId: number): Promise<void> {
-  await runRuntimeEffect(reconcileWorkspace({ projectId }));
-}
-
-/**
- * The same-path recovery action for a missing folder project. A thin delegate:
- * both stages live inside `mutationFn`, so either one failing leaves the
- * mutation in `isError` with no verdict.
- *
- * Findings are deliberately not routed to toasts. This is a user action, so its
- * result belongs at the surface that started it (ADR 0004);
- * `scheduleWorkspaceReconcile`'s passive feedback stays the policy for
- * background reconciliation only.
- */
-export function useRecheckProjectMutation() {
-  const client = useQueryClient();
-  return useMutation<ProjectRecheckResult, Error, number>({
-    mutationFn: (projectId) => runProjectRecheck({ client, projectId }),
-  });
-}
-
-export async function addProjectPath(path: string) {
-  const output = await runRuntimeEffect(addProject(path));
-  await commitAddProjectSuccess(queryClient, { projectId: output.projectId });
-}
-
-export async function relocateProjectPath(projectId: number, path: string) {
-  const output = await runRuntimeEffect(relocateProject(projectId, path));
-  await commitRelocateProjectSuccess(queryClient, output.findings);
-}
-
-export async function openWorktreeFromPalette(projectId: number, input: OpenWorktreeInput) {
-  const output = await runRuntimeEffect(openWorktree(projectId, input));
-  await commitOpenWorktreeSuccess(queryClient, output);
-  return output;
-}
-
-export async function deleteWorktreeFromPalette(
-  projectId: number,
-  worktreeId: number,
-  input: DeleteWorktreeInput,
-) {
-  try {
-    const output = await runRuntimeEffect(deleteWorktree(projectId, worktreeId, input));
-    await commitDeleteWorktreeSuccess(queryClient, output);
-    return output;
-  } catch (error) {
-    await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-    throw error;
-  }
-}
-
-/**
- * The one project-delete path, shared by every entry point through the
- * `delete-project` palette command. Never rejects: a failure is reported by the
- * existing toast and the snapshot is re-read, so the palette can always close.
- * `{ deleted: false }` (already gone) is success.
- */
-export async function deleteProjectFromPalette(
-  projectId: number,
-  remove: typeof deleteProject = deleteProject,
-  client: QueryClient = queryClient,
-): Promise<void> {
-  try {
-    await runRuntimeEffect(remove(projectId));
-  } catch (error) {
-    showToast({
-      id: `delete-project-failed:${projectId}`,
-      kind: 'warning',
-      title: toastCopy.projectDeleteFailed.title,
-      subtitle: formatRuntimeError(error),
-    });
-    console.error('[workspace] project deletion failed', error);
-    await client.invalidateQueries({ queryKey: workspaceQueryKey });
-    return;
-  }
-  try {
-    await commitDeleteProjectSuccess(client, projectId);
-  } catch (error) {
-    // The project is gone; only the follow-up read failed. Saying the delete
-    // failed would be false, so log it and let the next refetch catch up.
-    console.error('[workspace] workspace refresh after project deletion failed', error);
-    await client.invalidateQueries({ queryKey: workspaceQueryKey });
-  }
-}
-
-export async function startAgentSessionFromPalette(
-  worktreeId: number,
-  harness: AgentHarness,
-  launch: typeof launchAgentSession = launchAgentSession,
-  client: QueryClient = queryClient,
-) {
-  try {
-    const output = await runRuntimeEffect(launch(worktreeId, harness));
-    await commitLaunchSessionSuccess(client, output);
-    return output;
-  } catch (error) {
-    await commitLaunchSessionFailure(client);
-    throw error;
-  }
-}
-
-export async function startTerminalSessionFromPalette(worktreeId: number) {
-  const output = await runRuntimeEffect(launchTerminalSession(worktreeId));
-  await commitLaunchSessionSuccess(queryClient, output);
-  return output;
-}
-
-/** Starts the first pane of an empty surface, then settles like any new placement. */
-export async function startPaneFromPalette(
-  surfaceId: number,
-  newPane: StartPaneInput['newPane'],
-  client: QueryClient = queryClient,
-) {
-  try {
-    const output = await runRuntimeEffect(startPane(surfaceId, { newPane }));
-    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
-    await commitLaunchSessionSuccess(client, output);
-    return output;
-  } catch (error) {
-    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
-    await commitLaunchSessionFailure(client);
-    throw error;
-  }
-}
-
-/**
- * Launch a configured command from outside a React component, for palette rows
- * that have no mutation hook to lean on. Invalidation runs in `finally` so the
- * catalog and the command's log metadata are reconciled on both outcomes — the
- * same settle semantics `useRunCommandMutation` gives the drawer. The endpoint's
- * output is returned unchanged; the palette caller ignores it and hands off to
- * the drawer, which is the surface that owns run diagnostics.
- */
-export async function runConfiguredCommandFromPalette(
-  worktreeId: number,
-  commandName: string,
-  run: typeof runCommand = runCommand,
-  client: QueryClient = queryClient,
-): Promise<CommandActionOutput> {
-  try {
-    return await runRuntimeEffect(run(worktreeId, commandName));
-  } finally {
-    await invalidateCommandQueries(client, worktreeId, commandName);
-  }
-}
-
-export async function renameSurfaceTitleFromPalette(surfaceId: number, title: string) {
-  try {
-    const output = await runRuntimeEffect(renameSurfaceTitle(surfaceId, title));
-    await commitRenameSurfaceSuccess(queryClient, output.surfaceId);
-    return output;
-  } catch (error) {
-    await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-    throw error;
-  }
-}
-
-export async function deleteSurfaceFromPalette(input: {
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-}) {
-  try {
-    const output = await runRuntimeEffect(deleteSurface(input.surfaceId));
-    await commitDeleteSurfaceSuccess(queryClient, {
-      worktreeId: input.worktreeId,
-      surfaceId: input.surfaceId,
-      output,
-    });
-    return output;
-  } catch (error) {
-    await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-    throw error;
-  }
-}
-
-export async function deleteSurfacePaneFromPalette(input: {
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-  readonly paneId: number;
-}) {
-  try {
-    const output = await runRuntimeEffect(deleteSurfacePane(input.surfaceId, input.paneId));
-    await commitDeletePaneSuccess(queryClient, {
-      worktreeId: input.worktreeId,
-      surfaceId: input.surfaceId,
-      paneId: input.paneId,
-      output,
-    });
-    return output;
-  } catch (error) {
-    await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-    throw error;
-  }
-}
-
-export async function splitPaneFromPalette(input: {
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-  readonly split: SplitPaneInput;
-  readonly client?: QueryClient | undefined;
-}) {
-  const client = input.client ?? queryClient;
-  try {
-    const output = await runRuntimeEffect(splitPane(input.worktreeId, input.split));
-    await commitSplitPaneSuccess(client, output);
-    return output;
-  } catch (error) {
-    await client.invalidateQueries({ queryKey: workspaceQueryKey });
-    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
-    throw error;
-  }
-}
-
-// A resize commit returns the whole surface layout, so an older response landing
-// after a newer one would revert the newer resize. We stamp each commit per surface
-// and let only the latest one touch the cache: stale successes are dropped and a
-// stale failure does not force a refetch that would clobber a newer commit. The
-// server stays authoritative and refetch-on-focus backstops any dropped write.
-const latestSplitWeightCommitBySurface = new Map<number, number>();
-
-export async function setSplitWeightsFromSurface(input: {
-  readonly surfaceId: number;
-  readonly weights: SetSplitWeightsInput;
-  readonly commit?: (
-    surfaceId: number,
-    weights: SetSplitWeightsInput,
-  ) => Promise<SetSplitWeightsOutput>;
-  readonly client?: QueryClient | undefined;
-}) {
-  const client = input.client ?? queryClient;
-  const commit =
-    input.commit ?? ((surfaceId, weights) => runRuntimeEffect(setSplitWeights(surfaceId, weights)));
-  const commitSeq = (latestSplitWeightCommitBySurface.get(input.surfaceId) ?? 0) + 1;
-  latestSplitWeightCommitBySurface.set(input.surfaceId, commitSeq);
-  const isLatestCommit = () => latestSplitWeightCommitBySurface.get(input.surfaceId) === commitSeq;
-  try {
-    const output = await commit(input.surfaceId, input.weights);
-    if (isLatestCommit()) {
-      client.setQueryData<SurfaceDetail>(surfaceDetailQueryKey(output.surfaceId), (detail) =>
-        detail ? { ...detail, layout: output.layout } : detail,
-      );
-    }
-    return output;
-  } catch (error) {
-    if (isLatestCommit()) {
-      await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
-    }
-    throw error;
-  }
-}
-
-export async function commitOpenWorktreeSuccess(
-  client: QueryClient,
-  output: OpenWorktreeOutput,
-  fetchWorkspaceData: (
-    signal?: AbortSignal | undefined,
-  ) => Promise<WorkspaceData> = loadWorkspaceData,
-) {
-  await client.fetchQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceData(signal),
-    staleTime: 0,
-  });
-  useWorkspaceStore.getState().selectWorktree(output.projectId, output.worktreeId);
-  restoreActivePaneFocus();
-  // A setup-hook failure (status 'created_setup_failed') is surfaced as a
-  // palette-local warning result by the open-worktree command, not here — the
-  // worktree still exists and is selected above.
-}
-
-/**
- * Where a newly placed pane lives — the least a settle needs to fetch the
- * snapshot and activate it.
- *
- * `CreateSurfaceOutput` is structurally assignable to this, so every session
- * caller is unchanged. Opening an editor answers with a bare placement and no
- * title: placement is the operation's answer, and a title would be a second
- * naming authority over a surface the runtime already named.
- */
-export interface SurfacePlacement {
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-  readonly paneId: number;
-}
-
-export async function commitLaunchSessionSuccess(
-  client: QueryClient,
-  output: SurfacePlacement,
-  fetchWorkspaceData: (
-    signal?: AbortSignal | undefined,
-  ) => Promise<WorkspaceData> = loadWorkspaceData,
-) {
-  await client.fetchQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceData(signal),
-    staleTime: 0,
-  });
-  activatePane(
-    { worktreeId: output.worktreeId, surfaceId: output.surfaceId, paneId: output.paneId },
-    { persist: false },
-  );
-}
-
-export async function commitLaunchSessionFailure(client: QueryClient) {
-  await client.invalidateQueries({ queryKey: workspaceQueryKey });
-}
-
-export async function commitSplitPaneSuccess(client: QueryClient, output: CreateSurfaceOutput) {
-  await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(output.surfaceId) });
-  await client.invalidateQueries({ queryKey: workspaceQueryKey });
-  activatePane(
-    { worktreeId: output.worktreeId, surfaceId: output.surfaceId, paneId: output.paneId },
-    { persist: false },
-  );
-}
-
-export async function commitRenameSurfaceSuccess(client: QueryClient, surfaceId: number) {
-  await client.invalidateQueries({ queryKey: workspaceQueryKey });
-  await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
-}
-
-export async function commitDeleteSurfaceSuccess(
-  client: QueryClient,
-  input: {
-    readonly worktreeId: number;
-    readonly surfaceId: number;
-    readonly output: DeleteSurfaceOutput;
-    readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
+export const workspaceReadAtom = query(
+  (get) => {
+    const startedAt = get.once(railOrderAtom).clock;
+    return fetchWorkspace().pipe(
+      Effect.map(
+        (snapshot): WorkspaceRead => ({
+          data: workspaceDataFromSnapshot(snapshot),
+          startedAt,
+        }),
+      ),
+    );
   },
-) {
-  await refetchWorkspace(client, input.fetchWorkspaceData);
-  if (input.output.deletedSurfaceId !== input.surfaceId) return;
-  publishTerminalWorkspaceFact({
-    type: 'placement_removed',
-    worktreeId: input.worktreeId,
-    surfaceId: input.surfaceId,
-  });
-  const store = useWorkspaceStore.getState();
-  cancelWorkbenchFocusPersistence(input.worktreeId);
-  client.removeQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId), exact: true });
-  store.forgetSurface(input.worktreeId, input.surfaceId);
-  store.forgetPane(input.surfaceId);
-}
+  { keys: [keys.workspace] },
+);
 
 /**
- * A pane delete never removes its surface: the last pane going leaves the
- * surface empty, still selected, showing its empty state.
+ * What components display: the latest read with the rail's reorders on top (`projectRailOrder`).
+ * A transform, so refreshing it refreshes the read and the freshness policy is the read's. A
+ * failed refresh still shows the projected last success.
  */
-export async function commitDeletePaneSuccess(
-  client: QueryClient,
-  input: {
-    readonly worktreeId: number;
-    readonly surfaceId: number;
-    readonly paneId: number;
-    readonly output: DeletePaneOutput;
-    readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
-  },
-) {
-  await refetchWorkspace(client, input.fetchWorkspaceData);
-  publishTerminalWorkspaceFact({
-    type: 'placement_removed',
-    worktreeId: input.worktreeId,
-    surfaceId: input.surfaceId,
-    paneId: input.paneId,
-  });
-  useWorkspaceStore.getState().forgetPane(input.surfaceId, input.paneId);
-  await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
-}
-
-async function refetchWorkspace(
-  client: QueryClient,
-  fetchWorkspaceData: (
-    signal?: AbortSignal | undefined,
-  ) => Promise<WorkspaceData> = loadWorkspaceData,
-) {
-  await client.fetchQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceData(signal),
-    staleTime: 0,
-  });
-}
-
-export async function commitDeleteWorktreeSuccess(
-  client: QueryClient,
-  output: DeleteWorktreeOutput,
-  fetchWorkspaceData: (
-    signal?: AbortSignal | undefined,
-  ) => Promise<WorkspaceData> = loadWorkspaceData,
-) {
-  publishTerminalWorkspaceFact({
-    type: 'durable_worktree_deleted',
-    worktreeId: output.deletedWorktreeId,
-  });
-  const data = await client.fetchQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceData(signal),
-    staleTime: 0,
+export const workspaceAtom: Atom.Atom<AsyncResult.AsyncResult<WorkspaceData, Error>> =
+  Atom.transform(workspaceReadAtom, (get) => {
+    const rail = get(railOrderAtom);
+    return AsyncResult.map(get(workspaceReadAtom), (read) => projectRailOrder(read, rail));
   });
 
-  const project = data.projects.find((candidate) => candidate.id === output.projectId);
-  const selected = project?.worktrees.find(
-    (candidate) => candidate.id === output.selectedWorktreeId,
+/**
+ * The workspace this session shows right now, without starting a read (the old
+ * `getQueryData(workspaceQueryKey)`). Includes the last success under a failed refresh.
+ */
+export const cachedWorkspaceData = (
+  registry: AtomRegistry.AtomRegistry,
+): WorkspaceData | undefined => {
+  const read = Option.getOrUndefined(
+    Option.flatMap(peek(registry, workspaceReadAtom), AsyncResult.value),
   );
-  const store = useWorkspaceStore.getState();
-  if (project && selected) {
-    store.selectWorktree(project.id, selected.id);
-    restoreActivePaneFocus();
-    return;
-  }
+  return read === undefined ? undefined : projectRailOrder(read, registry.get(railOrderAtom));
+};
 
-  store.setSelection(
-    reconcileSelection(data.projects, {
-      kind: 'worktree',
-      projectId: output.projectId,
-      worktreeId: output.selectedWorktreeId,
+/**
+ * The old `setQueryData(workspaceQueryKey, update)` on a held success: rewrites the held read's data
+ * and keeps the moment it began, so the rail keeps replaying exactly what that read could not know.
+ */
+export const patchWorkspaceData = (
+  registry: AtomRegistry.AtomRegistry,
+  update: (data: WorkspaceData) => WorkspaceData,
+): void => patch(registry, workspaceReadAtom, (read) => ({ ...read, data: update(read.data) }));
+
+/**
+ * Read-after-write: cancel any workspace read in flight and answer with the workspace as shown on a
+ * read that began after this call (fails if that read fails). Every commit that decides from the
+ * snapshot uses this.
+ */
+export const refreshWorkspace = () =>
+  Effect.flatMap(readFresh(workspaceReadAtom), (read) =>
+    Effect.map(Atom.get(railOrderAtom), (rail) => projectRailOrder(read, rail)),
+  );
+
+/**
+ * `refreshAndRead` as a single attempt: the old `fetchQuery({ staleTime: 0 })` never retried
+ * (`fetchQuery` defaults `retry` to false), so a read-after-write that fails reports at once instead
+ * of after the query's 1 s / 2 s / 4 s retries. The query's own reads keep their retry policy.
+ *
+ * The fresh read is built synchronously here with the registry's retry switch off (`query()` reads
+ * `queryRetryAtom` once, when a read is built), then the switch is restored.
+ */
+export const readFresh = <A, E>(q: Query<A, E>) =>
+  Effect.gen(function* () {
+    const registry = yield* AtomRegistry.AtomRegistry;
+    const retry = registry.get(queryRetryAtom);
+    registry.set(queryRetryAtom, null);
+    try {
+      registry.refresh(q);
+      registry.get(q);
+    } finally {
+      registry.set(queryRetryAtom, retry);
+    }
+    return yield* Atom.getResult(q, { suspendOnWaiting: true });
+  });
+
+// --- Commands ---------------------------------------------------------------------------------------
+
+/**
+ * The worktree's configured-command catalog: the default freshness policy, refreshed by
+ * `keys.commands(worktreeId)` only (the log metadata below has its own key, so invalidating the
+ * catalog never touches it). The drawer and the status strip read this; the palette reads
+ * {@link paletteCommandsAtom}, a stricter view on the same data. Select `disabledQuery` when no
+ * worktree is active.
+ */
+export const worktreeCommandsAtom = Atom.family((worktreeId: number) =>
+  query(() => fetchWorktreeCommands(worktreeId), { keys: [keys.commands(worktreeId)] }),
+);
+
+// Command membership is file-backed with no config-change event. Open-only
+// polling bounds visible drift to ~10 s plus request latency; closing the
+// palette unmounts this view, which stops the polling.
+export const COMMAND_CATALOG_POLL_MS = 10_000;
+
+/**
+ * The palette's view of the catalog: polled every 10 s while the palette shows it, and re-read on
+ * every focus or reconnect while it is open (a per-observer `staleTime: 0`). The drawer and status
+ * strip keep the shared 10 s policy; this is a view on the same cache, not a second cache.
+ *
+ * The read on open is {@link readCommandsOnPaletteOpen}, not this view's mount: a mount
+ * revalidation (`Atom.swr`) is deferred to the registry's low-priority scheduler and dropped if the
+ * view unmounts first, so a palette opened and closed quickly would never read.
+ */
+export const paletteCommandsAtom = Atom.family((worktreeId: number) =>
+  pollWhile(
+    Atom.swr(worktreeCommandsAtom(worktreeId), {
+      staleTime: 0,
+      revalidateOnMount: false,
+      revalidateOnFocus: true,
+      focusSignal: revalidationSignalAtom,
     }),
-  );
-  restoreActivePaneFocus();
-}
-
-export async function commitAddProjectSuccess(
-  client: QueryClient,
-  options: { readonly projectId?: number | null; readonly reconcile?: boolean } = {},
-) {
-  await client.invalidateQueries({ queryKey: workspaceQueryKey });
-  if (options.reconcile ?? true) {
-    scheduleWorkspaceReconcile(client, { projectId: options.projectId ?? null });
-  }
-}
-
-export async function commitRelocateProjectSuccess(
-  client: QueryClient,
-  findings: readonly ReconciliationFinding[],
-) {
-  handleReconciliationFindings(findings);
-  await client.invalidateQueries({ queryKey: workspaceQueryKey });
-}
+    () => Duration.millis(COMMAND_CATALOG_POLL_MS),
+  ),
+);
 
 /**
- * Settle a successful project delete.
- *
- * The worktree ids come from the cache *before* the refetch replaces it, since
- * the fresh snapshot no longer knows them. The selection is moved here, before
- * `useReconcileSelection` sees the new data: left to that effect, a worktree
- * selection on the deleted project would be "recovered" with a warning that the
- * checkout is no longer reported by Git, which is false for a deliberate delete.
- * A selection elsewhere is left alone.
- *
- * The read must begin after the delete. `fetchQuery` joins a workspace read
- * already in flight (a focus refetch, say) whatever its `staleTime`, and that
- * read would still list the deleted project. Cancelling first, `exact` as in
- * {@link runProjectRecheck}, makes the fetch below a new one.
+ * The palette opened on a worktree (or switched worktree while open): start a catalog read now,
+ * showing cached data meanwhile, unless one is already in flight (the old observer's
+ * `staleTime: 0` mount read, which also joined a running read rather than restarting it).
  */
-export async function commitDeleteProjectSuccess(
-  client: QueryClient,
-  projectId: number,
-  fetchWorkspaceData: (
-    signal?: AbortSignal | undefined,
-  ) => Promise<WorkspaceData> = loadWorkspaceData,
-) {
-  const worktreeIds =
-    client
-      .getQueryData<WorkspaceData>(workspaceQueryKey)
-      ?.projects.find((project) => project.id === projectId)
-      ?.worktrees.map((worktree) => worktree.id) ?? [];
-  for (const worktreeId of worktreeIds) {
-    publishTerminalWorkspaceFact({ type: 'durable_worktree_deleted', worktreeId });
-  }
+export function readCommandsOnPaletteOpen(
+  registry: AtomRegistry.AtomRegistry,
+  worktreeId: number,
+): void {
+  const catalog = worktreeCommandsAtom(worktreeId);
+  if (!registry.get(catalog).waiting) registry.refresh(catalog);
+}
 
-  await client.cancelQueries({ queryKey: workspaceQueryKey, exact: true });
-  const data = await client.fetchQuery({
-    queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) => fetchWorkspaceData(signal),
-    staleTime: 0,
-  });
+/** One command's log metadata (its latest run), refreshed by `keys.commandLog(w, name)`. */
+export const commandLogMetadataAtom = Atom.family(
+  ([worktreeId, commandName]: readonly [worktreeId: number, commandName: string]) =>
+    query(() => fetchCommandLogMetadata(worktreeId, commandName), {
+      keys: [keys.commandLog(worktreeId, commandName)],
+    }),
+);
 
-  const store = useWorkspaceStore.getState();
-  const { selection } = store;
-  if (
-    (selection.kind === 'worktree' || selection.kind === 'missingProject') &&
-    selection.projectId === projectId
-  ) {
-    store.setSelection(defaultSelection(data.projects));
-    restoreActivePaneFocus();
-  }
-  publishTerminalWorkspaceFact({ type: 'durable_inventory_refresh_requested' });
+/**
+ * Re-read a command's catalog and its log metadata, in that order, waiting for each re-read that
+ * is observed (the old awaited `invalidateQueries` pair). A re-read failure is not the action's.
+ */
+export const revalidateCommandReadModel = (worktreeId: number, commandName: string) =>
+  Effect.andThen(
+    revalidate(worktreeCommandsAtom(worktreeId)),
+    revalidate(commandLogMetadataAtom([worktreeId, commandName])),
+  );
+
+/**
+ * Run / stop / restart for one worktree's commands, as fn atoms. Build them per component instance
+ * with `useMemo` on the worktree id, so each instance has its own pending/error state (as each
+ * `useMutation` had).
+ *
+ * The request is uninterruptible, so a second click or an unmount never aborts an action that
+ * already reached the runtime. The catalog and log metadata are re-read on both outcomes, and the
+ * action stays pending until those re-reads land, as the old `onSettled` awaited them.
+ */
+export const commandActionAtoms = (worktreeId: number | null) => {
+  const action = (
+    verb: 'run' | 'stop' | 'restart',
+    call: (
+      worktreeId: number,
+      commandName: string,
+    ) => Effect.Effect<CommandActionOutput, Error, RuntimeApi>,
+  ) =>
+    appRuntime.fn((commandName: string) =>
+      worktreeId === null
+        ? Effect.die(new Error(`Command ${verb} requires an active worktree.`))
+        : Effect.uninterruptible(call(worktreeId, commandName)).pipe(
+            Effect.ensuring(revalidateCommandReadModel(worktreeId, commandName)),
+          ),
+    );
+  return {
+    run: action('run', runCommand),
+    stop: action('stop', stopCommand),
+    restart: action('restart', restartCommand),
+  };
+};
+
+/** The pending/error/data state of one command action fn atom. */
+export type CommandActionResult = AsyncResult.AsyncResult<CommandActionOutput, Error>;
+
+// --- Active context and surfaces ----------------------------------------------------------------
+
+/**
+ * The persisted active context (the last selected project/worktree), used to restore the
+ * selection. Its key is independent of the workspace's: a workspace refresh does not re-read it.
+ * It is re-read after each accepted persistence (`background-sync.ts`).
+ */
+export const activeContextAtom = query(() => fetchActiveContext(), {
+  keys: [keys.activeContext],
+});
+
+/**
+ * One surface's detail (layout, panes, sessions): 10 s stale, kept for the app session (the old
+ * `gcTime: Infinity`), refreshed by `keys.surface(surfaceId)`. Select `disabledQuery` when there is
+ * no surface.
+ *
+ * A landed read is published on the terminal facts channel (`surface_detail_loaded`), which is how
+ * the terminal coordinator re-derives placements (it used to watch the query cache).
+ */
+export const surfaceDetailAtom = Atom.family((surfaceId: number) =>
+  query(
+    () =>
+      getSurfaceDetail(surfaceId).pipe(
+        Effect.tap((detail) =>
+          publishTerminalFactEffect({ type: 'surface_detail_loaded', detail }),
+        ),
+      ),
+    { keys: [keys.surface(surfaceId)], idleTTL: Duration.infinity },
+  ),
+);
+
+// --- Project recheck --------------------------------------------------------------------------------
+
+export type { ProjectRecheckResult } from './commits.js';
+
+/**
+ * The same-path recovery action for a missing folder project, one per component instance (build it
+ * with `useMemo`). Both stages run inside the fn, so either one failing leaves it a `Failure` with
+ * no verdict; `mutationData` is the verdict. Uninterruptible like every write: a restored folder
+ * unmounts the component that started the check, and that must not cut the check short (the old
+ * mutation was never cancelled either).
+ */
+export const makeRecheckProjectAtom = () =>
+  appRuntime.fn((projectId: number) =>
+    Effect.uninterruptible(commits.runProjectRecheck(projectId)),
+  );
+
+/** The workspace as displayed, with the old query-result shape. */
+export function useWorkspaceResult() {
+  const result = useAtomValue(workspaceAtom);
+  return {
+    data: Option.getOrUndefined(AsyncResult.value(result)),
+    isPending: result._tag === 'Initial',
+    error: queryError(result),
+  };
 }
 
 export { formatRuntimeError };

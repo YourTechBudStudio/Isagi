@@ -4,7 +4,7 @@ export const healthOutputSchema = Schema.Struct({
   context: Schema.Struct({
     arch: Schema.String,
     node: Schema.String,
-    pid: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    pid: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
     platform: Schema.String,
   }),
   name: Schema.Literal('isagi-runtime'),
@@ -13,4 +13,4 @@ export const healthOutputSchema = Schema.Struct({
   version: Schema.String,
 });
 
-export type HealthOutput = Schema.Schema.Type<typeof healthOutputSchema>;
+export type HealthOutput = typeof healthOutputSchema.Type;

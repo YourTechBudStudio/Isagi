@@ -1,20 +1,19 @@
+import { useAtom, useAtomValue } from '@effect/atom-react';
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { workflowCopy } from '../../copy/index.js';
+import { useRegistry } from '../../lib/state/registry.js';
+import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
+import { setWorkflowInspectorOpen, workflowInspectorOpenAtom } from '../../lib/workspace/store.js';
 import {
-  useAdvanceWorkflowMutation,
   useAttachedWorkflowRun,
-  useCancelWorkflowMutation,
-  useDismissWorkflowMutation,
-  usePauseWorkflowMutation,
-  useResumeWorkflowMutation,
-  useRetryWorkflowMutation,
   useRuntimeConnectionPhase,
   useRuntimeIdentity,
   useWorkflowLog,
+  workflowControlAtoms,
 } from '../../lib/workspace/workflow/queries.js';
 import type { LayoutEngineFactory } from './workflow/useGraphLayout.js';
 import { WorkflowInspector } from './workflow/WorkflowInspector.js';
@@ -33,19 +32,41 @@ export function WorkflowBarContainer({
    */
   readonly inspectorEngineFactory?: LayoutEngineFactory | undefined;
 } = {}) {
+  const registry = useRegistry();
   const { activeSurface } = useWorkspace();
   const summary = useAttachedWorkflowRun(activeSurface?.id ?? null) ?? null;
   const runId = summary?.runId ?? null;
   const runtimeIdentity = useRuntimeIdentity();
   const [logExpanded, setLogExpanded] = useState(false);
   /**
-   * Local, and deliberately not a route.
+   * Registry state, and deliberately not a route.
    *
    * The inspector opens from the bar of the surface its run is attached to and nowhere else: there
    * is no `/workspace/workflows/:runId`, no direct-by-run-id entry, and no promise that a link stays
-   * valid after Dismiss. Keeping it beside `logExpanded` is what makes that true by construction.
+   * valid after Dismiss. It lives in the registry only so pane focus can see it: an open inspector
+   * owns keyboard focus, and a terminal that took focus behind it would swallow the Escape that
+   * closes it. This container stays its only writer.
    */
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const inspectorOpen = useAtomValue(workflowInspectorOpenAtom);
+
+  /**
+   * Closing hands keyboard focus back to the active pane, as closing the drawer does: the atom flips
+   * first, so the focus scheduler's ownership guard already sees the inspector closed.
+   */
+  const closeInspector = useCallback(() => {
+    setWorkflowInspectorOpen(registry, false);
+    restoreActivePaneFocus(registry);
+  }, [registry]);
+
+  // The inspector is this bar's overlay. When the bar goes (zen, leaving the workspace) it goes with
+  // it, as local state did; an open flag left behind would keep every pane from taking focus.
+  useEffect(() => () => setWorkflowInspectorOpen(registry, false), [registry]);
+
+  // A run that let go of this surface takes its inspector with it: an overlay left open would be
+  // describing a run the bar no longer shows.
+  useEffect(() => {
+    if (summary === null && inspectorOpen) setWorkflowInspectorOpen(registry, false);
+  }, [registry, summary, inspectorOpen]);
   const [barHeight, setBarHeight] = useState(64);
   const barRef = useRef<HTMLElement | null>(null);
   const connection = useRuntimeConnectionPhase();
@@ -67,12 +88,15 @@ export function WorkflowBarContainer({
   const scope = `${runtimeIdentity ?? ''}:${runId ?? ''}`;
   const visible = feedback?.scope === scope ? feedback : null;
 
-  const pause = usePauseWorkflowMutation(runId);
-  const resume = useResumeWorkflowMutation(runId);
-  const retry = useRetryWorkflowMutation(runId);
-  const cancel = useCancelWorkflowMutation(runId);
-  const dismiss = useDismissWorkflowMutation(runId);
-  const advance = useAdvanceWorkflowMutation();
+  // The controls belong to the run they act on: a new run gets fresh pending/error state, while a
+  // control already sent for the previous run still completes (writes are uninterruptible).
+  const controls = useMemo(() => workflowControlAtoms(runId), [runId]);
+  const [pauseState, pause] = useAtom(controls.pause, { mode: 'promise' });
+  const [resumeState, resume] = useAtom(controls.resume, { mode: 'promise' });
+  const [retryState, retry] = useAtom(controls.retry, { mode: 'promise' });
+  const [cancelState, cancel] = useAtom(controls.cancel, { mode: 'promise' });
+  const [dismissState, dismiss] = useAtom(controls.dismiss, { mode: 'promise' });
+  const [advanceState, advance] = useAtom(controls.advance, { mode: 'promise' });
 
   /**
    * One control at a time.
@@ -83,30 +107,29 @@ export function WorkflowBarContainer({
    * asked", and it removes the overlap rather than trying to represent it.
    */
   const mutating =
-    pause.isPending ||
-    resume.isPending ||
-    retry.isPending ||
-    cancel.isPending ||
-    dismiss.isPending ||
-    advance.isPending;
+    pauseState.waiting ||
+    resumeState.waiting ||
+    retryState.waiting ||
+    cancelState.waiting ||
+    dismissState.waiting ||
+    advanceState.waiting;
 
   const actions = useMemo(
     () => ({
-      pause: () => runAction(workflowCopy.pauseActionFailed, () => pause.mutateAsync()),
-      resume: () => runAction(workflowCopy.resumeActionFailed, () => resume.mutateAsync()),
-      retry: () => runAction(workflowCopy.retryActionFailed, () => retry.mutateAsync()),
-      cancel: () => runAction(workflowCopy.cancelActionFailed, () => cancel.mutateAsync()),
+      pause: () => runAction(workflowCopy.pauseActionFailed, () => pause()),
+      resume: () => runAction(workflowCopy.resumeActionFailed, () => resume()),
+      retry: () => runAction(workflowCopy.retryActionFailed, () => retry()),
+      cancel: () => runAction(workflowCopy.cancelActionFailed, () => cancel()),
       // A separate control and a separate failure line. Cancel stops work; Dismiss lets go of the
       // surface. Sharing either would put one action's outcome under the other's name.
-      dismiss: () => runAction(workflowCopy.dismissActionFailed, () => dismiss.mutateAsync()),
+      dismiss: () => runAction(workflowCopy.dismissActionFailed, () => dismiss()),
       advance: (executionId: number, answers?: WorkflowInputAnswers) => {
         if (runId === null) return;
-        return runAction(workflowCopy.advanceActionFailed, () =>
-          advance.mutateAsync({ runId, executionId, answers }),
-        );
+        return runAction(workflowCopy.advanceActionFailed, () => advance({ executionId, answers }));
       },
     }),
-    [advance, cancel, dismiss, pause, resume, retry, runId],
+    // `runAction` reads `mutating` and `scope`; the setters themselves are stable per run.
+    [advance, cancel, dismiss, pause, resume, retry, runId, mutating, scope],
   );
 
   /**
@@ -151,10 +174,6 @@ export function WorkflowBarContainer({
     }
   }
 
-  // A run that let go of this surface takes its inspector with it: an overlay left open would be
-  // describing a run the bar no longer shows.
-  if (summary === null && inspectorOpen) setInspectorOpen(false);
-
   return (
     <AnimatePresence initial={false}>
       {summary && inspectorOpen && (
@@ -163,7 +182,7 @@ export function WorkflowBarContainer({
           summary={summary}
           bottomInset={barHeight}
           engineFactory={inspectorEngineFactory}
-          onClose={() => setInspectorOpen(false)}
+          onClose={closeInspector}
         />
       )}
       {summary && (
@@ -182,7 +201,9 @@ export function WorkflowBarContainer({
           actionsLocked={mutating}
           actionError={visible?.error ?? null}
           onToggleLog={() => setLogExpanded((expanded) => !expanded)}
-          onToggleInspector={() => setInspectorOpen((open) => !open)}
+          onToggleInspector={() =>
+            inspectorOpen ? closeInspector() : setWorkflowInspectorOpen(registry, true)
+          }
           onPause={actions.pause}
           onResume={actions.resume}
           onCancel={actions.cancel}

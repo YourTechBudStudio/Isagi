@@ -4,18 +4,24 @@ import { Effect } from 'effect';
 
 import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 
-import { getConversationHistory as readConversationHistory } from '../../agent-sessions/harness/conversation.js';
-import type { HarnessConversationTurn } from '../../agent-sessions/harness/definition-types.js';
-import type { AgentSessionArtifactsService } from '../../agent-sessions/harness/ledger.js';
+import type { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import {
+  getConversationHistory as readConversationHistory,
   HarnessLedgerObserver,
-  type HarnessLedgerObserverService,
-} from '../../agent-sessions/harness/observer.service.js';
-import type { AgentSessionService as AgentSessionServiceShape } from '../../agent-sessions/index.js';
-import { diagnosticPhase } from '../../diagnostics/phase.js';
-import type { PtyServiceShape } from '../../pty-processes/index.js';
-import type { SurfaceServiceShape } from '../../surfaces/index.js';
-import type { AgentPort } from '../engine/runtime.js';
+  type AgentSessionArtifacts,
+} from '../../harnesses/index.js';
+import type { HarnessConversationTurn } from '../../harnesses/index.js';
+import { diagnosticPhase } from '../../platform/diagnostics/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import type { PtyService } from '../../pty-processes/index.js';
+import type {
+  AgentPort,
+  AgentReadError,
+  AgentSendError,
+  AgentSpawnError,
+} from '../engine/runtime.js';
+import { WorkflowOperationFailed, type WorkflowEngineError } from '../errors.js';
+import { errorMessage } from '../state/pure.js';
 import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types.js';
 import { hasInFlightTurn } from '../waits/latest-turn.js';
 
@@ -28,11 +34,11 @@ import { hasInFlightTurn } from '../waits/latest-turn.js';
  */
 
 export interface AgentDeps {
-  readonly agents: AgentSessionServiceShape;
-  readonly surfaces: SurfaceServiceShape;
-  readonly pty: PtyServiceShape;
-  readonly artifacts: AgentSessionArtifactsService;
-  readonly observer: HarnessLedgerObserverService;
+  readonly agents: AgentSessionService['Service'];
+  readonly surfaces: SurfaceService['Service'];
+  readonly pty: PtyService['Service'];
+  readonly artifacts: AgentSessionArtifacts['Service'];
+  readonly observer: HarnessLedgerObserver['Service'];
 }
 
 export const spawnTimeoutMs = 10_000;
@@ -87,9 +93,17 @@ export function spawnAgentSession(
     readonly onCreated: (created: {
       readonly paneId: number;
       readonly agentSessionId: number;
-    }) => Effect.Effect<void, unknown>;
+    }) => Effect.Effect<void, DatabaseError | WorkflowEngineError>;
   },
-) {
+): Effect.Effect<
+  {
+    readonly agentSessionId: number;
+    readonly paneId: number;
+    readonly sentAt: string;
+    readonly harnessSessionId: string;
+  },
+  AgentSpawnError
+> {
   return Effect.gen(function* () {
     const phase = { surfaceId: input.surfaceId, harness: input.harness };
     const surface = yield* diagnosticPhase(
@@ -117,9 +131,9 @@ export function spawnAgentSession(
     const pane = detail.panes.find((candidate) => candidate.id === created.paneId);
     if (!pane || pane.session?.kind !== 'agent_session') {
       return yield* Effect.fail(
-        new Error(
-          `Surface ${created.surfaceId} pane ${created.paneId} was created without an agent session.`,
-        ),
+        new WorkflowOperationFailed({
+          message: `Surface ${created.surfaceId} pane ${created.paneId} was created without an agent session.`,
+        }),
       );
     }
     const agentSessionId = pane.session.agentSession.id;
@@ -132,10 +146,14 @@ export function spawnAgentSession(
       deps.agents
         .ensureActivePtyProcess(agentSessionId, { model: input.model, effort: input.effort })
         .pipe(
-          Effect.timeoutFail({
+          Effect.timeoutOrElse({
             duration: `${spawnTimeoutMs} millis`,
-            onTimeout: () =>
-              new Error(`Timed out waiting for agent session ${agentSessionId} to start.`),
+            orElse: () =>
+              Effect.fail(
+                new WorkflowOperationFailed({
+                  message: `Timed out waiting for agent session ${agentSessionId} to start.`,
+                }),
+              ),
           }),
         ),
     );
@@ -151,17 +169,23 @@ export function spawnAgentSession(
       'workflow.spawn.await_startup_output',
       { ...session, ptyProcessId },
       waitForPtyStartupOutput(deps.pty, ptyProcessId).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: `${spawnTimeoutMs} millis`,
-          onTimeout: () =>
-            new Error(`Timed out waiting for agent session ${agentSessionId} startup output.`),
+          orElse: () =>
+            Effect.fail(
+              new WorkflowOperationFailed({
+                message: `Timed out waiting for agent session ${agentSessionId} startup output.`,
+              }),
+            ),
         }),
       ),
     );
     yield* Effect.sleep(`${spawnSeedPromptDelayMs} millis`);
     if (yield* isTurnInFlight(deps.observer, agentSessionId)) {
       return yield* Effect.fail(
-        new Error(`Cannot seed agent session ${agentSessionId}: a turn is already in flight.`),
+        new WorkflowOperationFailed({
+          message: `Cannot seed agent session ${agentSessionId}: a turn is already in flight.`,
+        }),
       );
     }
     // Captured immediately before the PTY write: the latest-turn rule looks for turns that started
@@ -176,11 +200,13 @@ export function spawnAgentSession(
       'workflow.spawn.await_harness_session_id',
       { ...session, ptyProcessId },
       waitForHarnessSessionId(deps, { ptyProcessId, agentSessionId }).pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: `${spawnTimeoutMs} millis`,
-          onTimeout: () =>
-            new Error(
-              `Timed out waiting for agent session ${agentSessionId} to accept its prompt.`,
+          orElse: () =>
+            Effect.fail(
+              new WorkflowOperationFailed({
+                message: `Timed out waiting for agent session ${agentSessionId} to accept its prompt.`,
+              }),
             ),
         }),
       ),
@@ -216,42 +242,38 @@ function requireSpawnPlacement(
       case 'placed':
         if (outcome.paneId === spawned.paneId) return;
         return yield* Effect.fail(
-          new Error(
-            `Agent session ${spawned.agentSessionId} moved to pane ${outcome.paneId} on surface ${outcome.surfaceId} while it was starting; it was left running there.`,
-          ),
+          new WorkflowOperationFailed({
+            message: `Agent session ${spawned.agentSessionId} moved to pane ${outcome.paneId} on surface ${outcome.surfaceId} while it was starting; it was left running there.`,
+          }),
         );
       case 'stopped':
         return yield* Effect.fail(
-          new Error(
-            `Surface ${spawned.surfaceId} pane ${spawned.paneId} was closed while agent session ${spawned.agentSessionId} was starting; its process ${spawned.ptyProcessId} was stopped.`,
-          ),
+          new WorkflowOperationFailed({
+            message: `Surface ${spawned.surfaceId} pane ${spawned.paneId} was closed while agent session ${spawned.agentSessionId} was starting; its process ${spawned.ptyProcessId} was stopped.`,
+          }),
         );
       case 'stop_failed':
         return yield* Effect.fail(
-          new Error(
-            `Surface ${spawned.surfaceId} pane ${spawned.paneId} was closed while agent session ${spawned.agentSessionId} was starting, and its process ${spawned.ptyProcessId} could not be stopped: ${errorText(outcome.cause)}`,
-          ),
+          new WorkflowOperationFailed({
+            message: `Surface ${spawned.surfaceId} pane ${spawned.paneId} was closed while agent session ${spawned.agentSessionId} was starting, and its process ${spawned.ptyProcessId} could not be stopped: ${errorMessage(outcome.cause)}`,
+          }),
         );
     }
   });
-}
-
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Sends a prompt into an existing session. Refused while a turn is in flight. */
 export function sendAgentPrompt(
   deps: AgentDeps,
   input: { readonly agentSessionId: number; readonly prompt: string },
-) {
+): Effect.Effect<{ readonly agentSessionId: number; readonly sentAt: string }, AgentSendError> {
   return Effect.gen(function* () {
     yield* waitForObserverInitialization(deps.observer, input.agentSessionId);
     if (yield* isTurnInFlight(deps.observer, input.agentSessionId)) {
       return yield* Effect.fail(
-        new Error(
-          `Cannot send a prompt into agent session ${input.agentSessionId}: a turn is already in flight.`,
-        ),
+        new WorkflowOperationFailed({
+          message: `Cannot send a prompt into agent session ${input.agentSessionId}: a turn is already in flight.`,
+        }),
       );
     }
     const ptyProcessId = yield* deps.agents.activePtyProcessId(input.agentSessionId);
@@ -273,7 +295,7 @@ export function conversationHistory(
   deps: AgentDeps,
   agentSessionId: number,
   turn?: HarnessConversationTurn,
-): Effect.Effect<readonly WorkflowConversationMessage[], unknown> {
+): Effect.Effect<readonly WorkflowConversationMessage[], AgentReadError> {
   return Effect.gen(function* () {
     const session = yield* deps.agents.get(agentSessionId);
     const harnessSessionId =
@@ -305,6 +327,7 @@ export function chooseSpawnSplit(layout: SurfaceLayoutNode): {
   return { sourcePaneId: lastLeafPaneId(layout), direction: 'down' };
 }
 
+/** An empty split is a layout invariant the surfaces module never produces; a throw here is a defect. */
 function lastLeafPaneId(layout: SurfaceLayoutNode): number {
   if (layout.kind === 'leaf') return layout.paneId;
   const last = layout.children.at(-1);
@@ -312,7 +335,7 @@ function lastLeafPaneId(layout: SurfaceLayoutNode): number {
   return lastLeafPaneId(last);
 }
 
-function writePromptToPty(pty: PtyServiceShape, ptyProcessId: number, text: string) {
+function writePromptToPty(pty: PtyService['Service'], ptyProcessId: number, text: string) {
   return Effect.gen(function* () {
     const normalized = text.replace(/\r\n/g, '\n');
     yield* pty.writeInput({ ptyProcessId, data: `\x1b[200~${normalized}\x1b[201~` });
@@ -321,12 +344,12 @@ function writePromptToPty(pty: PtyServiceShape, ptyProcessId: number, text: stri
   });
 }
 
-function isTurnInFlight(observer: HarnessLedgerObserverService, agentSessionId: number) {
+function isTurnInFlight(observer: HarnessLedgerObserver['Service'], agentSessionId: number) {
   return Effect.map(observer.getTurnEdges(agentSessionId), hasInFlightTurn);
 }
 
 function waitForObserverInitialization(
-  observer: HarnessLedgerObserverService,
+  observer: HarnessLedgerObserver['Service'],
   agentSessionId: number,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
@@ -337,9 +360,9 @@ function waitForObserverInitialization(
 }
 
 function waitForPtyStartupOutput(
-  pty: PtyServiceShape,
+  pty: PtyService['Service'],
   ptyProcessId: number,
-): Effect.Effect<void, unknown> {
+): Effect.Effect<void, Effect.Error<ReturnType<PtyService['Service']['getAttachmentPlan']>>> {
   return Effect.gen(function* () {
     const plan = yield* pty.getAttachmentPlan({ ptyProcessId });
     const bytes = plan.session.logPath
@@ -357,18 +380,18 @@ function waitForPtyStartupOutput(
   });
 }
 
-function harnessSessionIdOf(artifacts: AgentSessionArtifactsService, agentSessionId: number) {
-  return artifacts
-    .readMetadata(agentSessionId)
-    .pipe(
-      Effect.flatMap((metadata) =>
-        metadata.status === 'valid' && metadata.metadata.harnessSessionId
-          ? Effect.succeed(metadata.metadata.harnessSessionId)
-          : Effect.fail(
-              new Error(`Agent session ${agentSessionId} has no captured harness session id yet.`),
-            ),
-      ),
-    );
+function harnessSessionIdOf(artifacts: AgentSessionArtifacts['Service'], agentSessionId: number) {
+  return artifacts.readMetadata(agentSessionId).pipe(
+    Effect.flatMap((metadata) =>
+      metadata.status === 'valid' && metadata.metadata.harnessSessionId
+        ? Effect.succeed(metadata.metadata.harnessSessionId)
+        : Effect.fail(
+            new WorkflowOperationFailed({
+              message: `Agent session ${agentSessionId} has no captured harness session id yet.`,
+            }),
+          ),
+    ),
+  );
 }
 
 /**
@@ -381,7 +404,7 @@ function waitForHarnessSessionId(
   delayMs = metadataInitialDelayMs,
   elapsedMs = 0,
   retries = 0,
-): Effect.Effect<string, unknown> {
+): Effect.Effect<string, Effect.Error<ReturnType<PtyService['Service']['writeInput']>>> {
   return Effect.gen(function* () {
     const metadata = yield* deps.artifacts.readMetadata(input.agentSessionId);
     if (metadata.status === 'valid' && metadata.metadata.harnessSessionId) {

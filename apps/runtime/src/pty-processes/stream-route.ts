@@ -1,4 +1,4 @@
-import { Deferred, Effect, Either, Queue } from 'effect';
+import { Cause, Effect, Fiber, Queue, Result, Stream } from 'effect';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import {
@@ -9,96 +9,105 @@ import {
   type PtyWebSocketInputMessage,
 } from '@isagi/contracts';
 
-import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
-import type { RuntimeServices } from '../runtime.layer.js';
+import { describeOperationalCause } from '../platform/diagnostics/index.js';
+import {
+  acquireWsConnection,
+  enforceRuntimeWebSocketOrigin,
+  errorMessage,
+  type RouteRuntime,
+  type WebSocketLike,
+  type WsConnection,
+} from '../platform/http/index.js';
 import {
   PtyService,
+  type PtyAttachError,
   type PtyAttachment,
   type PtyAttachmentMode,
   type PtyAttachmentPlan,
-} from './pty.service.js';
-
-type RuntimeRunner = <A>(
-  effect: Effect.Effect<A, unknown, RuntimeServices>,
-  options?: { readonly signal?: AbortSignal | undefined },
-) => Promise<A>;
+} from './service.js';
 
 type StreamSocketMessage<Preamble extends { readonly type: string }> =
   | Preamble
   | PtyStreamOutputMessageSet
   | PtyStreamErrorMessage;
 
-interface SocketLike {
-  readonly readyState: number;
-  readonly send: (data: string) => void;
-  readonly close: () => void;
-  readonly once: (event: 'close', listener: () => void) => void;
-  readonly on: (event: 'message', listener: (raw: Buffer) => void) => void;
-  readonly off: (event: 'message', listener: (raw: Buffer) => void) => void;
-}
-
+/** What a strategy may do to one connection's socket. Both are no-ops once the socket is closing. */
 export interface PtyStreamSocketControls<Preamble extends { readonly type: string }> {
-  readonly send: (message: StreamSocketMessage<Preamble>) => void;
-  readonly close: () => void;
+  readonly send: (message: StreamSocketMessage<Preamble>) => Effect.Effect<void>;
+  readonly close: Effect.Effect<void>;
 }
 
 export interface PtyStreamAttachedControls<
   Preamble extends { readonly type: string },
 > extends PtyStreamSocketControls<Preamble> {
-  readonly detach: Effect.Effect<void, never>;
+  /** Ends this connection's attachment now, ahead of its scope (a displaced or moved viewer). Idempotent. */
+  readonly detach: Effect.Effect<void>;
 }
 
-export interface PtyStreamStrategy<Target, Preamble extends { readonly type: string }> {
+type StreamTarget<Target> = Target & { readonly ptyProcessId: number | null };
+type LiveTarget<Target> = Target & { readonly ptyProcessId: number };
+
+/**
+ * How one kind of PTY socket resolves its process and talks to its client.
+ *
+ * `E` is everything the strategy's own effects can fail with; `mapError` maps it, plus the route's own PTY failures
+ * (`PtyAttachError`), to the socket's error frame. `R` is the services those effects need, beyond `PtyService`, which
+ * the route itself uses.
+ */
+export interface PtyStreamStrategy<Target, Preamble extends { readonly type: string }, E, R> {
   readonly path: string;
   readonly logLabel: string;
   readonly mode: PtyAttachmentMode;
   readonly closeOnExit?: boolean | undefined;
   readonly closeOnReplayOnly?: boolean | undefined;
   readonly closeOnClientError?: boolean | undefined;
-  readonly resolveTarget: (
-    request: FastifyRequest,
-  ) => Effect.Effect<Target & { readonly ptyProcessId: number | null }, unknown, RuntimeServices>;
+  readonly resolveTarget: (request: FastifyRequest) => Effect.Effect<StreamTarget<Target>, E, R>;
   readonly preamble: (input: {
-    readonly target: Target & { readonly ptyProcessId: number | null };
+    readonly target: StreamTarget<Target>;
     readonly plan: PtyAttachmentPlan | null;
   }) => Preamble;
   readonly decodeClientMessage: (raw: string) => PtyWebSocketInputMessage | null;
   readonly handleClientMessage: (input: {
-    readonly target: Target & { readonly ptyProcessId: number | null };
+    readonly target: StreamTarget<Target>;
     readonly attachmentId: symbol | null;
     readonly message: PtyWebSocketInputMessage;
-  }) => Effect.Effect<void, unknown, RuntimeServices>;
-  readonly beforeAttach: (
-    target: Target & { readonly ptyProcessId: number },
-  ) => Effect.Effect<void, unknown, RuntimeServices>;
+  }) => Effect.Effect<void, E, R>;
+  readonly beforeAttach: (target: LiveTarget<Target>) => Effect.Effect<void, E, R>;
   readonly recoverAttachFailure?: (input: {
-    readonly target: Target & { readonly ptyProcessId: number };
-    readonly cause: unknown;
-  }) => Effect.Effect<
-    (Target & { readonly ptyProcessId: number | null }) | null,
-    unknown,
-    RuntimeServices
-  >;
-  readonly supersede: (target: Target & { readonly ptyProcessId: number }) => boolean;
+    readonly target: LiveTarget<Target>;
+    readonly cause: E | PtyAttachError;
+  }) => Effect.Effect<StreamTarget<Target> | null, E, R>;
+  readonly supersede: (target: LiveTarget<Target>) => boolean;
   readonly displace: (input: {
-    readonly target: Target & { readonly ptyProcessId: number };
+    readonly target: LiveTarget<Target>;
     readonly controls: PtyStreamAttachedControls<Preamble>;
-  }) => Effect.Effect<void, never> | undefined;
+  }) => Effect.Effect<void> | undefined;
   readonly registerAttachment: (input: {
-    readonly target: Target & { readonly ptyProcessId: number };
+    readonly target: LiveTarget<Target>;
     readonly attachment: PtyAttachment;
     readonly controls: PtyStreamAttachedControls<Preamble>;
-  }) => Effect.Effect<() => void, unknown, RuntimeServices>;
-  readonly mapError: (error: unknown) => {
+  }) => Effect.Effect<() => void, E, R>;
+  readonly mapError: (error: E | PtyAttachError) => {
     readonly code: PtyStreamErrorCode;
     readonly message?: string;
   };
 }
 
-export function registerPtyStreamRoute<Target, Preamble extends { readonly type: string }>(
+/** The client may send once its connection is ready: after the replay, with the live attachment (if any) in place. */
+interface ReadyConnection<Target> {
+  readonly target: StreamTarget<Target>;
+  readonly attachmentId: symbol | null;
+}
+
+/**
+ * Registers a PTY WebSocket route. Each connection is one fiber on the route runtime, scoped to its socket: the client
+ * closing the socket, or the runtime shutting down, closes the scope, which detaches the PTY attachment, stops every
+ * fiber the connection started and closes the socket if it is still open.
+ */
+export function registerPtyStreamRoute<Target, Preamble extends { readonly type: string }, E, R>(
   fastify: FastifyInstance,
-  run: RuntimeRunner,
-  strategy: PtyStreamStrategy<Target, Preamble>,
+  runtime: RouteRuntime<NoInfer<R> | PtyService>,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
 ) {
   fastify.get(
     `${apiBasePath}${strategy.path}`,
@@ -107,420 +116,372 @@ export function registerPtyStreamRoute<Target, Preamble extends { readonly type:
       preValidation: enforceRuntimeWebSocketOrigin,
     },
     (socket, request) => {
-      const scoped = Effect.scoped(runConnection(socket, request, strategy));
-      setImmediate(() => {
-        void run(scoped).catch((error: unknown) => {
-          const socketError = strategy.mapError(error);
-          console.error(`[runtime] ${strategy.logLabel} crashed`, {
-            errorCode: socketError.code,
-            errorMessage: socketError.message,
-            cause: error,
-          });
-          send(socket, { type: 'error', ...socketError });
-          socket.close();
-        });
-      });
+      runtime.runFork(Effect.scoped(runConnection(socket, request, strategy)));
     },
   );
 }
 
-function runConnection<Target, Preamble extends { readonly type: string }>(
-  socket: SocketLike,
-  request: FastifyRequest,
-  strategy: PtyStreamStrategy<Target, Preamble>,
-) {
-  return Effect.gen(function* () {
-    let closed = false;
-    const closedSignal = yield* Deferred.make<void>();
-    const ready = yield* Deferred.make<{
-      readonly target: Target & { readonly ptyProcessId: number | null };
-      readonly attachmentId: symbol | null;
-    }>();
-    const clientMessages = yield* Queue.unbounded<PtyWebSocketInputMessage>();
-    const liveBuffer: PtyStreamOutputMessageSet[] = [];
-    let bufferingLive = false;
-
-    socket.once('close', () => {
-      closed = true;
-      liveBuffer.splice(0);
-      void Effect.runPromise(Deferred.succeed(closedSignal, undefined));
-    });
-
-    const sendMessage = (message: StreamSocketMessage<Preamble>) => {
-      send(socket, message);
-      if (message.type === 'exit' && strategy.closeOnExit) setImmediate(() => socket.close());
-    };
-    const sendLive = (message: PtyStreamOutputMessageSet) => {
-      if (closed) return;
-      if (bufferingLive) {
-        liveBuffer.push(message);
-        return;
-      }
-      sendMessage(message);
-    };
-    const flushLiveBuffer = () => {
-      for (const message of liveBuffer.splice(0)) {
-        if (closed) return;
-        sendMessage(message);
-        if (message.type === 'exit' && strategy.closeOnExit) return;
-      }
-    };
-
-    const onMessage = (raw: Buffer) => {
-      if (closed) return;
-      const parsed = strategy.decodeClientMessage(raw.toString());
-      if (!parsed) {
-        send(socket, { type: 'error', code: 'invalid_message' });
-        if (strategy.closeOnClientError) setImmediate(() => socket.close());
-        return;
-      }
-      void Effect.runPromise(Queue.offer(clientMessages, parsed));
-    };
-    socket.on('message', onMessage);
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        socket.off('message', onMessage);
-      }),
-    );
-    yield* Effect.addFinalizer(() => Queue.shutdown(clientMessages));
-
-    yield* processClientMessages(strategy, clientMessages, ready, (message) => {
-      send(socket, message);
-      if (strategy.closeOnClientError) setImmediate(() => socket.close());
-    }).pipe(Effect.forkScoped);
-
-    const targetResult = yield* strategy.resolveTarget(request).pipe(Effect.either);
-    if (Either.isLeft(targetResult)) {
-      closeWithMappedError(socket, strategy, strategy.logLabel, targetResult.left);
-      return yield* Deferred.await(closedSignal);
-    }
-
-    const target = targetResult.right;
-    const pty = yield* PtyService;
-    const planResult =
-      target.ptyProcessId === null
-        ? Either.right(null)
-        : yield* pty.getAttachmentPlan({ ptyProcessId: target.ptyProcessId }).pipe(Effect.either);
-    if (Either.isLeft(planResult)) {
-      closeWithMappedError(
-        socket,
-        strategy,
-        `${strategy.logLabel} attachment plan failed`,
-        planResult.left,
-      );
-      return yield* Deferred.await(closedSignal);
-    }
-
-    const plan = planResult.right;
-    sendMessage(strategy.preamble({ target, plan }));
-    if (closed) return;
-
-    if (target.ptyProcessId === null || !plan?.live) {
-      if (plan) {
-        const replayResult = yield* pty
-          .replay({
-            session: plan.session,
-            bytes: plan.replayBytes,
-            send: (message) => sendMessage(message),
-          })
-          .pipe(Effect.either);
-        if (Either.isLeft(replayResult)) {
-          closeWithMappedError(
-            socket,
-            strategy,
-            `${strategy.logLabel} replay failed`,
-            replayResult.left,
-          );
-          return yield* Deferred.await(closedSignal);
-        }
-      }
-      yield* Deferred.succeed(ready, { target, attachmentId: null });
-      if (strategy.closeOnReplayOnly) setImmediate(() => socket.close());
-      return yield* Deferred.await(closedSignal);
-    }
-
-    const liveTarget = { ...target, ptyProcessId: target.ptyProcessId };
-    if (plan.replayBytes === null) {
-      const replayResult = yield* pty
-        .replay({
-          session: plan.session,
-          bytes: plan.replayBytes,
-          send: (message) => sendMessage(message),
-        })
-        .pipe(Effect.either);
-      if (Either.isLeft(replayResult)) {
-        closeWithMappedError(
-          socket,
-          strategy,
-          `${strategy.logLabel} replay failed`,
-          replayResult.left,
-        );
-        return yield* Deferred.await(closedSignal);
-      }
-
-      const attachResult = yield* attachLive({
-        socket,
-        strategy,
-        target: liveTarget,
-        sendLive,
-      }).pipe(Effect.either);
-      if (Either.isLeft(attachResult)) {
-        const recovered = yield* recoverReplayOnlyAfterAttachFailure({
-          socket,
-          strategy,
-          target: liveTarget,
-          cause: attachResult.left,
-          sendMessage,
-          closed: () => closed,
-        });
-        if (recovered?.status === 'recovered') {
-          yield* Deferred.succeed(ready, { target: recovered.target, attachmentId: null });
-          if (strategy.closeOnReplayOnly) setImmediate(() => socket.close());
-          return yield* Deferred.await(closedSignal);
-        }
-        if (recovered?.status === 'closed') return yield* Deferred.await(closedSignal);
-        closeWithMappedError(
-          socket,
-          strategy,
-          `${strategy.logLabel} live attach failed`,
-          attachResult.left,
-        );
-        return yield* Deferred.await(closedSignal);
-      }
-
-      const attachment = attachResult.right;
-      yield* Deferred.succeed(ready, {
-        target,
-        attachmentId: attachment.attachmentId,
-      });
-      return yield* Deferred.await(closedSignal);
-    }
-
-    bufferingLive = true;
-    const attachResult = yield* attachLive({
-      socket,
-      strategy,
-      target: liveTarget,
-      sendLive,
-    }).pipe(Effect.either);
-
-    if (Either.isLeft(attachResult)) {
-      bufferingLive = false;
-      liveBuffer.splice(0);
-      const recovered = yield* recoverReplayOnlyAfterAttachFailure({
-        socket,
-        strategy,
-        target: liveTarget,
-        cause: attachResult.left,
-        sendMessage,
-        closed: () => closed,
-      });
-      if (recovered?.status === 'recovered') {
-        yield* Deferred.succeed(ready, { target: recovered.target, attachmentId: null });
-        if (strategy.closeOnReplayOnly) setImmediate(() => socket.close());
-        return yield* Deferred.await(closedSignal);
-      }
-      if (recovered?.status === 'closed') return yield* Deferred.await(closedSignal);
-      closeWithMappedError(
-        socket,
-        strategy,
-        `${strategy.logLabel} live attach failed`,
-        attachResult.left,
-      );
-      return yield* Deferred.await(closedSignal);
-    }
-
-    const attachment = attachResult.right;
-    yield* Deferred.succeed(ready, {
-      target,
-      attachmentId: attachment.attachmentId,
-    });
-
-    if (attachment.replayBytes === null) {
-      bufferingLive = false;
-      flushLiveBuffer();
-      return yield* Deferred.await(closedSignal);
-    }
-
-    const replayResult = yield* pty
-      .replay({
-        session: plan.session,
-        bytes: attachment.replayBytes,
-        send: (message) => sendMessage(message),
-      })
-      .pipe(Effect.either);
-    bufferingLive = false;
-
-    if (Either.isLeft(replayResult)) {
-      closeWithMappedError(
-        socket,
-        strategy,
-        `${strategy.logLabel} replay failed`,
-        replayResult.left,
-      );
-      return yield* Deferred.await(closedSignal);
-    }
-
-    flushLiveBuffer();
-    return yield* Deferred.await(closedSignal);
-  });
-}
-
-function recoverReplayOnlyAfterAttachFailure<
+/**
+ * One connection, for as long as its socket is open.
+ *
+ * Client frames are decoded as they arrive, so a malformed one is answered at once; valid ones wait in a queue until
+ * the connection is ready, then apply in arrival order. The rest of the connection (target, preamble, replay, live
+ * attach) runs in its own fiber, so a socket that closes mid-replay interrupts the replay rather than waiting for it.
+ */
+const runConnection = Effect.fn('ptyStream.connection')(function* <
   Target,
   Preamble extends { readonly type: string },
->(input: {
-  readonly socket: SocketLike;
-  readonly strategy: PtyStreamStrategy<Target, Preamble>;
-  readonly target: Target & { readonly ptyProcessId: number };
-  readonly cause: unknown;
-  readonly sendMessage: (message: StreamSocketMessage<Preamble>) => void;
-  readonly closed: () => boolean;
-}) {
-  return Effect.gen(function* () {
-    if (!input.strategy.recoverAttachFailure) return null;
-    const pty = yield* PtyService;
-    const targetResult = yield* input.strategy
-      .recoverAttachFailure({ target: input.target, cause: input.cause })
-      .pipe(Effect.either);
-    if (Either.isLeft(targetResult) || targetResult.right === null) return null;
+  E,
+  R,
+>(
+  socket: WebSocketLike,
+  request: FastifyRequest,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+) {
+  const ws = yield* acquireWsConnection(socket);
+  const clientMessages = yield* Queue.unbounded<PtyWebSocketInputMessage>();
 
-    const recoveredTarget = targetResult.right;
-    const planResult =
-      recoveredTarget.ptyProcessId === null
-        ? Either.right(null)
-        : yield* pty
-            .getAttachmentPlan({ ptyProcessId: recoveredTarget.ptyProcessId })
-            .pipe(Effect.either);
-    if (Either.isLeft(planResult) || planResult.right?.live) return null;
+  yield* ws.incoming.pipe(
+    Stream.runForEach((raw) => {
+      const message = strategy.decodeClientMessage(raw);
+      return message === null
+        ? rejectClientMessage(ws, strategy, { type: 'error', code: 'invalid_message' })
+        : Queue.offer(clientMessages, message);
+    }),
+    forkSupervised(ws, strategy),
+  );
 
-    const plan = planResult.right;
-    input.sendMessage(input.strategy.preamble({ target: recoveredTarget, plan }));
-    if (input.closed()) return { status: 'recovered' as const, target: recoveredTarget };
+  yield* streamProcess(ws, request, strategy).pipe(
+    Effect.flatMap((ready) =>
+      ready === null
+        ? Effect.void
+        : Stream.fromQueue(clientMessages).pipe(
+            Stream.runForEach((message) => handleClientMessage(ws, strategy, ready, message)),
+            forkSupervised(ws, strategy),
+          ),
+    ),
+    forkSupervised(ws, strategy),
+  );
 
+  yield* ws.closed;
+});
+
+/**
+ * Resolves the target, sends the preamble, replays and attaches. Returns the ready connection, or `null` when it
+ * ended the connection with an error frame. Live output reaches the socket only after the replay, in order.
+ */
+const streamProcess = Effect.fnUntraced(function* <
+  Target,
+  Preamble extends { readonly type: string },
+  E,
+  R,
+>(ws: WsConnection, request: FastifyRequest, strategy: PtyStreamStrategy<Target, Preamble, E, R>) {
+  const pty = yield* PtyService;
+  const sendOutput = outputSender(ws, strategy);
+
+  const targetResult = yield* strategy.resolveTarget(request).pipe(Effect.result);
+  if (Result.isFailure(targetResult)) {
+    return yield* closeWithMappedError(ws, strategy, strategy.logLabel, targetResult.failure);
+  }
+  const target = targetResult.success;
+
+  const planResult =
+    target.ptyProcessId === null
+      ? Result.succeed(null)
+      : yield* pty.getAttachmentPlan({ ptyProcessId: target.ptyProcessId }).pipe(Effect.result);
+  if (Result.isFailure(planResult)) {
+    return yield* closeWithMappedError(
+      ws,
+      strategy,
+      `${strategy.logLabel} attachment plan failed`,
+      planResult.failure,
+    );
+  }
+  const plan = planResult.success;
+  yield* ws.send(strategy.preamble({ target, plan }));
+
+  if (target.ptyProcessId === null || !plan?.live) {
     if (plan) {
-      const replayResult = yield* pty
-        .replay({
-          session: plan.session,
-          bytes: plan.replayBytes,
-          send: (message) => input.sendMessage(message),
-        })
-        .pipe(Effect.either);
-      if (Either.isLeft(replayResult)) {
-        closeWithMappedError(
-          input.socket,
-          input.strategy,
-          `${input.strategy.logLabel} replay failed after attach recovery`,
-          replayResult.left,
+      const replayResult = yield* replayFrames(sendOutput, (send) =>
+        pty.replay({ session: plan.session, bytes: plan.replayBytes, send }),
+      );
+      if (Result.isFailure(replayResult)) {
+        return yield* closeWithMappedError(
+          ws,
+          strategy,
+          `${strategy.logLabel} replay failed`,
+          replayResult.failure,
         );
-        return { status: 'closed' as const };
       }
     }
+    return yield* replayOnlyReady(ws, strategy, target);
+  }
 
-    return { status: 'recovered' as const, target: recoveredTarget };
-  });
-}
+  const liveTarget = { ...target, ptyProcessId: target.ptyProcessId };
+  const live = yield* Queue.unbounded<PtyStreamOutputMessageSet>();
+  const forwardLive = Stream.fromQueue(live).pipe(
+    Stream.runForEach(sendOutput),
+    forkSupervised(ws, strategy),
+  );
 
-function attachLive<Target, Preamble extends { readonly type: string }>(input: {
-  readonly socket: SocketLike;
-  readonly strategy: PtyStreamStrategy<Target, Preamble>;
-  readonly target: Target & { readonly ptyProcessId: number };
-  readonly sendLive: (message: PtyStreamOutputMessageSet) => void;
-}) {
-  return Effect.gen(function* () {
-    const pty = yield* PtyService;
-    yield* input.strategy.beforeAttach(input.target);
-    const attachment = yield* pty.attach({
-      ptyProcessId: input.target.ptyProcessId,
-      mode: input.strategy.mode,
-      supersede: input.strategy.supersede(input.target),
-      send: input.sendLive,
-      displace: (attached) =>
-        input.strategy.displace({
-          target: input.target,
-          controls: {
-            send: (message) => send(input.socket, message),
-            close: () => input.socket.close(),
-            detach: attached.detach,
-          },
-        }),
-    });
-    const detach = makeIdempotentEffect(attachment.detach);
-    yield* Effect.addFinalizer(() => detach());
-    const release = yield* input.strategy.registerAttachment({
-      target: input.target,
-      attachment,
-      controls: {
-        send: (message) => send(input.socket, message),
-        close: () => input.socket.close(),
-        detach: detach(),
-      },
-    });
-    yield* Effect.addFinalizer(() => Effect.sync(release));
-    return attachment;
-  });
-}
+  // A backend without a byte cursor cannot say where its replay ends, so it replays first and goes live from the
+  // attach.
+  if (plan.replayBytes === null) {
+    const replayResult = yield* replayFrames(sendOutput, (send) =>
+      pty.replay({ session: plan.session, bytes: plan.replayBytes, send }),
+    );
+    if (Result.isFailure(replayResult)) {
+      return yield* closeWithMappedError(
+        ws,
+        strategy,
+        `${strategy.logLabel} replay failed`,
+        replayResult.failure,
+      );
+    }
+  }
 
-function processClientMessages<Target, Preamble extends { readonly type: string }>(
-  strategy: PtyStreamStrategy<Target, Preamble>,
-  clientMessages: Queue.Queue<PtyWebSocketInputMessage>,
-  ready: Deferred.Deferred<
-    {
-      readonly target: Target & { readonly ptyProcessId: number | null };
-      readonly attachmentId: symbol | null;
-    },
-    never
-  >,
-  sendMessage: (message: PtyStreamErrorMessage) => void,
+  const attachResult = yield* attachLive(ws, strategy, liveTarget, live).pipe(Effect.result);
+  if (Result.isFailure(attachResult)) {
+    const recovered = yield* recoverReplayOnlyAfterAttachFailure(
+      ws,
+      strategy,
+      liveTarget,
+      attachResult.failure,
+    );
+    if (recovered?.status === 'recovered') {
+      return yield* replayOnlyReady(ws, strategy, recovered.target);
+    }
+    if (recovered?.status === 'closed') return null;
+    return yield* closeWithMappedError(
+      ws,
+      strategy,
+      `${strategy.logLabel} live attach failed`,
+      attachResult.failure,
+    );
+  }
+  const attachment = attachResult.success;
+
+  // Output produced while the replay runs waits in `live`, so the client sees the log up to the attach instant and
+  // then everything after it, with no gap and no duplicate.
+  if (plan.replayBytes !== null && attachment.replayBytes !== null) {
+    const replayResult = yield* replayFrames(sendOutput, (send) =>
+      pty.replay({ session: plan.session, bytes: attachment.replayBytes, send }),
+    );
+    if (Result.isFailure(replayResult)) {
+      return yield* closeWithMappedError(
+        ws,
+        strategy,
+        `${strategy.logLabel} replay failed`,
+        replayResult.failure,
+      );
+    }
+  }
+
+  yield* forwardLive;
+  return { target, attachmentId: attachment.attachmentId } satisfies ReadyConnection<Target>;
+});
+
+const replayOnlyReady = Effect.fnUntraced(function* <
+  Target,
+  Preamble extends { readonly type: string },
+  E,
+  R,
+>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  target: StreamTarget<Target>,
 ) {
-  return Effect.forever(
-    Effect.gen(function* () {
-      const message = yield* Queue.take(clientMessages);
-      const attachment = yield* Deferred.await(ready);
-      const result = yield* strategy
-        .handleClientMessage({
-          target: attachment.target,
-          attachmentId: attachment.attachmentId,
-          message,
-        })
-        .pipe(Effect.either);
-      if (Either.isLeft(result)) {
-        const error = strategy.mapError(result.left);
-        sendMessage({ type: 'error', ...error });
-      }
+  if (strategy.closeOnReplayOnly) yield* ws.close;
+  return { target, attachmentId: null } satisfies ReadyConnection<Target>;
+});
+
+const recoverReplayOnlyAfterAttachFailure = Effect.fnUntraced(function* <
+  Target,
+  Preamble extends { readonly type: string },
+  E,
+  R,
+>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  target: LiveTarget<Target>,
+  cause: E | PtyAttachError,
+) {
+  if (!strategy.recoverAttachFailure) return null;
+  const pty = yield* PtyService;
+  const targetResult = yield* strategy.recoverAttachFailure({ target, cause }).pipe(Effect.result);
+  if (Result.isFailure(targetResult) || targetResult.success === null) return null;
+
+  const recoveredTarget = targetResult.success;
+  const planResult =
+    recoveredTarget.ptyProcessId === null
+      ? Result.succeed(null)
+      : yield* pty
+          .getAttachmentPlan({ ptyProcessId: recoveredTarget.ptyProcessId })
+          .pipe(Effect.result);
+  if (Result.isFailure(planResult) || planResult.success?.live) return null;
+
+  const plan = planResult.success;
+  yield* ws.send(strategy.preamble({ target: recoveredTarget, plan }));
+  if (plan) {
+    const replayResult = yield* replayFrames(outputSender(ws, strategy), (send) =>
+      pty.replay({ session: plan.session, bytes: plan.replayBytes, send }),
+    );
+    if (Result.isFailure(replayResult)) {
+      yield* closeWithMappedError(
+        ws,
+        strategy,
+        `${strategy.logLabel} replay failed after attach recovery`,
+        replayResult.failure,
+      );
+      return { status: 'closed' as const };
+    }
+  }
+  return { status: 'recovered' as const, target: recoveredTarget };
+});
+
+/**
+ * Attaches for the life of the connection's scope. Live output goes to `live` from the attach instant; the scope
+ * closing detaches it (the attachment is scoped) and unregisters it from the strategy.
+ */
+const attachLive = Effect.fnUntraced(function* <
+  Target,
+  Preamble extends { readonly type: string },
+  E,
+  R,
+>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  target: LiveTarget<Target>,
+  live: Queue.Enqueue<PtyStreamOutputMessageSet>,
+) {
+  const pty = yield* PtyService;
+  yield* strategy.beforeAttach(target);
+  const attachment = yield* pty.attach({
+    ptyProcessId: target.ptyProcessId,
+    mode: strategy.mode,
+    supersede: strategy.supersede(target),
+    send: (message) => {
+      Queue.offerUnsafe(live, message);
+    },
+    displace: (attached) =>
+      strategy.displace({
+        target,
+        controls: { send: ws.send, close: ws.close, detach: attached.detach },
+      }),
+  });
+  const release = yield* strategy
+    .registerAttachment({
+      target,
+      attachment,
+      controls: { send: ws.send, close: ws.close, detach: attachment.detach },
+    })
+    .pipe(Effect.tapError(() => attachment.detach));
+  yield* Effect.addFinalizer(() => Effect.sync(release));
+  return attachment;
+});
+
+/**
+ * Runs one replay. `PtyService.replay` hands frames to a synchronous callback; a child fiber writes them to the
+ * socket in order while the replay runs, and every frame is written before this returns. Interrupting it (the socket
+ * closed) stops the replay and its writer together.
+ */
+const replayFrames = Effect.fnUntraced(function* <E, R>(
+  sendOutput: (message: PtyStreamOutputMessageSet) => Effect.Effect<void>,
+  replay: (send: (message: PtyStreamOutputMessageSet) => void) => Effect.Effect<void, E, R>,
+) {
+  const frames = yield* Queue.unbounded<PtyStreamOutputMessageSet, Cause.Done>();
+  const writer = yield* Stream.fromQueue(frames).pipe(
+    Stream.runForEach(sendOutput),
+    Effect.forkChild,
+  );
+  const result = yield* replay((message) => {
+    Queue.offerUnsafe(frames, message);
+  }).pipe(Effect.ensuring(Queue.end(frames)), Effect.result);
+  yield* Fiber.join(writer);
+  return result;
+});
+
+/** Applies one client message; a failure is answered with the strategy's error frame. */
+function handleClientMessage<Target, Preamble extends { readonly type: string }, E, R>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  ready: ReadyConnection<Target>,
+  message: PtyWebSocketInputMessage,
+) {
+  return strategy
+    .handleClientMessage({ ...ready, message })
+    .pipe(
+      Effect.catch((error) =>
+        rejectClientMessage(ws, strategy, { type: 'error', ...strategy.mapError(error) }),
+      ),
+    );
+}
+
+/**
+ * Forks a part of the connection into its scope. A defect in any part is reported as a crash, which closes the socket
+ * and so ends the connection.
+ */
+function forkSupervised<Target, Preamble extends { readonly type: string }, E, R>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+) {
+  return <A, R2>(effect: Effect.Effect<A, never, R2>) =>
+    effect.pipe(
+      Effect.catchDefect((defect) => reportCrash(ws, strategy, defect)),
+      Effect.forkScoped,
+      Effect.asVoid,
+    );
+}
+
+function outputSender<Target, Preamble extends { readonly type: string }, E, R>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+) {
+  return (message: PtyStreamOutputMessageSet) =>
+    message.type === 'exit' && strategy.closeOnExit
+      ? Effect.andThen(ws.send(message), ws.close)
+      : ws.send(message);
+}
+
+function rejectClientMessage<Target, Preamble extends { readonly type: string }, E, R>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  message: PtyStreamErrorMessage,
+) {
+  const send = ws.send(message);
+  return strategy.closeOnClientError ? Effect.andThen(send, ws.close) : send;
+}
+
+/** Ends the connection with the strategy's error frame for `error`; the scope closes when the socket does. */
+function closeWithMappedError<Target, Preamble extends { readonly type: string }, E, R>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  operation: string,
+  error: E | PtyAttachError,
+) {
+  const mapped = strategy.mapError(error);
+  return Effect.logWarning(`[runtime] ${operation}`).pipe(
+    Effect.annotateLogs({
+      errorCode: mapped.code,
+      ...(mapped.message === undefined ? {} : { errorMessage: mapped.message }),
+      cause: describeOperationalCause(error),
     }),
+    Effect.andThen(ws.send({ type: 'error', ...mapped })),
+    Effect.andThen(ws.close),
+    Effect.as(null),
   );
 }
 
-function closeWithMappedError<Target, Preamble extends { readonly type: string }>(
-  socket: SocketLike,
-  strategy: PtyStreamStrategy<Target, Preamble>,
-  operation: string,
-  cause: unknown,
+/** A defect in a connection is reported once, to the log and to the client, and ends the connection. */
+function reportCrash<Target, Preamble extends { readonly type: string }, E, R>(
+  ws: WsConnection,
+  strategy: PtyStreamStrategy<Target, Preamble, E, R>,
+  defect: unknown,
 ) {
-  const error = strategy.mapError(cause);
-  console.warn(`[runtime] ${operation}`, {
-    errorCode: error.code,
-    errorMessage: error.message,
-    cause,
-  });
-  send(socket, { type: 'error', ...error });
-  setImmediate(() => socket.close());
-}
-
-function send<Preamble extends { readonly type: string }>(
-  socket: { readonly readyState: number; readonly send: (data: string) => void },
-  message: StreamSocketMessage<Preamble>,
-) {
-  if (socket.readyState === 1) socket.send(JSON.stringify(message));
-}
-
-function makeIdempotentEffect(effect: Effect.Effect<void, never>) {
-  let done = false;
-  return () =>
-    Effect.gen(function* () {
-      if (done) return;
-      done = true;
-      yield* effect;
-    });
+  const message = errorMessage(defect);
+  return Effect.logError(`[runtime] ${strategy.logLabel} crashed`, Cause.die(defect)).pipe(
+    Effect.annotateLogs({ errorCode: 'unknown', errorMessage: message }),
+    Effect.andThen(ws.send({ type: 'error', code: 'unknown', message })),
+    Effect.andThen(ws.close),
+  );
 }

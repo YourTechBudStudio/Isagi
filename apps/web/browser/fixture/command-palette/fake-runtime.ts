@@ -8,6 +8,7 @@ import type {
   WorktreeCommandsOutput,
 } from '@isagi/contracts';
 
+import { requestBodyText } from '../test-support/request-body.js';
 import { createResponseGate, FIXTURE_PATH_TREE, suggestFromTree } from './path-world.js';
 import {
   FIXTURE_CATALOG,
@@ -387,7 +388,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     if (method === 'POST' && path === '/workspace/reconcile') return success({ findings: [] });
 
     if (method === 'POST' && path === '/paths/suggestions') {
-      const body = JSON.parse(String(init?.body ?? '{}')) as {
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as {
         input?: string;
         limit?: number;
       };
@@ -413,7 +414,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     }
 
     if (method === 'POST' && path === '/projects') {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { path?: string };
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as { path?: string };
       const id = nextRequestId++;
       const requestedPath = body.path ?? '';
 
@@ -446,7 +447,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     const relocate = /^\/projects\/(\d+)\/relocate$/.exec(path);
     if (method === 'POST' && relocate) {
       const projectId = Number(relocate[1]);
-      const body = JSON.parse(String(init?.body ?? '{}')) as { path?: string };
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as { path?: string };
       const id = nextRequestId++;
       const requestedPath = body.path ?? '';
 
@@ -535,7 +536,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     const run = /^\/worktrees\/(\d+)\/commands\/run$/.exec(path);
     if (method === 'POST' && run) {
       const worktreeId = Number(run[1]);
-      const body = JSON.parse(String(init?.body ?? '{}')) as { commandName?: string };
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as { commandName?: string };
       const commandName = body.commandName ?? '';
       runs.push({ worktreeId, commandName });
 
@@ -565,7 +566,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     if (method === 'POST' && action) {
       const worktreeId = Number(action[1]);
       const kind = action[2] === 'restart' ? 'restart' : 'stop';
-      const body = JSON.parse(String(init?.body ?? '{}')) as { commandName?: string };
+      const body = JSON.parse(requestBodyText(init?.body) ?? '{}') as { commandName?: string };
       const commandName = body.commandName ?? '';
       actions.push({ action: kind, worktreeId, commandName });
 

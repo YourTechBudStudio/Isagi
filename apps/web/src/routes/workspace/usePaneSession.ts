@@ -1,13 +1,18 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { Effect } from 'effect';
+import { useAtomValue } from '@effect/atom-react';
+import { Effect, Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { ControlPlaneSnapshot, HarnessLaunchProjection } from '@isagi/contracts';
+import type { HarnessLaunchProjection } from '@isagi/contracts';
 
 import { ptyCopy } from '../../copy/index.js';
 import { harnessLaunch } from '../../lib/control-plane/launchability.js';
-import { controlPlaneQueryKey, useControlPlaneQuery } from '../../lib/control-plane/queries.js';
-import { runRuntimeEffect } from '../../lib/runtime/run.js';
+import { controlPlaneAtom, controlPlaneQuery } from '../../lib/control-plane/queries.js';
+import type { RuntimeApi } from '../../lib/runtime/client.js';
+import { keys } from '../../lib/state/keys.js';
+import { refreshAndRead } from '../../lib/state/policy.js';
+import { useAppRun, useRegistry } from '../../lib/state/registry.js';
+import { invalidateKeys, provideApp } from '../../lib/state/runtime.js';
 import {
   paneNotice,
   paneStatusLabel,
@@ -30,7 +35,6 @@ import {
   ptyStreamConnectionActive,
   type PtyStreamConnectionState,
 } from '../../lib/workspace/pty-stream/index.js';
-import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/query-keys.js';
 import {
   claimPaneSession,
   createPaneSession,
@@ -102,8 +106,9 @@ export function usePaneSession({
   paneAttention,
   autoAttach = false,
 }: UsePaneSessionInput): UsePaneSessionResult {
-  const queryClient = useQueryClient();
-  const controlPlane = useControlPlaneQuery();
+  const registry = useRegistry();
+  const app = useAppRun();
+  const controlPlane = Option.getOrUndefined(AsyncResult.value(useAtomValue(controlPlaneAtom)));
   const autoAttachSessionKeyRef = useRef<string | null>(null);
 
   const [userAttach, setUserAttach] = useState(false);
@@ -116,10 +121,10 @@ export function usePaneSession({
   // stale socket/claim failure. Terminals are always launchable.
   const launch: HarnessLaunchProjection = useMemo(
     () =>
-      session?.kind === 'agent_session' && controlPlane.data
-        ? harnessLaunch(controlPlane.data, session.harness)
+      session?.kind === 'agent_session' && controlPlane
+        ? harnessLaunch(controlPlane, session.harness)
         : { status: 'launchable' },
-    [session, controlPlane.data],
+    [session, controlPlane],
   );
 
   const sessionId = session?.id ?? null;
@@ -133,8 +138,9 @@ export function usePaneSession({
     if (session === null) {
       return Effect.fail(new Error('No pane session is bound.'));
     }
-    return resolveSessionPtyWebSocketUrl(worktreeId, paneId, session);
-  }, [paneId, session, worktreeId]);
+    // The terminal subsystem runs this effect itself, so it gets the app's services bound in.
+    return provideApp(registry, resolveSessionPtyWebSocketUrl(worktreeId, paneId, session));
+  }, [paneId, registry, session, worktreeId]);
 
   const handleCustomKey = useCallback(
     (event: KeyboardEvent, sendInput: (data: string) => void) =>
@@ -188,14 +194,14 @@ export function usePaneSession({
   useEffect(() => {
     if (connection.phase === 'errored' || connection.phase === 'disconnected') {
       setUserAttach(false);
-      void queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
+      invalidateKeys(registry, [keys.surface(surfaceId)]);
       // A launch-block code over the socket means the same thing as at claim time:
       // reproject the pane from a fresh control-plane snapshot.
       if (isLaunchBlockCode(connection.notice?.code)) {
-        void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+        invalidateKeys(registry, [keys.controlPlane]);
       }
     }
-  }, [connection.phase, connection.notice?.code, queryClient, surfaceId]);
+  }, [connection.phase, connection.notice?.code, registry, surfaceId]);
 
   const attach = useCallback(() => {
     setUserAttach(true);
@@ -219,24 +225,25 @@ export function usePaneSession({
   // "Check again" for an unavailable pane: refresh authoritative host facts first,
   // reproject from the fresh snapshot, and only then retry attachment if the
   // harness is now launchable. Repeating the claim against stale facts would just
-  // fail the same way.
+  // fail the same way. The snapshot read begins after the refresh, so it reflects
+  // it; a read that fails attaches nothing (there is no fresh fact to act on).
   const checkAgain = useCallback(async () => {
     setChecking(true);
     try {
-      await runRuntimeEffect(refreshInventory());
-      await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
-      const fresh = queryClient.getQueryData<ControlPlaneSnapshot>(controlPlaneQueryKey);
+      const fresh = await app(
+        Effect.andThen(refreshInventory(), Effect.option(refreshAndRead(controlPlaneQuery))),
+      );
       if (
-        fresh &&
+        Option.isSome(fresh) &&
         session?.kind === 'agent_session' &&
-        harnessLaunch(fresh, session.harness).status === 'launchable'
+        harnessLaunch(fresh.value, session.harness).status === 'launchable'
       ) {
         attach();
       }
     } finally {
       setChecking(false);
     }
-  }, [queryClient, session, attach]);
+  }, [app, session, attach]);
 
   const startFresh = useCallback(() => {
     if (session === null || creating) {
@@ -244,15 +251,12 @@ export function usePaneSession({
     }
     setCreating(true);
     setStartFreshError(null);
-    void runRuntimeEffect(
-      createPaneSession(worktreeId, startFreshInputForSession(paneId, session)),
-    ).then(
-      async () => {
+    void app(createPaneSession(worktreeId, startFreshInputForSession(paneId, session))).then(
+      () => {
         // The new session arrives via the surfaceDetail refetch, which swaps the
         // bound session id and resets this hook through the identity effect. We
         // never claim the old (replaced) session.
-        await queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
-        await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+        invalidateKeys(registry, [keys.surface(surfaceId), keys.workspace]);
       },
       (error: unknown) => {
         // Surface the failure on the recovery prompt itself: "start fresh" is the
@@ -262,7 +266,7 @@ export function usePaneSession({
         setCreating(false);
       },
     );
-  }, [session, creating, worktreeId, paneId, surfaceId, queryClient]);
+  }, [session, creating, app, worktreeId, paneId, surfaceId, registry]);
 
   const view = useMemo(
     () => derivePaneView(session, paneConnectionSnapshot(connection), launch),
@@ -335,7 +339,7 @@ function resolveSessionPtyWebSocketUrl(
   worktreeId: number,
   paneId: number,
   session: PtyPaneSession,
-): Effect.Effect<string, Error> {
+): Effect.Effect<string, Error, RuntimeApi> {
   return Effect.gen(function* () {
     const claim = yield* claimPaneSession(worktreeId, claimInputForSession(paneId, session));
     const urlEffect =

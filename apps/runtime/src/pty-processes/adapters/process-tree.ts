@@ -1,8 +1,9 @@
-import { execFile } from 'node:child_process';
 import process from 'node:process';
-import { promisify } from 'node:util';
 
-import { Effect } from 'effect';
+import { Duration, Effect } from 'effect';
+
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
+import { execCommand } from '../../platform/process/index.js';
 
 // A PTY's own process is only the root of what it runs. Agents, shells, test
 // runners, and dev servers start children that can leave the root's process
@@ -11,8 +12,6 @@ import { Effect } from 'effect';
 // session points at them any more. Termination therefore snapshots the whole
 // tree while the root still anchors it, signals that snapshot, and finally
 // SIGKILLs whatever of it is still alive.
-
-const execFileAsync = promisify(execFile);
 
 export interface ProcessTableRow {
   readonly pid: number;
@@ -81,19 +80,35 @@ export function killProcessTreeSurvivors(
     if (!snapshot) return none;
     const rows = yield* readProcessTable;
     if (rows === null) return none;
+    const tree = { ptyProcessId: snapshot.ptyProcessId, rootPid: snapshot.rootPid };
     if (options.requireRootExited && isRootStillAlive(snapshot, rows)) {
-      console.warn(
-        `[runtime] Not sweeping PTY process tree because its root is still alive ptyProcessId=${snapshot.ptyProcessId} rootPid=${snapshot.rootPid}`,
-      );
+      yield* Effect.logWarning(
+        'Not sweeping PTY process tree because its root is still alive',
+      ).pipe(Effect.annotateLogs(tree));
       return none;
     }
     const sweep = sweepProcessTreeSurvivors(snapshot, rows, signalPid);
     if (sweep.killedPids.length > 0) {
-      console.warn(
-        `[runtime] SIGKILLed PTY process tree survivors ptyProcessId=${snapshot.ptyProcessId} rootPid=${snapshot.rootPid} pids=${sweep.killedPids.join(',')}`,
+      yield* Effect.logWarning('SIGKILLed PTY process tree survivors').pipe(
+        Effect.annotateLogs({ ...tree, pids: sweep.killedPids.join(',') }),
       );
     }
     return { killedRoot: sweep.killedRoot };
+  });
+}
+
+const DESCENDANT_EXIT_POLL = Duration.millis(50);
+
+// Waits until every snapshotted descendant has exited, polling with signal 0 so a
+// grace period can end once the tree is gone. Unbounded: the caller bounds it by
+// its grace. Liveness errs towards waiting (a reused pid only extends the wait up
+// to that bound), and processes the snapshot never saw are left to the final sweep.
+export function awaitProcessTreeDescendantsExit(
+  snapshot: ProcessTreeSnapshot | null,
+): Effect.Effect<void> {
+  const anyAlive = () => snapshot?.descendants.some((row) => isPidAlive(row.pid)) ?? false;
+  return Effect.gen(function* () {
+    while (anyAlive()) yield* Effect.sleep(DESCENDANT_EXIT_POLL);
   });
 }
 
@@ -202,29 +217,30 @@ export function processTreeSurvivors(
 const readProcessTable: Effect.Effect<ProcessTableRow[] | null> =
   process.platform === 'win32' ? Effect.succeed(null) : readPosixProcessTable();
 
-function readPosixProcessTable() {
-  return Effect.tryPromise({
-    try: async () => {
-      const { stdout } = await execFileAsync('ps', ['-Ao', 'pid=,ppid=,pgid=,lstart='], {
-        encoding: 'utf8',
-        env: { ...process.env, LC_ALL: 'C' },
-        maxBuffer: 16 * 1024 * 1024,
-        timeout: 5_000,
-      });
-      return parseProcessTable(stdout);
-    },
-    catch: (cause) => cause,
+function readPosixProcessTable(): Effect.Effect<ProcessTableRow[] | null> {
+  return execCommand('ps', ['-Ao', 'pid=,ppid=,pgid=,lstart='], {
+    env: { LC_ALL: 'C' },
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: '5 seconds',
   }).pipe(
-    Effect.catchAll((cause) =>
-      Effect.sync(() => {
-        console.warn(
-          '[runtime] Could not read the process table; PTY descendants will not be swept',
-          cause,
-        );
-        return null;
-      }),
+    Effect.map(({ stdout }) => parseProcessTable(stdout)),
+    Effect.catch((error) =>
+      Effect.logWarning('Could not read the process table; PTY descendants will not be swept').pipe(
+        Effect.annotateLogs({ cause: describeOperationalCause(error) }),
+        Effect.as(null),
+      ),
     ),
   );
+}
+
+// Signal 0 delivers nothing; it only asks whether the pid exists and is ours to signal.
+function isPidAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Reports whether the signal was delivered.

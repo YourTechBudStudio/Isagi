@@ -2,7 +2,7 @@ import { and, asc, eq, gt, sql } from 'drizzle-orm';
 
 import type { WorkflowCheckpointScopeDto } from '@isagi/contracts';
 
-import { workflowCheckpoints } from '../../persistence/schema.js';
+import { workflowCheckpoints } from '../tables.js';
 import { now, toJson, type CheckpointRow, type Db } from './rows.js';
 
 /**

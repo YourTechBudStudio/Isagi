@@ -8,20 +8,20 @@ import {
   controlPlaneSnapshotSchema,
   refreshInventoryOutputSchema,
 } from './types.js';
-export const controlPlaneErrorSchema = Schema.Union(
+export const controlPlaneErrorSchema = Schema.Union([
   apiInfrastructureErrorSchema,
   Schema.Struct({
-    code: Schema.Literal(
+    code: Schema.Literals([
       'harness_policy_conflict',
       'harness_config_invalid',
       'control_plane_not_ready',
-    ),
+    ]),
     status: Schema.Number,
     message: Schema.String,
     requestId: Schema.String,
     data: Schema.optional(Schema.Unknown),
   }),
-);
+]);
 export const controlPlaneEndpoints = {
   get: {
     id: 'controlPlane.get',

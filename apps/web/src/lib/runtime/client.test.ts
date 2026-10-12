@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 
 import type {
   AddProjectOutput,
@@ -14,7 +14,10 @@ import type {
 } from '@isagi/contracts';
 import { RuntimeApiError, RuntimeDecodeError } from '@isagi/runtime-client';
 
-import { createRuntimeClient } from './client.js';
+import { makeRuntimeApi, RuntimeApi } from './client.js';
+
+/** The runtime API against one fixed URL. */
+const runtimeApiAt = (url: string) => makeRuntimeApi(Effect.succeed(url));
 
 const project = {
   id: 1,
@@ -84,9 +87,7 @@ test('runtime client requests and decodes client settings without applying defau
     );
   }) as typeof fetch;
 
-  const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').fetchClientSettings(),
-  );
+  const output = await Effect.runPromise(runtimeApiAt('http://runtime.test').fetchClientSettings());
 
   assert.equal(requestedUrl, 'http://runtime.test/api/v1/client-settings');
   assert.deepEqual(output, clientSettings);
@@ -104,7 +105,7 @@ test('runtime client rejects malformed client settings instead of applying defau
   );
 
   const error = await Effect.runPromise(
-    Effect.flip(createRuntimeClient('http://runtime.test').fetchClientSettings()),
+    Effect.flip(runtimeApiAt('http://runtime.test').fetchClientSettings()),
   );
 
   assert.ok(error instanceof RuntimeDecodeError);
@@ -118,7 +119,7 @@ test('runtime client decodes minimal mutation success envelopes', async () => {
   );
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').addProject('/repo/isagi'),
+    runtimeApiAt('http://runtime.test').addProject('/repo/isagi'),
   );
 
   assert.deepEqual(output, addProjectOutput);
@@ -140,7 +141,7 @@ test('runtime client calls the worktree commands endpoint', async () => {
   }) as typeof fetch;
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').fetchWorktreeCommands(10),
+    runtimeApiAt('http://runtime.test').fetchWorktreeCommands(10),
   );
 
   assert.equal(requestedUrl, 'http://runtime.test/api/v1/worktrees/10/commands');
@@ -153,12 +154,34 @@ test('runtime client calls the worktree commands endpoint', async () => {
 });
 
 test('runtime client resolves command log stream websocket URLs', () => {
-  const client = createRuntimeClient('https://runtime.test/base/');
+  const client = runtimeApiAt('https://runtime.test/base/');
 
   assert.equal(
-    client.resolveCommandLogStreamWebSocketUrl(10, 'dev server'),
+    Effect.runSync(client.resolveCommandLogStreamWebSocketUrl(10, 'dev server')),
     'wss://runtime.test/api/v1/worktrees/10/commands/log-stream?commandName=dev+server',
   );
+});
+
+test('runtime client fails socket URLs for a malformed runtime URL with RuntimeUrlUnavailable, not a defect', () => {
+  // Malformed and carrying credentials: whatever the URL parser says about it, the message must not echo it.
+  const client = runtimeApiAt('http://user:secret@runtime.test:not-a-port');
+
+  for (const resolve of [
+    client.resolveRuntimeEventsWebSocketUrl(),
+    client.resolveCommandLogStreamWebSocketUrl(10, 'dev server'),
+    client.resolveTerminalSessionPtyWebSocketUrl(3, 'token'),
+    client.resolveAgentSessionPtyWebSocketUrl(4),
+    client.workflowCheckpointFileUrl(5, 'notes.md'),
+  ]) {
+    const exit = Effect.runSyncExit(resolve);
+    assert.ok(Exit.isFailure(exit), 'the URL must not resolve');
+    const failure = Cause.findErrorOption(exit.cause);
+    assert.ok(Option.isSome(failure), 'a typed failure, not a defect');
+    assert.equal(failure.value._tag, 'RuntimeUrlUnavailable');
+    assert.equal(failure.value.message, 'The runtime URL is not a valid URL.');
+    assert.ok(!failure.value.message.includes('secret'));
+    assert.ok(failure.value.cause instanceof TypeError, 'the parser error stays in cause');
+  }
 });
 
 test('runtime client calls surface title and delete endpoints', async () => {
@@ -178,7 +201,7 @@ test('runtime client calls surface title and delete endpoints', async () => {
     );
   }) as typeof fetch;
 
-  const client = createRuntimeClient('http://runtime.test');
+  const client = runtimeApiAt('http://runtime.test');
   assert.deepEqual(await Effect.runPromise(client.renameSurfaceTitle(7, 'Terminal')), {
     surfaceId: 7,
     title: 'Terminal',
@@ -217,7 +240,7 @@ test('runtime client calls surface creation endpoint with initial pane', async (
   }) as typeof fetch;
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').createSurface(10, {
+    runtimeApiAt('http://runtime.test').createSurface(10, {
       initialPane: { kind: 'agent_session', harness: 'opencode' },
     }),
   );
@@ -251,7 +274,7 @@ test('runtime client sends workflow start inputs and origin in the request body'
   }) as typeof fetch;
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').startWorkflow({
+    runtimeApiAt('http://runtime.test').startWorkflow({
       workflowKey: 'argument-probe',
       inputs: {
         text: 'hello',
@@ -298,7 +321,7 @@ test('runtime client calls split pane endpoint with source pane and new pane spe
   }) as typeof fetch;
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').splitPane(10, {
+    runtimeApiAt('http://runtime.test').splitPane(10, {
       paneId: 7,
       direction: 'right',
       newPane: { kind: 'terminal_session' },
@@ -342,7 +365,7 @@ test('runtime client calls each rail order endpoint with its scope and anchor', 
     );
   }) as typeof fetch;
 
-  const client = createRuntimeClient('http://runtime.test');
+  const client = runtimeApiAt('http://runtime.test');
   // A null anchor is "move to the end", and it has to survive as JSON null
   // rather than being dropped from the body.
   assert.deepEqual(
@@ -395,7 +418,7 @@ test('runtime client surfaces rail order refusals as typed API errors', async ()
 
   const error = await Effect.runPromise(
     Effect.flip(
-      createRuntimeClient('http://runtime.test').moveSurfaceOrder(12, 123, {
+      runtimeApiAt('http://runtime.test').moveSurfaceOrder(12, 123, {
         beforeSurfaceId: 121,
       }),
     ),
@@ -449,7 +472,13 @@ function captureRequest(data: unknown) {
   globalThis.fetch = ((input, init) => {
     captured.url = String(input);
     captured.method = init?.method;
-    captured.body = typeof init?.body === 'string' ? init.body : null;
+    // The runtime client hands `fetch` its JSON text already encoded as UTF-8 bytes.
+    captured.body =
+      typeof init?.body === 'string'
+        ? init.body
+        : init?.body instanceof Uint8Array
+          ? new TextDecoder().decode(init.body)
+          : null;
     return Promise.resolve(
       new Response(JSON.stringify({ data, meta: { requestId: 'req-editor' } }), { status: 200 }),
     );
@@ -466,7 +495,7 @@ test('runtime client opens an editor by worktree path parameter, naming where an
   });
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').openEditor(10, { intoSurfaceId: 501 }),
+    runtimeApiAt('http://runtime.test').openEditor(10, { intoSurfaceId: 501 }),
   );
 
   assert.equal(captured.url, 'http://runtime.test/api/v1/worktrees/10/editor');
@@ -479,7 +508,7 @@ test('runtime client sends the ensure intent as a body, keyed by editor context'
   const captured = captureRequest({ editorContext: editorContextFacts });
 
   await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').ensureEditorRuntime(7, { intent: 'replace' }),
+    runtimeApiAt('http://runtime.test').ensureEditorRuntime(7, { intent: 'replace' }),
   );
 
   assert.equal(captured.url, 'http://runtime.test/api/v1/editor-contexts/7/runtime');
@@ -497,7 +526,7 @@ test('runtime client names the incarnation as a query, not a second path paramet
   });
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').editorDiagnostics(7, 48120),
+    runtimeApiAt('http://runtime.test').editorDiagnostics(7, 48120),
   );
 
   // Params, then query — the order `ApiEndpointRequestArgs` derives. Reversing
@@ -514,10 +543,71 @@ test('runtime client retries provisioning with no arguments at all', async () =>
   const captured = captureRequest({ provisioning: { status: 'checking', version: '4.135.0' } });
 
   const output = await Effect.runPromise(
-    createRuntimeClient('http://runtime.test').retryEditorProvisioning(),
+    runtimeApiAt('http://runtime.test').retryEditorProvisioning(),
   );
 
   assert.equal(captured.url, 'http://runtime.test/api/v1/editor/provisioning/retry');
   assert.equal(captured.method, 'POST');
   assert.deepEqual(output, { provisioning: { status: 'checking', version: '4.135.0' } });
+});
+
+test('RuntimeApi.layer resolves the runtime URL per request, so a restarted runtime is picked up', async (t) => {
+  const urls = ['http://runtime-a.test', 'http://runtime-b.test', 'http://runtime-c.test/base/'];
+  let resolutions = 0;
+  Object.assign(globalThis, {
+    window: { isagi: { getRuntimeUrl: () => Promise.resolve(urls[resolutions++]) } },
+  });
+  t.after(() => {
+    Reflect.deleteProperty(globalThis, 'window');
+  });
+  const requested: string[] = [];
+  globalThis.fetch = ((input) => {
+    requested.push(String(input));
+    return Promise.resolve(
+      Response.json({
+        data: { status: 'configured', worktreeId: 10, commands: [], removedCommands: [] },
+        meta: { requestId: 'req-commands' },
+      }),
+    );
+  }) as typeof fetch;
+
+  const program = RuntimeApi.use((api) => api.fetchWorktreeCommands(10));
+  await Effect.runPromise(Effect.provide(program, RuntimeApi.layer));
+  await Effect.runPromise(Effect.provide(program, RuntimeApi.layer));
+  const identity = await Effect.runPromise(
+    Effect.provide(
+      RuntimeApi.use((api) => api.runtimeIdentity()),
+      RuntimeApi.layer,
+    ),
+  );
+
+  assert.deepEqual(requested, [
+    'http://runtime-a.test/api/v1/worktrees/10/commands',
+    'http://runtime-b.test/api/v1/worktrees/10/commands',
+  ]);
+  assert.equal(
+    identity,
+    'http://runtime-c.test/base',
+    'identity is resolved per call and normalized',
+  );
+});
+
+test('RuntimeApi.layer fails a request with RuntimeUrlUnavailable when no runtime URL is configured', async (t) => {
+  Object.assign(globalThis, { window: {} });
+  t.after(() => {
+    Reflect.deleteProperty(globalThis, 'window');
+  });
+  globalThis.fetch = (() => Promise.reject(new Error('no request expected'))) as typeof fetch;
+
+  const failure = await Effect.runPromise(
+    Effect.flip(
+      Effect.provide(
+        RuntimeApi.use((api) => api.fetchWorkspace()),
+        RuntimeApi.layer,
+      ),
+    ),
+  );
+
+  assert.equal(failure._tag, 'RuntimeUrlUnavailable');
+  assert.match(failure.message, /No runtime URL configured/);
 });

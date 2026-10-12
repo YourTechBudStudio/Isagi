@@ -8,24 +8,25 @@ import { Effect, Schema, type Layer } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { createFixtureWorkspace, removeTree } from '../../git/tests/fixtures.js';
-import { RuntimeDatabase, type RuntimeDatabaseService } from '../../persistence/index.js';
+import { SurfaceService } from '../../environment/index.js';
 import {
   surfacePanes,
   worktreeEnvironmentStates,
-  worktrees,
   worktreeSurfaces,
-} from '../../persistence/schema.js';
-import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
+} from '../../environment/tables.js';
 // The surfaces layer is the only test layer that composes all three ordered
 // scopes at once, and this test is specifically about the three surviving
 // together. Rebuilding that graph here would be a second definition of the
 // same wiring.
-import { addPaneToSurface, testLayer } from '../../surfaces/tests/test-support.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceService } from '../workspace.service.js';
-import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../workspace.snapshot.js';
-import { liveWorkspaceLayer } from './live-workspace-support.js';
+import { addPaneToSurface, testLayer } from '../../environment/testing.js';
+import { SurfaceRepository } from '../../environment/testing.js';
+import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
+import { RuntimeDatabase } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
+import { worktrees } from '../../projects/tables.js';
+import { WorkspaceService } from '../service.js';
+import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../snapshot.js';
+import { liveWorkspaceLayer } from '../testing.js';
 
 /**
  * Order is durable or it is not a feature: a rank that only survives while the
@@ -37,7 +38,7 @@ import { liveWorkspaceLayer } from './live-workspace-support.js';
  * prove nothing beyond in-memory consistency.
  */
 
-type SurfaceTestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
+type SurfaceTestServices = Layer.Success<ReturnType<typeof testLayer>>;
 
 /** Runs one program against `dataRoot` in its own scope, then closes it. */
 function inFreshScope<A, E>(dataRoot: string, build: Effect.Effect<A, E, SurfaceTestServices>) {
@@ -46,7 +47,7 @@ function inFreshScope<A, E>(dataRoot: string, build: Effect.Effect<A, E, Surface
 
 function readSnapshot() {
   return Effect.gen(function* () {
-    const repository = yield* WorkspaceRepository;
+    const repository = yield* ProjectRepository;
     const surfaceRepository = yield* SurfaceRepository;
     return buildWorkspaceSnapshot(
       yield* repository.listProjects,
@@ -64,7 +65,7 @@ test('project, worktree, and surface order survive closing and reopening the dat
     const written = await inFreshScope(
       dataRoot,
       Effect.gen(function* () {
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         const surfaces = yield* SurfaceService;
 
         const projectIds: number[] = [];
@@ -206,11 +207,7 @@ test('a folder project, its environment, surfaces, panes, and focus survive loss
 
   /** One workspace scope: real service, real repository, real Git, own connection. */
   const inWorkspaceScope = <A, E>(
-    build: Effect.Effect<
-      A,
-      E,
-      RuntimeDatabaseService | WorkspaceRepositoryService | WorkspaceService
-    >,
+    build: Effect.Effect<A, E, RuntimeDatabase | ProjectRepository | WorkspaceService>,
   ) => Effect.runPromise(build.pipe(Effect.provide(liveWorkspaceLayer(dataRoot, {}))));
 
   try {
@@ -218,7 +215,7 @@ test('a folder project, its environment, surfaces, panes, and focus survive loss
     const registered = await inWorkspaceScope(
       Effect.gen(function* () {
         const service = yield* WorkspaceService;
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         const added = yield* service.registerProject({ path: projectPath });
         const environment = (yield* repository.listWorktrees).find(
           (row) => row.projectId === added.projectId,
@@ -287,7 +284,7 @@ test('a folder project, its environment, surfaces, panes, and focus survive loss
     const restored = await inWorkspaceScope(
       Effect.gen(function* () {
         const service = yield* WorkspaceService;
-        const repository = yield* WorkspaceRepository;
+        const repository = yield* ProjectRepository;
         const database = yield* RuntimeDatabase;
 
         // The missing state itself survived the reopen.

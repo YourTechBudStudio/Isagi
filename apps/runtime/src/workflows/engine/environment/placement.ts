@@ -1,11 +1,8 @@
 import { Effect } from 'effect';
 
-import type { DatabaseError } from '../../../persistence/index.js';
-import { SurfaceError, validateSurfaceTitle } from '../../../surfaces/index.js';
-import {
-  WorkspaceError,
-  type WorkspaceServiceError,
-} from '../../../workspace/workspace.service.js';
+import { SurfaceError, validateSurfaceTitle } from '../../../environment/index.js';
+import type { DatabaseError } from '../../../platform/persistence/index.js';
+import type { WorkspaceError, WorkspaceServiceError } from '../../../workspace/index.js';
 import { WorkflowEngineError } from '../../errors.js';
 import type { WorkflowOrigin } from '../../types.js';
 import type { LaunchProject, PlacementSelection, ResolvedPlacement } from './types.js';
@@ -42,7 +39,7 @@ export interface PlacementDeps {
       readonly fromRef: string;
     }) => Effect.Effect<{ readonly commit: string }, WorkspaceServiceError>;
   };
-  readonly surfaceRepository: {
+  readonly surfaceReads: {
     readonly findSurface: (
       surfaceId: number,
     ) => Effect.Effect<{ readonly id: number; readonly worktreeId: number } | null, DatabaseError>;
@@ -151,9 +148,8 @@ function resolveWorktree(
             fromRef: choice.fromRef,
           })
           .pipe(
-            Effect.catchIf(
-              (error): error is WorkspaceError => error instanceof WorkspaceError,
-              (error) => Effect.fail(creationRejection(error, input, branch, choice.fromRef)),
+            Effect.catchTag('WorkspaceError', (error) =>
+              Effect.fail(creationRejection(error, input, branch, choice.fromRef)),
             ),
           );
         return {
@@ -310,7 +306,7 @@ function resolveSurface(
 
     case 'existing':
       return Effect.gen(function* () {
-        const row = yield* deps.surfaceRepository.findSurface(choice.surfaceId);
+        const row = yield* deps.surfaceReads.findSurface(choice.surfaceId);
         if (!row) {
           return yield* Effect.fail(
             new WorkflowEngineError({

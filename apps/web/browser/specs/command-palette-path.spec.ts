@@ -1064,6 +1064,9 @@ const LIST_HIGHLIGHT = /bg-white\/8/;
 async function highlightRow(page: Page, label: string) {
   const target = listRow(page, label);
   await expect(target).toBeVisible();
+  // The palette focuses its input in a passive effect after the open render; an
+  // arrow pressed before that lands on the document body and moves nothing.
+  await expect(input(page)).toBeFocused();
   const budget = await page.locator(`${PALETTE} button`).count();
   for (let step = 0; step < budget + 1; step += 1) {
     if (LIST_HIGHLIGHT.test((await target.getAttribute('class')) ?? '')) return;
@@ -1262,4 +1265,22 @@ test('workflow commit is guarded against key repeat and composition', async ({ p
 
   await expect(workflowRow(page, 'lint')).toBeVisible();
   expect(await fixture.workflowSubmissions(page)).toHaveLength(0);
+});
+
+test('a burst of typing longer than React’s nested-update limit keeps every key', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await openAddProject(page);
+
+  // No delay on purpose: Chromium runs back-to-back keystrokes before any scheduler task, so an
+  // update a keystroke leaves pending stays pending for the whole burst. More than 50 keys is what
+  // used to trip React's nested-update limit and drop a character.
+  const path = `/srv/deploy/releases/${'build-'.repeat(12)}`;
+  expect(path.length).toBeGreaterThan(60);
+  await page.keyboard.type(path);
+
+  await expect(input(page)).toHaveValue(path);
+  expect(pageErrors).toEqual([]);
 });

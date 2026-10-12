@@ -1,10 +1,10 @@
 import { Effect } from 'effect';
 
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import { WorkflowEngineError } from '../errors.js';
-import { errorMessage } from '../state/pure.js';
 import { toJson } from '../store/rows.js';
 import { insertArtifact } from '../store/runs.js';
-import { WorkflowLoadError, type PublishedWorkflowArtifact } from '../structure/loader.js';
+import type { PublishedWorkflowArtifact } from '../structure/loader.js';
 import type { WorkflowRegistryContext } from '../structure/registry.js';
 import type { EngineRuntime } from './runtime.js';
 
@@ -19,7 +19,7 @@ export function resolveLatestBuild(
   rt: EngineRuntime,
   workflowKey: string,
   context: WorkflowRegistryContext,
-): Effect.Effect<PublishedWorkflowArtifact, WorkflowEngineError | unknown> {
+): Effect.Effect<PublishedWorkflowArtifact, WorkflowEngineError | DatabaseError> {
   return Effect.gen(function* () {
     const snapshot = yield* rt.deps.registry.discover(context).pipe(
       Effect.mapError(
@@ -53,7 +53,7 @@ export function resolveLatestBuild(
         (failure) =>
           new WorkflowEngineError({
             code: 'workflow_load_failed',
-            message: failure instanceof WorkflowLoadError ? failure.message : errorMessage(failure),
+            message: failure.message,
             workflowKey,
             workflowLoadFailureReason: failure.reason,
             ...(failure.diagnostics ? { diagnostics: failure.diagnostics } : {}),
@@ -85,7 +85,7 @@ export function resolveLatestBuild(
 export function projectContext(
   rt: EngineRuntime,
   projectId: number,
-): Effect.Effect<WorkflowRegistryContext, unknown> {
+): Effect.Effect<WorkflowRegistryContext, DatabaseError> {
   return Effect.map(rt.deps.places.workspace.findProject(projectId), (project) => ({
     projectId,
     projectRoot: project?.rootPath ?? null,

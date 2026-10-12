@@ -235,7 +235,7 @@ test('a bar that unmounts and comes back keeps the log it already read', async (
 });
 
 test('the bar, the surface and the palette all read one attached-run cache', async ({ page }) => {
-  // Three production readers, one QueryClient, one cache entry. None of them is handed the
+  // Three production readers, one app registry, one attached-runs atom. None of them is handed the
   // summary, so the only way they can agree is by genuinely sharing it.
   const surface = page.locator('[data-surface-host]');
   const glow = surface.locator('div.pointer-events-none.absolute.inset-0.z-20');

@@ -1,20 +1,7 @@
-export { registerPtyApi } from './api.js';
-export { PtyBackendCatalog, PtyBackendCatalogLive } from './backend.js';
-export type { PtyBackendCatalogService } from './backend.js';
-export { PtyForegroundState, PtyForegroundStateLive } from './foreground-state.js';
-export type { PtyForegroundStateService } from './foreground-state.js';
-export { NodePtyBackend, NodePtyBackendLive } from './adapters/node-pty.js';
-export { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
-export type { PtyRepositoryService } from './pty.repository.js';
-export { PtyService, PtyServiceLive } from './pty.service.js';
-export {
-  activePtyProcessIds,
-  activePtyProcessIdsForSessions,
-  PtyTeardownError,
-  terminatePtyProcessIds,
-} from './session-teardown.js';
-export { TmuxBackend, TmuxBackendLive } from './adapters/tmux.js';
-export type { PtyService as PtyServiceShape } from './pty.service.js';
+export { PtyForegroundState } from './foreground-state.js';
+export { PtyService } from './service.js';
+export { PtyProcessesLayer } from './layer.js';
+export type { PtyAttachmentPlan, PtyLaunchError } from './service.js';
 // The command domain names a durable termination reason when it asks for
 // generic cleanup; it stays PTY-layer vocabulary, exported rather than
 // re-spelled so the two cannot drift.
@@ -31,6 +18,7 @@ export type {
   PtyProcessAllocation,
   PtyProcessRecord,
   PtyProcessRow,
+  LaunchPtyProcessInput,
 } from './types.js';
 // The affirmative-vs-absent kill outcome, exported so a caller that must not
 // clear ownership on an unconfirmed termination can name what it requires.
@@ -40,5 +28,8 @@ export {
   PtyResizeError,
   PtyServiceError,
   PtyStartError,
+  PtyTeardownError,
   PtyWriteError,
 } from './types.js';
+export { registerPtyStreamRoute } from './stream-route.js';
+export type { PtyStreamStrategy } from './stream-route.js';

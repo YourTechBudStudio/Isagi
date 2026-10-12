@@ -37,6 +37,29 @@ export class MacReleaseVerificationFailure extends Data.TaggedError(
 // Every resource this verifier acquires — the temporary tree, the extracted ZIP
 // copy, and the mounted DMG volume — is scoped, so an interrupted or failed run
 // releases them in the same order a successful one does.
+/**
+ * @typedef {object} MacCommandResult
+ * @property {number | null} code
+ * @property {NodeJS.Signals | null} signal
+ * @property {string} stderr
+ * @property {string} stdout
+ */
+
+/** @typedef {(command: string, args: string[]) => Effect.Effect<MacCommandResult, unknown>} MacCommandRunner */
+
+/**
+ * @typedef {object} MacReleaseVerificationOptions
+ * @property {string} architecture
+ * @property {string} expectedTeamId
+ * @property {string} expectedVersion
+ * @property {string} releaseDirectory
+ * @property {boolean} [allowNonDarwin]
+ * @property {MacCommandRunner} [run]
+ * @property {(resourcesRoot: string, label?: string) => { fileCount: number }} [verifyLicenseBundle]
+ * @property {boolean} [smoke]
+ */
+
+/** @param {MacReleaseVerificationOptions} options */
 export function verifyMacRelease(options) {
   return Effect.gen(function* () {
     if (process.platform !== 'darwin' && options.allowNonDarwin !== true) {
@@ -138,6 +161,11 @@ export function verifyMacRelease(options) {
 
 // A successful `hdiutil attach` is the acquisition boundary, so mount-point
 // validation belongs to the use phase where detachment is already guaranteed.
+/**
+ * @template A, E, R
+ * @param {{ dmgPath: string; mountPoint: string; onDetachFailure?: () => void; run: MacCommandRunner }} options
+ * @param {(mountPoint: string) => Effect.Effect<A, E, R>} use
+ */
 export function withMountedDmg(options, use) {
   return Effect.acquireUseRelease(
     options.run('hdiutil', [
@@ -169,6 +197,13 @@ export function withMountedDmg(options, use) {
   );
 }
 
+/**
+ * @param {string} appPath
+ * @param {MacReleaseVerificationOptions} options
+ * @param {MacCommandRunner} run
+ * @param {NonNullable<MacReleaseVerificationOptions['verifyLicenseBundle']>} verifyLicenseBundle
+ * @param {string} label
+ */
 function verifyApp(appPath, options, run, verifyLicenseBundle, label) {
   return Effect.gen(function* () {
     const bundle = yield* attempt(() => {
@@ -300,6 +335,7 @@ export function classifyCommandFailure(command, args, result) {
   return `${command} ${args.join(' ')} failed with ${status}${detail ? `: ${detail}` : ''}`;
 }
 
+/** @param {MacCommandRunner} run */
 function readEntitlements(executable, run) {
   return run('codesign', ['--display', '--entitlements', ':-', executable]).pipe(
     Effect.map((result) => parseEntitlements(`${result.stdout}\n${result.stderr}`)),
@@ -329,6 +365,7 @@ function verifySigningIdentity(signature, expectedTeamId, label) {
   }
 }
 
+/** @param {MacCommandRunner} run */
 function verifyArchitecture(path, architecture, run) {
   return run('lipo', ['-archs', path]).pipe(
     Effect.flatMap((result) =>
@@ -347,6 +384,7 @@ export function verifyMachOArchitecture(output, architecture, label) {
   }
 }
 
+/** @param {MacCommandRunner} run */
 function inspectIconSizes(iconPath, run) {
   return Effect.acquireUseRelease(
     attempt(() => mkdtempSync(resolve(tmpdir(), 'isagi-iconset-'))),
@@ -508,7 +546,7 @@ function assertRegularFile(path, label) {
 }
 
 function runCommand(command, args) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const child = spawn(command, args, { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let settled = false;
     let stdout = '';

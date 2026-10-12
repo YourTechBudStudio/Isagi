@@ -1,6 +1,8 @@
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import { captureCheckpoint } from '../checkpoints/step.js';
+import type { WorkflowEngineError } from '../errors.js';
 import { makeOperationContext } from '../operations/context.js';
 import { isolate } from '../state/isolation.js';
 import { checkSerializable, errorMessage } from '../state/pure.js';
@@ -11,7 +13,7 @@ import { findLeafExecution, getExecution, getInvocation, updateExecution } from 
 import { nodeOf } from '../structure/graph.js';
 import type { LoadedWorkflowArtifact } from '../structure/loader.js';
 import type { NodeEvent } from '../types.js';
-import { checkWait, type AgentReply } from '../waits/check.js';
+import { checkWait, type AgentReply, type WaitCheckError } from '../waits/check.js';
 import {
   applyChain,
   applyEntry,
@@ -41,55 +43,63 @@ import type { EngineRuntime } from './runtime.js';
  * function is the only await that can take long, and it runs outside any transaction. Every step
  * re-reads the run first, so a Pause, Cancel or Resume in the meantime is always respected.
  */
-export function driveRun(rt: EngineRuntime, runId: number): Effect.Effect<void, unknown> {
-  return Effect.gen(function* () {
-    for (;;) {
-      const parked = yield* step(rt, runId);
-      if (parked) return;
-    }
-  });
-}
+export const driveRun = Effect.fn('workflows.driveRun')(function* (
+  rt: EngineRuntime,
+  runId: number,
+): Effect.fn.Return<void, StepError> {
+  for (;;) {
+    const parked = yield* step(rt, runId);
+    if (parked) return;
+  }
+});
+
+/**
+ * What a step can fail with: the database, an engine refusal inside a commit, or an agent wait's
+ * check. Every one is unexpected here, and the run's driver records it as a step failure.
+ */
+type StepError = WorkflowEngineError | DatabaseError | WaitCheckError;
 
 /** One step. Returns true when there is nothing more to do until something wakes the run. */
-function step(rt: EngineRuntime, runId: number): Effect.Effect<boolean, unknown> {
-  return Effect.gen(function* () {
-    const run = yield* rt.read('workflow_read_run', (db) => getRun(db, runId));
-    if (!run || (run.status !== 'running' && run.status !== 'waiting')) return true;
-    const leaf = yield* rt.read('workflow_read_leaf', (db) => findLeafExecution(db, runId));
-    if (!leaf) return true;
+const step = Effect.fnUntraced(function* (
+  rt: EngineRuntime,
+  runId: number,
+): Effect.fn.Return<boolean, StepError> {
+  const run = yield* rt.read('workflow_read_run', (db) => getRun(db, runId));
+  if (!run || (run.status !== 'running' && run.status !== 'waiting')) return true;
+  const leaf = yield* rt.read('workflow_read_leaf', (db) => findLeafExecution(db, runId));
+  if (!leaf) return true;
 
-    const artifact = yield* rt.loadArtifact(run.artifactHash, run.workflowKey).pipe(Effect.either);
-    if (Either.isLeft(artifact)) {
-      yield* failStep(rt, run, leaf, {
-        stage: 'node_function',
-        message: `The build ${run.artifactHash} could not be loaded: ${errorMessage(artifact.left)}`,
-      });
-      return true;
-    }
+  const artifact = yield* rt.loadArtifact(run.artifactHash, run.workflowKey).pipe(Effect.result);
+  if (Result.isFailure(artifact)) {
+    yield* failStep(rt, run, leaf, {
+      stage: 'node_function',
+      message: `The build ${run.artifactHash} could not be loaded: ${errorMessage(artifact.failure)}`,
+    });
+    return true;
+  }
 
-    if (leaf.nodeKind === 'subgraph') {
-      yield* enterSubgraph(rt, artifact.right, runId, leaf);
-      return false;
-    }
+  if (leaf.nodeKind === 'subgraph') {
+    yield* enterSubgraph(rt, artifact.success, runId, leaf);
+    return false;
+  }
 
-    const result = fromJson<SavedResult>(leaf.resultJson);
-    if (result === null) {
-      if (leaf.nodeKind === 'checkpoint') yield* captureCheckpoint(rt, artifact.right, run, leaf);
-      else yield* runNodeFunction(rt, artifact.right, run, leaf);
-      return false;
-    }
-    if (result.type === 'complete') {
-      return yield* route(rt, artifact.right, runId, leaf.id, { kind: 'immediate' }, null);
-    }
-    const checked = yield* checkWait(rt, leaf, result.wait);
-    rt.freshChecks.delete(runId);
-    if (checked.kind === 'waiting') {
-      yield* park(rt, runId, leaf.id);
-      return true;
-    }
-    return yield* route(rt, artifact.right, runId, leaf.id, checked.event, checked.reply);
-  });
-}
+  const result = fromJson<SavedResult>(leaf.resultJson);
+  if (result === null) {
+    if (leaf.nodeKind === 'checkpoint') yield* captureCheckpoint(rt, artifact.success, run, leaf);
+    else yield* runNodeFunction(rt, artifact.success, run, leaf);
+    return false;
+  }
+  if (result.type === 'complete') {
+    return yield* route(rt, artifact.success, runId, leaf.id, { kind: 'immediate' }, null);
+  }
+  const checked = yield* checkWait(rt, leaf, result.wait);
+  rt.freshChecks.delete(runId);
+  if (checked.kind === 'waiting') {
+    yield* park(rt, runId, leaf.id);
+    return true;
+  }
+  return yield* route(rt, artifact.success, runId, leaf.id, checked.event, checked.reply);
+});
 
 /**
  * The pure step for an execution with a saved result: apply its update and route, in one
@@ -102,7 +112,7 @@ function route(
   executionId: number,
   event: NodeEvent,
   reply: AgentReply | null,
-): Effect.Effect<boolean, unknown> {
+): Effect.Effect<boolean, WorkflowEngineError | DatabaseError> {
   return rt.commit('workflow_route', (db, emit) => {
     const run = getRun(db, runId);
     const execution = getExecution(db, executionId);
@@ -203,77 +213,79 @@ function enterSubgraph(
  * Runs an operation node's function and saves what it returned. The one step with side effects,
  * and the one that is never repeated once its result is saved.
  */
-function runNodeFunction(
+const runNodeFunction = Effect.fn('workflows.runNodeFunction')(function* (
   rt: EngineRuntime,
   artifact: LoadedWorkflowArtifact,
   run: RunRow,
   leaf: ExecutionRow,
-): Effect.Effect<void, unknown> {
-  return Effect.gen(function* () {
-    const invocation = yield* rt.read('workflow_read_invocation', (db) =>
-      getInvocation(db, leaf.invocationId),
-    );
-    const graph = invocation ? artifact.graphs.get(invocation.graphKey) : undefined;
-    const node = graph ? nodeOf(graph, leaf.nodeId) : null;
-    const at = { graphKey: invocation?.graphKey ?? '', nodeId: leaf.nodeId };
-    if (!invocation || !node || node.isagiKind !== 'operation-node') {
-      yield* failStep(rt, run, leaf, {
-        stage: 'node_function',
-        message: `Node '${leaf.nodeId}' is not an operation node in this build.`,
-        ...at,
-      });
-      return;
-    }
-    if (!destinationOf(run)) {
-      yield* failStep(rt, run, leaf, {
-        stage: 'node_function',
-        message: `Workflow run ${run.id} has no worktree and surface to work in.`,
-        ...at,
-      });
-      return;
-    }
-
-    const { context, close } = makeOperationContext(rt, run, leaf);
-    const returned = yield* Effect.tryPromise(() =>
-      node.run(context, isolate(fromJson(invocation.stateJson))),
-    ).pipe(Effect.either);
-    close();
-
-    yield* rt.commit('workflow_save_result', (db, emit) => {
-      const current = getRun(db, run.id);
-      const execution = getExecution(db, leaf.id);
-      if (!current || !execution) return;
-      const failure = (message: string): StepFailure => ({
-        stage: 'node_function',
-        message,
-        ...at,
-      });
-      if (Either.isLeft(returned)) {
-        if (execution.status === 'running' && current.status !== 'cancelled') {
-          applyFailure(db, emit, current, execution, failure(errorMessage(returned.left.error)));
-        }
-        return;
-      }
-      const validated = validateOperationResult(returned.right);
-      const problem = validated.ok
-        ? (checkSerializable(validated.value, 'result') ??
-          unknownHeadlessHandle(validated.value, (id) => getOperation(db, id), run.id))
-        : validated.message;
-      if (!validated.ok || problem !== null) {
-        if (execution.status === 'running' && current.status !== 'cancelled') {
-          applyFailure(db, emit, current, execution, failure(problem ?? 'Invalid result.'));
-        }
-        return;
-      }
-      // Saved even when the run was paused or cancelled meanwhile: it is what the function did.
-      updateExecution(db, execution.id, { resultJson: toJson(validated.value) });
+): Effect.fn.Return<void, WorkflowEngineError | DatabaseError> {
+  const invocation = yield* rt.read('workflow_read_invocation', (db) =>
+    getInvocation(db, leaf.invocationId),
+  );
+  const graph = invocation ? artifact.graphs.get(invocation.graphKey) : undefined;
+  const node = graph ? nodeOf(graph, leaf.nodeId) : null;
+  const at = { graphKey: invocation?.graphKey ?? '', nodeId: leaf.nodeId };
+  if (!invocation || !node || node.isagiKind !== 'operation-node') {
+    yield* failStep(rt, run, leaf, {
+      stage: 'node_function',
+      message: `Node '${leaf.nodeId}' is not an operation node in this build.`,
+      ...at,
     });
-  });
-}
+    return;
+  }
+  const destination = destinationOf(run);
+  if (!destination) {
+    yield* failStep(rt, run, leaf, {
+      stage: 'node_function',
+      message: `Workflow run ${run.id} has no worktree and surface to work in.`,
+      ...at,
+    });
+    return;
+  }
 
-/** Marks the execution and the run as waiting, the first time a check finds nothing yet. */
+  // The context closes when the function returns, and also when this step is interrupted.
+  const { context, close } = makeOperationContext(rt, run, leaf, destination);
+  const returned = yield* rt.bridge
+    .call('node function', () => node.run(context, isolate(fromJson(invocation.stateJson))))
+    .pipe(Effect.result, Effect.ensuring(Effect.sync(close)));
+
+  yield* rt.commit('workflow_save_result', (db, emit) => {
+    const current = getRun(db, run.id);
+    const execution = getExecution(db, leaf.id);
+    if (!current || !execution) return;
+    const failure = (message: string): StepFailure => ({
+      stage: 'node_function',
+      message,
+      ...at,
+    });
+    if (Result.isFailure(returned)) {
+      if (execution.status === 'running' && current.status !== 'cancelled') {
+        applyFailure(db, emit, current, execution, failure(returned.failure.message));
+      }
+      return;
+    }
+    const validated = validateOperationResult(returned.success);
+    const problem = validated.ok
+      ? (checkSerializable(validated.value, 'result') ??
+        unknownHeadlessHandle(validated.value, (id) => getOperation(db, id), run.id))
+      : validated.message;
+    if (!validated.ok || problem !== null) {
+      if (execution.status === 'running' && current.status !== 'cancelled') {
+        applyFailure(db, emit, current, execution, failure(problem ?? 'Invalid result.'));
+      }
+      return;
+    }
+    // Saved even when the run was paused or cancelled meanwhile: it is what the function did.
+    updateExecution(db, execution.id, { resultJson: toJson(validated.value) });
+  });
+});
+
+/**
+ * Marks the execution and the run as waiting, the first time a check finds nothing yet. After Resume
+ * the execution is already waiting and only the run changes, with no event to carry its summary.
+ */
 function park(rt: EngineRuntime, runId: number, executionId: number) {
-  return rt.commit('workflow_park', (db, emit) => {
+  return rt.commit('workflow_park', (db, emit, _abort, changed) => {
     const run = getRun(db, runId);
     const execution = getExecution(db, executionId);
     if (!run || !execution || (run.status !== 'running' && run.status !== 'waiting')) return;
@@ -289,7 +301,10 @@ function park(rt: EngineRuntime, runId: number, executionId: number) {
         data: result?.type === 'suspend' ? result.wait : null,
       });
     }
-    if (run.status === 'running') updateRun(db, runId, { status: 'waiting' });
+    if (run.status === 'running') {
+      updateRun(db, runId, { status: 'waiting' });
+      changed(runId);
+    }
   });
 }
 

@@ -1,5 +1,5 @@
 import type { WebglAddon } from '@xterm/addon-webgl';
-import { Effect, Schema } from 'effect';
+import { Schema } from 'effect';
 
 import {
   ptyWebSocketOutputMessageSchema,
@@ -8,7 +8,6 @@ import {
 } from '@isagi/contracts';
 
 import { ptyCopy, ptySocketErrorCopy } from '../../../copy/index.js';
-import { runRuntimeEffect } from '../../runtime/run.js';
 import { createPtyStreamTransport } from '../pty-stream/transport.js';
 import { formatRuntimeError, formatRuntimeErrorSummary } from '../runtime-data.js';
 import { TERMINAL_HOST_CLASS } from '../terminal-appearance.js';
@@ -80,7 +79,12 @@ export interface CreateTerminalPresentationControllerInput {
   readonly attachment: TerminalAttachmentHandle<TerminalPresentationController>;
   readonly scrollbackLines: number;
   readonly initiallyInteractive: boolean;
-  readonly resolveUrl: () => Effect.Effect<string, Error>;
+  /**
+   * Claims the session and mints its attach URL. Operational work that outlives this call, so it
+   * takes the signal disposal aborts. Built by the caller with `runApp` (lib/state/runtime.ts),
+   * which keeps this subsystem free of Effect run sites.
+   */
+  readonly resolveUrl: (signal: AbortSignal) => Promise<string>;
   readonly onEvent: (event: TerminalAttachmentEvent) => void;
   readonly initialViewport: TerminalViewportMemory | null;
   readonly onViewport: (viewport: TerminalViewportMemory) => void;
@@ -411,7 +415,7 @@ export function createTerminalPresentationController(
   const claim = new AbortController();
   const startTimer = env.scheduleTask(() => {
     if (!current()) return;
-    void runRuntimeEffect(input.resolveUrl(), { signal: claim.signal }).then(
+    void input.resolveUrl(claim.signal).then(
       (url) => {
         if (!current()) return;
         const opened = env.openSocket(url);

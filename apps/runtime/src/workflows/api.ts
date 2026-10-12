@@ -1,23 +1,24 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
   apiEndpoints,
   workflowContentEndpoints,
-  type ApiError,
   type WorkflowRejectionData,
 } from '@isagi/contracts';
 
 import {
-  errorMessage,
-  infrastructureApiError,
   registerApiEndpoint,
   registerContentEndpoint,
-  type ApiRouteContext,
-} from '../lib/api/index.js';
-import type { RuntimeServices } from '../runtime.layer.js';
+  type ApiRejected,
+  type Rejection,
+  type RouteRuntime,
+} from '../platform/http/index.js';
+import { workspaceRejections } from '../workspace/index.js';
+import type { PlacementInfrastructureError } from './engine/environment/placement.js';
 import { WorkflowEngine } from './engine/service.js';
-import { WorkflowEngineError } from './errors.js';
+import type { WorkflowEngineError } from './errors.js';
+import type { WorkflowsLayer } from './layer.js';
 
 /**
  * The workflow HTTP surface: launch, the controls, and plain reads.
@@ -25,37 +26,24 @@ import { WorkflowEngineError } from './errors.js';
  * Every control returns the run's summary after it was applied. Live changes reach clients on the
  * shared runtime event socket as `workflow_run_event` and `workflow_run_changed`; these routes are
  * what a client refetches from.
+ *
+ * Every endpoint maps `WorkflowEngineError` with `rejectWorkflow`: the engine already decides in
+ * the contract's reasons, so mapping only copies context. Database and Git failures pass through
+ * as infrastructure errors, which every workflow endpoint declares.
  */
 
-const runWithRuntime =
-  (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
-  <A>(
-    effect: Effect.Effect<A, unknown, RuntimeServices>,
-    options?: { readonly signal?: AbortSignal | undefined },
-  ) =>
-    runtime.runPromise(effect, options);
+/** Every workflow endpoint declares the same error union, so one rejection type serves them all. */
+type WorkflowRejection = Rejection<typeof apiEndpoints.workflows.start>;
 
-export function registerWorkflowApi(
+export function registerWorkflowsRoutes(
   fastify: FastifyInstance,
-  runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
+  runtime: RouteRuntime<Layer.Success<typeof WorkflowsLayer>>,
 ) {
-  const run = runWithRuntime(runtime);
   const endpoints = apiEndpoints.workflows;
-  const register = <Endpoint extends Parameters<typeof registerApiEndpoint>[1]>(
-    endpoint: Endpoint,
-    handle: Parameters<typeof registerApiEndpoint<Endpoint, RuntimeServices>>[2]['handle'],
-  ) =>
-    registerApiEndpoint<Endpoint, RuntimeServices>(fastify, endpoint, {
-      handle,
-      mapError: toWorkflowApiError,
-      run,
-    });
 
-  register(endpoints.descriptors, (input) =>
-    Effect.gen(function* () {
-      const engine = yield* WorkflowEngine;
-      const listings = yield* engine.listWorkflowDescriptors(input.origin);
-      return {
+  registerApiEndpoint(fastify, runtime, endpoints.descriptors, (request) =>
+    WorkflowEngine.use((engine) => engine.listWorkflowDescriptors(request.body.origin)).pipe(
+      Effect.map((listings) => ({
         workflows: listings.map((listing) =>
           listing.result.ok
             ? {
@@ -70,172 +58,195 @@ export function registerWorkflowApi(
                 diagnostics: [...listing.result.diagnostics],
               },
         ),
-      };
-    }),
+      })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
+    ),
   );
 
-  register(endpoints.start, (input) =>
-    Effect.flatMap(WorkflowEngine, (engine) =>
+  registerApiEndpoint(fastify, runtime, endpoints.start, (request) =>
+    WorkflowEngine.use((engine) =>
       engine.launch({
-        workflowKey: input.workflowKey,
-        inputs: input.inputs ?? {},
-        origin: input.origin,
-        ...(input.placement === undefined ? {} : { placement: input.placement }),
+        workflowKey: request.body.workflowKey,
+        inputs: request.body.inputs ?? {},
+        origin: request.body.origin,
+        ...(request.body.placement === undefined ? {} : { placement: request.body.placement }),
       }),
+    ).pipe(Effect.catchTags(launchRejections(request))),
+  );
+
+  registerApiEndpoint(fastify, runtime, endpoints.listRuns, (request) =>
+    WorkflowEngine.use((engine) => engine.listRuns(request.query)),
+  );
+  registerApiEndpoint(fastify, runtime, endpoints.getRun, (request) =>
+    WorkflowEngine.use((engine) => engine.getRun(request.params.runId)).pipe(
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
+    ),
+  );
+  registerApiEndpoint(fastify, runtime, endpoints.getStructure, (request) =>
+    WorkflowEngine.use((engine) =>
+      engine.getStructure(request.params.runId, request.query.artifactHash),
+    ).pipe(Effect.catchTag('WorkflowEngineError', rejectWorkflow(request))),
+  );
+  registerApiEndpoint(fastify, runtime, endpoints.listEvents, (request) =>
+    WorkflowEngine.use((engine) => engine.listEvents(request.params.runId, request.query)).pipe(
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
+    ),
+  );
+  registerApiEndpoint(fastify, runtime, endpoints.listOperations, (request) =>
+    WorkflowEngine.use((engine) => engine.listOperations(request.params.runId, request.query)).pipe(
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
+    ),
+  );
+  registerApiEndpoint(fastify, runtime, endpoints.getExecution, (request) =>
+    WorkflowEngine.use((engine) => engine.getExecution(request.params.executionId)).pipe(
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
+    ),
+  );
+  registerApiEndpoint(fastify, runtime, endpoints.getOperation, (request) =>
+    WorkflowEngine.use((engine) => engine.getOperation(request.params.operationId)).pipe(
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
 
-  register(endpoints.listRuns, (_input, _context, _params, query) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.listRuns(query)),
+  registerApiEndpoint(fastify, runtime, endpoints.listCheckpoints, (request) =>
+    WorkflowEngine.use((engine) =>
+      engine.listCheckpoints(request.params.runId, request.query),
+    ).pipe(Effect.catchTag('WorkflowEngineError', rejectWorkflow(request))),
   );
-  register(endpoints.getRun, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.getRun(params.runId)),
-  );
-  register(endpoints.getStructure, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowEngine, (engine) =>
-      engine.getStructure(params.runId, query.artifactHash),
+  registerApiEndpoint(fastify, runtime, endpoints.getCheckpoint, (request) =>
+    WorkflowEngine.use((engine) => engine.getCheckpoint(request.params.checkpointId)).pipe(
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
-  register(endpoints.listEvents, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.listEvents(params.runId, query)),
+  registerApiEndpoint(fastify, runtime, endpoints.exportCheckpoint, (request) =>
+    WorkflowEngine.use((engine) =>
+      engine.exportCheckpoint(request.params.checkpointId, request.body.destinationPath),
+    ).pipe(Effect.catchTag('WorkflowEngineError', rejectWorkflow(request))),
   );
-  register(endpoints.listOperations, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.listOperations(params.runId, query)),
-  );
-  register(endpoints.getExecution, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.getExecution(params.executionId)),
-  );
-  register(endpoints.getOperation, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.getOperation(params.operationId)),
+  registerContentEndpoint(fastify, runtime, workflowContentEndpoints.getCheckpointFile, (request) =>
+    WorkflowEngine.use((engine) =>
+      engine.openCheckpointFile(request.params.checkpointId, request.query.path),
+    ).pipe(Effect.catchTag('WorkflowEngineError', rejectWorkflow(request))),
   );
 
-  register(endpoints.listCheckpoints, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.listCheckpoints(params.runId, query)),
-  );
-  register(endpoints.getCheckpoint, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.getCheckpoint(params.checkpointId)),
-  );
-  register(endpoints.exportCheckpoint, (input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) =>
-      engine.exportCheckpoint(params.checkpointId, input.destinationPath),
+  registerApiEndpoint(fastify, runtime, endpoints.pause, (request) =>
+    WorkflowEngine.use((engine) => engine.pause(request.params.runId)).pipe(
+      Effect.map((run) => ({ run })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
-  registerContentEndpoint<typeof workflowContentEndpoints.getCheckpointFile, RuntimeServices>(
-    fastify,
-    workflowContentEndpoints.getCheckpointFile,
-    {
-      handle: (_context, params, query) =>
-        Effect.flatMap(WorkflowEngine, (engine) =>
-          engine.openCheckpointFile(params.checkpointId, query.path),
-        ),
-      mapError: toWorkflowApiError,
-      run,
-    },
-  );
-
-  register(endpoints.pause, (_input, _context, params) =>
-    Effect.map(
-      Effect.flatMap(WorkflowEngine, (engine) => engine.pause(params.runId)),
-      (summary) => ({ run: summary }),
+  registerApiEndpoint(fastify, runtime, endpoints.resume, (request) =>
+    WorkflowEngine.use((engine) => engine.resume(request.params.runId)).pipe(
+      Effect.map((run) => ({ run })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
-  register(endpoints.resume, (_input, _context, params) =>
-    Effect.map(
-      Effect.flatMap(WorkflowEngine, (engine) => engine.resume(params.runId)),
-      (summary) => ({ run: summary }),
+  registerApiEndpoint(fastify, runtime, endpoints.retry, (request) =>
+    WorkflowEngine.use((engine) => engine.retry(request.params.runId)).pipe(
+      Effect.map((run) => ({ run })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
-  register(endpoints.retry, (_input, _context, params) =>
-    Effect.map(
-      Effect.flatMap(WorkflowEngine, (engine) => engine.retry(params.runId)),
-      (summary) => ({ run: summary }),
+  registerApiEndpoint(fastify, runtime, endpoints.cancel, (request) =>
+    WorkflowEngine.use((engine) => engine.cancel(request.params.runId)).pipe(
+      Effect.map((run) => ({ run })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
-  register(endpoints.cancel, (_input, _context, params) =>
-    Effect.map(
-      Effect.flatMap(WorkflowEngine, (engine) => engine.cancel(params.runId)),
-      (summary) => ({ run: summary }),
+  registerApiEndpoint(fastify, runtime, endpoints.dismiss, (request) =>
+    WorkflowEngine.use((engine) => engine.dismiss(request.params.runId)).pipe(
+      Effect.map((run) => ({ run })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
-  register(endpoints.dismiss, (_input, _context, params) =>
-    Effect.map(
-      Effect.flatMap(WorkflowEngine, (engine) => engine.dismiss(params.runId)),
-      (summary) => ({ run: summary }),
-    ),
-  );
-  register(endpoints.advance, (input, _context, params) =>
-    Effect.map(
-      Effect.flatMap(WorkflowEngine, (engine) =>
-        engine.advance({
-          runId: params.runId,
-          executionId: input.executionId,
-          answers: input.answers,
-        }),
-      ),
-      (summary) => ({ run: summary }),
+  registerApiEndpoint(fastify, runtime, endpoints.advance, (request) =>
+    WorkflowEngine.use((engine) =>
+      engine.advance({
+        runId: request.params.runId,
+        executionId: request.body.executionId,
+        answers: request.body.answers,
+      }),
+    ).pipe(
+      Effect.map((run) => ({ run })),
+      Effect.catchTag('WorkflowEngineError', rejectWorkflow(request)),
     ),
   );
 }
 
-/** One vocabulary: the engine already decides in the contract's reasons, so this only copies context. */
-function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError {
-  if (error instanceof WorkflowEngineError) {
-    const identities = {
-      ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
-      ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
-      ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
-      ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
-      ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
-      ...(error.paneId ? { paneId: error.paneId } : {}),
-      ...(error.agentSessionId ? { agentSessionId: error.agentSessionId } : {}),
-      ...(error.executionId ? { executionId: error.executionId } : {}),
-      ...(error.operationId ? { operationId: error.operationId } : {}),
-      ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
-      ...(error.path ? { path: error.path } : {}),
-      ...(error.commitSha ? { commitSha: error.commitSha } : {}),
-      ...(error.control ? { control: error.control } : {}),
-      ...(error.workflowLoadFailureReason
-        ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
-        : {}),
-      ...(error.workflowSourceDirectory
-        ? { workflowSourceDirectory: error.workflowSourceDirectory }
-        : {}),
-      ...(error.workflowPackageDirectory
-        ? { workflowPackageDirectory: error.workflowPackageDirectory }
-        : {}),
-      ...(error.shadowedWorkflowPackageDirectories?.length
-        ? { shadowedWorkflowPackageDirectories: [...error.shadowedWorkflowPackageDirectories] }
-        : {}),
-      ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
-      ...(error.collision ? { collision: error.collision } : {}),
-      ...(error.branch ? { branch: error.branch } : {}),
-      ...(error.baseRef ? { baseRef: error.baseRef } : {}),
-      ...(error.projectId ? { projectId: error.projectId } : {}),
-    };
-    return {
-      code: 'workflow_rejected',
-      status: statusFor(error.code),
-      message: error.message,
-      requestId: context.requestId,
-      data: rejectionData(error, identities),
-    };
-  }
+/**
+ * What a workflow route needs of its request to refuse it. Every workflow endpoint declares the same
+ * error union, so each endpoint's typed `reject` accepts exactly a `WorkflowRejection`.
+ */
+interface WorkflowRequest {
+  readonly reject: (
+    rejection: WorkflowRejection,
+  ) => Effect.Effect<never, ApiRejected<WorkflowRejection>>;
+}
 
-  // Launch makes one owning-service call (the worktree preflight), so Git, the database, the
-  // state file and project paths can fail underneath it. They are reported as themselves.
-  const infrastructure = infrastructureApiError(error, context);
-  if (infrastructure) return infrastructure;
+/** Rejects with the workflow's own vocabulary. */
+function rejectWorkflow(request: WorkflowRequest) {
+  return (error: WorkflowEngineError) => request.reject(workflowRejection(error));
+}
 
-  console.error(
-    `[runtime] Unhandled workflow API handler error during ${context.endpointId}`,
-    error,
-  );
+/**
+ * Launch makes one owning-service call — the worktree preflight — so the workspace's own
+ * endpoint-independent failures can surface beneath it, each read the way every workspace route
+ * reports it. Each workspace builder is typed as the exact contract error it builds, and the
+ * workflow error union declares all three, so no cast is needed.
+ */
+function launchRejections(request: WorkflowRequest) {
   return {
-    code: 'api_unhandled_error',
-    status: 500,
-    message: errorMessage(error),
-    requestId: context.requestId,
-    data: { endpointId: context.endpointId },
+    WorkflowEngineError: rejectWorkflow(request),
+    ProjectConfigError: (
+      error: Extract<PlacementInfrastructureError, { _tag: 'ProjectConfigError' }>,
+    ) => request.reject(workspaceRejections.projectConfig(error)),
+    WorktreeSetupError: (
+      error: Extract<PlacementInfrastructureError, { _tag: 'WorktreeSetupError' }>,
+    ) => request.reject(workspaceRejections.worktreeSetup(error)),
+    StateFileError: (error: Extract<PlacementInfrastructureError, { _tag: 'StateFileError' }>) =>
+      request.reject(workspaceRejections.stateFile(error)),
+  } as const;
+}
+
+/** One vocabulary: the engine already decides in the contract's reasons, so this only copies context. */
+function workflowRejection(error: WorkflowEngineError): WorkflowRejection {
+  const identities = {
+    ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
+    ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
+    ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
+    ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+    ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
+    ...(error.paneId ? { paneId: error.paneId } : {}),
+    ...(error.agentSessionId ? { agentSessionId: error.agentSessionId } : {}),
+    ...(error.executionId ? { executionId: error.executionId } : {}),
+    ...(error.operationId ? { operationId: error.operationId } : {}),
+    ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
+    ...(error.path ? { path: error.path } : {}),
+    ...(error.commitSha ? { commitSha: error.commitSha } : {}),
+    ...(error.control ? { control: error.control } : {}),
+    ...(error.workflowLoadFailureReason
+      ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
+      : {}),
+    ...(error.workflowSourceDirectory
+      ? { workflowSourceDirectory: error.workflowSourceDirectory }
+      : {}),
+    ...(error.workflowPackageDirectory
+      ? { workflowPackageDirectory: error.workflowPackageDirectory }
+      : {}),
+    ...(error.shadowedWorkflowPackageDirectories?.length
+      ? { shadowedWorkflowPackageDirectories: [...error.shadowedWorkflowPackageDirectories] }
+      : {}),
+    ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
+    ...(error.collision ? { collision: error.collision } : {}),
+    ...(error.branch ? { branch: error.branch } : {}),
+    ...(error.baseRef ? { baseRef: error.baseRef } : {}),
+    ...(error.projectId ? { projectId: error.projectId } : {}),
+  };
+  return {
+    code: 'workflow_rejected',
+    status: statusFor(error.code),
+    message: error.message,
+    data: rejectionData(error, identities),
   };
 }
 

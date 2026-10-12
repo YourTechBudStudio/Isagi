@@ -27,12 +27,12 @@ import {
 import { eq } from 'drizzle-orm';
 import { Cause, Effect, Exit } from 'effect';
 
-import { workflowCheckpoints } from '../../persistence/schema.js';
 import { withEngine, type EngineHarness } from '../engine/test-support.js';
 import { WorkflowEngineError } from '../errors.js';
 import { listReferencedContentHashes } from '../store/checkpoints.js';
 import { contentPathFor, type ContentGcResult } from '../store/content-store.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowCheckpoints } from '../tables.js';
 
 /**
  * Checkpoint capture, reads and export, against real Git in a temporary repository and a real
@@ -602,11 +602,13 @@ const graceMs = 60 * 60_000;
 
 /** A sweep of the harness's content store two grace periods ahead, so only liveness keeps a blob. */
 function sweepContent(harness: EngineHarness, mark: () => ReadonlySet<string> = () => new Set()) {
-  return harness.contentStore.collectGarbage({
-    nowMs: Date.now() + 2 * graceMs,
-    minAgeMs: graceMs,
-    referencedHashes: mark,
-  });
+  return Effect.runPromise(
+    harness.contentStore.collectGarbage({
+      nowMs: Date.now() + 2 * graceMs,
+      minAgeMs: graceMs,
+      referencedHashes: Effect.sync(mark),
+    }),
+  );
 }
 
 function sweptStats(result: ContentGcResult | undefined) {

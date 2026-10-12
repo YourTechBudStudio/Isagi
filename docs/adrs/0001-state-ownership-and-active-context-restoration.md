@@ -7,7 +7,7 @@ date: 2026-06-05
 
 Isagi separates state ownership from persistence location and frontend tooling.
 
-Runtime/server state in the web app should be read, cached, and mutated through React Query over the Effect runtime client. Frontend interaction state should stay in frontend-owned state such as local component state or Zustand.
+How the web app reads, caches and holds state (the tooling) is ADR 0011, which supersedes this ADR's original React Query and Zustand clause; this ADR decides ownership only.
 
 `activeContext` is frontend-owned live workspace selection persisted by the runtime for restart restoration. The runtime may validate and store it through dedicated active-context persistence APIs. It is not part of the workspace snapshot and is not itself runtime operational scope.
 
@@ -19,16 +19,16 @@ Mutations should return the minimal result needed for the client to update cache
 
 ## Current ownership map
 
-| state                                 | meaning_owner | persistence_host          | frontend_mechanism                                   |
-| ------------------------------------- | ------------- | ------------------------- | ---------------------------------------------------- |
-| projects/worktrees                    | runtime/Git   | runtime                   | server-state cache                                   |
-| add project result                    | runtime       | runtime                   | mutation result + workspace query invalidation       |
-| path suggestions                      | runtime       | none                      | direct Effect call or server-state query when useful |
-| activeContext/live worktree selection | frontend      | runtime restoration state | frontend state + active-context persistence sync     |
-| missing-project selection             | frontend      | none                      | transient frontend state                             |
-| active surface                        | frontend      | none for now              | frontend state                                       |
-| drawer/command selection/zen          | frontend      | none for now              | frontend state                                       |
-| toasts                                | frontend      | none                      | frontend state                                       |
+| state                                 | meaning_owner | persistence_host          | frontend_mechanism                           |
+| ------------------------------------- | ------------- | ------------------------- | -------------------------------------------- |
+| projects/worktrees                    | runtime/Git   | runtime                   | query atom                                   |
+| add project result                    | runtime       | runtime                   | mutation result + workspace invalidation     |
+| path suggestions                      | runtime       | none                      | direct Effect call or query atom when useful |
+| activeContext/live worktree selection | frontend      | runtime restoration state | state atom + active-context persistence sync |
+| missing-project selection             | frontend      | none                      | transient state atom                         |
+| active surface                        | frontend      | none for now              | state atom                                   |
+| drawer/command selection/zen          | frontend      | none for now              | state atom                                   |
+| toasts                                | frontend      | none                      | state atom                                   |
 
 ## Active context mechanics
 

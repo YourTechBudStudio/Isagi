@@ -94,7 +94,7 @@ function runPtyProbe(root, workingDirectory, electronExecutable) {
 }
 
 function runRuntimeProbe(root, workingDirectory, electronExecutable) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const dataRoot = resolve(workingDirectory, `data-${Date.now()}-${Math.random()}`);
     const child = spawn(electronExecutable, [resolve(root, 'index.js')], {
       cwd: workingDirectory,
@@ -197,7 +197,9 @@ async function checkHealth(readyJson) {
     throw new Error(`Unexpected runtime host ${parsed.hostname}.`);
   const response = await fetch(`${url}/api/v1/health`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Runtime health returned HTTP ${response.status}.`);
-  const body = await response.json();
+  const body = /** @type {{ data?: { ok?: unknown; context?: unknown } } | null} */ (
+    await response.json()
+  );
   if (body?.data?.ok !== true) throw new Error('Runtime health response was not healthy.');
   return body.data.context;
 }
@@ -236,7 +238,10 @@ function assertElectronMatchesStage(actual, expected) {
 function tryOperation(operation, path, run) {
   return Effect.try({
     try: run,
-    catch: (cause) => (cause?._tag ? cause : new StageOperationError({ operation, path, cause })),
+    catch: (cause) =>
+      /** @type {{ _tag?: unknown } | null | undefined} */ (cause)?._tag
+        ? cause
+        : new StageOperationError({ operation, path, cause }),
   });
 }
 

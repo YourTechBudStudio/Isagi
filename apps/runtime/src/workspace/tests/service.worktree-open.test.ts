@@ -6,18 +6,22 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { branchPathHash, Git, GitCommandError, type GitService } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { CommandService } from '../../commands/index.js';
+import { SurfaceService } from '../../environment/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
+import { branchPathHash, Git, GitCommandError } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { WorktreeRow } from '../../projects/index.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
-import type { WorktreeRow } from '../types.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceError } from '../errors.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import {
   project,
   repositoryWith,
@@ -26,7 +30,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
-  testSurfaceRepository,
+  testWorktreeDeleteDiagnostics,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -81,7 +85,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         }
         return { added, missing: [] };
       }),
-  } satisfies WorkspaceRepositoryService;
+  } satisfies ProjectRepository['Service'];
   const stateFile = stateFileWithWriteCounter(() => {});
   const openGit = {
     run: (args: readonly string[]) =>
@@ -115,14 +119,14 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const commandService = {
     ...testCommandService,
     runPostCreateLifecycle: (input: { readonly worktreeId: number }) =>
       Effect.sync(() => {
         lifecycleCalls.push(input.worktreeId);
       }),
-  } satisfies CommandServiceShape;
+  } satisfies CommandService['Service'];
 
   try {
     const output = await Effect.runPromise(
@@ -130,13 +134,13 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         const workspace = yield* WorkspaceService;
         return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
       }).pipe(
-        Effect.provide(WorkspaceServiceLive),
-        Effect.provide(WorkflowRunErasureLive),
+        Effect.provide(WorkspaceService.layerNoDeps),
+        Effect.provide(NoProjectDeletionParticipant),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, testPtyService),
-        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-        Effect.provideService(WorkspaceRepository, repository),
-        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(InternalEvents, testInternalEvents),
+        Effect.provideService(ProjectRepository, repository),
+        Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
@@ -190,7 +194,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
       }
       return Effect.succeed({ stdout: '', stderr: '' });
     },
-  } satisfies GitService;
+  } satisfies Git['Service'];
 
   try {
     const error = await Effect.runPromise(
@@ -199,13 +203,13 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
           const workspace = yield* WorkspaceService;
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
-          Effect.provide(WorkspaceServiceLive),
-          Effect.provide(WorkflowRunErasureLive),
+          Effect.provide(WorkspaceService.layerNoDeps),
+          Effect.provide(NoProjectDeletionParticipant),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
-          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-          Effect.provideService(WorkspaceRepository, repository),
-          Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(InternalEvents, testInternalEvents),
+          Effect.provideService(ProjectRepository, repository),
+          Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, invalidGit),
@@ -260,7 +264,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   try {
@@ -270,13 +274,13 @@ test('opening an existing local branch rejects an occupied deterministic checkou
           const workspace = yield* WorkspaceService;
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
-          Effect.provide(WorkspaceServiceLive),
-          Effect.provide(WorkflowRunErasureLive),
+          Effect.provide(WorkspaceService.layerNoDeps),
+          Effect.provide(NoProjectDeletionParticipant),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
-          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-          Effect.provideService(WorkspaceRepository, repository),
-          Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(InternalEvents, testInternalEvents),
+          Effect.provideService(ProjectRepository, repository),
+          Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, dirtyPathGit),
@@ -327,7 +331,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   try {
@@ -337,13 +341,13 @@ test('opening an existing local branch rejects a stale registered deterministic 
           const workspace = yield* WorkspaceService;
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
-          Effect.provide(WorkspaceServiceLive),
-          Effect.provide(WorkflowRunErasureLive),
+          Effect.provide(WorkspaceService.layerNoDeps),
+          Effect.provide(NoProjectDeletionParticipant),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
-          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-          Effect.provideService(WorkspaceRepository, repository),
-          Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(InternalEvents, testInternalEvents),
+          Effect.provideService(ProjectRepository, repository),
+          Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, registeredPathGit),
@@ -390,7 +394,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
         }
         return { stdout: '', stderr: '' };
       }),
-  } satisfies GitService;
+  } satisfies Git['Service'];
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   try {
@@ -400,13 +404,13 @@ test('opening an existing local branch distinguishes checkout parent preparation
           const workspace = yield* WorkspaceService;
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
-          Effect.provide(WorkspaceServiceLive),
-          Effect.provide(WorkflowRunErasureLive),
+          Effect.provide(WorkspaceService.layerNoDeps),
+          Effect.provide(NoProjectDeletionParticipant),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
-          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
-          Effect.provideService(WorkspaceRepository, repository),
-          Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(InternalEvents, testInternalEvents),
+          Effect.provideService(ProjectRepository, repository),
+          Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, parentFailureGit),

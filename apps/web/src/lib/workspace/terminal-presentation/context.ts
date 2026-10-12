@@ -1,6 +1,8 @@
 import type { Effect } from 'effect';
-import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { useRegistry } from '../../state/registry.js';
+import { runApp } from '../../state/runtime.js';
 import { paneFocusAllowed } from '../activation.js';
 import {
   type TerminalPlacement,
@@ -12,6 +14,7 @@ import type {
   TerminalAttachmentSnapshot,
   TerminalPresentationController,
 } from './controller.js';
+import { useEnsuredTerminalSession } from './ensured-session.js';
 import { browserTerminalEnvironment } from './environment.js';
 import { selectPresentationResource } from './resource-selection.js';
 import {
@@ -53,15 +56,12 @@ export function useTerminalAttachmentResource(input: {
     | undefined;
   readonly onMilestone?: TerminalAttachmentMilestoneObserver | undefined;
 }) {
+  const registry = useRegistry();
   const workspace = useTerminalPresentationWorkspace();
   const identityKey = input.identity
     ? `${input.identity.kind}:${input.identity.sessionId}`
     : 'none';
-  const session = useMemo(() => {
-    if (!input.identity) return null;
-    const ensured = workspace.cache.ensureSession(input.identity, input.placement);
-    return ensured.status === 'ensured' ? ensured : null;
-  }, [workspace.cache, input.identity?.kind, input.identity?.sessionId]);
+  const session = useEnsuredTerminalSession(workspace.cache, input.identity, input.placement);
   // React state, not a ref: preparation resolves outside React's knowledge, and
   // the cache publication that accompanies installation may be rendered before
   // this value is written. A ref write would schedule no render and could strand
@@ -121,7 +121,8 @@ export function useTerminalAttachmentResource(input: {
       attachment: start.attachment,
       scrollbackLines: workspace.settings.scrollbackLines,
       initiallyInteractive: input.initiallyInteractive,
-      resolveUrl: input.resolveUrl,
+      // The controller runs the claim itself; `runApp` binds this app session's services to it.
+      resolveUrl: (signal) => runApp(registry, input.resolveUrl(), { signal }),
       onEvent: (event) => workspace.onAttachmentEvent(identity, event),
       onDiagnostic: (event) =>
         workspace.diagnostics.record({
@@ -146,10 +147,10 @@ export function useTerminalAttachmentResource(input: {
       onCustomKey: input.onCustomKey,
       parkingRoot: workspace.parkingRoot,
       environment: workspace.environment ?? browserTerminalEnvironment,
-      // Passed by reference, not wrapped: both enforcement points (the focus
-      // scheduler and this controller) read the identical owner rule and
-      // cannot drift.
-      paneFocusAllowed,
+      // The focus scheduler's own rule, bound to this app session: both
+      // enforcement points (the focus scheduler and this controller) read the
+      // identical owner rule and cannot drift.
+      paneFocusAllowed: () => paneFocusAllowed(registry),
       // Superseded by a newer request, not by an effect teardown: a StrictMode
       // probe re-runs this effect with the same request key and must not cancel
       // the preparation it is about to reuse.
@@ -171,6 +172,7 @@ export function useTerminalAttachmentResource(input: {
     input.resolveUrl,
     input.onCustomKey,
     input.onMilestone,
+    registry,
     session,
     workspace.settings.scrollbackLines,
   ]);

@@ -1,0 +1,114 @@
+import { Context, Effect, Layer, Semaphore } from 'effect';
+
+// Per-entity mutual exclusion for operations that must not interleave on the
+// same durable entity. It lives in `platform` so every domain that takes it
+// shares one set of semantics: durable sessions (`environment/sessions/lifecycle.ts`),
+// editor contexts (`editor/contexts/service.ts`, and `environment/surfaces`
+// when it opens or releases an editor) and project commands
+// (`commands/service.ts`).
+//
+// The keys are deliberately one closed union rather than an opaque string: a
+// lock is only useful when every caller agrees on what it names, and a free-form
+// key makes a typo a silent loss of exclusion rather than a compile error.
+
+export type EntityLockKey =
+  | { readonly kind: 'agent_session'; readonly id: number }
+  | { readonly kind: 'terminal_session'; readonly id: number }
+  | { readonly kind: 'editor_context'; readonly id: number }
+  // A project command has no row id of its own that outlives a run, so it is named by the worktree it belongs to and
+  // its configured name.
+  | { readonly kind: 'command'; readonly worktreeId: number; readonly commandName: string };
+
+/**
+ * The brand that makes the witness unforgeable. It is declared, never defined,
+ * and never exported, so the only expression in the program that satisfies
+ * `EntityLockHeld` is the one `withLock` builds below: no other module can name
+ * this symbol, and structural typing therefore cannot mint a witness from a
+ * bare `{ key }`.
+ */
+declare const entityLockHeld: unique symbol;
+
+/**
+ * Proof, passed by value, that the caller is already inside `withLock` for
+ * `key`.
+ *
+ * It exists so an operation that must run under a lock it does not itself take
+ * can require that fact in its type instead of in a comment — and so that no
+ * such operation is tempted to re-acquire a semaphore that is not reentrant.
+ * Nothing reads the witness yet; it is part of the signature from the start
+ * because adding the parameter later would mean editing every call site.
+ *
+ * The brand is what makes the name honest: a caller that has not held the lock
+ * cannot construct this type at all, so a later key comparison is checking
+ * *which* lock a genuine witness came from rather than whether it is genuine.
+ */
+export interface EntityLockHeld {
+  readonly [entityLockHeld]: true;
+  readonly key: EntityLockKey;
+}
+
+export function entityLockKeyId(key: EntityLockKey) {
+  // The worktree id is numeric, so the first `:` after it always ends it and a command name containing `:` cannot
+  // make two keys collide.
+  if (key.kind === 'command') return `${key.kind}:${key.worktreeId}:${key.commandName}`;
+  return `${key.kind}:${key.id}`;
+}
+
+const make = Effect.gen(function* () {
+  const semaphores = new Map<string, Semaphore.Semaphore>();
+
+  // Lookup and insertion happen in one synchronous step, so two fibers asking for a new key's lock at the same time
+  // always share one semaphore.
+  const semaphoreFor = (key: EntityLockKey) =>
+    Effect.sync(() => {
+      const keyId = entityLockKeyId(key);
+      let semaphore = semaphores.get(keyId);
+      if (!semaphore) {
+        semaphore = Semaphore.makeUnsafe(1);
+        semaphores.set(keyId, semaphore);
+      }
+      return semaphore;
+    });
+
+  const service = EntityLock.of({
+    withLock: Effect.fn('EntityLock.withLock')(function* <A, E, R>(
+      key: EntityLockKey,
+      run: (held: EntityLockHeld) => Effect.Effect<A, E, R>,
+    ) {
+      const semaphore = yield* semaphoreFor(key);
+      // The one place a witness is created, and the only reason this file
+      // asserts anything: the brand has no runtime representation, so the
+      // value carries exactly the key and the cast is the proof.
+      const held = { key } as EntityLockHeld;
+      return yield* semaphore.withPermits(1)(run(held));
+    }),
+  });
+
+  return yield* Effect.acquireRelease(Effect.succeed(service), () =>
+    Effect.sync(() => {
+      semaphores.clear();
+    }),
+  );
+});
+
+/**
+ * One instance per runtime scope, which is what makes "the same lock" a fact
+ * rather than a convention: two domains that provide this same layer value
+ * serialize against each other on a shared key.
+ *
+ * The map is cleared when the providing scope closes. The service owns no
+ * background work and holds nothing but semaphores, so this is memory hygiene
+ * at shutdown rather than a lifecycle guarantee — normal code cannot reach the
+ * map once its scope is gone.
+ */
+export class EntityLock extends Context.Service<
+  EntityLock,
+  {
+    readonly withLock: <A, E, R>(
+      key: EntityLockKey,
+      run: (held: EntityLockHeld) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
+  }
+>()('isagi/runtime/platform/locks/EntityLock') {
+  static readonly layer = Layer.effect(EntityLock, make);
+}

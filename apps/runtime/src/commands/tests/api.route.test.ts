@@ -5,8 +5,8 @@ import { Effect } from 'effect';
 
 import { type WorktreeCommandsOutput } from '@isagi/contracts';
 
-import { DatabaseError } from '../../persistence/index.js';
-import { CommandError } from '../commands.errors.js';
+import { DatabaseError } from '../../platform/persistence/index.js';
+import { CommandError } from '../errors.js';
 import { idleAction, idleLogMetadata, withCommandsApi } from './test-support.js';
 
 test('command route returns configured command reads through the contract path', async () => {

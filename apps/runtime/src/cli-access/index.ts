@@ -1,10 +1,2 @@
-export {
-  CliAccess,
-  CliAccessLive,
-  CliAccessNone,
-  CliShimError,
-  makeCliAccess,
-  noCliAccess,
-  type CliAccessService,
-} from './cli-access.service.js';
-export { cliShimPath, renderCliShim, writeCliShim } from './shim.js';
+export { CliAccessLayer } from './layer.js';
+export { CliAccess, CliShimError } from './service.js';

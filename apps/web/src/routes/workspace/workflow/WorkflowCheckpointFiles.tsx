@@ -1,8 +1,12 @@
+import { useAtomRefresh, useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { useMemo, useState } from 'react';
 
 import type { WorkflowCheckpointDto } from '@isagi/contracts';
 
-import { useWorkflowCheckpoint } from '../../../lib/workspace/workflow/queries.js';
+import { queryError } from '../../../lib/state/result.js';
+import { workflowCheckpointAtom } from '../../../lib/workspace/workflow/queries.js';
 import {
   buildCheckpointTree,
   checkpointCommitLabel,
@@ -35,8 +39,10 @@ export function WorkflowCheckpointFiles({
   /** Rendered under the chosen file's details in the `panes` layout: the export line. */
   readonly aside?: React.ReactNode;
 }) {
-  const detail = useWorkflowCheckpoint(checkpointId);
-  const checkpoint = detail.data ?? null;
+  const detailAtom = workflowCheckpointAtom(checkpointId);
+  const detail = useAtomValue(detailAtom);
+  const refreshDetail = useAtomRefresh(detailAtom);
+  const checkpoint = Option.getOrNull(AsyncResult.value(detail));
   const tree = useMemo(
     () => (checkpoint === null ? null : buildCheckpointTree(checkpoint)),
     [checkpoint],
@@ -54,12 +60,12 @@ export function WorkflowCheckpointFiles({
         );
 
   const treePane =
-    detail.error !== null ? (
+    queryError(detail) !== null ? (
       <div className="px-3.5 py-2">
         <p className="text-[12.5px] text-fg-muted">{inspectorCopy.checkpointFilesFailed}</p>
         <button
           type="button"
-          onClick={() => void detail.refetch()}
+          onClick={refreshDetail}
           className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
         >
           {inspectorCopy.checkpointFilesRetry}

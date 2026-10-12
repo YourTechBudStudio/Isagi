@@ -17,6 +17,8 @@ export function buildPaletteContext(
   projects: readonly Project[],
   activeWorktreeId: number | null,
   options: {
+    readonly registry: PaletteContext['registry'];
+    readonly app: PaletteContext['app'];
     readonly launchableHarnesses: readonly AgentHarness[];
     readonly editorAvailable: boolean;
     readonly activeSurfaceByWorktreeId?: Readonly<Record<number, number>>;
@@ -43,6 +45,8 @@ export function buildPaletteContext(
   const activeSurface = storedActiveSurface ?? runtimeActiveSurface;
 
   return {
+    registry: options.registry,
+    app: options.app,
     projects,
     activeWorktree,
     activeProject: findWorktreeProject(projects, activeWorktree),

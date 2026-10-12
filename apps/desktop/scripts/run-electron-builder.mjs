@@ -181,11 +181,18 @@ process.off('SIGINT', onInterruptSignal);
 process.off('SIGTERM', onTerminateSignal);
 
 const outcome = classifyProgramExit(exit, receivedSignal);
-if (outcome.cause) console.error(Cause.pretty(outcome.cause, { renderErrorCause: true }));
+if (outcome.cause) console.error(Cause.pretty(outcome.cause));
 process.exitCode = outcome.code;
 
+/** @typedef {{ code: number | null; signal: NodeJS.Signals | null }} CommandResult */
+
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @returns {Effect.Effect<CommandResult, CommandStartError>}
+ */
 function runCommand(command, args) {
-  return Effect.async((resume) => {
+  return Effect.callback((resume) => {
     const child = spawn(command, args, {
       cwd: process.cwd(),
       env: process.env,

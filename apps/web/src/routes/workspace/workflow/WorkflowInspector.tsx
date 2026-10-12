@@ -1,13 +1,20 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowCheckpointSummaryDto, WorkflowRunSummary } from '@isagi/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
+import { isPaletteOpen } from '../../../lib/palette/store.js';
+import { disabledQuery } from '../../../lib/state/policy.js';
+import { useRegistry } from '../../../lib/state/registry.js';
+import { queryError } from '../../../lib/state/result.js';
 import {
-  useWorkflowExecutionQuery,
   useWorkflowRunView,
-  useWorkflowStructureQuery,
+  workflowExecutionAtom,
+  workflowStructureAtom,
 } from '../../../lib/workspace/workflow/queries.js';
 import { aggregateVisits, emptyAggregation } from './aggregate.js';
 import { executionAddressKey } from './ancestry.js';
@@ -58,6 +65,7 @@ export function WorkflowInspector({
   /** Swappable so a test can drive the layout protocol without a real engine. */
   readonly engineFactory?: LayoutEngineFactory | undefined;
 }) {
+  const registry = useRegistry();
   const runId = summary.runId;
   const runRead = useWorkflowRunView(runId);
   const view = runRead.view;
@@ -81,10 +89,12 @@ export function WorkflowInspector({
   const live = runSummary.endedAt === null;
   const now = useRunClock(live);
 
-  const structure = useWorkflowStructureQuery(runId, runSummary.artifactHash);
+  const structureAtom = workflowStructureAtom([runId, runSummary.artifactHash]);
+  const structure = useAtomValue(structureAtom);
+  const structureData = Option.getOrUndefined(AsyncResult.value(structure));
   const topology = useMemo(
-    () => (structure.data ? buildTopology(structure.data.descriptor) : null),
-    [structure.data],
+    () => (structureData ? buildTopology(structureData.descriptor) : null),
+    [structureData],
   );
 
   const aggregation = useMemo(
@@ -137,8 +147,10 @@ export function WorkflowInspector({
     setChosenCheckpointId(null);
   }, [runId]);
 
-  const execution = useWorkflowExecutionQuery(selectedExecutionId(selection, view));
-  const detail = execution.data ?? null;
+  const selectedId = selectedExecutionId(selection, view);
+  const executionAtom = selectedId === null ? disabledQuery : workflowExecutionAtom(selectedId);
+  const execution = useAtomValue(executionAtom);
+  const detail = Option.getOrNull(AsyncResult.value(execution));
 
   const dockView = useMemo(
     () => (view === null ? null : buildDockView({ selection, view, topology, detail, now })),
@@ -152,28 +164,43 @@ export function WorkflowInspector({
   }, []);
 
   /**
-   * Focus moves into the overlay on open and back where it came from on close.
+   * Focus moves into the overlay on open, and on close goes back where it came from unless something
+   * already took it.
    *
-   * "Back where it came from" is the Inspect toggle in practice, and reading it from the document
-   * rather than being handed a ref is what keeps that true however the inspector was opened.
+   * The close path hands focus to the active pane, as the drawer's does, and that lands a frame or two
+   * after the close while this unmount waits for the exit animation. So the opener (the Inspect toggle
+   * in practice, read from the document so that holds however the inspector was opened) only gets
+   * focus back when nothing holds it: there is no pane to return to, or the pane has not taken it yet
+   * and will on its own frame.
    */
   useEffect(() => {
     const opener = document.activeElement;
     closeRef.current?.focus();
     return () => {
-      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+      const holder = document.activeElement;
+      const unclaimed = holder === null || holder === document.body;
+      if (unclaimed && opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
   }, []);
 
-  const onKeyDown = useCallback(
-    (event: React.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    },
-    [onClose],
-  );
+  /**
+   * Escape closes the inspector wherever focus is, as the header's Esc hint promises. A `keydown` on
+   * the dialog only heard it while focus was inside, and the bar below stays operable: one click on
+   * a bar control moved focus out (or to the body, once that control disabled itself) and Escape
+   * went nowhere. On the document it still runs after React's handlers, so an Escape the bar's
+   * input flow or the palette consumed (prevented and stopped) never reaches it; stopping it here
+   * keeps one Escape from also leaving zen. An open palette owns Escape even while busy.
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || isPaletteOpen(registry)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, registry]);
 
   const toggleExpanded = useCallback((key: string) => {
     setExpanded((current) => {
@@ -226,7 +253,6 @@ export function WorkflowInspector({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.985, y: 6 }}
         transition={surfaceTransition}
-        onKeyDown={onKeyDown}
         style={{ bottom: bottomInset + 8 }}
         className="absolute inset-x-4 top-4 z-30 flex flex-col overflow-hidden rounded-md border border-line/42 bg-elevated/97 shadow-lift backdrop-blur-xl"
       >
@@ -268,19 +294,19 @@ export function WorkflowInspector({
                 onRetry={runRead.retry}
               />
               {tab === 'declared' ? (
-                structure.isPending ? (
+                structure._tag === 'Initial' ? (
                   <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
                     <p className="font-mono text-[12px] text-fg-subtle">
                       {inspectorCopy.readingStructure}
                     </p>
                   </div>
-                ) : structure.error ? (
+                ) : structure._tag === 'Failure' ? (
                   <div className="grid min-h-0 flex-1 place-items-center bg-canvas/55">
                     <div className="max-w-sm rounded-lg border border-error/40 bg-error/5 px-3 py-2.5 text-center">
                       <p className="text-[12.5px] text-fg-muted">{inspectorCopy.structureFailed}</p>
                       <button
                         type="button"
-                        onClick={() => void structure.refetch()}
+                        onClick={() => registry.refresh(structureAtom)}
                         className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
                       >
                         {inspectorCopy.structureRetry}
@@ -290,7 +316,7 @@ export function WorkflowInspector({
                 ) : topology ? (
                   <WorkflowDeclaredCanvas
                     topology={topology}
-                    artifactHash={structure.data.artifactHash}
+                    artifactHash={structure.value.artifactHash}
                     aggregation={aggregation}
                     liveKey={liveKey}
                     selection={selection}
@@ -324,9 +350,9 @@ export function WorkflowInspector({
                 view={dockView}
                 execution={{
                   detail,
-                  isLoading: execution.isLoading,
-                  error: execution.error,
-                  retry: () => void execution.refetch(),
+                  isLoading: execution._tag === 'Initial' && execution.waiting,
+                  error: queryError(execution),
+                  retry: () => registry.refresh(executionAtom),
                 }}
                 height={dockHeight}
                 onHeightChange={clampDock}

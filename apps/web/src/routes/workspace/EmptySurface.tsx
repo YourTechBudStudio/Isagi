@@ -5,8 +5,8 @@ import { MonoAside } from '../../components/MonoAside.js';
 import { emptySurfaceCopy } from '../../copy/index.js';
 import { useEditorAvailable } from '../../lib/control-plane/queries.js';
 import {
-  handleDispatchedCommandError,
   useCommandDispatcher,
+  useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
 import {
   isDeletePending,
@@ -33,6 +33,7 @@ export function EmptySurface({
   readonly surfaceId: number;
 }) {
   const dispatchCommand = useCommandDispatcher();
+  const onDispatchError = useDispatchedCommandErrorHandler();
   const editorAvailable = useEditorAvailable();
   const runDelete = useRunDelete();
   const deleteKey = surfaceDeleteKey(surfaceId);
@@ -41,7 +42,7 @@ export function EmptySurface({
   const target = { intoSurfaceId: String(surfaceId) };
 
   const start = (commandId: 'start-agent-session' | 'start-terminal-session' | 'open-editor') => {
-    void dispatchCommand(commandId, target).catch(handleDispatchedCommandError);
+    void dispatchCommand(commandId, target).catch(onDispatchError);
   };
 
   return (

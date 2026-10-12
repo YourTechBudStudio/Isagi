@@ -1,13 +1,20 @@
-import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
 
-import { queryClient } from '../../../src/lib/query/client.js';
 import { RuntimeLocalityContext, type RuntimeLocality } from '../../../src/lib/runtime/locality.js';
+import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
+import { revalidate } from '../../../src/lib/state/policy.js';
+import { runApp } from '../../../src/lib/state/runtime.js';
 import { registerPaneFocusTarget } from '../../../src/lib/workspace/activation.js';
-import { worktreeCommandsQueryKey } from '../../../src/lib/workspace/query-keys.js';
-import { emptyWorkspaceSelection, useWorkspaceStore } from '../../../src/lib/workspace/store.js';
+import { worktreeCommandsAtom } from '../../../src/lib/workspace/queries.js';
+import {
+  emptyWorkspaceSelection,
+  selectWorktree,
+  setActivePane,
+  setActiveSurface,
+  setSelection,
+} from '../../../src/lib/workspace/store.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
 import { WorkbenchDrawer } from '../../../src/routes/workspace/WorkbenchDrawer.js';
@@ -15,8 +22,11 @@ import {
   WorkflowInputFlow,
   type WorkflowInputAnswers,
 } from '../../../src/routes/workspace/WorkflowInputFlow.js';
+import { createFixtureRegistry } from '../test-support/registry.js';
 import type { CommandPaletteRuntimeControls } from './fake-runtime.js';
 import { FIXTURE_ORIGIN, FIXTURE_PANES } from './seed.js';
+
+const fixtureRegistry = createFixtureRegistry();
 
 /** Production workbench components with observable pane focus and simulated runtime controls. */
 export function CommandPaletteFixtureApp({
@@ -45,12 +55,11 @@ export function CommandPaletteFixtureApp({
     // opens on: the destination's active surface and pane have to resolve for
     // `restoreActivePaneFocus()` to schedule anything at all, and a suppression
     // assertion against a request that was never going to fire proves nothing.
-    const store = useWorkspaceStore.getState();
     for (const place of FIXTURE_PANES) {
-      store.setActiveSurface(place.worktreeId, place.surfaceId);
-      store.setActivePane(place.surfaceId, place.paneId);
+      setActiveSurface(fixtureRegistry, place.worktreeId, place.surfaceId);
+      setActivePane(fixtureRegistry, place.surfaceId, place.paneId);
     }
-    store.selectWorktree(FIXTURE_ORIGIN.projectId, FIXTURE_ORIGIN.worktreeId);
+    selectWorktree(fixtureRegistry, FIXTURE_ORIGIN.projectId, FIXTURE_ORIGIN.worktreeId);
     setReady(true);
   }, []);
 
@@ -58,12 +67,11 @@ export function CommandPaletteFixtureApp({
     window.commandPaletteFixture = {
       ...runtime,
       setActiveWorktree: (worktreeId) => {
-        const store = useWorkspaceStore.getState();
         if (worktreeId === null) {
-          store.setSelection(emptyWorkspaceSelection);
+          setSelection(fixtureRegistry, emptyWorkspaceSelection);
           return;
         }
-        store.selectWorktree(FIXTURE_ORIGIN.projectId, worktreeId);
+        selectWorktree(fixtureRegistry, FIXTURE_ORIGIN.projectId, worktreeId);
       },
       paneFocusCount: (worktreeId) => paneFocusCounts.current[worktreeId] ?? 0,
       setLocality,
@@ -72,7 +80,7 @@ export function CommandPaletteFixtureApp({
       // spec that changes the catalog behind it needs to say so — this is the
       // fixture standing in for the invalidation a real mutation would cause.
       refetchCommands: (worktreeId = FIXTURE_ORIGIN.worktreeId) =>
-        queryClient.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId) }),
+        runApp(fixtureRegistry, revalidate(worktreeCommandsAtom(worktreeId))),
       mountWorkflowQuestions: (questions) => {
         workflowEvents.current = { submissions: [], backCount: 0 };
         setWorkflowQuestions(questions);
@@ -86,25 +94,25 @@ export function CommandPaletteFixtureApp({
   }, [runtime]);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <AppStateProvider registry={fixtureRegistry}>
       <RuntimeLocalityContext.Provider value={locality}>
         {/* `relative` because the drawer is absolutely positioned inside the work
-          area in production; without a positioned ancestor it would anchor to the
-          viewport and this fixture would be judging a drawer the app never renders. */}
+            area in production; without a positioned ancestor it would anchor to the
+            viewport and this fixture would be judging a drawer the app never renders. */}
         <div data-fixture-shell className="relative h-screen overflow-hidden bg-canvas text-fg">
           {FIXTURE_PANES.map((place) => (
             <PaneStandIn key={place.paneId} place={place} counts={paneFocusCounts} />
           ))}
           {/* Declared in the production order — the drawer before the palette — so
-            the effect flush order this page observes is the app's own. */}
+              the effect flush order this page observes is the app's own. */}
           {ready && (
             <>
               <WorkbenchDrawer />
               <CommandPalette />
               {/* The strip is the always-on surface, so it sits at the foot of the
-                work area exactly as the app places it. It shares the drawer's
-                catalog query, which is the point: a command's chip and its drawer
-                row must never disagree about the same read. */}
+                  work area exactly as the app places it. It shares the drawer's
+                  catalog query, which is the point: a command's chip and its drawer
+                  row must never disagree about the same read. */}
               <div data-fixture-strip className="absolute inset-x-0 bottom-0 z-10">
                 <StatusStrip />
               </div>
@@ -129,7 +137,7 @@ export function CommandPaletteFixtureApp({
           )}
         </div>
       </RuntimeLocalityContext.Provider>
-    </QueryClientProvider>
+    </AppStateProvider>
   );
 }
 
@@ -154,7 +162,7 @@ function PaneStandIn({
 
   useEffect(
     () =>
-      registerPaneFocusTarget({
+      registerPaneFocusTarget(fixtureRegistry, {
         surfaceId: place.surfaceId,
         paneId: place.paneId,
         focus: () => {

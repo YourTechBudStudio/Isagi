@@ -27,6 +27,10 @@ export function verifyHelpText() {
   ].join('\n');
 }
 
+/**
+ * @param {string[]} args
+ * @returns {Effect.Effect<{ help: true } | { help: false }, PackageVersionSyncError>}
+ */
 function parseVerifyArguments(args) {
   if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
     return Effect.succeed({ help: true });
@@ -45,19 +49,19 @@ async function runCli() {
   const exit = await Effect.runPromiseExit(
     Effect.gen(function* () {
       const parsedArguments = yield* parseVerifyArguments(process.argv.slice(2));
-      if (parsedArguments.help) {
+      if (parsedArguments.help === true) {
         return parsedArguments;
       }
       const plan = yield* verifyPackageVersions({ repoRoot: repositoryRoot });
-      return { help: false, plan };
+      return /** @type {const} */ ({ help: false, plan });
     }),
   );
   if (Exit.isFailure(exit)) {
-    console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+    console.error(Cause.pretty(exit.cause));
     process.exitCode = 1;
     return;
   }
-  if (exit.value.help) {
+  if (exit.value.help === true) {
     console.log(verifyHelpText());
     return;
   }

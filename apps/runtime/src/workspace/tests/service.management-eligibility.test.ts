@@ -9,30 +9,28 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints } from '@isagi/contracts';
 
-import { CommandService, type CommandServiceShape } from '../../commands/index.js';
-import { Git, type GitService } from '../../git/index.js';
-import { DataDirectory, StateFile } from '../../persistence/index.js';
-import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { SurfaceRepository } from '../../surfaces/index.js';
-import { WorkflowRunErasureLive } from '../../workflows/erasure.js';
-import {
-  WorktreeSetupRepository,
-  WorktreeSetupService,
-  type WorktreeSetupRepositoryService,
-  type WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../../worktree-setup/index.js';
-import type { ProjectRow } from '../types.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace.repository.js';
-import { WorkspaceServiceLive } from '../workspace.service.js';
+import { CommandService } from '../../commands/index.js';
+import { SurfaceService } from '../../environment/index.js';
+import { InternalEvents } from '../../platform/events/index.js';
+import { Git } from '../../platform/git/index.js';
+import { DataDirectory } from '../../platform/persistence/index.js';
+import { ProjectRepository } from '../../projects/index.js';
+import type { ProjectRow } from '../../projects/index.js';
+import { runWithDatabase } from '../../projects/testing.js';
+import { PtyService } from '../../pty-processes/index.js';
+import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
+import { WorkspaceService } from '../service.js';
+import { WorktreeSetupRepository } from '../setup/repository.js';
+import { WorktreeSetupService } from '../setup/service.js';
+import { StateFile } from '../state-file.js';
+import { NoProjectDeletionParticipant } from '../testing.js';
 import { withWorkspaceApi } from './api-test-support.js';
-import { runWithDatabase } from './repository-test-support.js';
 import {
   project,
   stateFileWithWriteCounter,
   testDataDirectory,
   testInternalEvents,
-  testSurfaceRepository,
+  testSurfaceService,
   worktree,
 } from './test-support.js';
 
@@ -51,13 +49,13 @@ import {
 const forbiddenGit = {
   run: (args: readonly string[]) =>
     Effect.die(new Error(`git must not run for an unsupported request: git ${args.join(' ')}`)),
-} satisfies GitService;
+} satisfies Git['Service'];
 
 const forbiddenWorktreeSetup = {
   preflight: () => Effect.die(new Error('worktree setup preflight must not read hook config')),
   updateTrust: () => Effect.die(new Error('worktree setup must not write trust')),
   validateTrustForOpen: () => Effect.die(new Error('worktree setup must not validate trust')),
-} satisfies WorktreeSetupServiceShape;
+} satisfies WorktreeSetupService['Service'];
 
 const forbiddenWorktreeSetupRepository = {
   findTrust: () => Effect.die(new Error('trust must not be read')),
@@ -65,7 +63,7 @@ const forbiddenWorktreeSetupRepository = {
   disableHooks: () => Effect.die(new Error('hooks must not be disabled')),
   createRunWithSteps: () => Effect.die(new Error('setup runs must not be recorded')),
   listRunSteps: () => Effect.die(new Error('setup run steps must not be read')),
-} satisfies WorktreeSetupRepositoryService;
+} satisfies WorktreeSetupRepository['Service'];
 
 const forbiddenCommands = {
   listForWorktree: () => Effect.die(new Error('commands must not be listed')),
@@ -76,7 +74,7 @@ const forbiddenCommands = {
   runPostCreateLifecycle: () => Effect.die(new Error('postCreate must not run')),
   cleanupBeforeWorktreeDelete: () => Effect.die(new Error('command cleanup must not run')),
   cleanupBeforeWorktreePrune: () => Effect.die(new Error('prune cleanup must not run')),
-} satisfies CommandServiceShape;
+} satisfies CommandService['Service'];
 
 const forbiddenPty = {
   allocateLaunch: () => Effect.die(new Error('pty must not be allocated')),
@@ -90,22 +88,23 @@ const forbiddenPty = {
   resize: () => Effect.die(new Error('pty must not resize')),
   kill: () => Effect.die(new Error('pty must not be killed')),
   terminate: () => Effect.die(new Error('pty must not be terminated')),
+  terminateMany: () => Effect.die(new Error('pty must not be terminated')),
+  findProcess: () => Effect.die(new Error('pty rows must not be read')),
   cleanupProcess: () => Effect.die(new Error('pty must not be cleaned up')),
   pin: () => Effect.die(new Error('pty must not be pinned')),
   unpin: () => Effect.die(new Error('pty must not be unpinned')),
   isPinned: () => Effect.die(new Error('pty pinning must not be read')),
-} satisfies PtyServiceShape;
+} satisfies PtyService['Service'];
 
 /**
  * Resolves the project row under test and dies on everything a refused request
  * must not reach — including the reads that would follow the guard, so the
  * matrix also establishes that kind precedes worktree lookup.
  */
-function forbiddenRepositoryFor(row: ProjectRow): WorkspaceRepositoryService {
+function forbiddenRepositoryFor(row: ProjectRow): ProjectRepository['Service'] {
   return {
     findProject: (projectId) => Effect.succeed(projectId === row.id ? row : null),
     listProjects: Effect.succeed([row]),
-    listDurableSessions: Effect.die(new Error('durable sessions must not be read')),
     findProjectByRootPath: () => Effect.die(new Error('root path lookup must not run')),
     findWorktree: () => Effect.die(new Error('worktree lookup must not run')),
     findProjectWorktree: () => Effect.die(new Error('project worktree lookup must not run')),
@@ -114,7 +113,6 @@ function forbiddenRepositoryFor(row: ProjectRow): WorkspaceRepositoryService {
     findProjectWorktreeByPath: () => Effect.die(new Error('path lookup must not run')),
     deleteProject: () => Effect.die(new Error('project must not be deleted')),
     deleteWorktree: () => Effect.die(new Error('worktree rows must not be deleted')),
-    readWorktreeDeleteDiagnostics: () => Effect.die(new Error('delete diagnostics must not run')),
     createProject: () => Effect.die(new Error('projects must not be created')),
     listWorktrees: Effect.die(new Error('worktrees must not be listed')),
     reconcileProjectWorktrees: () => Effect.die(new Error('reconciliation must not run')),
@@ -125,16 +123,26 @@ function forbiddenRepositoryFor(row: ProjectRow): WorkspaceRepositoryService {
   };
 }
 
-function workspaceLayerWith(repository: WorkspaceRepositoryService) {
-  return WorkspaceServiceLive.pipe(
+const forbiddenDeleteDiagnostics = WorktreeDeleteDiagnosticsReader.of({
+  read: () => Effect.die(new Error('delete diagnostics must not run')),
+});
+
+const forbiddenDurableSessions = {
+  ...testSurfaceService,
+  listDurableSessions: Effect.die(new Error('durable sessions must not be read')),
+} satisfies SurfaceService['Service'];
+
+function workspaceLayerWith(repository: ProjectRepository['Service']) {
+  return WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
-        WorkflowRunErasureLive,
-        Layer.succeed(WorkspaceRepository, repository),
+        NoProjectDeletionParticipant,
+        Layer.succeed(ProjectRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
-        Layer.succeed(InternalRuntimeEventBus, testInternalEvents),
-        Layer.succeed(SurfaceRepository, testSurfaceRepository),
+        Layer.succeed(InternalEvents, testInternalEvents),
+        Layer.succeed(WorktreeDeleteDiagnosticsReader, forbiddenDeleteDiagnostics),
+        Layer.succeed(SurfaceService, forbiddenDurableSessions),
         Layer.succeed(
           StateFile,
           stateFileWithWriteCounter(() => {}),
@@ -150,7 +158,7 @@ function workspaceLayerWith(repository: WorkspaceRepositoryService) {
 
 interface ManagementRequest {
   readonly label: string;
-  readonly endpoint: { readonly errors: Schema.Schema.AnyNoContext };
+  readonly endpoint: { readonly errors: Schema.Codec<unknown, unknown> };
   readonly method: 'DELETE' | 'GET' | 'POST' | 'PUT';
   readonly url: string;
   readonly payload?: Record<string, unknown>;
@@ -370,19 +378,20 @@ test('a Git project still reaches the work the guard refuses for folders', async
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-eligibility-git-'));
   const gitProject: ProjectRow = { ...project, rootPath: projectRoot };
   let branchListCalls = 0;
-  const repository: WorkspaceRepositoryService = {
+  const repository: ProjectRepository['Service'] = {
     ...forbiddenRepositoryFor(gitProject),
     listWorktrees: Effect.succeed([{ ...worktree, path: projectRoot }]),
   };
-  const layer = WorkspaceServiceLive.pipe(
+  const layer = WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
-        WorkflowRunErasureLive,
-        Layer.succeed(WorkspaceRepository, repository),
+        NoProjectDeletionParticipant,
+        Layer.succeed(ProjectRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
-        Layer.succeed(InternalRuntimeEventBus, testInternalEvents),
-        Layer.succeed(SurfaceRepository, testSurfaceRepository),
+        Layer.succeed(InternalEvents, testInternalEvents),
+        Layer.succeed(WorktreeDeleteDiagnosticsReader, forbiddenDeleteDiagnostics),
+        Layer.succeed(SurfaceService, forbiddenDurableSessions),
         Layer.succeed(
           StateFile,
           stateFileWithWriteCounter(() => {}),
@@ -396,7 +405,7 @@ test('a Git project still reaches the work the guard refuses for folders', async
               branchListCalls += 1;
               return { stdout: 'main\n', stderr: '' };
             }),
-        } satisfies GitService),
+        } satisfies Git['Service']),
       ),
     ),
   );
@@ -442,7 +451,7 @@ test('worktrees.moveOrder carries the real repository refusal to the wire', asyn
   await runWithDatabase(
     'eligibility-reorder-wire',
     Effect.gen(function* () {
-      const repository = yield* WorkspaceRepository;
+      const repository = yield* ProjectRepository;
       const { id: projectId } = yield* repository.createProject({
         name: 'notes',
         rootPath: '/repo/notes',

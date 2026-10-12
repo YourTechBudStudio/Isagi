@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Either, Fiber } from 'effect';
+import { Effect, Fiber, Result } from 'effect';
 
 import { PtyKillError } from '../types.js';
 import { leakyRootScript, leakyTreeFixture, waitUntilGone } from './process-tree-test-support.js';
-import { TmuxBackend, TmuxBackendLive } from './tmux.js';
+import { TmuxBackend } from './tmux.js';
 
 // tmux reports an already-gone session on stderr rather than through a
 // distinguishable exit code, so these message shapes are the whole classifier.
@@ -32,8 +32,8 @@ async function killWithFakeTmux(script: string) {
     return await Effect.runPromise(
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
-        return yield* backend.kill(ref).pipe(Effect.either);
-      }).pipe(Effect.provide(TmuxBackendLive)),
+        return yield* backend.kill(ref).pipe(Effect.result);
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
@@ -49,8 +49,8 @@ function fakeTmux(body: string) {
 test('tmux kill affirms a termination when kill-session succeeds', async () => {
   const result = await killWithFakeTmux(fakeTmux('process.exit(0);'));
 
-  assert.equal(Either.isRight(result), true);
-  assert.deepEqual(Either.getOrThrow(result), { terminated: true });
+  assert.equal(Result.isSuccess(result), true);
+  assert.deepEqual(Result.getOrThrow(result), { terminated: true });
 });
 
 test('tmux kill reports a missing session as absence, not as a kill', async () => {
@@ -58,8 +58,8 @@ test('tmux kill reports a missing session as absence, not as a kill', async () =
     fakeTmux(`process.stderr.write("can't find session: isagi_test_7\\n");\nprocess.exit(1);`),
   );
 
-  assert.equal(Either.isRight(result), true);
-  assert.deepEqual(Either.getOrThrow(result), { terminated: false });
+  assert.equal(Result.isSuccess(result), true);
+  assert.deepEqual(Result.getOrThrow(result), { terminated: false });
 });
 
 test('tmux kill reports a missing server as absence — the session cannot outlive it', async () => {
@@ -69,8 +69,8 @@ test('tmux kill reports a missing server as absence — the session cannot outli
     ),
   );
 
-  assert.equal(Either.isRight(result), true);
-  assert.deepEqual(Either.getOrThrow(result), { terminated: false });
+  assert.equal(Result.isSuccess(result), true);
+  assert.deepEqual(Result.getOrThrow(result), { terminated: false });
 });
 
 test('tmux kill keeps an unrecognised failure a control failure with no terminal evidence', async () => {
@@ -78,8 +78,8 @@ test('tmux kill keeps an unrecognised failure a control failure with no terminal
     fakeTmux(`process.stderr.write('permission denied\\n');\nprocess.exit(1);`),
   );
 
-  assert.equal(Either.isLeft(result), true);
-  assert.ok(Either.isLeft(result) && result.left instanceof PtyKillError);
+  assert.equal(Result.isFailure(result), true);
+  assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);
 });
 
 test('an unusable tmux binary is a control failure, never verified absence', async () => {
@@ -91,12 +91,12 @@ test('an unusable tmux binary is a control failure, never verified absence', asy
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
-        return yield* backend.kill(ref).pipe(Effect.either);
-      }).pipe(Effect.provide(TmuxBackendLive)),
+        return yield* backend.kill(ref).pipe(Effect.result);
+      }).pipe(Effect.provide(TmuxBackend.layer)),
     );
 
-    assert.equal(Either.isLeft(result), true);
-    assert.ok(Either.isLeft(result) && result.left instanceof PtyKillError);
+    assert.equal(Result.isFailure(result), true);
+    assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -159,7 +159,7 @@ for (const operation of ['terminate', 'kill'] as const) {
             if (operation === 'kill') return yield* backend.kill(ref);
             assert.ok(backend.terminate);
             return yield* backend.terminate({ ref, gracefulTimeoutMs: 100 });
-          }).pipe(Effect.provide(TmuxBackendLive)),
+          }).pipe(Effect.provide(TmuxBackend.layer)),
         );
 
         assert.deepEqual(result, { terminated: true });
@@ -177,12 +177,12 @@ test(
       await Effect.runPromise(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
-          const fiber = yield* Effect.fork(backend.kill(ref));
+          const fiber = yield* Effect.forkChild(backend.kill(ref));
           // Cancel only once the pane is really dead but the command is still
           // in flight — the window in which the sweep used to be skipped.
           yield* Effect.promise(() => waitForFile(killedMarker));
           yield* Fiber.interrupt(fiber);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
       assert.equal(await waitUntilGone(helperPid), true);
@@ -202,11 +202,11 @@ test(
       const result = await Effect.runPromise(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
-          return yield* backend.kill(ref).pipe(Effect.either);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+          return yield* backend.kill(ref).pipe(Effect.result);
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
-      assert.ok(Either.isLeft(result) && result.left instanceof PtyKillError);
+      assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);
       assert.equal(await waitUntilGone(helperPid), true);
     });
   },
@@ -222,11 +222,11 @@ test(
       const result = await Effect.runPromise(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
-          return yield* backend.kill(ref).pipe(Effect.either);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+          return yield* backend.kill(ref).pipe(Effect.result);
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
-      assert.ok(Either.isLeft(result) && result.left instanceof PtyKillError);
+      assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);
       assert.equal(isAlive(panePid), true);
       assert.equal(isAlive(helperPid), true);
     });
@@ -245,7 +245,7 @@ test(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
           return yield* backend.kill(ref);
-        }).pipe(Effect.provide(TmuxBackendLive)),
+        }).pipe(Effect.provide(TmuxBackend.layer)),
       );
 
       assert.deepEqual(result, { terminated: true });

@@ -1,48 +1,48 @@
 import { Schema } from 'effect';
 
-const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
+import { positiveInteger } from '../scalars.js';
 
 export const projectWorktreeRouteParamsSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
+  projectId: positiveInteger,
 });
 
 export const worktreeRouteParamsSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
-  worktreeId: positiveIntegerSchema,
+  projectId: positiveInteger,
+  worktreeId: positiveInteger,
 });
 
 export const worktreeBranchSchema = Schema.Struct({
   name: Schema.String,
-  worktreeId: Schema.NullOr(positiveIntegerSchema),
+  worktreeId: Schema.NullOr(positiveInteger),
 });
 
 export const listProjectBranchesOutputSchema = Schema.Struct({
   branches: Schema.Array(worktreeBranchSchema),
 });
 
-export const worktreeBaseRefSchema = Schema.Union(
+export const worktreeBaseRefSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal('branch'),
-    ref: Schema.String.pipe(Schema.minLength(1)),
+    ref: Schema.String.check(Schema.isMinLength(1)),
   }),
   Schema.Struct({
     kind: Schema.Literal('detached_worktree'),
-    worktreeId: positiveIntegerSchema,
+    worktreeId: positiveInteger,
   }),
   // An already-resolved commit. A caller that resolved a ref itself branches from the commit it
   // actually saw, rather than re-resolving a moving ref and silently branching from somewhere else.
   // Caller-supplied and crossing a trust boundary, so the shape is validated here.
   Schema.Struct({
     kind: Schema.Literal('commit'),
-    commit: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
+    commit: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
   }),
-);
+]);
 
 /**
  * Why a destination cannot hold a new worktree. One vocabulary for every place the rule is checked:
  * the runtime's detached creation, the rejection it reports, and a client's own precheck.
  */
-export const worktreeDestinationIssueSchema = Schema.Literal(
+export const worktreeDestinationIssueSchema = Schema.Literals([
   /** The runtime requires an absolute path. */
   'not_absolute',
   /** It exists and has entries. */
@@ -53,26 +53,26 @@ export const worktreeDestinationIssueSchema = Schema.Literal(
   'inside_checkout',
   /** It cannot be inspected, or its parent cannot be created. */
   'inaccessible',
-);
+]);
 
 export const openWorktreeInputSchema = Schema.Struct({
-  branch: Schema.String.pipe(Schema.minLength(1)),
+  branch: Schema.String.check(Schema.isMinLength(1)),
   base: Schema.optional(worktreeBaseRefSchema),
   /**
    * `open` (default) adopts an existing worktree or branch; `create_new` refuses both. A caller that
    * has already decided it is creating something wants the collision reported, not absorbed into a
    * silent reuse of somebody else's checkout.
    */
-  mode: Schema.optional(Schema.Literal('open', 'create_new')),
+  mode: Schema.optional(Schema.Literals(['open', 'create_new'])),
 });
 
-export const checkoutRemovalModeSchema = Schema.Literal('normal', 'force');
+export const checkoutRemovalModeSchema = Schema.Literals(['normal', 'force']);
 
-export const branchRemovalModeSchema = Schema.Literal('preserve', 'delete_if_safe');
+export const branchRemovalModeSchema = Schema.Literals(['preserve', 'delete_if_safe']);
 
 export const deleteWorktreePreflightOutputSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
-  worktreeId: positiveIntegerSchema,
+  projectId: positiveInteger,
+  worktreeId: positiveInteger,
   path: Schema.String,
   branch: Schema.NullOr(Schema.String),
   isRoot: Schema.Boolean,
@@ -87,7 +87,7 @@ export const deleteWorktreeInputSchema = Schema.Struct({
   branchRemovalMode: branchRemovalModeSchema,
 });
 
-export const worktreeBranchRemovalSchema = Schema.Union(
+export const worktreeBranchRemovalSchema = Schema.Union([
   Schema.Struct({
     status: Schema.Literal('not_requested'),
   }),
@@ -103,58 +103,59 @@ export const worktreeBranchRemovalSchema = Schema.Union(
     branch: Schema.String,
     diagnostic: Schema.String,
   }),
-);
+]);
 
 export const deleteWorktreeOutputSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
-  deletedWorktreeId: positiveIntegerSchema,
-  selectedWorktreeId: positiveIntegerSchema,
+  projectId: positiveInteger,
+  deletedWorktreeId: positiveInteger,
+  selectedWorktreeId: positiveInteger,
   branchRemoval: worktreeBranchRemovalSchema,
 });
 
-export const worktreeSetupLifecycleSchema = Schema.Literal('post_create');
+/** A one-member set: `Literals` keeps `.literals` so the set can grow without changing its shape. */
+export const worktreeSetupLifecycleSchema = Schema.Literals(['post_create']);
 
-export const worktreeSetupHookTypeSchema = Schema.Literal('copy', 'symlink', 'command');
+export const worktreeSetupHookTypeSchema = Schema.Literals(['copy', 'symlink', 'command']);
 
 export const worktreeSetupSummarySchema = Schema.Struct({
-  index: positiveIntegerSchema,
+  index: positiveInteger,
   type: worktreeSetupHookTypeSchema,
   label: Schema.String,
   detail: Schema.optional(Schema.String),
   envKeys: Schema.optional(Schema.Array(Schema.String)),
 });
 
-export const worktreeSetupPreflightStatusSchema = Schema.Literal(
+export const worktreeSetupPreflightStatusSchema = Schema.Literals([
   'not_configured',
   'trusted',
   'always_trusted',
   'disabled',
   'needs_approval',
-);
+]);
 
 export const worktreeSetupPreflightOutputSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
+  projectId: positiveInteger,
   status: worktreeSetupPreflightStatusSchema,
   hash: Schema.optional(Schema.String),
   summary: Schema.Array(worktreeSetupSummarySchema),
 });
 
-export const worktreeSetupTrustInputSchema = Schema.Union(
+export const worktreeSetupTrustInputSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literal('trust_hook_config'),
-    hash: Schema.String.pipe(Schema.minLength(1)),
+    hash: Schema.String.check(Schema.isMinLength(1)),
   }),
   Schema.Struct({
     action: Schema.Literal('always_trust_project'),
-    hash: Schema.String.pipe(Schema.minLength(1)),
+    hash: Schema.String.check(Schema.isMinLength(1)),
   }),
   Schema.Struct({
     action: Schema.Literal('disable_hooks'),
   }),
-);
+]);
 
 export const worktreeSetupTrustOutputSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
+  projectId: positiveInteger,
   status: worktreeSetupPreflightStatusSchema,
   hash: Schema.optional(Schema.String),
 });
@@ -171,64 +172,64 @@ const worktreeSetupNotRunSchema = Schema.Struct({
 
 const worktreeSetupSkippedSchema = Schema.Struct({
   status: Schema.Literal('skipped'),
-  reason: Schema.Literal('not_configured', 'hooks_disabled'),
+  reason: Schema.Literals(['not_configured', 'hooks_disabled']),
 });
 
 const worktreeSetupSucceededSchema = Schema.Struct({
   status: Schema.Literal('succeeded'),
-  runId: positiveIntegerSchema,
+  runId: positiveInteger,
 });
 
 const worktreeSetupFailedSchema = Schema.Struct({
   status: Schema.Literal('failed'),
-  runId: positiveIntegerSchema,
-  failedHookIndex: positiveIntegerSchema,
+  runId: positiveInteger,
+  failedHookIndex: positiveInteger,
   failedHookType: worktreeSetupHookTypeSchema,
   message: Schema.String,
   command: Schema.optional(Schema.String),
   src: Schema.optional(Schema.String),
   dest: Schema.optional(Schema.String),
-  exitCode: Schema.optional(Schema.NullOr(Schema.Number.pipe(Schema.int()))),
+  exitCode: Schema.optional(Schema.NullOr(Schema.Number.check(Schema.isInt()))),
   signal: Schema.optional(Schema.NullOr(Schema.String)),
   outputExcerpt: Schema.optional(Schema.String),
 });
 
-export const worktreeSetupResultSchema = Schema.Union(
+export const worktreeSetupResultSchema = Schema.Union([
   worktreeSetupNotRunSchema,
   worktreeSetupSkippedSchema,
   worktreeSetupSucceededSchema,
   worktreeSetupFailedSchema,
-);
+]);
 
-export const openWorktreeStatusSchema = Schema.Literal(
+export const openWorktreeStatusSchema = Schema.Literals([
   'opened_existing',
   'created',
   'created_setup_failed',
-);
+]);
 
-export const openWorktreeOutputSchema = Schema.Union(
+export const openWorktreeOutputSchema = Schema.Union([
   Schema.Struct({
-    projectId: positiveIntegerSchema,
-    worktreeId: positiveIntegerSchema,
+    projectId: positiveInteger,
+    worktreeId: positiveInteger,
     branch: Schema.String,
     status: Schema.Literal('opened_existing'),
     setup: worktreeSetupNotRunSchema,
   }),
   Schema.Struct({
-    projectId: positiveIntegerSchema,
-    worktreeId: positiveIntegerSchema,
+    projectId: positiveInteger,
+    worktreeId: positiveInteger,
     branch: Schema.String,
     status: Schema.Literal('created'),
-    setup: Schema.Union(worktreeSetupSkippedSchema, worktreeSetupSucceededSchema),
+    setup: Schema.Union([worktreeSetupSkippedSchema, worktreeSetupSucceededSchema]),
   }),
   Schema.Struct({
-    projectId: positiveIntegerSchema,
-    worktreeId: positiveIntegerSchema,
+    projectId: positiveInteger,
+    worktreeId: positiveInteger,
     branch: Schema.String,
     status: Schema.Literal('created_setup_failed'),
     setup: worktreeSetupFailedSchema,
   }),
-);
+]);
 
 /**
  * One bounded move within a single project's non-root worktrees. `null` appends
@@ -236,44 +237,36 @@ export const openWorktreeOutputSchema = Schema.Union(
  * anchor, so this shape cannot express placing a worktree above it.
  */
 export const moveWorktreeOrderInputSchema = Schema.Struct({
-  beforeWorktreeId: Schema.NullOr(positiveIntegerSchema),
+  beforeWorktreeId: Schema.NullOr(positiveInteger),
 });
 
 export const moveWorktreeOrderOutputSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
-  worktreeId: positiveIntegerSchema,
+  projectId: positiveInteger,
+  worktreeId: positiveInteger,
 });
 
-export type ProjectWorktreeRouteParams = Schema.Schema.Type<
-  typeof projectWorktreeRouteParamsSchema
->;
-export type MoveWorktreeOrderInput = Schema.Schema.Type<typeof moveWorktreeOrderInputSchema>;
-export type MoveWorktreeOrderOutput = Schema.Schema.Type<typeof moveWorktreeOrderOutputSchema>;
-export type WorktreeRouteParams = Schema.Schema.Type<typeof worktreeRouteParamsSchema>;
-export type WorktreeBranch = Schema.Schema.Type<typeof worktreeBranchSchema>;
-export type ListProjectBranchesOutput = Schema.Schema.Type<typeof listProjectBranchesOutputSchema>;
-export type WorktreeBaseRef = Schema.Schema.Type<typeof worktreeBaseRefSchema>;
-export type WorktreeDestinationIssue = Schema.Schema.Type<typeof worktreeDestinationIssueSchema>;
-export type OpenWorktreeInput = Schema.Schema.Type<typeof openWorktreeInputSchema>;
-export type CheckoutRemovalMode = Schema.Schema.Type<typeof checkoutRemovalModeSchema>;
-export type BranchRemovalMode = Schema.Schema.Type<typeof branchRemovalModeSchema>;
-export type DeleteWorktreePreflightOutput = Schema.Schema.Type<
-  typeof deleteWorktreePreflightOutputSchema
->;
-export type DeleteWorktreeInput = Schema.Schema.Type<typeof deleteWorktreeInputSchema>;
-export type WorktreeBranchRemoval = Schema.Schema.Type<typeof worktreeBranchRemovalSchema>;
-export type DeleteWorktreeOutput = Schema.Schema.Type<typeof deleteWorktreeOutputSchema>;
-export type WorktreeSetupLifecycle = Schema.Schema.Type<typeof worktreeSetupLifecycleSchema>;
-export type WorktreeSetupHookType = Schema.Schema.Type<typeof worktreeSetupHookTypeSchema>;
-export type WorktreeSetupSummary = Schema.Schema.Type<typeof worktreeSetupSummarySchema>;
-export type WorktreeSetupPreflightStatus = Schema.Schema.Type<
-  typeof worktreeSetupPreflightStatusSchema
->;
-export type WorktreeSetupPreflightOutput = Schema.Schema.Type<
-  typeof worktreeSetupPreflightOutputSchema
->;
-export type WorktreeSetupTrustInput = Schema.Schema.Type<typeof worktreeSetupTrustInputSchema>;
-export type WorktreeSetupTrustOutput = Schema.Schema.Type<typeof worktreeSetupTrustOutputSchema>;
-export type WorktreeSetupResult = Schema.Schema.Type<typeof worktreeSetupResultSchema>;
-export type OpenWorktreeStatus = Schema.Schema.Type<typeof openWorktreeStatusSchema>;
-export type OpenWorktreeOutput = Schema.Schema.Type<typeof openWorktreeOutputSchema>;
+export type ProjectWorktreeRouteParams = typeof projectWorktreeRouteParamsSchema.Type;
+export type MoveWorktreeOrderInput = typeof moveWorktreeOrderInputSchema.Type;
+export type MoveWorktreeOrderOutput = typeof moveWorktreeOrderOutputSchema.Type;
+export type WorktreeRouteParams = typeof worktreeRouteParamsSchema.Type;
+export type WorktreeBranch = typeof worktreeBranchSchema.Type;
+export type ListProjectBranchesOutput = typeof listProjectBranchesOutputSchema.Type;
+export type WorktreeBaseRef = typeof worktreeBaseRefSchema.Type;
+export type WorktreeDestinationIssue = typeof worktreeDestinationIssueSchema.Type;
+export type OpenWorktreeInput = typeof openWorktreeInputSchema.Type;
+export type CheckoutRemovalMode = typeof checkoutRemovalModeSchema.Type;
+export type BranchRemovalMode = typeof branchRemovalModeSchema.Type;
+export type DeleteWorktreePreflightOutput = typeof deleteWorktreePreflightOutputSchema.Type;
+export type DeleteWorktreeInput = typeof deleteWorktreeInputSchema.Type;
+export type WorktreeBranchRemoval = typeof worktreeBranchRemovalSchema.Type;
+export type DeleteWorktreeOutput = typeof deleteWorktreeOutputSchema.Type;
+export type WorktreeSetupLifecycle = typeof worktreeSetupLifecycleSchema.Type;
+export type WorktreeSetupHookType = typeof worktreeSetupHookTypeSchema.Type;
+export type WorktreeSetupSummary = typeof worktreeSetupSummarySchema.Type;
+export type WorktreeSetupPreflightStatus = typeof worktreeSetupPreflightStatusSchema.Type;
+export type WorktreeSetupPreflightOutput = typeof worktreeSetupPreflightOutputSchema.Type;
+export type WorktreeSetupTrustInput = typeof worktreeSetupTrustInputSchema.Type;
+export type WorktreeSetupTrustOutput = typeof worktreeSetupTrustOutputSchema.Type;
+export type WorktreeSetupResult = typeof worktreeSetupResultSchema.Type;
+export type OpenWorktreeStatus = typeof openWorktreeStatusSchema.Type;
+export type OpenWorktreeOutput = typeof openWorktreeOutputSchema.Type;

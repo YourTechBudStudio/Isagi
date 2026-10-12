@@ -1,67 +1,47 @@
 # Principles
 
-These principles are intentionally small and durable. Detailed review questions live in the lens docs.
+These principles are intentionally small and durable. Review questions live in the lenses.
 
 ## Optimize For Future Change
 
-Prefer designs that keep the next product slice easy to add without freezing architecture too early. Isagi is pre-MVP, so clean internal evolution is more valuable than preserving incidental internal compatibility.
+Prefer designs that keep the next product slice easy to add without freezing architecture too early. Isagi is pre-MVP, so clean internal evolution beats compatibility: migrate callers and delete old paths instead of adding shims or dual systems. Preserve compatibility only at real boundaries: released user data, public APIs or contracts used outside the repo, integrations or deployment behavior users rely on, and behavior early users already depend on.
 
-## Preserve Source-Of-Truth Boundaries
+## Keep Ownership And Sources Of Truth Clear
 
-Keep ownership clear. The runtime owns operational state. Git remains the source of truth for repository and worktree facts where practical. The web app owns React UI without Electron assumptions. Desktop owns native shell concerns. Contracts describe shared behavior and wire shapes without implementation.
-
-## Make State Ownership Explicit
-
-Every durable or user-visible state fact should have a clear owner. Persistence location, cache mechanism, and UI state tooling should follow that ownership rather than obscure it.
+Every durable or user-visible fact has one clear owner, and persistence location, caching and UI state follow that ownership instead of hiding it. The runtime owns operational state. Git and the filesystem are the source of truth for repository and worktree facts where practical. The web app owns the React UI without Electron assumptions. Desktop owns native shell concerns. Contracts describe shared behavior and wire shapes without implementation.
 
 ## Keep State Flow Causal And Proportionate
 
-State changes should have clear causes, bounded effects, and operational cost that matches the triggering action. Avoid hidden transitions, broad side effects, and expensive work attached to APIs that appear lightweight.
+State changes have clear causes, bounded effects, and a cost that matches the triggering action. Avoid hidden transitions, broad side effects, and expensive work behind APIs that look lightweight.
 
-## Make Operational Work Explicit
+## Make Operational Work And Its Failures Explicit
 
-Work that can fail, block, retry, allocate resources, depend on services, spawn processes, or outlive a single call should make those facts visible in its type, boundary, and lifecycle. Use Effect as Isagi's operational substrate, not as a universal style for pure code.
+Work that can fail, block, retry, hold resources, depend on services, spawn processes or outlive a call makes those facts visible in its type, boundary and lifecycle. Expected failures are named, structured and small in vocabulary, and are mapped to contract errors at API boundaries; unexpected defects stay distinct from them. ADR 0011 records how Isagi does this with Effect; it is the substrate for operational work, not a style for pure code.
 
-## Model Expected Failures Explicitly
+## Use Narrow Types Where Mixups Matter
 
-Expected domain and operational failures should be named, tagged, and structured. Prefer tagged Effect data/errors for failures callers are meant to handle, keep reason/code surfaces small and stable, carry useful context, and map runtime failures into contract errors at API boundaries. Use native or thrown errors for unexpected defects and third-party causes, not as the primary shape of expected behavior.
+When plain strings or numbers would make identifiers, refs, paths or state variants easy to confuse, use a narrower shape: literal unions, tagged variants, or named fields instead of positional same-typed arguments. Do not add type ceremony where nothing can be mixed up.
 
-## Prefer Strong Domain Shapes Where Mixups Matter
+## Prefer Deep Modules That Humans Can Navigate
 
-Use branded, opaque, or otherwise narrow domain types when plain strings or numbers would make important identifiers, refs, paths, tokens, or state variants easy to confuse. Do not brand every primitive by default; use stronger shapes where they protect boundaries, operational targeting, or local reasoning.
-
-## Prefer Deep Modules With Narrow Public Surfaces
-
-Concentrate complexity behind clear interfaces. A deep module may contain multiple focused internal files; depth means callers see a small, stable surface, not that everything lives in one huge file.
-
-## Organize Internals For Human Navigation
-
-Code should be easy for a human to trace. Group related files by concept, responsibility, platform, lifecycle, or flow. Large files are acceptable only when they remain single-purpose and reviewable.
+Concentrate complexity behind small, stable public surfaces. Depth is not one huge file: a deep module may hold several focused files, grouped by concept, responsibility, platform, lifecycle or flow so a human can trace the main path. Large files are fine only while they stay single-purpose and reviewable.
 
 ## Make Real Boundaries Explicit
 
-Use explicit contracts and interfaces where behavior crosses packages, runtime/client boundaries, platform variants, persisted data, public APIs, integrations, or user-visible expectations. Runtime API contracts should make request, response, and error shapes explicit enough for clients to reason about success and failure. Avoid interface ceremony for tiny local helpers or one-off implementation details.
+Use explicit contracts and interfaces where behavior crosses packages, the runtime/client boundary, platform variants, persisted data, public APIs, integrations or user expectations. API contracts make request, response and error shapes explicit enough for clients to handle success and failure deliberately. Skip interface ceremony for small local helpers.
 
 ## Reuse To Prevent Drift
 
-Actively look for similar functions, modules, and components. Reuse or refactor when similarity represents the same product behavior, visual pattern, lifecycle rule, or contract concept. Do not reuse in ways that weaken boundaries, readability, or local reasoning.
+Look actively for similar functions, modules and components. Reuse or refactor when the similarity is the same product behavior, visual pattern, lifecycle rule or contract concept, but not in ways that weaken boundaries or local reasoning.
 
-## Keep Behavior Honest And Visible
+## Keep User-Visible Behavior Honest
 
-Do not present uncertain, partial, failed, or degraded behavior as success. Restoration, command execution, session state, attention signals, and missing artifacts should be visible in the product when they matter to the user.
+What the user sees, trusts, resumes or acts on is engineering behavior, not polish. Never present uncertain, partial, failed or degraded behavior as success; restoration, command execution, session state, attention signals and missing artifacts are visible when they matter. On user-facing surfaces, fidelity to Isagi's design language and voice is part of the product.
 
 ## Make Runtime Failures Diagnosable
 
-Early users need to report problems that can be debugged remotely. Runtime errors, process failures, Git/worktree problems, API failures, and integration degradation should expose enough context through UI, logs, structured API errors, or structured state to understand what failed and where.
+Early users must be able to report problems that can be debugged remotely. Runtime, process, Git/worktree, API and integration failures expose enough context, through UI, logs, structured API errors or structured state, to tell what failed and where.
 
-## Treat User-Visible Behavior As Engineering Behavior
+## Make Completed Work Easy To Trust
 
-When a change affects what the user sees, trusts, resumes, or acts on, review it as engineering correctness, not as cosmetic polish. This includes look-and-feel and voice: on user-facing surfaces, adherence to Isagi's design language is part of the product, not decoration.
-
-## Let Verification Match Risk
-
-Use enough verification to make the change trustworthy. A small copy change does not need the same evidence as a runtime lifecycle change, but risky behavior should not ship on optimism.
-
-## Make Completed Work Easy To Review And Trust
-
-Changes should leave a clear path through the code, an understandable explanation of behavior, and useful evidence of verification. Working code that is hard to review is usually a concern, even when it runs.
+Verification matches risk: a copy change needs less evidence than a runtime lifecycle change, but risky behavior never ships on optimism. A change leaves a clear path through the code, an honest explanation of behavior and evidence of what was verified. Working code that is hard to review is usually a concern, even when it runs.

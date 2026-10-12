@@ -9,7 +9,7 @@ import {
 } from '../../copy/index.js';
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
 import { compactHomePath } from '../workspace/selectors.js';
-import { useWorkspaceStore } from '../workspace/store.js';
+import { selectWorktree } from '../workspace/store.js';
 import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
 import { editorActionCommands } from './commands/editor-actions.js';
 import { projectActionCommands } from './commands/project-actions.js';
@@ -246,7 +246,8 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         icon: surfaceSummaryIcon(surface.paneKinds),
         group: 'worktree-surfaces',
         sub: 'go to surface',
-        run: () => activateSurface({ worktreeId: worktree.id, surfaceId: surface.id }),
+        run: () =>
+          activateSurface(ctx.registry, { worktreeId: worktree.id, surfaceId: surface.id }),
       });
     }
   }
@@ -269,8 +270,8 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         // branch that is already this row's own label.
         sub: `${project.name} · ${compactHomePath(candidate.path)}`,
         run: () => {
-          useWorkspaceStore.getState().selectWorktree(project.id, candidate.id);
-          restoreActivePaneFocus();
+          selectWorktree(ctx.registry, project.id, candidate.id);
+          restoreActivePaneFocus(ctx.registry);
         },
       });
     }

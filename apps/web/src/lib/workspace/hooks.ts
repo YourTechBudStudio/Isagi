@@ -1,132 +1,130 @@
+import { useAtomValue } from '@effect/atom-react';
+import { Option } from 'effect';
+import { AsyncResult } from 'effect/reactivity';
 import { useCallback, useEffect, useMemo } from 'react';
 
 import type { ProjectKind } from '@isagi/contracts';
 
-import { toastCopy } from '../../copy/index.js';
+import { useAppRun, useRegistry } from '../state/registry.js';
+import { queryError } from '../state/result.js';
 import { showToast } from '../toast/index.js';
 import { activateSurface, restoreActivePaneFocus } from './activation.js';
-import { applyAttentionToProjects, useAttentionStore } from './attention.js';
+import { applyAttentionToProjects, attentionSourcesAtom } from './attention.js';
 import {
   scheduleActiveContextPersistence,
-  scheduleWorkspaceReconcileForProject,
+  scheduleWorkspaceReconcile,
+  settleMissingProjectsToast,
 } from './background-sync.js';
 import {
   activeContextFromSelection,
   activeWorktreeId,
   findMissingProject,
   findWorktree,
-  reconcileSelection,
   selectedProjectId,
-  selectionFromActiveContext,
 } from './model.js';
-import { formatRuntimeError, useActiveContextQuery, useWorkspaceQuery } from './queries.js';
-import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
+import { activeContextAtom, formatRuntimeError, useWorkspaceResult } from './queries.js';
+import { nextSelectionSync, selectionEquals, selectionSyncAtom } from './selection-sync.js';
+import {
+  activeSurfaceByWorktreeAtom,
+  emptyWorkspaceSelection,
+  selectionAtom,
+  selectMissingProject,
+  selectWorktree,
+  setSelection,
+} from './store.js';
 import type { Surface, Worktree, WorkspaceSelection } from './types.js';
-import { useAttachedWorkflowRunsQuery } from './workflow/queries.js';
+import { useAttachedWorkflowRuns } from './workflow/queries.js';
 
-let suppressedPersistenceSelection: WorkspaceSelection | null = null;
-const restorationReconciledProjectIds = new Set<number>();
-
+/**
+ * Restore the selection from the persisted active context on startup, and keep it valid as the
+ * workspace changes (`nextSelectionSync` decides; this applies).
+ */
 export function useWorkspaceSelectionSync() {
-  const workspace = useWorkspaceQuery();
-  const activeContext = useActiveContextQuery();
-  const selection = useWorkspaceStore((state) => state.selection);
-  const setSelection = useWorkspaceStore((state) => state.setSelection);
+  const workspace = useWorkspaceResult();
+  const activeContext = useAtomValue(activeContextAtom);
+  const registry = useRegistry();
+  const run = useAppRun();
+  const selection = useAtomValue(selectionAtom);
+  const activeContextData = Option.getOrUndefined(AsyncResult.value(activeContext));
+  const activeContextError = queryError(activeContext) !== null;
 
   useEffect(() => {
-    if (!workspace.data) {
-      return;
+    const sync = registry.get(selectionSyncAtom);
+    const decision = nextSelectionSync({
+      selection,
+      projects: workspace.data?.projects,
+      activeContext: activeContextData?.activeContext,
+      activeContextError,
+      reconciled: sync.reconciledProjectIds,
+    });
+    for (const toast of decision.toasts) {
+      showToast(registry, toast);
     }
-
-    const restoredActiveContext = activeContext.data?.activeContext;
-    if (selection.kind === 'empty' && !restoredActiveContext && !activeContext.error) {
-      return;
+    if (decision.reconcileProjectId !== null) {
+      sync.reconciledProjectIds.add(decision.reconcileProjectId);
+      void run(scheduleWorkspaceReconcile(decision.reconcileProjectId));
     }
-
-    const activeContextLoadFailed = selection.kind === 'empty' && Boolean(activeContext.error);
-
-    if (activeContextLoadFailed) {
-      showToast({
-        id: 'active-context-load-failed',
-        kind: 'warning',
-        title: toastCopy.activeContextLoadFailed.title,
-        subtitle: toastCopy.activeContextLoadFailed.subtitle,
-      });
-    }
-
-    const next =
-      selection.kind === 'empty'
-        ? selectionFromActiveContext(
-            workspace.data.projects,
-            restoredActiveContext ?? { projectId: null, worktreeId: null },
-          )
-        : reconcileSelection(workspace.data.projects, selection);
-
-    const restoredProjectId = selection.kind === 'empty' ? restoredActiveContext?.projectId : null;
-    if (restoredProjectId && !restorationReconciledProjectIds.has(restoredProjectId)) {
-      restorationReconciledProjectIds.add(restoredProjectId);
-      scheduleWorkspaceReconcileForProject(restoredProjectId);
-    }
-
-    if (!selectionEquals(selection, next)) {
-      if (selection.kind === 'empty') {
-        suppressedPersistenceSelection = next;
+    if (decision.next !== null) {
+      if (decision.suppressPersistence) {
+        sync.suppressedPersistence = decision.next;
       }
-
-      if (selection.kind === 'worktree' && next.kind === 'worktree') {
-        showToast({
-          id: `active-worktree-recovered:${selection.worktreeId}`,
-          kind: 'warning',
-          title: toastCopy.activeWorktreeRecovered.title,
-          subtitle: toastCopy.activeWorktreeRecovered.subtitle,
-          lifetime: { autoDismiss: false },
-        });
-      }
-      setSelection(next);
+      setSelection(registry, decision.next);
     }
-  }, [activeContext.data, activeContext.error, workspace.data, selection, setSelection]);
+  }, [activeContextData, activeContextError, workspace.data, selection, registry, run]);
+
+  const projects = workspace.data?.projects;
+  useEffect(() => {
+    if (projects) settleMissingProjectsToast(registry, projects);
+  }, [projects, registry]);
 }
 
+/** Persist the user's selection as the runtime's active context (debounced, latest wins). */
 export function usePersistActiveContextSelection() {
-  const selection = useWorkspaceStore((state) => state.selection);
+  const registry = useRegistry();
+  const run = useAppRun();
+  const selection = useAtomValue(selectionAtom);
 
   useEffect(() => {
-    if (
-      suppressedPersistenceSelection &&
-      selectionEquals(selection, suppressedPersistenceSelection)
-    ) {
-      suppressedPersistenceSelection = null;
+    const sync = registry.get(selectionSyncAtom);
+    const suppressed = sync.suppressedPersistence;
+    sync.suppressedPersistence = null;
+    if (suppressed && selectionEquals(selection, suppressed)) {
       return;
     }
-    suppressedPersistenceSelection = null;
 
     const activeContext = activeContextFromSelection(selection);
     if (!activeContext) {
       return;
     }
 
-    scheduleActiveContextPersistence(activeContext);
-  }, [selection]);
+    void run(scheduleActiveContextPersistence(activeContext));
+  }, [selection, registry, run]);
 }
 
 export function useWorkspace() {
-  const workspace = useWorkspaceQuery();
-  const selection = useWorkspaceStore((state) => state.selection);
-  const sourcesByKey = useAttentionStore((state) => state.sourcesByKey);
-  const attachedRuns = useAttachedWorkflowRunsQuery().data;
-  const activeSurfaceByWorktreeId = useWorkspaceStore((state) => state.activeSurfaceByWorktreeId);
-  const selectWorktree = useWorkspaceStore((state) => state.selectWorktree);
-  const selectMissingProject = useWorkspaceStore((state) => state.selectMissingProject);
+  const workspace = useWorkspaceResult();
+  const registry = useRegistry();
+  const selection = useAtomValue(selectionAtom);
+  const sourcesByKey = useAtomValue(attentionSourcesAtom);
+  const attachedRuns = useAttachedWorkflowRuns();
+  const activeSurfaceByWorktreeId = useAtomValue(activeSurfaceByWorktreeAtom);
   const selectWorktreeAndRestoreFocus = useCallback(
     (projectId: number, worktreeId: number) => {
-      selectWorktree(projectId, worktreeId);
-      restoreActivePaneFocus();
+      selectWorktree(registry, projectId, worktreeId);
+      restoreActivePaneFocus(registry);
     },
-    [selectWorktree],
+    [registry],
   );
-  const selectSurfaceAndActivate = useCallback((worktreeId: number, surfaceId: number) => {
-    activateSurface({ worktreeId, surfaceId });
-  }, []);
+  const selectMissingProjectInRegistry = useCallback(
+    (projectId: number) => selectMissingProject(registry, projectId),
+    [registry],
+  );
+  const selectSurfaceAndActivate = useCallback(
+    (worktreeId: number, surfaceId: number) => {
+      activateSurface(registry, { worktreeId, surfaceId });
+    },
+    [registry],
+  );
 
   const projects = useMemo(
     () => applyAttentionToProjects(workspace.data?.projects ?? [], sourcesByKey, attachedRuns),
@@ -153,23 +151,23 @@ export function useWorkspace() {
     activeMissingProject,
     activeSurface,
     loading: workspace.isPending,
-    error: workspace.error ? formatRuntimeError(workspace.error) : null,
+    error: workspace.error !== null ? formatRuntimeError(workspace.error) : null,
     selectWorktree: selectWorktreeAndRestoreFocus,
-    selectMissingProject,
+    selectMissingProject: selectMissingProjectInRegistry,
     selectSurface: selectSurfaceAndActivate,
     activeSurfaceByWorktreeId,
   };
 }
 
 export function useActiveWorktree(): Worktree | null {
-  const workspace = useWorkspaceQuery();
-  const sourcesByKey = useAttentionStore((state) => state.sourcesByKey);
-  const attachedRuns = useAttachedWorkflowRunsQuery().data;
+  const workspace = useWorkspaceResult();
+  const sourcesByKey = useAtomValue(attentionSourcesAtom);
+  const attachedRuns = useAttachedWorkflowRuns();
   const projects = useMemo(
     () => applyAttentionToProjects(workspace.data?.projects ?? [], sourcesByKey, attachedRuns),
     [workspace.data?.projects, sourcesByKey, attachedRuns],
   );
-  const selection = useWorkspaceStore((state) => state.selection);
+  const selection = useAtomValue(selectionAtom);
   return findWorktree(projects, activeWorktreeId(selection));
 }
 
@@ -187,8 +185,8 @@ export function useActiveWorktree(): Worktree | null {
  * show nothing, never as a reason to fall back to Git formatting.
  */
 export function useActiveProjectKind(): ProjectKind | null {
-  const workspace = useWorkspaceQuery();
-  const selection = useWorkspaceStore((state) => state.selection);
+  const workspace = useWorkspaceResult();
+  const selection = useAtomValue(selectionAtom);
   const projectId = selectedProjectId(selection);
   if (projectId === null) {
     return null;
@@ -210,21 +208,4 @@ function findWorkspaceActiveSurface(
 
   const activeSurfaceId = activeSurfaceByWorktreeId[worktree.id] ?? worktree.activeSurfaceId;
   return worktree.surfaces.find((surface) => surface.id === activeSurfaceId) ?? null;
-}
-
-function selectionEquals(left: WorkspaceSelection, right: WorkspaceSelection) {
-  if (left.kind !== right.kind) {
-    return false;
-  }
-  switch (left.kind) {
-    case 'empty':
-      return true;
-    case 'missingProject':
-      return left.projectId === (right as typeof left).projectId;
-    case 'worktree':
-      return (
-        left.projectId === (right as typeof left).projectId &&
-        left.worktreeId === (right as typeof left).worktreeId
-      );
-  }
 }

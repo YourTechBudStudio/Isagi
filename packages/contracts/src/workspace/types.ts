@@ -1,10 +1,9 @@
 import { Schema } from 'effect';
 
+import { positiveInteger } from '../scalars.js';
 import { paneSessionKindSchema } from '../surfaces/types.js';
 
-const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
-
-export const projectStatusSchema = Schema.Literal('present', 'missing');
+export const projectStatusSchema = Schema.Literals(['present', 'missing']);
 
 /**
  * How a project's environments are maintained. A `git` project discovers its
@@ -12,16 +11,16 @@ export const projectStatusSchema = Schema.Literal('present', 'missing');
  * environment at its registered directory. Assigned once at registration and
  * never rewritten, so every consumer can treat it as a stable project fact.
  */
-export const projectKindSchema = Schema.Literal('git', 'folder');
+export const projectKindSchema = Schema.Literals(['git', 'folder']);
 export const surfaceSchema = Schema.Struct({
-  id: positiveIntegerSchema,
+  id: positiveInteger,
   title: Schema.String,
   paneKinds: Schema.Array(paneSessionKindSchema),
 });
 
 export const worktreeSchema = Schema.Struct({
-  id: positiveIntegerSchema,
-  projectId: positiveIntegerSchema,
+  id: positiveInteger,
+  projectId: positiveInteger,
   title: Schema.String,
   path: Schema.String,
   branch: Schema.NullOr(Schema.String),
@@ -29,11 +28,11 @@ export const worktreeSchema = Schema.Struct({
   isRoot: Schema.Boolean,
   parked: Schema.Boolean,
   surfaces: Schema.Array(surfaceSchema),
-  activeSurfaceId: Schema.NullOr(positiveIntegerSchema),
+  activeSurfaceId: Schema.NullOr(positiveInteger),
 });
 
 const projectBaseFields = {
-  id: positiveIntegerSchema,
+  id: positiveInteger,
   name: Schema.String,
   rootPath: Schema.String,
   // Required on both members: a missing project keeps its kind, which is what
@@ -42,7 +41,7 @@ const projectBaseFields = {
   worktrees: Schema.Array(worktreeSchema),
 } as const;
 
-export const projectSchema = Schema.Union(
+export const projectSchema = Schema.Union([
   Schema.Struct({
     ...projectBaseFields,
     status: Schema.Literal('present'),
@@ -51,17 +50,17 @@ export const projectSchema = Schema.Union(
   Schema.Struct({
     ...projectBaseFields,
     status: Schema.Literal('missing'),
-    missingReason: Schema.String.pipe(Schema.minLength(1)),
+    missingReason: Schema.String.check(Schema.isMinLength(1)),
   }),
-);
+]);
 
 const activeSelectionSchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
-  worktreeId: positiveIntegerSchema,
+  projectId: positiveInteger,
+  worktreeId: positiveInteger,
 });
 
 const activeProjectOnlySchema = Schema.Struct({
-  projectId: positiveIntegerSchema,
+  projectId: positiveInteger,
   worktreeId: Schema.Null,
 });
 
@@ -70,11 +69,11 @@ const emptyActiveContextSchema = Schema.Struct({
   worktreeId: Schema.Null,
 });
 
-export const activeContextSchema = Schema.Union(
+export const activeContextSchema = Schema.Union([
   activeSelectionSchema,
   activeProjectOnlySchema,
   emptyActiveContextSchema,
-);
+]);
 
 export const workspaceSnapshotSchema = Schema.Struct({
   projects: Schema.Array(projectSchema),
@@ -91,26 +90,26 @@ export const workspaceSnapshotSchema = Schema.Struct({
  * Widening this literal would silently expand `durable_session_deleted` and the
  * cache's identity to a kind neither can service.
  */
-export const durablePtySessionKindSchema = Schema.Literal('agent_session', 'terminal_session');
+export const durablePtySessionKindSchema = Schema.Literals(['agent_session', 'terminal_session']);
 
 export const durableSessionIdentitySchema = Schema.Struct({
   kind: durablePtySessionKindSchema,
-  sessionId: positiveIntegerSchema,
-  worktreeId: positiveIntegerSchema,
+  sessionId: positiveInteger,
+  worktreeId: positiveInteger,
 });
 
 export const durableSessionInventorySchema = Schema.Struct({
   sessions: Schema.Array(durableSessionIdentitySchema),
 });
 
-export const setActiveContextInputSchema = Schema.Union(
+export const setActiveContextInputSchema = Schema.Union([
   activeSelectionSchema,
   emptyActiveContextSchema,
-);
+]);
 
 export const activeContextPersistenceInputSchema = Schema.Struct({
   activeContext: setActiveContextInputSchema,
-  revision: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  revision: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
 });
 
 export const activeContextOutputSchema = Schema.Struct({
@@ -118,56 +117,54 @@ export const activeContextOutputSchema = Schema.Struct({
 });
 
 export const reconcileWorkspaceInputSchema = Schema.Struct({
-  projectId: Schema.NullOr(positiveIntegerSchema),
+  projectId: Schema.NullOr(positiveInteger),
 });
 
-export const reconciliationFindingSchema = Schema.Union(
+export const reconciliationFindingSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal('project_missing'),
-    projectId: positiveIntegerSchema,
+    projectId: positiveInteger,
     path: Schema.String,
   }),
   Schema.Struct({
     kind: Schema.Literal('project_restored'),
-    projectId: positiveIntegerSchema,
+    projectId: positiveInteger,
     path: Schema.String,
   }),
   Schema.Struct({
     kind: Schema.Literal('worktree_added'),
-    projectId: positiveIntegerSchema,
-    worktreeId: positiveIntegerSchema,
+    projectId: positiveInteger,
+    worktreeId: positiveInteger,
     path: Schema.String,
     branch: Schema.NullOr(Schema.String),
   }),
   Schema.Struct({
     kind: Schema.Literal('worktree_missing'),
-    projectId: positiveIntegerSchema,
-    worktreeId: positiveIntegerSchema,
+    projectId: positiveInteger,
+    worktreeId: positiveInteger,
     path: Schema.String,
     branch: Schema.NullOr(Schema.String),
   }),
-);
+]);
 
 export const reconcileWorkspaceOutputSchema = Schema.Struct({
   findings: Schema.Array(reconciliationFindingSchema),
 });
 
-export type ProjectStatus = Schema.Schema.Type<typeof projectStatusSchema>;
-export type ProjectKind = Schema.Schema.Type<typeof projectKindSchema>;
-export type WorkspaceSnapshot = Schema.Schema.Type<typeof workspaceSnapshotSchema>;
-export type DurablePtySessionKind = Schema.Schema.Type<typeof durablePtySessionKindSchema>;
-export type DurableSessionIdentity = Schema.Schema.Type<typeof durableSessionIdentitySchema>;
-export type DurableSessionInventory = Schema.Schema.Type<typeof durableSessionInventorySchema>;
-export type SetActiveContextInput = Schema.Schema.Type<typeof setActiveContextInputSchema>;
-export type ActiveContextPersistenceInput = Schema.Schema.Type<
-  typeof activeContextPersistenceInputSchema
->;
-export type ActiveContextOutput = Schema.Schema.Type<typeof activeContextOutputSchema>;
+export type ProjectStatus = typeof projectStatusSchema.Type;
+export type ProjectKind = typeof projectKindSchema.Type;
+export type WorkspaceSnapshot = typeof workspaceSnapshotSchema.Type;
+export type DurablePtySessionKind = typeof durablePtySessionKindSchema.Type;
+export type DurableSessionIdentity = typeof durableSessionIdentitySchema.Type;
+export type DurableSessionInventory = typeof durableSessionInventorySchema.Type;
+export type SetActiveContextInput = typeof setActiveContextInputSchema.Type;
+export type ActiveContextPersistenceInput = typeof activeContextPersistenceInputSchema.Type;
+export type ActiveContextOutput = typeof activeContextOutputSchema.Type;
 export type SetActiveContextOutput = ActiveContextOutput;
-export type ReconcileWorkspaceInput = Schema.Schema.Type<typeof reconcileWorkspaceInputSchema>;
-export type ReconcileWorkspaceOutput = Schema.Schema.Type<typeof reconcileWorkspaceOutputSchema>;
-export type ReconciliationFinding = Schema.Schema.Type<typeof reconciliationFindingSchema>;
-export type Project = Schema.Schema.Type<typeof projectSchema>;
-export type Worktree = Schema.Schema.Type<typeof worktreeSchema>;
-export type ActiveContext = Schema.Schema.Type<typeof activeContextSchema>;
-export type WorkspaceSurfaceMetadata = Schema.Schema.Type<typeof surfaceSchema>;
+export type ReconcileWorkspaceInput = typeof reconcileWorkspaceInputSchema.Type;
+export type ReconcileWorkspaceOutput = typeof reconcileWorkspaceOutputSchema.Type;
+export type ReconciliationFinding = typeof reconciliationFindingSchema.Type;
+export type Project = typeof projectSchema.Type;
+export type Worktree = typeof worktreeSchema.Type;
+export type ActiveContext = typeof activeContextSchema.Type;
+export type WorkspaceSurfaceMetadata = typeof surfaceSchema.Type;

@@ -14,9 +14,9 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { eq } from 'drizzle-orm';
 
-import { workflowExecutions, workflowRuns } from '../../persistence/schema.js';
 import { WorkflowEngineError } from '../errors.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { workflowExecutions, workflowRuns } from '../tables.js';
 import { withEngine, type EngineHarness } from './test-support.js';
 
 /** Agent-turn waits through the engine: the latest-turn rule for waiting, Resume and Retry. */

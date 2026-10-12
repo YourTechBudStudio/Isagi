@@ -1,5 +1,5 @@
 import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
-import { Effect, Either } from 'effect';
+import { Effect, Result } from 'effect';
 
 import type {
   WorkflowLaunchOrigin,
@@ -7,13 +7,14 @@ import type {
   WorkflowPlacementRequestDto,
 } from '@isagi/contracts';
 
+import type { DatabaseError } from '../../platform/persistence/index.js';
 import { WorkflowEngineError } from '../errors.js';
 import { checkSerializable, errorMessage } from '../state/pure.js';
 import { storedParameters, toJson, type RunPlacement } from '../store/rows.js';
 import { findRunOnSurface, insertRun, projectExists } from '../store/runs.js';
 import type { WorkflowCommandManifest, WorkflowOrigin } from '../types.js';
 import { projectContext, resolveLatestBuild } from './builds.js';
-import { resolvePlacement } from './environment/placement.js';
+import { resolvePlacement, type PlacementInfrastructureError } from './environment/placement.js';
 import { selectPlacement } from './environment/selection.js';
 import type { LaunchProject } from './environment/types.js';
 import { prepareAndStart } from './prepare.js';
@@ -44,132 +45,139 @@ export interface LaunchInput {
   readonly placement?: WorkflowPlacementRequestDto | undefined;
 }
 
-export function launch(
+export const launch = Effect.fn('workflows.launch')(function* (
   rt: EngineRuntime,
   input: LaunchInput,
-): Effect.Effect<{ readonly runId: number; readonly workflowKey: string }, unknown> {
-  return Effect.gen(function* () {
-    const places = rt.deps.places;
-    const origin = yield* buildOrigin(rt, input.origin);
-    const project = yield* requireProject(rt, origin.worktreeId);
-    const build = yield* resolveLatestBuild(
-      rt,
-      input.workflowKey,
-      yield* projectContext(rt, project.id),
+): Effect.fn.Return<
+  { readonly runId: number; readonly workflowKey: string },
+  WorkflowEngineError | PlacementInfrastructureError
+> {
+  const places = rt.deps.places;
+  const origin = yield* buildOrigin(rt, input.origin);
+  const project = yield* requireProject(rt, origin.worktreeId);
+  const build = yield* resolveLatestBuild(
+    rt,
+    input.workflowKey,
+    yield* projectContext(rt, project.id),
+  );
+  const definition = build.definition;
+
+  const manifest = yield* rt.bridge
+    .call('command', () => definition.command(origin))
+    .pipe(
+      Effect.mapError(
+        (failed) =>
+          new WorkflowEngineError({
+            code: 'workflow_command_failed',
+            message: failed.message,
+            workflowKey: input.workflowKey,
+            worktreeId: origin.worktreeId,
+            surfaceId: origin.surfaceId ?? undefined,
+          }),
+      ),
     );
-    const definition = build.definition;
-
-    const manifest = yield* Effect.tryPromise({
-      try: async () => definition.command(origin),
-      catch: (cause) =>
-        new WorkflowEngineError({
-          code: 'workflow_command_failed',
-          message: errorMessage(cause),
-          workflowKey: input.workflowKey,
-          worktreeId: origin.worktreeId,
-          surfaceId: origin.surfaceId ?? undefined,
-        }),
-    });
-    const parsed = yield* Effect.tryPromise({
-      try: async () => definition.parse(origin, input.inputs),
-      catch: (cause) =>
-        new WorkflowEngineError({
-          code: 'workflow_parse_rejected',
-          message: errorMessage(cause),
-          workflowKey: input.workflowKey,
-        }),
-    });
-    // Serialized once: placement, the stored row and the root graph's `init` all see this value.
-    const parametersJson = yield* storableParameters(parsed, input.workflowKey);
-
-    const selection = yield* selectPlacement(
-      { workspace: places.workspace, surfaceRepository: places.surfaceRepository },
-      {
-        definition,
-        workflowKey: input.workflowKey,
-        origin,
-        project,
-        parameters: storedParameters(parametersJson),
-        placement: input.placement,
-        commandTitle: manifest.title,
-      },
+  const parsed = yield* rt.bridge
+    .call('parse', () => definition.parse(origin, input.inputs))
+    .pipe(
+      Effect.mapError(
+        (failed) =>
+          new WorkflowEngineError({
+            code: 'workflow_parse_rejected',
+            message: failed.message,
+            workflowKey: input.workflowKey,
+          }),
+      ),
     );
-    const resolved = yield* resolvePlacement(
-      {
-        workspace: places.workspace,
-        workspaceService: places.workspaceService,
-        surfaceRepository: places.surfaceRepository,
-      },
-      { workflowKey: input.workflowKey, origin, project, selection },
-    );
+  // Serialized once: placement, the stored row and the root graph's `init` all see this value.
+  const parametersJson = yield* storableParameters(parsed, input.workflowKey);
 
-    const placement: RunPlacement = {
-      source: resolved.source,
-      request: resolved.request,
-      baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
-    };
-    const surfaceId = resolved.surface.kind === 'reuse' ? resolved.surface.surfaceId : null;
-    // Checked in the transaction that creates the run, so two launches cannot both take a surface.
-    const created = yield* rt.commit('workflow_launch', (db, emit) => {
-      // A run exists only while its project does: project deletion erases runs in its own
-      // transaction (workflows/erasure.ts), and this check refuses any launch that commits after it.
-      if (!projectExists(db, project.id)) return { projectGone: true } as const;
-      const occupant = surfaceId === null ? null : findRunOnSurface(db, surfaceId);
-      if (occupant) return { busy: occupant.id } as const;
-      const run = insertRun(db, {
-        projectId: project.id,
-        workflowKey: input.workflowKey,
-        title: manifest.title,
-        artifactHash: build.artifactHash,
-        status: 'preparing',
-        inputsJson: toJson(input.inputs),
-        parametersJson,
-        placementJson: toJson(placement),
-        originWorktreeId: origin.worktreeId,
-        originWorktreePath: origin.worktreePath,
-        originSurfaceId: origin.surfaceId,
-        originPaneId: origin.paneId ?? null,
-        originAgentSessionId: origin.agentSessionId ?? null,
-        worktreeId: resolved.worktree.kind === 'reuse' ? resolved.worktree.worktreeId : null,
-        worktreePath: resolved.worktree.kind === 'reuse' ? resolved.worktree.worktreePath : null,
-        setupDone: false,
-        surfaceId,
-      });
-      emit({
-        runId: run.id,
-        category: 'run',
-        kind: 'run_launched',
-        message: `Launched ${manifest.title}`,
-        data: { workflowKey: input.workflowKey, artifactHash: build.artifactHash, placement },
-      });
-      return { run } as const;
+  const selection = yield* selectPlacement(
+    { workspace: places.workspace, surfaceReads: places.surfaceReads, bridge: rt.bridge },
+    {
+      definition,
+      workflowKey: input.workflowKey,
+      origin,
+      project,
+      parameters: storedParameters(parametersJson),
+      placement: input.placement,
+      commandTitle: manifest.title,
+    },
+  );
+  const resolved = yield* resolvePlacement(
+    {
+      workspace: places.workspace,
+      workspaceService: places.workspaceService,
+      surfaceReads: places.surfaceReads,
+    },
+    { workflowKey: input.workflowKey, origin, project, selection },
+  );
+
+  const placement: RunPlacement = {
+    source: resolved.source,
+    request: resolved.request,
+    baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
+  };
+  const surfaceId = resolved.surface.kind === 'reuse' ? resolved.surface.surfaceId : null;
+  // Checked in the transaction that creates the run, so two launches cannot both take a surface.
+  const created = yield* rt.commit('workflow_launch', (db, emit) => {
+    // A run exists only while its project does: project deletion erases runs in its own
+    // transaction (workflows/erasure.ts), and this check refuses any launch that commits after it.
+    if (!projectExists(db, project.id)) return { projectGone: true } as const;
+    const occupant = surfaceId === null ? null : findRunOnSurface(db, surfaceId);
+    if (occupant) return { busy: occupant.id } as const;
+    const run = insertRun(db, {
+      projectId: project.id,
+      workflowKey: input.workflowKey,
+      title: manifest.title,
+      artifactHash: build.artifactHash,
+      status: 'preparing',
+      inputsJson: toJson(input.inputs),
+      parametersJson,
+      placementJson: toJson(placement),
+      originWorktreeId: origin.worktreeId,
+      originWorktreePath: origin.worktreePath,
+      originSurfaceId: origin.surfaceId,
+      originPaneId: origin.paneId ?? null,
+      originAgentSessionId: origin.agentSessionId ?? null,
+      worktreeId: resolved.worktree.kind === 'reuse' ? resolved.worktree.worktreeId : null,
+      worktreePath: resolved.worktree.kind === 'reuse' ? resolved.worktree.worktreePath : null,
+      setupDone: false,
+      surfaceId,
     });
-    if ('projectGone' in created) {
-      return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'worktree_not_found',
-          message: `Project ${project.id} no longer exists.`,
-          workflowKey: input.workflowKey,
-          worktreeId: origin.worktreeId,
-        }),
-      );
-    }
-    if ('busy' in created) {
-      return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'workflow_surface_busy',
-          message: `Surface ${surfaceId} already has a workflow run attached. Dismiss it before starting another.`,
-          workflowKey: input.workflowKey,
-          surfaceId: surfaceId ?? undefined,
-          activeWorkflowRunId: created.busy,
-        }),
-      );
-    }
-
-    rt.fork(prepareAndStart(rt, created.run.id), 'workflow preparation');
-    return { runId: created.run.id, workflowKey: input.workflowKey };
+    emit({
+      runId: run.id,
+      category: 'run',
+      kind: 'run_launched',
+      message: `Launched ${manifest.title}`,
+      data: { workflowKey: input.workflowKey, artifactHash: build.artifactHash, placement },
+    });
+    return { run } as const;
   });
-}
+  if ('projectGone' in created) {
+    return yield* Effect.fail(
+      new WorkflowEngineError({
+        code: 'worktree_not_found',
+        message: `Project ${project.id} no longer exists.`,
+        workflowKey: input.workflowKey,
+        worktreeId: origin.worktreeId,
+      }),
+    );
+  }
+  if ('busy' in created) {
+    return yield* Effect.fail(
+      new WorkflowEngineError({
+        code: 'workflow_surface_busy',
+        message: `Surface ${surfaceId} already has a workflow run attached. Dismiss it before starting another.`,
+        workflowKey: input.workflowKey,
+        surfaceId: surfaceId ?? undefined,
+        activeWorkflowRunId: created.busy,
+      }),
+    );
+  }
+
+  rt.fork(prepareAndStart(rt, created.run.id), 'Workflow preparation failed');
+  return { runId: created.run.id, workflowKey: input.workflowKey };
+});
 
 /**
  * The parameters `parse` returned, checked the way a subgraph's parameters are and serialized for
@@ -210,55 +218,53 @@ export interface DescriptorListing {
  * Every discoverable workflow and whether it loads, for the launch palette. A workflow that cannot
  * be loaded, or whose `command` throws, is listed as unavailable rather than hiding the others.
  */
-export function listWorkflowDescriptors(
+export const listWorkflowDescriptors = Effect.fn('workflows.listWorkflowDescriptors')(function* (
   rt: EngineRuntime,
   originInput: WorkflowLaunchOrigin,
-): Effect.Effect<readonly DescriptorListing[], unknown> {
-  return Effect.gen(function* () {
-    const origin = yield* buildOrigin(rt, originInput);
-    const project = yield* requireProject(rt, origin.worktreeId);
-    const snapshot = yield* rt.deps.registry
-      .discover(yield* projectContext(rt, project.id))
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new WorkflowEngineError({ code: 'workflow_discovery_failed', message: cause.message }),
-        ),
-      );
-    return yield* Effect.forEach(snapshot.entries, (entry) =>
-      Effect.gen(function* () {
-        const loaded = yield* entry.load().pipe(Effect.either);
-        if (Either.isLeft(loaded)) {
-          return {
-            workflowKey: entry.workflowKey,
-            result: {
-              ok: false,
-              reason: loaded.left.reason,
-              diagnostics: loaded.left.diagnostics ?? [],
-            },
-          } satisfies DescriptorListing;
-        }
-        const manifest = yield* Effect.tryPromise(async () =>
-          loaded.right.definition.command(origin),
-        ).pipe(Effect.either);
-        return Either.isRight(manifest)
-          ? ({
-              workflowKey: entry.workflowKey,
-              result: { ok: true, manifest: manifest.right },
-            } satisfies DescriptorListing)
-          : ({
-              workflowKey: entry.workflowKey,
-              result: { ok: false, reason: 'artifact_load_failed', diagnostics: [] },
-            } satisfies DescriptorListing);
-      }),
+): Effect.fn.Return<readonly DescriptorListing[], WorkflowEngineError | DatabaseError> {
+  const origin = yield* buildOrigin(rt, originInput);
+  const project = yield* requireProject(rt, origin.worktreeId);
+  const snapshot = yield* rt.deps.registry
+    .discover(yield* projectContext(rt, project.id))
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new WorkflowEngineError({ code: 'workflow_discovery_failed', message: cause.message }),
+      ),
     );
-  });
-}
+  return yield* Effect.forEach(snapshot.entries, (entry) =>
+    Effect.gen(function* () {
+      const loaded = yield* entry.load().pipe(Effect.result);
+      if (Result.isFailure(loaded)) {
+        return {
+          workflowKey: entry.workflowKey,
+          result: {
+            ok: false,
+            reason: loaded.failure.reason,
+            diagnostics: loaded.failure.diagnostics ?? [],
+          },
+        } satisfies DescriptorListing;
+      }
+      const manifest = yield* rt.bridge
+        .call('command', () => loaded.success.definition.command(origin))
+        .pipe(Effect.result);
+      return Result.isSuccess(manifest)
+        ? ({
+            workflowKey: entry.workflowKey,
+            result: { ok: true, manifest: manifest.success },
+          } satisfies DescriptorListing)
+        : ({
+            workflowKey: entry.workflowKey,
+            result: { ok: false, reason: 'artifact_load_failed', diagnostics: [] },
+          } satisfies DescriptorListing);
+    }),
+  );
+});
 
 function requireProject(
   rt: EngineRuntime,
   worktreeId: number,
-): Effect.Effect<LaunchProject, unknown> {
+): Effect.Effect<LaunchProject, WorkflowEngineError | DatabaseError> {
   return Effect.gen(function* () {
     const workspace = rt.deps.places.workspace;
     const worktree = yield* workspace.findWorktree(worktreeId);
@@ -286,7 +292,7 @@ function requireProject(
 function buildOrigin(
   rt: EngineRuntime,
   origin: WorkflowLaunchOrigin,
-): Effect.Effect<WorkflowOrigin, unknown> {
+): Effect.Effect<WorkflowOrigin, WorkflowEngineError | DatabaseError> {
   return Effect.gen(function* () {
     const worktree = yield* rt.deps.places.workspace.findWorktree(origin.worktreeId);
     if (!worktree) {

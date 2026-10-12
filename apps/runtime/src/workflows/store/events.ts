@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt } from 'drizzle-orm';
 
 import type { WorkflowEventCategory, WorkflowEventKind } from '@isagi/contracts';
 
-import { workflowEvents } from '../../persistence/schema.js';
+import { workflowEvents } from '../tables.js';
 import { now, toNullableJson, type Db, type EventRow } from './rows.js';
 
 /** One append-only event log per run. The same rows are pushed live to clients. */

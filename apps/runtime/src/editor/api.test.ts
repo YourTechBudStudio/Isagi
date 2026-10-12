@@ -1,36 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import Fastify, { type FastifyInstance } from 'fastify';
+import { Effect, Layer } from 'effect';
+import type { FastifyInstance } from 'fastify';
 
 import type {
   EditorContextFacts,
   EditorDiagnosticsOutput,
-  OpenEditorOutput,
   RetryEditorProvisioningOutput,
 } from '@isagi/contracts';
 
+import { makeLogCapture } from '../../test/test-support.js';
+import { withApiServer } from '../platform/http/testing.js';
+import { registerEditorRoutes } from './api.js';
 import {
-  EditorContextService,
   EditorDiagnosticsUnavailable,
   EditorError,
   EditorLaunchFailed,
-  type EditorContextServiceShape,
-} from '../editor-contexts/index.js';
+} from './contexts/errors.js';
+import { EditorContextService } from './contexts/service.js';
 import {
   EditorProvisioning,
   EditorProvisioningBusy,
   EditorUnavailable,
-  type EditorProvisioningService,
-} from '../editor-provisioning/index.js';
-import { DatabaseError } from '../persistence/index.js';
-import { SurfaceError, SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
-import { registerEditorApi } from './api.js';
+} from './provisioning/service.js';
 
 function fakeProvisioning(
-  overrides: Partial<EditorProvisioningService>,
-): EditorProvisioningService {
+  overrides: Partial<EditorProvisioning['Service']>,
+): EditorProvisioning['Service'] {
   return {
     start: Effect.void,
     state: Effect.succeed({ status: 'not_applicable' }),
@@ -42,7 +39,9 @@ function fakeProvisioning(
   };
 }
 
-function fakeEditors(overrides: Partial<EditorContextServiceShape>): EditorContextServiceShape {
+function fakeEditors(
+  overrides: Partial<EditorContextService['Service']>,
+): EditorContextService['Service'] {
   return {
     requireAvailable: Effect.die('requireAvailable is not used by editor API tests'),
     findForWorktree: () => Effect.die('findForWorktree is not used by editor API tests'),
@@ -55,44 +54,23 @@ function fakeEditors(overrides: Partial<EditorContextServiceShape>): EditorConte
   };
 }
 
-function fakeSurfaces(overrides: Partial<SurfaceServiceShape>): SurfaceServiceShape {
-  return new Proxy(
-    { openEditor: () => Effect.die('openEditor is not used by this test'), ...overrides },
-    {
-      get: (target, property) =>
-        property in target
-          ? target[property as keyof typeof target]
-          : () => Effect.die(`${String(property)} is not used by editor API tests`),
-    },
-  ) as SurfaceServiceShape;
-}
-
-async function withEditorApi(
-  service: EditorProvisioningService,
+function withEditorApi(
+  service: EditorProvisioning['Service'],
   use: (fastify: FastifyInstance) => Promise<void>,
   services: {
-    readonly editors?: Partial<EditorContextServiceShape> | undefined;
-    readonly surfaces?: Partial<SurfaceServiceShape> | undefined;
+    readonly editors?: Partial<EditorContextService['Service']> | undefined;
   } = {},
 ) {
-  const runtime = ManagedRuntime.make(
+  // Registered exactly the way the runtime registers it, so this proves the
+  // route really is reachable rather than that a handler function exists.
+  return withApiServer(
     Layer.mergeAll(
       Layer.succeed(EditorProvisioning, service),
       Layer.succeed(EditorContextService, fakeEditors(services.editors ?? {})),
-      Layer.succeed(SurfaceService, fakeSurfaces(services.surfaces ?? {})),
     ),
+    registerEditorRoutes,
+    use,
   );
-  const fastify = Fastify({ logger: false });
-  // Registered exactly the way `server.ts` registers it, so this proves the
-  // route really is reachable rather than that a handler function exists.
-  registerEditorApi(fastify, runtime as never);
-  try {
-    await fastify.ready();
-    await use(fastify);
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
 }
 
 /**
@@ -109,8 +87,7 @@ async function withEditorApi(
 async function editorErrorResponse(
   request: { readonly method: 'POST' | 'GET'; readonly url: string; readonly body?: unknown },
   services: {
-    readonly editors?: Partial<EditorContextServiceShape> | undefined;
-    readonly surfaces?: Partial<SurfaceServiceShape> | undefined;
+    readonly editors?: Partial<EditorContextService['Service']> | undefined;
   },
 ) {
   let captured: { statusCode: number; code: string; data: Record<string, unknown> } | null = null;
@@ -195,67 +172,38 @@ test('a retry arriving while one is running maps to editor_rejected', async () =
 });
 
 test('an unexpected failure is reported as an unhandled API error, not as a rejection', async () => {
-  const originalConsoleError = console.error;
-  console.error = () => {};
-  try {
-    await withEditorApi(
-      fakeProvisioning({ retry: Effect.fail(new Error('boom')) as never }),
-      async (fastify) => {
-        const response = await fastify.inject({
-          method: 'POST',
-          url: '/api/v1/editor/provisioning/retry',
-        });
-        const payload = response.json() as { error?: { code: string } };
-
-        assert.equal(response.statusCode, 500);
-        // `api_`-prefixed codes bypass the endpoint's declared error schema, so
-        // the fallback is safe even though this code is not in the editor union.
-        assert.equal(payload.error?.code, 'api_unhandled_error');
-      },
-    );
-  } finally {
-    console.error = originalConsoleError;
-  }
-});
-
-// ---------------------------------------------------------------------------
-// The three routes registered alongside retry, and total error mapping
-// ---------------------------------------------------------------------------
-
-test('the open route returns the placement the operation resolved', async () => {
-  await withEditorApi(
-    fakeProvisioning({}),
+  // The typed route helper logs the unclassified failure through Effect; captured here so it is asserted rather
+  // than printed.
+  const logs = makeLogCapture();
+  await withApiServer(
+    Layer.mergeAll(
+      Layer.succeed(
+        EditorProvisioning,
+        fakeProvisioning({ retry: Effect.fail(new Error('boom')) as never }),
+      ),
+      Layer.succeed(EditorContextService, fakeEditors({})),
+      logs.layer,
+    ),
+    registerEditorRoutes,
     async (fastify) => {
       const response = await fastify.inject({
         method: 'POST',
-        url: '/api/v1/worktrees/4/editor',
-        payload: { intoSurfaceId: 11 },
+        url: '/api/v1/editor/provisioning/retry',
       });
-      const payload = response.json() as { data?: OpenEditorOutput };
+      const payload = response.json() as { error?: { code: string } };
 
-      assert.equal(response.statusCode, 200);
-      // Placement is the operation's whole answer, which is why opening an
-      // editor adds no separate "which surface holds it?" read.
-      assert.deepEqual(payload.data, {
-        worktreeId: 4,
-        surfaceId: 11,
-        paneId: 23,
-        editorContextId: 5,
-      });
-    },
-    {
-      surfaces: {
-        openEditor: ({ worktreeId, intoSurfaceId }) =>
-          Effect.succeed({
-            worktreeId,
-            surfaceId: intoSurfaceId ?? 99,
-            paneId: 23,
-            editorContextId: 5,
-          }),
-      },
+      assert.equal(response.statusCode, 500);
+      // `api_`-prefixed codes bypass the endpoint's declared error schema, so
+      // the fallback is safe even though this code is not in the editor union.
+      assert.equal(payload.error?.code, 'api_unhandled_error');
     },
   );
+  assert.ok(logs.lines.some((line) => line.message === 'Unhandled API handler failure'));
 });
+
+// ---------------------------------------------------------------------------
+// The two context routes registered alongside retry, and total error mapping
+// ---------------------------------------------------------------------------
 
 test('the ensure route decodes its intent and returns the editor context facts', async () => {
   let seen: { editorContextId: number; intent: string } | null = null;
@@ -317,28 +265,6 @@ test('the diagnostics route decodes params and query together', async () => {
       },
     },
   );
-});
-
-test('EditorUnavailable maps to a 400 rejection carrying its reason and diagnostic', async () => {
-  const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
-    {
-      surfaces: {
-        openEditor: () =>
-          Effect.fail(
-            new EditorUnavailable({
-              reason: 'editor_unsupported_runtime',
-              diagnostic: 'this runtime declares no editor capability',
-            }),
-          ),
-      },
-    },
-  );
-
-  assert.equal(response.statusCode, 400);
-  assert.equal(response.code, 'editor_rejected');
-  assert.equal(response.data.reason, 'editor_unsupported_runtime');
-  assert.equal(response.data.diagnostic, 'this runtime declares no editor capability');
 });
 
 test('a superseded diagnostics read maps to a 400 rejection carrying that reason', async () => {
@@ -407,72 +333,6 @@ test('EditorDiagnosticsUnavailable maps to a 500 carrying its detail', async () 
   assert.equal(response.statusCode, 500);
   assert.equal(response.code, 'editor_diagnostics_unavailable');
   assert.equal(response.data.detail, 'EACCES');
-});
-
-test('a surfaces worktree_not_found is translated into the editor rejection vocabulary', async () => {
-  const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
-    {
-      surfaces: {
-        openEditor: () =>
-          Effect.fail(
-            new SurfaceError({
-              code: 'worktree_not_found',
-              message: 'Worktree 4 was not found.',
-              worktreeId: 4,
-            }),
-          ),
-      },
-    },
-  );
-
-  // Translated rather than delegated, because the editor's own refusal
-  // vocabulary already names it and the palette reads one reason set.
-  assert.equal(response.statusCode, 400);
-  assert.equal(response.code, 'editor_rejected');
-  assert.equal(response.data.reason, 'worktree_not_found');
-  assert.equal(response.data.worktreeId, 4);
-});
-
-test('any other SurfaceError is delegated rather than given an invented editor reason', async () => {
-  const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
-    {
-      surfaces: {
-        openEditor: () =>
-          Effect.fail(
-            new SurfaceError({
-              code: 'surface_not_found',
-              message: 'Surface 11 was not found.',
-              surfaceId: 11,
-            }),
-          ),
-      },
-    },
-  );
-
-  assert.equal(response.statusCode, 400);
-  assert.equal(response.code, 'surface_rejected');
-});
-
-test('a database fault reaches the client as runtime_database_failed, not an encoding failure', async () => {
-  const response = await editorErrorResponse(
-    { method: 'POST', url: '/api/v1/worktrees/4/editor', body: { intoSurfaceId: null } },
-    {
-      surfaces: {
-        openEditor: () =>
-          Effect.fail(
-            new DatabaseError({ operation: 'create_single_pane_surface', cause: 'disk full' }),
-          ),
-      },
-    },
-  );
-
-  // An earlier revision of the contract omitted this member, which would have
-  // turned a diagnosable database fault into an undiagnosable encoding failure.
-  assert.equal(response.statusCode, 500);
-  assert.equal(response.code, 'runtime_database_failed');
-  assert.equal(response.data.operation, 'create_single_pane_surface');
 });
 
 const editorContextFacts: EditorContextFacts = {

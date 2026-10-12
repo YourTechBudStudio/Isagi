@@ -1,12 +1,13 @@
-import { Effect } from 'effect';
+import { Effect, FiberMap } from 'effect';
 
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
+import type { PtyRepository } from '../repository.js';
 import type { PtyProcessStatusReason } from '../types.js';
 import type { PtyExit } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { transitionProcessByIdAndPublish } from './events.js';
-import type { PtyRetryScheduler } from './retry.js';
+import type { PtyPersistenceRetry } from './retry.js';
 
 export type DurablePtyTerminationReason = Extract<
   PtyProcessStatusReason,
@@ -65,45 +66,83 @@ export function isRowReserved(reservations: PtyReservations, ptyProcessId: numbe
   return reservations.terminations.has(ptyProcessId) || reservations.launches.has(ptyProcessId);
 }
 
+// One supervisor fiber per launched process, consuming its backend `events` (see `superviseProcess` in `launch.ts`).
+// A supervisor leaves this map only when its events stream ends, and a stream ends only after the supervisor has
+// handled `Exited` (or without one, when `kill`/`terminate` suppressed it and the killer owns the outcome).
+export type PtySupervisors = FiberMap.FiberMap<number, void, never>;
+
+// The exit-in-flight window. A backend learns about an exit in its own callback, stops reporting the process as live
+// there, and only enqueues `Exited`; the row records it later. Until it does, the row still reads `running` while
+// `inspect` answers `missing` and `attach` answers "not live", so a `missing` verdict is not evidence that the process
+// vanished: the real exit (code, signal) is about to be recorded, and a generic
+// `runtime_ephemeral_lost`/`backend_process_missing` written first would win permanently under terminal immutability.
+//
+// Two holders cover the window end to end, and the second takes over before the first lets go:
+// - the row's supervisor, from the backend callback until it handles `Exited` and its stream ends;
+// - `deferredWrites`, when the supervisor's exit write failed and it handed that write to the persistence retry. The
+//   supervisor adds the id before its stream can end, and the retry removes it once the write applies or is rejected
+//   by an already-terminal row. A retry abandoned at shutdown leaves its id behind, like a termination reservation
+//   left to a retry does; the service is closing, and the next startup reconciles the row.
+export interface PtyPendingExits {
+  readonly supervisors: PtySupervisors;
+  readonly deferredWrites: PtyDeferredExitWrites;
+}
+
+export type PtyDeferredExitWrites = Set<number>;
+
+// Only the `missing` verdict defers to a pending exit: the poller still reconciles a supervised row whose backend
+// answers `alive`.
+export function isExitPending(pendingExits: PtyPendingExits, ptyProcessId: number) {
+  return (
+    FiberMap.hasUnsafe(pendingExits.supervisors, ptyProcessId) ||
+    pendingExits.deferredWrites.has(ptyProcessId)
+  );
+}
+
 // The poller's variant: same membership answer, plus the age report the fixed
 // poll cadence makes meaningful.
 export function skipReservedRow(
   reservations: PtyReservations,
   ptyProcessId: number,
   warnAfterMs: number,
-) {
-  const termination = reservations.terminations.get(ptyProcessId);
-  if (termination) {
-    warnOnceWhenStale(
-      termination,
-      warnAfterMs,
-      (ageMs) =>
-        `[runtime] PTY termination reservation is still unresolved ptyProcessId=${ptyProcessId} reason=${termination.reason} ownership=${termination.ownership} ageMs=${ageMs}`,
-    );
-    return true;
-  }
-  const launch = reservations.launches.get(ptyProcessId);
-  if (launch) {
-    warnOnceWhenStale(
-      launch,
-      warnAfterMs,
-      (ageMs) =>
-        `[runtime] PTY launch reservation is still unresolved ptyProcessId=${ptyProcessId} ageMs=${ageMs}`,
-    );
-    return true;
-  }
-  return false;
+): Effect.Effect<boolean> {
+  return Effect.suspend(() => {
+    const termination = reservations.terminations.get(ptyProcessId);
+    if (termination) {
+      return warnOnceWhenStale(termination, warnAfterMs, (ageMs) =>
+        Effect.logWarning('PTY termination reservation is still unresolved').pipe(
+          Effect.annotateLogs({
+            ptyProcessId,
+            reason: termination.reason,
+            ownership: termination.ownership,
+            ageMs,
+          }),
+        ),
+      ).pipe(Effect.as(true));
+    }
+    const launch = reservations.launches.get(ptyProcessId);
+    if (launch) {
+      return warnOnceWhenStale(launch, warnAfterMs, (ageMs) =>
+        Effect.logWarning('PTY launch reservation is still unresolved').pipe(
+          Effect.annotateLogs({ ptyProcessId, ageMs }),
+        ),
+      ).pipe(Effect.as(true));
+    }
+    return Effect.succeed(false);
+  });
 }
 
 function warnOnceWhenStale(
   reservation: PtyReservationAge,
   warnAfterMs: number,
-  message: (ageMs: number) => string,
+  warn: (ageMs: number) => Effect.Effect<void>,
 ) {
-  const ageMs = Date.now() - reservation.reservedAt;
-  if (ageMs <= warnAfterMs || reservation.ageWarningLogged) return;
-  reservation.ageWarningLogged = true;
-  console.warn(message(ageMs));
+  return Effect.suspend(() => {
+    const ageMs = Date.now() - reservation.reservedAt;
+    if (ageMs <= warnAfterMs || reservation.ageWarningLogged) return Effect.void;
+    reservation.ageWarningLogged = true;
+    return warn(ageMs);
+  });
 }
 
 // Reserve the allocation window. Called from inside the repository's insert
@@ -177,11 +216,12 @@ function clearTerminationReservation(
 }
 
 export function handleExit(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
-  retry: PtyRetryScheduler,
+  repository: PtyRepository['Service'],
+  eventBus: InternalEvents['Service'],
+  retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
+  deferredExitWrites: PtyDeferredExitWrites,
   ptyProcessId: number,
   exit: PtyExit,
 ) {
@@ -193,29 +233,50 @@ export function handleExit(
       // the consequence of its own affirmative kill.
       termination.exit = exit;
       activeAttachments.delete(ptyProcessId);
-      console.info(
-        `[runtime] Captured backend exit for terminating PTY ${ptyProcessId} reason=${termination.reason}`,
+      yield* Effect.logInfo('Captured backend exit for terminating PTY').pipe(
+        Effect.annotateLogs({ ptyProcessId, reason: termination.reason }),
       );
       return;
     }
-    yield* persistExit(repository, eventBus, retry, activeAttachments, ptyProcessId, exit);
+    yield* persistExit(
+      repository,
+      eventBus,
+      retry,
+      activeAttachments,
+      deferredExitWrites,
+      ptyProcessId,
+      exit,
+    );
   });
 }
 
-// Persist an exit that no termination attempt is reserving.
+// Persist an exit that no termination attempt is reserving. If the first write fails, the exit stays pending
+// (`deferredExitWrites`) until the retry settles it: the supervisor running this ends as soon as the retry is
+// submitted, and without the entry an observer could relabel the clean exit as a generic `missing` failure in the
+// retry window — the same window `persistCapturedExitAndRelease` closes with its reservation.
 function persistExit(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
-  retry: PtyRetryScheduler,
+  repository: PtyRepository['Service'],
+  eventBus: InternalEvents['Service'],
+  retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
+  deferredExitWrites: PtyDeferredExitWrites,
   ptyProcessId: number,
   exit: PtyExit,
 ) {
+  const settle = Effect.sync(() => {
+    deferredExitWrites.delete(ptyProcessId);
+  });
   return persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        console.error(`[runtime] Failed to persist PTY exit for session ${ptyProcessId}`, error);
-        scheduleExitRetry(repository, eventBus, retry, activeAttachments, ptyProcessId, exit);
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        deferredExitWrites.add(ptyProcessId);
+        yield* logPersistFailure('Failed to persist PTY exit', ptyProcessId, error);
+        yield* retry.submit(
+          `exit ptyProcessId=${ptyProcessId}`,
+          persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
+            Effect.andThen(settle),
+          ),
+        );
       }),
     ),
     Effect.asVoid,
@@ -228,31 +289,30 @@ function persistExit(
 // failure in the retry window — under terminal immutability that mislabel would
 // be permanent.
 export function persistCapturedExitAndRelease(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
-  retry: PtyRetryScheduler,
+  repository: PtyRepository['Service'],
+  eventBus: InternalEvents['Service'],
+  retry: PtyPersistenceRetry,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: PtyTerminations,
   ptyProcessId: number,
   termination: PtyTerminationState,
   exit: PtyExit,
 ) {
+  const release = Effect.sync(() =>
+    clearTerminationReservation(terminations, ptyProcessId, termination),
+  );
   return persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
     Effect.matchEffect({
-      onSuccess: () =>
-        Effect.sync(() => clearTerminationReservation(terminations, ptyProcessId, termination)),
+      onSuccess: () => release,
       onFailure: (error) =>
-        Effect.sync(() => {
-          console.error(`[runtime] Failed to persist PTY exit for session ${ptyProcessId}`, error);
+        Effect.gen(function* () {
+          yield* logPersistFailure('Failed to persist PTY exit', ptyProcessId, error);
           transferTerminationToRetry(termination);
-          scheduleExitRetry(
-            repository,
-            eventBus,
-            retry,
-            activeAttachments,
-            ptyProcessId,
-            exit,
-            () => clearTerminationReservation(terminations, ptyProcessId, termination),
+          yield* retry.submit(
+            `exit ptyProcessId=${ptyProcessId}`,
+            persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
+              Effect.andThen(release),
+            ),
           );
         }),
     }),
@@ -262,46 +322,38 @@ export function persistCapturedExitAndRelease(
 // The affirmative kill is real even while its write is deferred, so the row
 // stays reserved until this retry lands or an already-terminal fact rejects it.
 export function retryPersistKilledUntilSuccess(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
-  retry: PtyRetryScheduler,
+  repository: PtyRepository['Service'],
+  eventBus: InternalEvents['Service'],
+  retry: PtyPersistenceRetry,
   terminations: PtyTerminations,
   ptyProcessId: number,
   termination: PtyTerminationState,
 ) {
-  transferTerminationToRetry(termination);
-  const attempt: Effect.Effect<void> = Effect.suspend(() =>
-    transitionProcessByIdAndPublish(repository, eventBus, {
-      ptyProcessId,
-      status: 'killed',
-      statusReason: termination.reason,
-      exitCode: null,
-      signal: null,
-    }).pipe(
-      Effect.matchEffect({
+  return Effect.suspend(() => {
+    transferTerminationToRetry(termination);
+    return retry.submit(
+      `killed ptyProcessId=${ptyProcessId}`,
+      transitionProcessByIdAndPublish(repository, eventBus, {
+        ptyProcessId,
+        status: 'killed',
+        statusReason: termination.reason,
+        exitCode: null,
+        signal: null,
+      }).pipe(
         // A rejection by an already-terminal row resolves this retry just as a
         // successful write does: the durable fact is settled either way, so the
         // reservation must not outlive it.
-        onSuccess: () =>
+        Effect.andThen(
           Effect.sync(() => clearTerminationReservation(terminations, ptyProcessId, termination)),
-        onFailure: (error) =>
-          Effect.sync(() => {
-            console.error(
-              `[runtime] Failed to retry PTY termination persistence for session ${ptyProcessId}`,
-              error,
-            );
-            retry.schedule(`killed ptyProcessId=${ptyProcessId}`, attempt);
-          }),
-      }),
-    ),
-  );
-
-  retry.schedule(`killed ptyProcessId=${ptyProcessId}`, attempt);
+        ),
+      ),
+    );
+  });
 }
 
 function persistExitOnce(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
+  repository: PtyRepository['Service'],
+  eventBus: InternalEvents['Service'],
   activeAttachments: Map<number, ActiveAttachment>,
   ptyProcessId: number,
   exit: PtyExit,
@@ -320,38 +372,21 @@ function persistExitOnce(
     // attachment but announces nothing — logging a competing outcome would read
     // as a second death.
     if (result.applied) {
-      console.info(
-        `[runtime] PTY exited ptyProcessId=${ptyProcessId} status=${status} exitCode=${exit.exitCode ?? 'null'} signal=${exit.signal ?? 'null'}`,
+      yield* Effect.logInfo('PTY exited').pipe(
+        Effect.annotateLogs({
+          ptyProcessId,
+          status,
+          exitCode: exit.exitCode ?? 'null',
+          signal: exit.signal ?? 'null',
+        }),
       );
     }
     return result;
   });
 }
 
-function scheduleExitRetry(
-  repository: PtyRepositoryService,
-  eventBus: InternalRuntimeEventBusService,
-  retry: PtyRetryScheduler,
-  activeAttachments: Map<number, ActiveAttachment>,
-  ptyProcessId: number,
-  exit: PtyExit,
-  onResolved?: () => void,
-) {
-  const attempt: Effect.Effect<void> = Effect.suspend(() =>
-    persistExitOnce(repository, eventBus, activeAttachments, ptyProcessId, exit).pipe(
-      Effect.matchEffect({
-        onSuccess: () => Effect.sync(() => onResolved?.()),
-        onFailure: (error) =>
-          Effect.sync(() => {
-            console.error(
-              `[runtime] Failed to retry PTY exit persistence for session ${ptyProcessId}`,
-              error,
-            );
-            retry.schedule(`exit ptyProcessId=${ptyProcessId}`, attempt);
-          }),
-      }),
-    ),
+function logPersistFailure(message: string, ptyProcessId: number, error: unknown) {
+  return Effect.logWarning(message).pipe(
+    Effect.annotateLogs({ ptyProcessId, cause: describeOperationalCause(error) }),
   );
-
-  retry.schedule(`exit ptyProcessId=${ptyProcessId}`, attempt);
 }

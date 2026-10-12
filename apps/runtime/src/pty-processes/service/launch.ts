@@ -1,27 +1,36 @@
 import { existsSync } from 'node:fs';
 
-import { Effect, Either } from 'effect';
+import { Effect, FiberMap, Result, Stream } from 'effect';
 
-import type { CliAccessService } from '../../cli-access/index.js';
-import type { DatabaseError } from '../../persistence/index.js';
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtyBackendCatalogService } from '../backend.js';
-import type { PtyForegroundStateService } from '../foreground-state.js';
-import { appendLog, type PtyRepositoryService } from '../pty.repository.js';
+import type { CliAccess } from '../../cli-access/index.js';
+import { describeOperationalCause } from '../../platform/diagnostics/index.js';
+import type { InternalEvents } from '../../platform/events/index.js';
+import type { DatabaseError } from '../../platform/persistence/index.js';
+import { shellLaunchCommand } from '../../platform/process/index.js';
+import type { PtyBackendCatalog } from '../backend.js';
+import type { PtyForegroundState } from '../foreground-state.js';
+import { appendLog, type PtyRepository } from '../repository.js';
 import {
-  type BackendSessionRef,
+  PtyLogError,
+  type LaunchedBackendSession,
   type LaunchPtyProcessInput,
   type PtyBackend as PtyBackendShape,
   type PtyProcessAllocation,
+  type PtyProcessEvent,
   type PtyProcessLaunchMetadata,
   type PtyStartError,
 } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { backendMetadataForLaunch } from './backend-ref.js';
 import { recordForegroundCommandState, transitionProcessByIdAndPublish } from './events.js';
-import { backendLaunchCommand } from './launch-mode.js';
-import { handleExit, releaseLaunch, reserveLaunch, type PtyReservations } from './lifecycle.js';
-import type { PtyRetryScheduler } from './retry.js';
+import {
+  handleExit,
+  releaseLaunch,
+  reserveLaunch,
+  type PtyPendingExits,
+  type PtyReservations,
+} from './lifecycle.js';
+import type { PtyPersistenceRetry } from './retry.js';
 import { spawnFailureMessage } from './runtime-namespace.js';
 import { prepareShellIntegration, refWithShellIntegrationToken } from './shell-integration.js';
 import type { ShellIntegrationConfig } from './shell-integration.js';
@@ -31,17 +40,24 @@ const defaultCols = 100;
 const defaultRows = 30;
 
 export interface PtyLaunchDependencies {
-  readonly repository: PtyRepositoryService;
-  readonly catalog: PtyBackendCatalogService;
-  readonly eventBus: InternalRuntimeEventBusService;
-  readonly foreground: PtyForegroundStateService;
-  readonly retry: PtyRetryScheduler;
+  readonly repository: PtyRepository['Service'];
+  readonly catalog: PtyBackendCatalog['Service'];
+  readonly eventBus: InternalEvents['Service'];
+  readonly foreground: PtyForegroundState['Service'];
+  readonly retry: PtyPersistenceRetry;
+  /**
+   * `supervisors` holds one supervisor fiber per launched process, consuming its backend `events`. Owned by the PTY
+   * service scope, so a supervisor outlives the request that launched the process and is interrupted when the service
+   * shuts down. A supervisor, or the deferred write it hands to `retry`, also tells observers that an exit may still
+   * be in flight (`isExitPending`).
+   */
+  readonly pendingExits: PtyPendingExits;
   readonly reservations: PtyReservations;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly userProcessEnvironment: NodeJS.ProcessEnv;
-  readonly cliAccess: CliAccessService;
+  readonly cliAccess: CliAccess['Service'];
 }
 
 type PtyAllocationPhase = 'allocated' | 'starting' | 'settled' | 'abandoned';
@@ -127,7 +143,7 @@ function makeAllocation(
     return markLaunchFailed(
       deps,
       ptyProcessId,
-      `[runtime] Could not mark abandoned PTY launch allocation ptyProcessId=${ptyProcessId}`,
+      'Could not mark abandoned PTY launch allocation',
     ).pipe(
       Effect.ensuring(Effect.sync(() => releaseLaunch(deps.reservations.launches, ptyProcessId))),
     );
@@ -142,7 +158,7 @@ function makeAllocation(
  * writes, cancellation cleanup) is uninterruptible, and `start`'s `ensuring`
  * releases the reservation on every exit including interruption.
  *
- * Total for every uninterrupted path: expected pre-spawn (`DatabaseError`) and
+ * Total for every uninterrupted path: expected pre-spawn (`DatabaseError`, `PtyLogError`) and
  * spawn (`PtyStartError`) failures fold into the row and metadata is still
  * returned, because the pre-launch metadata write already made the incarnation
  * inspectable and killable. Defects stay defects and are never dressed up as a
@@ -164,38 +180,37 @@ function startAllocation(
   return Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const prepared = yield* restore(prepareLaunch(deps, input, ptyProcessId)).pipe(
-        Effect.either,
+        Effect.result,
         // Quiescence-safe: nothing has reached a backend yet, so no session can
         // ever materialize for this row and a terminal write is honest.
         Effect.onInterrupt(() =>
-          markLaunchFailed(
-            deps,
-            ptyProcessId,
-            `[runtime] Could not mark cancelled PTY launch ptyProcessId=${ptyProcessId}`,
-          ),
+          markLaunchFailed(deps, ptyProcessId, 'Could not mark cancelled PTY launch'),
         ),
       );
-      if (Either.isLeft(prepared)) {
-        console.warn(
-          `[runtime] PTY process launch preparation failed ptyProcessId=${ptyProcessId} command=${metadata.command}`,
-          prepared.left,
+      if (Result.isFailure(prepared)) {
+        yield* Effect.logWarning('PTY process launch preparation failed').pipe(
+          Effect.annotateLogs({
+            ptyProcessId,
+            command: metadata.command,
+            cause: describeOperationalCause(prepared.failure),
+          }),
         );
-        yield* markLaunchFailed(
-          deps,
-          ptyProcessId,
-          `[runtime] Could not mark failed PTY launch ptyProcessId=${ptyProcessId}`,
-        );
+        yield* markLaunchFailed(deps, ptyProcessId, 'Could not mark failed PTY launch');
         return yield* withPersistedLogPath(deps, metadata);
       }
 
-      const spawned = yield* restore(spawnBackendProcess(deps, prepared.right, metadata)).pipe(
-        Effect.either,
+      const spawned = yield* restore(spawnBackendProcess(prepared.success, metadata)).pipe(
+        Effect.result,
         Effect.onInterrupt(() => cleanupCancelledSpawn(deps, ptyProcessId)),
       );
-      if (Either.isLeft(spawned)) {
-        yield* foldSpawnFailure(deps, metadata, spawned.left);
+      if (Result.isFailure(spawned)) {
+        yield* foldSpawnFailure(deps, metadata, spawned.failure);
         return yield* withPersistedLogPath(deps, metadata);
       }
+
+      // Uninterruptible since the spawn returned, so a live process always gets its supervisor. Events the process
+      // produced before this point wait in its queue.
+      yield* superviseProcess(deps, ptyProcessId, spawned.success.events);
 
       // Past this point nothing is load-bearing for ownership: the process is
       // durably inspectable and killable through the metadata written before the
@@ -205,10 +220,10 @@ function startAllocation(
       yield* deps.repository
         .updateBackendRef({
           ptyProcessId,
-          backendRefJson: JSON.stringify(spawned.right),
+          backendRefJson: JSON.stringify(spawned.success.ref),
         })
         .pipe(
-          Effect.zipRight(
+          Effect.andThen(
             transitionProcessByIdAndPublish(deps.repository, deps.eventBus, {
               ptyProcessId,
               status: 'running',
@@ -217,13 +232,10 @@ function startAllocation(
               signal: null,
             }),
           ),
-          Effect.catchAll((error) =>
-            Effect.sync(() => {
-              console.warn(
-                `[runtime] Could not persist PTY launch result; the process is live and the poller will reconcile it ptyProcessId=${ptyProcessId}`,
-                error,
-              );
-            }),
+          Effect.catch((error) =>
+            Effect.logWarning(
+              'Could not persist PTY launch result; the process is live and the poller will reconcile it',
+            ).pipe(Effect.annotateLogs({ ptyProcessId, cause: describeOperationalCause(error) })),
           ),
         );
       return yield* withPersistedLogPath(deps, metadata);
@@ -235,7 +247,7 @@ function prepareLaunch(
   deps: PtyLaunchDependencies,
   input: LaunchPtyProcessInput,
   ptyProcessId: number,
-): Effect.Effect<PreparedLaunch, DatabaseError> {
+): Effect.Effect<PreparedLaunch, DatabaseError | PtyLogError> {
   return Effect.gen(function* () {
     // `foreground.clear` and `envForProcess` have empty expected-error channels
     // by contract, so nothing they raise is folded into a launch failure.
@@ -251,7 +263,16 @@ function prepareLaunch(
       ...input.envOverrides,
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };
-    const backendCommand = backendLaunchCommand({ launch: input, env: processEnvironment });
+    const backendCommand = shellLaunchCommand({ launch: input, env: processEnvironment });
+    if (backendCommand.fallback) {
+      yield* Effect.logWarning('User-shell PTY launch fell back to a direct command').pipe(
+        Effect.annotateLogs({
+          ptyProcessId,
+          command: input.command,
+          reason: backendCommand.fallback,
+        }),
+      );
+    }
     const shell = prepareShellIntegration({
       launch: {
         ...input,
@@ -269,7 +290,7 @@ function prepareLaunch(
     // persisted backend. An explicit selection resolves through the same
     // catalog, which already rejects an unknown name loudly.
     const backend = input.backend
-      ? deps.catalog.forBackend(input.backend)
+      ? yield* deps.catalog.forBackend(input.backend)
       : deps.catalog.configured;
     const backendMetadata = backendMetadataForLaunch(
       backend,
@@ -277,8 +298,14 @@ function prepareLaunch(
       deps.runtimeNamespace,
       deps.sessionsPath,
     );
-    if (backendMetadata.logPath && !existsSync(backendMetadata.logPath)) {
-      appendLog(backendMetadata.logPath, '');
+    const logPath = backendMetadata.logPath;
+    if (logPath && !existsSync(logPath)) {
+      // A log that cannot be created is an expected launch failure (full disk, refused permission, a removed sessions
+      // directory): it folds into the row like any other pre-spawn failure instead of dying as a defect.
+      yield* Effect.try({
+        try: () => appendLog(logPath, ''),
+        catch: (cause) => new PtyLogError({ operation: 'create', ptyProcessId, cause }),
+      });
     }
     // This is the write that makes the incarnation inspectable and killable,
     // which is why it precedes the spawn and why nothing after the spawn needs
@@ -313,10 +340,9 @@ interface PreparedLaunch {
 }
 
 function spawnBackendProcess(
-  deps: PtyLaunchDependencies,
   prepared: PreparedLaunch,
   metadata: PtyProcessLaunchMetadata,
-): Effect.Effect<BackendSessionRef, PtyStartError> {
+): Effect.Effect<LaunchedBackendSession, PtyStartError> {
   return prepared.backend
     .launch({
       ptyProcessId: metadata.ptyProcessId,
@@ -326,38 +352,59 @@ function spawnBackendProcess(
       cwd: metadata.cwd,
       env: prepared.env,
       shellIntegration: prepared.shellIntegration,
-      onForegroundCommand: (event) =>
-        void Effect.runPromise(
-          recordForegroundCommandState(
-            deps.foreground,
-            deps.eventBus,
-            event.ptyProcessId,
-            event.state,
-          ),
-        ),
       cols: defaultCols,
       rows: defaultRows,
       logPath: prepared.logPath,
-      onExit: (exit) =>
-        void Effect.runPromise(
-          deps.foreground
-            .clear(metadata.ptyProcessId)
-            .pipe(
-              Effect.zipRight(
-                handleExit(
-                  deps.repository,
-                  deps.eventBus,
-                  deps.retry,
-                  deps.activeAttachments,
-                  deps.reservations.terminations,
-                  metadata.ptyProcessId,
-                  exit,
-                ),
-              ),
-            ),
-        ),
     })
-    .pipe(Effect.map((ref) => refWithShellIntegrationToken(ref, prepared.shellIntegration)));
+    .pipe(
+      Effect.map((launched) => ({
+        ref: refWithShellIntegrationToken(launched.ref, prepared.shellIntegration),
+        events: launched.events,
+      })),
+    );
+}
+
+/**
+ * Forks the process's supervisor into the service-owned `FiberMap`: every backend fact becomes an effect here, in a
+ * fiber the service scope interrupts at shutdown, instead of an unsupervised `runPromise` in a node-pty callback.
+ */
+function superviseProcess(
+  deps: PtyLaunchDependencies,
+  ptyProcessId: number,
+  events: Stream.Stream<PtyProcessEvent>,
+) {
+  const onProcessEvent = Effect.fnUntraced(function* (event: PtyProcessEvent) {
+    switch (event._tag) {
+      case 'ForegroundChanged':
+        return yield* recordForegroundCommandState(
+          deps.foreground,
+          deps.eventBus,
+          ptyProcessId,
+          event.state,
+        );
+      case 'LogAppendFailed':
+        return yield* Effect.logWarning('Failed to append PTY output').pipe(
+          Effect.annotateLogs({ cause: describeOperationalCause(event.cause) }),
+        );
+      case 'Exited':
+        yield* deps.foreground.clear(ptyProcessId);
+        return yield* handleExit(
+          deps.repository,
+          deps.eventBus,
+          deps.retry,
+          deps.activeAttachments,
+          deps.reservations.terminations,
+          deps.pendingExits.deferredWrites,
+          ptyProcessId,
+          { exitCode: event.exitCode, signal: event.signal },
+        );
+    }
+  });
+  return FiberMap.run(
+    deps.pendingExits.supervisors,
+    ptyProcessId,
+    events.pipe(Stream.runForEach(onProcessEvent), Effect.annotateLogs({ ptyProcessId })),
+  ).pipe(Effect.asVoid);
 }
 
 function foldSpawnFailure(
@@ -367,19 +414,36 @@ function foldSpawnFailure(
 ) {
   return Effect.gen(function* () {
     const message = spawnFailureMessage(metadata.command, metadata.cwd, error);
-    console.warn(
-      `[runtime] PTY process launch failed ptyProcessId=${metadata.ptyProcessId} command=${metadata.command}`,
-      error,
+    yield* Effect.logWarning('PTY process launch failed').pipe(
+      Effect.annotateLogs({
+        ptyProcessId: metadata.ptyProcessId,
+        command: metadata.command,
+        cause: describeOperationalCause(error),
+      }),
     );
     const failedProcess = yield* deps.repository
       .findProcess(metadata.ptyProcessId)
       .pipe(Effect.orElseSucceed(() => null));
-    if (failedProcess?.logPath) appendLog(failedProcess.logPath, message);
-    yield* markLaunchFailed(
-      deps,
-      metadata.ptyProcessId,
-      `[runtime] Could not mark failed PTY launch ptyProcessId=${metadata.ptyProcessId}`,
-    );
+    const failedLogPath = failedProcess?.logPath;
+    if (failedLogPath) {
+      // Best effort: the message only explains the failure in the log, so an unwritable log must not keep the row from
+      // being marked failed.
+      yield* Effect.try({
+        try: () => appendLog(failedLogPath, message),
+        catch: (cause) =>
+          new PtyLogError({ operation: 'append', ptyProcessId: metadata.ptyProcessId, cause }),
+      }).pipe(
+        Effect.catch((logError) =>
+          Effect.logWarning('Could not write the PTY launch failure to its log').pipe(
+            Effect.annotateLogs({
+              ptyProcessId: metadata.ptyProcessId,
+              cause: describeOperationalCause(logError),
+            }),
+          ),
+        ),
+      );
+    }
+    yield* markLaunchFailed(deps, metadata.ptyProcessId, 'Could not mark failed PTY launch');
   });
 }
 
@@ -405,7 +469,10 @@ function cleanupCancelledSpawn(deps: PtyLaunchDependencies, ptyProcessId: number
     retry: deps.retry,
     ptyProcessId,
     reason: 'user_requested',
-  }).pipe(Effect.ignore);
+  }).pipe(
+    // Best effort and already decided: a failure leaves the row nonterminal for the poller, as documented above.
+    Effect.ignore,
+  );
 }
 
 // Best-effort terminal marker for a launch that never produced a usable
@@ -422,7 +489,11 @@ function markLaunchFailed(
     exitCode: null,
     signal: null,
   }).pipe(
-    Effect.catchAll((error) => Effect.sync(() => console.warn(failureLogMessage, error))),
+    Effect.catch((error) =>
+      Effect.logWarning(failureLogMessage).pipe(
+        Effect.annotateLogs({ ptyProcessId, cause: describeOperationalCause(error) }),
+      ),
+    ),
     Effect.asVoid,
   );
 }
@@ -436,14 +507,16 @@ function withPersistedLogPath(
   metadata: PtyProcessLaunchMetadata,
 ): Effect.Effect<PtyProcessLaunchMetadata> {
   return deps.repository.findProcess(metadata.ptyProcessId).pipe(
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        console.warn(
-          `[runtime] Could not read persisted PTY launch metadata; returning launch result without a log path ptyProcessId=${metadata.ptyProcessId}`,
-          error,
-        );
-        return null;
-      }),
+    Effect.catch((error) =>
+      Effect.logWarning(
+        'Could not read persisted PTY launch metadata; returning launch result without a log path',
+      ).pipe(
+        Effect.annotateLogs({
+          ptyProcessId: metadata.ptyProcessId,
+          cause: describeOperationalCause(error),
+        }),
+        Effect.as(null),
+      ),
     ),
     Effect.map((row) => ({ ...metadata, logPath: row?.logPath ?? null })),
   );

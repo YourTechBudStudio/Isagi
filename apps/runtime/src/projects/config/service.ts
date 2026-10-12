@@ -1,0 +1,186 @@
+import { access, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { Data, Effect, Result } from 'effect';
+import { parse } from 'yaml';
+
+import type { WorktreeCommandCatalogConfig, WorktreeHooksConfig } from './config-schema.js';
+import { hashWorktreeHooks } from './hash.js';
+import { normalizeCommandCatalogConfig, normalizeWorktreeHooksConfig } from './normalize.js';
+import { summarizeWorktreeHooks } from './summary.js';
+
+export class ProjectConfigError extends Data.TaggedError('ProjectConfigError')<{
+  readonly code: 'setup_config_invalid';
+  readonly message: string;
+  readonly path: string;
+  readonly projectId?: number | undefined;
+  readonly cause?: unknown;
+}> {}
+
+export type LoadedWorktreeHooks =
+  | { readonly status: 'not_configured' }
+  | {
+      readonly status: 'configured';
+      readonly config: WorktreeHooksConfig;
+      readonly hash: string;
+      readonly summary: ReturnType<typeof summarizeWorktreeHooks>;
+    };
+
+export type LoadedWorktreeCommandCatalog =
+  | {
+      readonly status: 'configured';
+      readonly config: WorktreeCommandCatalogConfig;
+      readonly path: string;
+    }
+  | {
+      readonly status: 'config_error';
+      readonly diagnostic: {
+        readonly code: 'command_config_invalid';
+        readonly path: string;
+        readonly message: string;
+      };
+    };
+
+/**
+ * Reads the project's worktree hooks from `<root>/.isagi/config.yaml`. A missing file or an empty `postCreate` list is
+ * `not_configured`; an unreadable, unparsable or invalid file fails with `ProjectConfigError`.
+ */
+export const loadWorktreeHooks = Effect.fn('projects.loadWorktreeHooks')(function* (input: {
+  readonly projectId?: number | undefined;
+  readonly rootPath: string;
+}): Effect.fn.Return<LoadedWorktreeHooks, ProjectConfigError> {
+  const configPath = join(input.rootPath, '.isagi', 'config.yaml');
+  const exists = yield* pathExists(configPath);
+  if (!exists) {
+    return { status: 'not_configured' as const };
+  }
+
+  const contents = yield* Effect.tryPromise({
+    try: () => readFile(configPath, 'utf8'),
+    catch: (cause) =>
+      new ProjectConfigError({
+        code: 'setup_config_invalid',
+        message: `Could not read project config at ${configPath}.`,
+        path: configPath,
+        projectId: input.projectId,
+        cause,
+      }),
+  });
+
+  const parsed = yield* Effect.try({
+    try: () => parse(contents),
+    catch: (cause) =>
+      new ProjectConfigError({
+        code: 'setup_config_invalid',
+        message: `Could not parse project config at ${configPath}.`,
+        path: configPath,
+        projectId: input.projectId,
+        cause,
+      }),
+  });
+
+  const config = yield* Effect.try({
+    try: () => normalizeWorktreeHooksConfig(parsed),
+    catch: (cause) =>
+      new ProjectConfigError({
+        code: 'setup_config_invalid',
+        message: cause instanceof Error ? cause.message : `Invalid worktree hooks config.`,
+        path: configPath,
+        projectId: input.projectId,
+        cause,
+      }),
+  });
+
+  if (!config || config.postCreate.length === 0) {
+    return { status: 'not_configured' as const };
+  }
+
+  return {
+    status: 'configured' as const,
+    config,
+    hash: hashWorktreeHooks(config),
+    summary: summarizeWorktreeHooks(config),
+  };
+});
+
+/**
+ * Reads the worktree's command catalog from `<worktree>/.isagi/config.yaml`. Never fails: a missing file is an empty
+ * catalog, and an unreadable, unparsable or invalid file is a `config_error` diagnostic the caller shows to the user.
+ */
+export const loadWorktreeCommandCatalog = Effect.fn('projects.loadWorktreeCommandCatalog')(
+  function* (input: {
+    readonly worktreeRootPath: string;
+  }): Effect.fn.Return<LoadedWorktreeCommandCatalog> {
+    const configPath = join(input.worktreeRootPath, '.isagi', 'config.yaml');
+    const contents = yield* Effect.tryPromise({
+      try: () => readFile(configPath, 'utf8'),
+      catch: (cause) =>
+        isNodeErrorCode(cause, 'ENOENT')
+          ? {
+              status: 'configured' as const,
+              config: { commands: [] },
+              path: configPath,
+            }
+          : commandConfigDiagnostic(configPath, 'Could not read command config.', cause),
+    }).pipe(Effect.result);
+    if (Result.isFailure(contents)) {
+      return contents.failure;
+    }
+
+    const parsed = yield* Effect.try({
+      try: () => parse(contents.success),
+      catch: (cause) =>
+        commandConfigDiagnostic(configPath, 'Could not parse command config.', cause),
+    }).pipe(Effect.result);
+    if (Result.isFailure(parsed)) {
+      return parsed.failure;
+    }
+
+    const config = yield* Effect.try({
+      try: () =>
+        normalizeCommandCatalogConfig(parsed.success, {
+          worktreeRootPath: input.worktreeRootPath,
+        }),
+      catch: (cause) => commandConfigDiagnostic(configPath, 'Invalid command config.', cause),
+    }).pipe(Effect.result);
+    if (Result.isFailure(config)) {
+      return config.failure;
+    }
+
+    return {
+      status: 'configured' as const,
+      config: config.success,
+      path: configPath,
+    };
+  },
+);
+
+function pathExists(path: string) {
+  return Effect.promise(() =>
+    access(path).then(
+      () => true,
+      () => false,
+    ),
+  );
+}
+
+function commandConfigDiagnostic(path: string, fallback: string, cause: unknown) {
+  const detail = cause instanceof Error && cause.message ? cause.message : fallback;
+  return {
+    status: 'config_error' as const,
+    diagnostic: {
+      code: 'command_config_invalid' as const,
+      path,
+      message: detail,
+    },
+  };
+}
+
+function isNodeErrorCode(cause: unknown, code: string) {
+  return Boolean(
+    cause &&
+    typeof cause === 'object' &&
+    'code' in cause &&
+    (cause as { readonly code?: unknown }).code === code,
+  );
+}

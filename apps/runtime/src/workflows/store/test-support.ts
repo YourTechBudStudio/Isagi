@@ -9,7 +9,7 @@ import {
   workflowGraphInvocations,
   workflowOperations,
   workflowRuns,
-} from '../../persistence/schema.js';
+} from '../tables.js';
 import { insertCheckpoint } from './checkpoints.js';
 import { appendEvent } from './events.js';
 import { insertOperation } from './operations.js';
