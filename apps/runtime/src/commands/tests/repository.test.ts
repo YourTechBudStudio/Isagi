@@ -7,8 +7,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
-import { makeLogCapture } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import {
   DatabaseError,
   DataDirectory,

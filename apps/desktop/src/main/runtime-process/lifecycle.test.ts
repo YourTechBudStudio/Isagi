@@ -16,8 +16,8 @@ import {
 import { TestClock } from 'effect/testing';
 
 import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
-import { makeLogCapture, runWithTestClock } from '@isagi/testing';
 
+import { makeLogCapture } from '../log-capture-test-support.js';
 import {
   RuntimeLifecycleFailure,
   RuntimeProcess,
@@ -111,7 +111,12 @@ function harness(
   );
   /** Runs `body` against a fresh `RuntimeProcess` under the TestClock; the layer's scope closes when `body` ends. */
   const run = <A, E>(body: (process: RuntimeProcess['Service']) => Effect.Effect<A, E>) =>
-    runWithTestClock(RuntimeProcess.use(body).pipe(Effect.provide(layer)));
+    RuntimeProcess.use(body).pipe(
+      Effect.provide(layer),
+      Effect.scoped,
+      Effect.provide(TestClock.layer()),
+      Effect.runPromise,
+    );
   return { child, logs, signals, spawns: () => spawns, run };
 }
 

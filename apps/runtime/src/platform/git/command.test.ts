@@ -8,8 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Cause, Effect, Exit, Fiber, Option } from 'effect';
 
-import { expectNoProcessMatching, runScoped } from '@isagi/testing';
-
+import { expectNoProcessMatching } from '../../../test/test-support.js';
 import { Git, GitCommandError } from './command.js';
 import { removeTree, requireGit } from './testing.js';
 
@@ -150,39 +149,43 @@ describe(
   () => {
     test('interrupting git kills its child process', async () => {
       const { marker, args } = blockingGit();
-      await runScoped(
-        Effect.gen(function* () {
-          const git = yield* Git;
-          const fiber = yield* Effect.forkChild(git.run(args));
-          yield* waitForProcess(marker);
-          yield* Fiber.interrupt(fiber);
-          const exit = yield* Fiber.await(fiber);
-          // Interruption is not a failure: no `aborted` GitCommandError reaches the caller.
-          assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
-          yield* expectNoProcessMatching(marker);
-        }).pipe(Effect.provide(Git.layer)),
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const git = yield* Git;
+            const fiber = yield* Effect.forkChild(git.run(args));
+            yield* waitForProcess(marker);
+            yield* Fiber.interrupt(fiber);
+            const exit = yield* Fiber.await(fiber);
+            // Interruption is not a failure: no `aborted` GitCommandError reaches the caller.
+            assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+            yield* expectNoProcessMatching(marker);
+          }).pipe(Effect.provide(Git.layer)),
+        ),
       );
     });
 
     test('git timeout fails with the typed timeout error and kills the child', async () => {
       const { marker, args } = blockingGit();
-      await runScoped(
-        Effect.gen(function* () {
-          const git = yield* Git;
-          const timed = yield* Effect.forkChild(
-            Effect.flip(
-              git.run(args).pipe(
-                Effect.tap(() => Effect.die('git should not finish')),
-                Effect.timeout('1 second'),
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const git = yield* Git;
+            const timed = yield* Effect.forkChild(
+              Effect.flip(
+                git.run(args).pipe(
+                  Effect.tap(() => Effect.die('git should not finish')),
+                  Effect.timeout('1 second'),
+                ),
               ),
-            ),
-          );
-          // Proves the deadline lands on a live git rather than on one that never started.
-          yield* waitForProcess(marker);
-          const error = yield* Fiber.join(timed);
-          assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
-          yield* expectNoProcessMatching(marker);
-        }).pipe(Effect.provide(Git.layer)),
+            );
+            // Proves the deadline lands on a live git rather than on one that never started.
+            yield* waitForProcess(marker);
+            const error = yield* Fiber.join(timed);
+            assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+            yield* expectNoProcessMatching(marker);
+          }).pipe(Effect.provide(Git.layer)),
+        ),
       );
     });
   },

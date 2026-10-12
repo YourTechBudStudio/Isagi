@@ -22,8 +22,7 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Result, Layer, Ref } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { RuntimeConfig } from '../../runtime-config/index.js';
@@ -282,8 +281,8 @@ test('warns once for a missing explicitly configured source and stays silent for
       },
     );
 
-    await runScoped(registry.discover().pipe(Effect.provide(logs.layer)));
-    await runScoped(registry.discover().pipe(Effect.provide(logs.layer)));
+    await Effect.runPromise(Effect.scoped(registry.discover().pipe(Effect.provide(logs.layer))));
+    await Effect.runPromise(Effect.scoped(registry.discover().pipe(Effect.provide(logs.layer))));
 
     assert.deepEqual(
       logs.lines.map((line) => [line.level, line.message]),
@@ -312,8 +311,10 @@ test('retains configured missing-path warning policy when a project source wins 
       },
     );
 
-    await runScoped(
-      registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.provide(logs.layer)),
+    await Effect.runPromise(
+      Effect.scoped(
+        registry.discover({ projectId: 1, projectRoot: project }).pipe(Effect.provide(logs.layer)),
+      ),
     );
 
     assert.equal(logs.lines.length, 1);
@@ -464,8 +465,12 @@ test('logs a discovered project collision once per registry instance and context
     const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
     const context = { projectId: 1, projectRoot: project };
 
-    await runScoped(registry.discover(context).pipe(Effect.provide(logs.layer)));
-    await runScoped(registry.discover(context).pipe(Effect.provide(logs.layer)));
+    await Effect.runPromise(
+      Effect.scoped(registry.discover(context).pipe(Effect.provide(logs.layer))),
+    );
+    await Effect.runPromise(
+      Effect.scoped(registry.discover(context).pipe(Effect.provide(logs.layer))),
+    );
 
     assert.deepEqual(
       logs.lines.map((line) => [line.level, line.message]),

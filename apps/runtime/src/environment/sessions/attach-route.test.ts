@@ -10,8 +10,8 @@ import {
   terminalSessionPtyWebSocketEndpoint,
   type PtyStreamOutputMessageSet,
 } from '@isagi/contracts';
-import { makeFiberProbe } from '@isagi/testing';
 
+import { makeFiberProbe } from '../../../test/test-support.js';
 import { HarnessAdapterError } from '../../harnesses/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
 import { PtyService } from '../../pty-processes/index.js';

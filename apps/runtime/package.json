@@ -13,7 +13,7 @@
     "dev": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 tsx src/index.ts",
     "lint:modules": "node ../../scripts/architecture/module-boundaries.mjs ../..",
     "start": "node dist/index.js",
-    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node ../../scripts/test-exit-watchdog.mjs 240 -- node --import tsx --import ./test/dump-handles-on-signal.mjs --test --experimental-test-isolation=none \"src/**/*.test.ts\"",
+    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node ../../scripts/test-exit-watchdog.mjs 240 -- node --import tsx --import ./test/dump-handles-on-signal.mjs --test --experimental-test-isolation=none \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
     "typecheck": "pnpm workspace-deps && tsc --noEmit -p tsconfig.json",
     "workspace-deps": "pnpm -C ../../packages/workflow-sdk build && pnpm -C ../../packages/workflow-verifier build && pnpm -C ../cli build"
   },
@@ -33,7 +33,6 @@
   },
   "devDependencies": {
     "@isagi/cli": "workspace:*",
-    "@isagi/testing": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "cross-env": "^10.1.0",

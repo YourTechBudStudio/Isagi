@@ -8,7 +8,6 @@ import {
   type DesktopUpdateIntent,
   type DesktopUpdateSnapshot,
 } from '@isagi/contracts';
-import { runScoped } from '@isagi/testing';
 
 import { decodeDesktopUpdateIntent, dispatchDesktopUpdateIntent } from './desktop-update-ipc.js';
 import { RELEASE_DOWNLOAD_PAGE_URL } from './download-page.js';
@@ -49,7 +48,7 @@ function fakeService(
   return {
     calls,
     run: <A, E>(effect: Effect.Effect<A, E, DesktopUpdater>) =>
-      runScoped(Effect.provide(effect, layer)),
+      Effect.runPromise(Effect.scoped(Effect.provide(effect, layer))),
   };
 }
 

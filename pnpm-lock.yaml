@@ -48,9 +48,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.2
     devDependencies:
-      '@isagi/testing':
-        specifier: workspace:*
-        version: link:../../packages/testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -85,9 +82,6 @@ importers:
       '@electron/rebuild':
         specifier: ^4.2.0
         version: 4.2.0(supports-color@7.2.0)
-      '@isagi/testing':
-        specifier: workspace:*
-        version: link:../../packages/testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -149,9 +143,6 @@ importers:
       '@isagi/cli':
         specifier: workspace:*
         version: link:../cli
-      '@isagi/testing':
-        specifier: workspace:*
-        version: link:../../packages/testing
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -290,9 +281,6 @@ importers:
         specifier: 'catalog:'
         version: 4.0.2
     devDependencies:
-      '@isagi/testing':
-        specifier: workspace:*
-        version: link:../testing
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -314,22 +302,6 @@ importers:
       node-pty:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
-
-  packages/testing:
-    dependencies:
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.2
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.12.4
-      tsx:
-        specifier: ^4.21.0
-        version: 4.22.3
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
 
   packages/workflow-sdk:
     devDependencies:

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Ref } from 'effect';
+import { Effect, Ref, type Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import { makeLogCapture, runWithTestClock } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { runPeriodically } from './run-periodically.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 test('the first tick runs one interval in, then once per interval', () =>
   runWithTestClock(

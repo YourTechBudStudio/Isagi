@@ -6,8 +6,6 @@ import websocket from '@fastify/websocket';
 import { Cause, Effect, Layer, Logger, References } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { runScoped } from '@isagi/testing';
-
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { withApiServer } from '../../platform/http/testing.js';
 import { EntityLock } from '../../platform/locks/index.js';
@@ -285,34 +283,34 @@ export async function runCommandServiceEffect<A>(
   >,
   options: CommandRepositoryOptions = {},
 ) {
-  return runScoped(
-    CommandService.pipe(
-      Effect.flatMap(effect),
-      Effect.provide(CommandService.layerNoDeps),
-      Effect.provide(options.entityLock ?? EntityLock.layer),
-      Effect.provide(Layer.mock(ProjectRepository)(repository(rootPath))),
-      Effect.provide(Layer.mock(CommandRepository)(commandRepository(options))),
-      Effect.provide(
-        Layer.mock(PtyService)({
-          ...ptyService(options.pty),
-          ...ptyProcessReads(
-            options.ptyProcess ?? null,
-            options.ptyProcessReadFault,
-            options.ptyProcessById,
-          ),
-        }),
-      ),
-      Effect.provide(
-        Layer.succeed(LoopbackPortProbe, options.portProbe ?? untouchableCommandPortProbe()),
-      ),
-      Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
-      Effect.provide(options.eventBus ?? RuntimeEvents.layer),
-      Effect.provide(InternalEvents.layer),
-      Effect.provide(
-        options.settings ? Layer.succeed(CommandSettings, options.settings) : Layer.empty,
-      ),
-      Effect.provide(options.logger ?? Layer.empty),
+  return CommandService.pipe(
+    Effect.flatMap(effect),
+    Effect.provide(CommandService.layerNoDeps),
+    Effect.provide(options.entityLock ?? EntityLock.layer),
+    Effect.provide(Layer.mock(ProjectRepository)(repository(rootPath))),
+    Effect.provide(Layer.mock(CommandRepository)(commandRepository(options))),
+    Effect.provide(
+      Layer.mock(PtyService)({
+        ...ptyService(options.pty),
+        ...ptyProcessReads(
+          options.ptyProcess ?? null,
+          options.ptyProcessReadFault,
+          options.ptyProcessById,
+        ),
+      }),
     ),
+    Effect.provide(
+      Layer.succeed(LoopbackPortProbe, options.portProbe ?? untouchableCommandPortProbe()),
+    ),
+    Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
+    Effect.provide(options.eventBus ?? RuntimeEvents.layer),
+    Effect.provide(InternalEvents.layer),
+    Effect.provide(
+      options.settings ? Layer.succeed(CommandSettings, options.settings) : Layer.empty,
+    ),
+    Effect.provide(options.logger ?? Layer.empty),
+    Effect.scoped,
+    Effect.runPromise,
   );
 }
 

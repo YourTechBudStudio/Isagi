@@ -6,8 +6,7 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
-import { makeLogCapture } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../../test/test-support.js';
 import {
   EditorContextRepository,
   insertPtyProcess as insertEditorPtyProcess,

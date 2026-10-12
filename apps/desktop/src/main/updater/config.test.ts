@@ -3,8 +3,6 @@ import test from 'node:test';
 
 import { Context, Effect, Layer } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { DesktopUpdaterConfig } from './config.js';
 
 class RuntimeUrlSource extends Context.Service<RuntimeUrlSource, { readonly url: string }>()(
@@ -30,17 +28,19 @@ test('the Electron configuration binds the runtime URL services and asks for the
     Layer.provide(Layer.succeed(RuntimeUrlSource, RuntimeUrlSource.of({ url: 'http://runtime' }))),
   );
 
-  const url = await runScoped(
-    Effect.gen(function* () {
-      const config = yield* DesktopUpdaterConfig;
-      assert.equal(config.installedVersion, '1.2.3');
-      assert.equal(config.isPackaged, true);
-      assert.deepEqual(asked, [], 'the logs path was read before any diagnostic needed it');
-      assert.equal(config.logsDirectory(), '/logs');
-      config.requestInstall(() => undefined);
-      // The configured effect carries no requirements of its own.
-      return yield* config.runtimeUrl;
-    }).pipe(Effect.provide(layer)),
+  const url = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const config = yield* DesktopUpdaterConfig;
+        assert.equal(config.installedVersion, '1.2.3');
+        assert.equal(config.isPackaged, true);
+        assert.deepEqual(asked, [], 'the logs path was read before any diagnostic needed it');
+        assert.equal(config.logsDirectory(), '/logs');
+        config.requestInstall(() => undefined);
+        // The configured effect carries no requirements of its own.
+        return yield* config.runtimeUrl;
+      }).pipe(Effect.provide(layer)),
+    ),
   );
   assert.equal(url, 'http://runtime');
   assert.deepEqual(asked, ['logs']);

@@ -6,8 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../../test/test-support.js';
 import { DataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
 import { StateFile, stateFromActiveContext } from './state-file.js';
@@ -27,10 +26,12 @@ async function withStateFile<A>(
       root,
       statePath: paths.statePath,
       run: (effect) =>
-        runScoped(
-          effect.pipe(
-            Effect.provide(StateFile.layer),
-            Effect.provideService(DataDirectory, { paths }),
+        Effect.runPromise(
+          Effect.scoped(
+            effect.pipe(
+              Effect.provide(StateFile.layer),
+              Effect.provideService(DataDirectory, { paths }),
+            ),
           ),
         ),
     });

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Duration, Effect, Layer } from 'effect';
+import { TestClock } from 'effect/testing';
 
-import { makeLogCapture, runScoped, runWithTestClock } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { EventLoopWatchdog, EventLoopWatchdogSettings } from './event-loop-watchdog.js';
 import { diagnosticPhase } from './phase.js';
 
@@ -33,17 +33,22 @@ const realDelay = (ms: number) =>
 
 test('a blocked event loop is reported with its lag and the active phase, even under a TestClock', async () => {
   const logs = makeLogCapture();
-  await runWithTestClock(
-    Effect.gen(function* () {
-      yield* Layer.build(EventLoopWatchdog.layer);
-      yield* realDelay(50);
-      // The phase stays active while the watchdog wakes up late, as a hung phase would.
-      yield* diagnosticPhase(
-        'watchdog-test-phase',
-        { probe: 'blocked' },
-        blockEventLoop(300).pipe(Effect.andThen(realDelay(100))),
-      );
-    }).pipe(Effect.provide(Layer.mergeAll(logs.layer, settings))),
+  await Effect.runPromise(
+    Effect.provide(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(EventLoopWatchdog.layer);
+          yield* realDelay(50);
+          // The phase stays active while the watchdog wakes up late, as a hung phase would.
+          yield* diagnosticPhase(
+            'watchdog-test-phase',
+            { probe: 'blocked' },
+            blockEventLoop(300).pipe(Effect.andThen(realDelay(100))),
+          );
+        }).pipe(Effect.provide(Layer.mergeAll(logs.layer, settings))),
+      ),
+      TestClock.layer(),
+    ),
   );
 
   const warnings = logs.lines.filter((line) => line.message === 'Event loop lag detected');
@@ -59,15 +64,17 @@ test('a blocked event loop is reported with its lag and the active phase, even u
 test('closing the watchdog scope stops it', async () => {
   const logs = makeLogCapture();
   let linesAtClose = -1;
-  await runScoped(
-    Effect.gen(function* () {
-      yield* Effect.scoped(
-        Layer.build(EventLoopWatchdog.layer).pipe(Effect.andThen(realDelay(50))),
-      );
-      linesAtClose = logs.lines.length;
-      yield* blockEventLoop(300);
-      yield* realDelay(100);
-    }).pipe(Effect.provide(Layer.mergeAll(logs.layer, settings))),
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.scoped(
+          Layer.build(EventLoopWatchdog.layer).pipe(Effect.andThen(realDelay(50))),
+        );
+        linesAtClose = logs.lines.length;
+        yield* blockEventLoop(300);
+        yield* realDelay(100);
+      }).pipe(Effect.provide(Layer.mergeAll(logs.layer, settings))),
+    ),
   );
   assert.ok(linesAtClose >= 0);
   assert.deepEqual(logs.lines.slice(linesAtClose), []);

@@ -16,8 +16,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import {
   isIdName,
   lastWriteMs,
@@ -57,7 +56,11 @@ test('openCollectorRoot reports absent, unusable and ready roots', async () => {
   await withDataRootAsync(async (dataRoot) => {
     const logs = makeLogCapture();
     const open = (segments: readonly string[]) =>
-      runScoped(openCollectorRoot(dataRoot, segments, 'test').pipe(Effect.provide(logs.layer)));
+      Effect.runPromise(
+        Effect.scoped(
+          openCollectorRoot(dataRoot, segments, 'test').pipe(Effect.provide(logs.layer)),
+        ),
+      );
     assert.deepEqual(await open(['a', 'b']), { status: 'absent' });
     assert.equal(logs.lines.length, 0, 'an absent root is not worth a log line');
 
@@ -284,9 +287,11 @@ test('orphan collection warnings name filesystem conditions by their system erro
     rmSync(parent.path, { recursive: true, force: true });
     writeFileSync(parent.path, 'not a directory');
     const listingLogs = makeLogCapture();
-    const listing = await runScoped(
-      listOrphanCandidates(parent, 'file', isIdName, 'test').pipe(
-        Effect.provide(listingLogs.layer),
+    const listing = await Effect.runPromise(
+      Effect.scoped(
+        listOrphanCandidates(parent, 'file', isIdName, 'test').pipe(
+          Effect.provide(listingLogs.layer),
+        ),
       ),
     );
     assert.equal(listing.status, 'unreadable');
@@ -323,19 +328,21 @@ test('sweepOrphans treats anything written after the sweep started as young', as
 
 async function guardedRoot(dataRoot: string, ...segments: string[]): Promise<GuardedDirectory> {
   mkdirSync(join(dataRoot, ...segments), { recursive: true });
-  const opened = await runScoped(openCollectorRoot(dataRoot, segments, 'test'));
+  const opened = await Effect.runPromise(
+    Effect.scoped(openCollectorRoot(dataRoot, segments, 'test')),
+  );
   assert.equal(opened.status, 'ready');
   if (opened.status !== 'ready') throw new Error('unreachable');
   return opened.directory;
 }
 
 function list(parent: GuardedDirectory, kind: 'file' | 'directory') {
-  return runScoped(listOrphanCandidates(parent, kind, isIdName, 'test'));
+  return Effect.runPromise(Effect.scoped(listOrphanCandidates(parent, kind, isIdName, 'test')));
 }
 
 /** Runs a sweep with its log lines captured, so a test can assert on them and nothing is printed. */
 function sweep(input: Parameters<typeof sweepOrphans>[0], logs = makeLogCapture()) {
-  return runScoped(sweepOrphans(input).pipe(Effect.provide(logs.layer)));
+  return Effect.runPromise(Effect.scoped(sweepOrphans(input).pipe(Effect.provide(logs.layer))));
 }
 
 function listed(listing: OrphanListing): OrphanCandidate[] {

@@ -5,8 +5,7 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { LoopbackPortUnavailable, makeLoopbackPortProbe } from './loopback-port-probe.js';
 
 /**
@@ -366,7 +365,9 @@ test('a close failure is logged with the port and never with its cause', async (
   });
 
   // A close failure means the port may still be held, so it is not offered.
-  const inactive = await runScoped(failing.probeInactive(port).pipe(Effect.provide(logs.layer)));
+  const inactive = await Effect.runPromise(
+    Effect.scoped(failing.probeInactive(port).pipe(Effect.provide(logs.layer))),
+  );
   assert.equal(inactive, false);
 
   const warnings = logs.lines.filter((line) =>
@@ -392,19 +393,21 @@ test('interrupting the loopback port probe closes its listener', async () => {
   const port = occupied.port;
   await occupied.release();
 
-  await runScoped(
-    Effect.gen(function* () {
-      const listening = yield* Deferred.make<void>();
-      const held = makeLoopbackPortProbe({
-        afterListening: () =>
-          Deferred.succeed(listening, undefined).pipe(Effect.andThen(Effect.never)),
-      });
-      const fiber = yield* Effect.forkChild(held.probeInactive(port));
-      yield* Deferred.await(listening);
-      yield* Fiber.interrupt(fiber);
-      const exit = yield* Fiber.await(fiber);
-      assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
-    }),
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const listening = yield* Deferred.make<void>();
+        const held = makeLoopbackPortProbe({
+          afterListening: () =>
+            Deferred.succeed(listening, undefined).pipe(Effect.andThen(Effect.never)),
+        });
+        const fiber = yield* Effect.forkChild(held.probeInactive(port));
+        yield* Deferred.await(listening);
+        yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+        assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+      }),
+    ),
   );
   await assertImmediatelyRebindable(port);
 });
@@ -416,8 +419,8 @@ test('loopback port probe timeout fails with the typed timeout error and closes 
       Effect.sync(() => assigned.push(bound)).pipe(Effect.andThen(Effect.never)),
   });
 
-  const error = await runScoped(
-    Effect.flip(stalled.obtainEphemeralPort.pipe(Effect.timeout('200 millis'))),
+  const error = await Effect.runPromise(
+    Effect.scoped(Effect.flip(stalled.obtainEphemeralPort.pipe(Effect.timeout('200 millis')))),
   );
   assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
   assert.equal(assigned.length, 1, 'the deadline must land on a bound listener');

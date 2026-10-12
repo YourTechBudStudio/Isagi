@@ -3,8 +3,6 @@
 import { Effect, Layer, type Scope } from 'effect';
 import { FetchHttpClient, type HttpClient } from 'effect/http';
 
-import { runScoped } from '@isagi/testing';
-
 import { RuntimeClient } from './service.js';
 
 export const runtimeUrl = 'http://runtime.test';
@@ -37,7 +35,7 @@ export function fakeRuntime(answer: (seen: SeenRequest) => Response | Promise<Re
   return {
     seen,
     run: <A, E>(effect: Effect.Effect<A, E, RuntimeClient | HttpClient.HttpClient | Scope.Scope>) =>
-      runScoped(Effect.provide(effect, layer)),
+      Effect.runPromise(Effect.scoped(Effect.provide(effect, layer))),
   };
 }
 

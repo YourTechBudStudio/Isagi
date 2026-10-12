@@ -3,8 +3,7 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Layer } from 'effect';
 
-import { makeLogCapture } from '@isagi/testing';
-
+import { makeLogCapture } from '../../test/test-support.js';
 import { RuntimeConfig } from '../runtime-config/index.js';
 import { defaultRuntimeConfig } from '../runtime-config/testing.js';
 import { NodePtyBackend } from './adapters/node-pty.js';

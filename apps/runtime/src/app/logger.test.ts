@@ -3,8 +3,6 @@ import { describe, test } from 'node:test';
 
 import { Cause, ConfigProvider, Console, Effect, Exit, Logger } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { InvalidRuntimeSetting, RuntimeLogger, RuntimeSettings } from './logger.js';
 
 const withEnv = (env: Record<string, string>) =>
@@ -94,11 +92,13 @@ describe('RuntimeLogger', () => {
       error: record('error'),
       trace: record('trace'),
     };
-    await runScoped(
-      program.pipe(
-        Effect.provide(RuntimeLogger.layer),
-        withEnv(env),
-        Effect.provideService(Console.Console, console),
+    await Effect.runPromise(
+      Effect.scoped(
+        program.pipe(
+          Effect.provide(RuntimeLogger.layer),
+          withEnv(env),
+          Effect.provideService(Console.Console, console),
+        ),
       ),
     );
     return calls;
@@ -144,10 +144,12 @@ describe('RuntimeLogger', () => {
   });
 
   test('the tracer logger stays installed so log entries reach spans', async () => {
-    const loggers = await runScoped(
-      Effect.gen(function* () {
-        return yield* Logger.CurrentLoggers;
-      }).pipe(Effect.provide(RuntimeLogger.layer), withEnv({})),
+    const loggers = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          return yield* Logger.CurrentLoggers;
+        }).pipe(Effect.provide(RuntimeLogger.layer), withEnv({})),
+      ),
     );
     assert.ok(loggers.has(Logger.tracerLogger));
     assert.equal(loggers.size, 2);

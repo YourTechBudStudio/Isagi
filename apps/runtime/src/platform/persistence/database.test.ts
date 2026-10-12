@@ -6,8 +6,6 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { Data, Effect, Exit } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { DatabaseError, type RuntimeDrizzleDatabase } from './database.js';
 import { makeRuntimeDatabase } from './testing.js';
 
@@ -26,12 +24,14 @@ const countNames = (database: RuntimeDrizzleDatabase) =>
 test('an aborted transaction rolls back and fails with the typed error', async () => {
   const { client, service } = openDatabase();
   try {
-    const exit = await runScoped(
-      Effect.exit(
-        service.transaction<void, NameTaken>('insert_name', (database, abort) => {
-          database.run(sql`insert into names (name) values ('a')`);
-          return abort(new NameTaken({ name: 'a' }));
-        }),
+    const exit = await Effect.runPromise(
+      Effect.scoped(
+        Effect.exit(
+          service.transaction<void, NameTaken>('insert_name', (database, abort) => {
+            database.run(sql`insert into names (name) values ('a')`);
+            return abort(new NameTaken({ name: 'a' }));
+          }),
+        ),
       ),
     );
 
@@ -39,7 +39,7 @@ test('an aborted transaction rolls back and fails with the typed error', async (
     assert.equal(exit.cause.reasons.length, 1);
     const reason = exit.cause.reasons[0];
     assert.ok(reason?._tag === 'Fail' && reason.error instanceof NameTaken);
-    assert.equal(await runScoped(service.use('count_names', countNames)), 0);
+    assert.equal(await Effect.runPromise(Effect.scoped(service.use('count_names', countNames))), 0);
   } finally {
     client.close();
   }
@@ -48,18 +48,20 @@ test('an aborted transaction rolls back and fails with the typed error', async (
 test('a transaction that throws rolls back and fails with DatabaseError', async () => {
   const { client, service } = openDatabase();
   try {
-    const failure = await runScoped(
-      Effect.flip(
-        service.transaction('insert_name', (database) => {
-          database.run(sql`insert into names (name) values ('a')`);
-          throw new Error('constraint violated');
-        }),
+    const failure = await Effect.runPromise(
+      Effect.scoped(
+        Effect.flip(
+          service.transaction('insert_name', (database) => {
+            database.run(sql`insert into names (name) values ('a')`);
+            throw new Error('constraint violated');
+          }),
+        ),
       ),
     );
 
     assert.ok(failure instanceof DatabaseError);
     assert.equal(failure.operation, 'insert_name');
-    assert.equal(await runScoped(service.use('count_names', countNames)), 0);
+    assert.equal(await Effect.runPromise(Effect.scoped(service.use('count_names', countNames))), 0);
   } finally {
     client.close();
   }
@@ -68,13 +70,15 @@ test('a transaction that throws rolls back and fails with DatabaseError', async 
 test('a transaction that returns commits', async () => {
   const { client, service } = openDatabase();
   try {
-    await runScoped(
-      service.transaction('insert_name', (database) => {
-        database.run(sql`insert into names (name) values ('a')`);
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        service.transaction('insert_name', (database) => {
+          database.run(sql`insert into names (name) values ('a')`);
+        }),
+      ),
     );
 
-    assert.equal(await runScoped(service.use('count_names', countNames)), 1);
+    assert.equal(await Effect.runPromise(Effect.scoped(service.use('count_names', countNames))), 1);
   } finally {
     client.close();
   }

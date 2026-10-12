@@ -4,8 +4,8 @@ import test from 'node:test';
 import { Effect, Layer } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
-import { makeLogCapture } from '@isagi/testing';
 
+import { makeLogCapture } from '../../../test/test-support.js';
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from '../agent-sessions/attention.js';

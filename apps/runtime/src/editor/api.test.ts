@@ -9,8 +9,8 @@ import type {
   EditorDiagnosticsOutput,
   RetryEditorProvisioningOutput,
 } from '@isagi/contracts';
-import { makeLogCapture } from '@isagi/testing';
 
+import { makeLogCapture } from '../../test/test-support.js';
 import { withApiServer } from '../platform/http/testing.js';
 import { registerEditorRoutes } from './api.js';
 import {

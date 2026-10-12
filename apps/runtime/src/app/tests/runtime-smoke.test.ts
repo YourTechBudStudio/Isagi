@@ -1,11 +1,10 @@
 // Whole-runtime smoke: boots the real runtime against a temp data dir and a temp Git repo, then
 // drives one user path end to end through the public HTTP and WebSocket API. Every response is
 // decoded with the contract schemas, so this pins wire behavior (status, code, envelope shape)
-// across the Effect v4 port and the runtime module refactor. Pinned values were observed on v3.
+// across refactors.
 //
 // The runtime boots through `bootRuntime` (the same `MainLayer` the process entry launches) with a
-// fiber probe around it. The other probes below (handle diff, process probe, console capture) are
-// still inline; the final enforcement stage switches them to `@isagi/testing`.
+// fiber probe around it; the handle and process leak probes come from the runtime test support.
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -34,8 +33,14 @@ import {
   type RuntimeEvent,
   type WireSchema,
 } from '@isagi/contracts';
-import { expectNoProcessMatching, makeFiberProbe } from '@isagi/testing';
 
+import {
+  activeHandleCounts,
+  expectHandlesBackTo,
+  expectNoProcessMatching,
+  makeFiberProbe,
+  pidsMatching,
+} from '../../../test/test-support.js';
 import { RuntimeLogger } from '../logger.js';
 import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 
@@ -152,7 +157,7 @@ describe('runtime smoke', () => {
     // reaches any process's argv, so the probe sees it and flow 11 can prove the tree is killed.
     terminal.socket.send({ type: 'input', data: `sh -c 'sleep 300; true' ${marker}\n` });
     await waitFor(
-      async () => (await processesMatching(marker)).length > 0,
+      async () => (await Effect.runPromise(pidsMatching(marker))).length > 0,
       'the marker process to start',
     );
     assert.deepEqual(errorMessages(terminal.socket), []);
@@ -228,7 +233,7 @@ describe('runtime smoke', () => {
     await events.close();
     await terminal.socket.close();
     const shutdownLogs = await captureLogs(() => runtime.shutdown());
-    await expectNoNewHandles(runtime.handleBaseline);
+    await Effect.runPromise(expectHandlesBackTo(runtime.handleBaseline, { withinMs: 3_000 }));
     assert.deepEqual(failureLines(shutdownLogs), []);
     assert.equal(runtime.fibers.active, 0, 'no fiber outlives the runtime');
   });
@@ -270,7 +275,7 @@ describe('runtime smoke: shutdown with open sockets', () => {
       await waitFor(() => attached.output().includes('$'), 'the shell prompt');
       attached.socket.send({ type: 'input', data: `sh -c 'sleep 300; true' ${marker}\n` });
       await waitFor(
-        async () => (await processesMatching(marker)).length > 0,
+        async () => (await Effect.runPromise(pidsMatching(marker))).length > 0,
         'the marker process to start',
       );
 
@@ -282,7 +287,7 @@ describe('runtime smoke: shutdown with open sockets', () => {
         2_000,
       );
       await Effect.runPromise(expectNoProcessMatching(marker, { withinMs: 2_000 }));
-      await expectNoNewHandles(runtime.handleBaseline);
+      await Effect.runPromise(expectHandlesBackTo(runtime.handleBaseline, { withinMs: 3_000 }));
       assert.deepEqual(failureLines(shutdownLogs), []);
     } finally {
       events?.socket.close();
@@ -299,7 +304,7 @@ interface SmokeRuntime {
   readonly server: FastifyInstance;
   readonly url: string;
   readonly repoDir: string;
-  readonly handleBaseline: ReadonlyMap<string, number>;
+  readonly handleBaseline: Readonly<Record<string, number>>;
   /** Fibers started under the runtime that have not ended yet. */
   readonly fibers: { readonly active: number };
   /** Shuts the runtime down once, then restores the environment and removes the temp dirs. */
@@ -355,7 +360,7 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
     throw error;
   }
 
-  const handleBaseline = activeResourceCounts();
+  const handleBaseline = activeHandleCounts();
   const fiberProbe = makeFiberProbe();
   let started: BootedRuntime;
   try {
@@ -564,40 +569,11 @@ function errorMessages(socket: RecordingSocket<{ readonly type: string }>) {
   ];
 }
 
-// --- Processes, handles and logs -----------------------------------------------------------------
-
-async function processesMatching(pattern: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    execFile('pgrep', ['-f', pattern], (error, stdout) => {
-      // pgrep exits 1 when nothing matches.
-      if (error && error.code !== 1) reject(error);
-      else resolve(stdout.split('\n').filter((line) => line.trim() !== ''));
-    });
-  });
-}
+// --- Processes and logs ------------------------------------------------------------------------
 
 async function killProcessesMatching(pattern: string) {
   await new Promise<void>((resolve) => {
     execFile('pkill', ['-KILL', '-f', pattern], () => resolve());
-  });
-}
-
-function activeResourceCounts(): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const resource of process.getActiveResourcesInfo()) {
-    counts.set(resource, (counts.get(resource) ?? 0) + 1);
-  }
-  return counts;
-}
-
-/** Every resource kind is back to (or below) its pre-boot count within a short grace period. */
-async function expectNoNewHandles(baseline: ReadonlyMap<string, number>) {
-  const leaked = () =>
-    [...activeResourceCounts()]
-      .filter(([resource, count]) => count > (baseline.get(resource) ?? 0))
-      .map(([resource, count]) => `${resource} ${baseline.get(resource) ?? 0} -> ${count}`);
-  await waitFor(() => leaked().length === 0, 'no new active handles', 3_000).catch(() => {
-    assert.deepEqual(leaked(), [], 'handles left open after shutdown');
   });
 }
 

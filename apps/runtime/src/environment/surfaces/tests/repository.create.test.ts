@@ -6,8 +6,6 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { type DatabaseError, RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { surfacePanes, worktreeEnvironmentStates, worktreeSurfaces } from '../../tables.js';
 import { testLayer } from '../../testing.js';
@@ -26,18 +24,20 @@ async function refusalFor(
 ) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surface-create-'));
   try {
-    return await runScoped(
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceRepository;
-        const database = yield* RuntimeDatabase;
-        const error = yield* Effect.flip(create(surfaces));
-        const rows = yield* database.use('test_count_surface_rows', (db) => ({
-          surfaces: db.select().from(worktreeSurfaces).all().length,
-          panes: db.select().from(surfacePanes).all().length,
-          focus: db.select().from(worktreeEnvironmentStates).all().length,
-        }));
-        return { error, rows };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+    return await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const surfaces = yield* SurfaceRepository;
+          const database = yield* RuntimeDatabase;
+          const error = yield* Effect.flip(create(surfaces));
+          const rows = yield* database.use('test_count_surface_rows', (db) => ({
+            surfaces: db.select().from(worktreeSurfaces).all().length,
+            panes: db.select().from(surfacePanes).all().length,
+            focus: db.select().from(worktreeEnvironmentStates).all().length,
+          }));
+          return { error, rows };
+        }).pipe(Effect.provide(testLayer(dataRoot))),
+      ),
     );
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });

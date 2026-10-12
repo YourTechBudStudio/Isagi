@@ -6,8 +6,8 @@ import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import Fastify from 'fastify';
 
 import type { RuntimeEvent } from '@isagi/contracts';
-import { makeLogCapture } from '@isagi/testing';
 
+import { makeLogCapture } from '../../test/test-support.js';
 import { AgentSessionAttentionProjection } from '../environment/index.js';
 import { RuntimeEvents } from '../platform/events/index.js';
 import { registerRuntimeEventsRoutes } from './api.js';

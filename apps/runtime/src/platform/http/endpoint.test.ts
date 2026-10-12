@@ -6,8 +6,8 @@ import { TestClock } from 'effect/testing';
 import Fastify from 'fastify';
 
 import { apiEndpoints, type ApiError, type HealthOutput } from '@isagi/contracts';
-import { makeLogCapture } from '@isagi/testing';
 
+import { makeLogCapture } from '../../../test/test-support.js';
 import { DatabaseError } from '../persistence/index.js';
 import { registerApiEndpoint } from './endpoint.js';
 import { routeRuntimeOf, serviceFreeRouteRuntime } from './testing.js';

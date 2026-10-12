@@ -16,8 +16,6 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, FiberMap, Layer } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { PtyRepository } from '../repository.js';
@@ -374,51 +372,53 @@ test('PTY GC keeps orphan running processes when backend inspection is unavailab
 // on a later scheduler turn. A GC pass in between sees a `running` orphan whose backend answers `missing`.
 test('PTY GC keeps a missing orphan while its supervisor may still record the exit, and collects it afterwards', () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-exit-pending-'));
-  return runScoped(
-    Effect.gen(function* () {
-      const repository = yield* PtyRepository;
-      const sessionsPath = join(dataRoot, 'sessions');
-      mkdirSync(sessionsPath, { recursive: true });
-      const process = yield* insertPtyProcess({
-        status: 'running',
-        logPath: join(sessionsPath, 'running.ptylog'),
-        updatedAt: oldIso(),
-      });
-      writeFileSync(process.logPath, 'session log', 'utf8');
-      const backend = fakeBackend({
-        inspect: () => Effect.succeed({ status: 'missing' as const }),
-        kill: () => Effect.die('a missing process must not be killed'),
-      });
-      const supervisors = yield* FiberMap.make<number, void, never>();
-      const deferredWrites = new Set<number>();
-      yield* FiberMap.run(supervisors, process.id, Effect.never);
-      const collect = collectPtyGarbage(
-        repository,
-        nodePtyCatalog(backend),
-        'test-runtime',
-        sessionsPath,
-        { nowMs: nowMs(), pendingExits: { supervisors, deferredWrites } },
-      );
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'running.ptylog'),
+          updatedAt: oldIso(),
+        });
+        writeFileSync(process.logPath, 'session log', 'utf8');
+        const backend = fakeBackend({
+          inspect: () => Effect.succeed({ status: 'missing' as const }),
+          kill: () => Effect.die('a missing process must not be killed'),
+        });
+        const supervisors = yield* FiberMap.make<number, void, never>();
+        const deferredWrites = new Set<number>();
+        yield* FiberMap.run(supervisors, process.id, Effect.never);
+        const collect = collectPtyGarbage(
+          repository,
+          nodePtyCatalog(backend),
+          'test-runtime',
+          sessionsPath,
+          { nowMs: nowMs(), pendingExits: { supervisors, deferredWrites } },
+        );
 
-      yield* collect;
-      assert.notEqual(yield* repository.findProcess(process.id), null);
-      assert.equal(existsSync(process.logPath), true);
+        yield* collect;
+        assert.notEqual(yield* repository.findProcess(process.id), null);
+        assert.equal(existsSync(process.logPath), true);
 
-      // The supervisor finished, but its exit write failed and the persistence retry now holds it: still pending.
-      yield* FiberMap.remove(supervisors, process.id);
-      deferredWrites.add(process.id);
-      yield* collect;
-      assert.notEqual(yield* repository.findProcess(process.id), null);
-      assert.equal(existsSync(process.logPath), true);
+        // The supervisor finished, but its exit write failed and the persistence retry now holds it: still pending.
+        yield* FiberMap.remove(supervisors, process.id);
+        deferredWrites.add(process.id);
+        yield* collect;
+        assert.notEqual(yield* repository.findProcess(process.id), null);
+        assert.equal(existsSync(process.logPath), true);
 
-      // Nothing holds the exit any more (it is recorded, or a kill suppressed it): the row is collectable again.
-      deferredWrites.delete(process.id);
-      yield* collect;
-      assert.equal(yield* repository.findProcess(process.id), null);
-      assert.equal(existsSync(process.logPath), false);
-    }).pipe(
-      Effect.provide(testLayer(dataRoot)),
-      Effect.ensuring(Effect.sync(() => rmSync(dataRoot, { recursive: true, force: true }))),
+        // Nothing holds the exit any more (it is recorded, or a kill suppressed it): the row is collectable again.
+        deferredWrites.delete(process.id);
+        yield* collect;
+        assert.equal(yield* repository.findProcess(process.id), null);
+        assert.equal(existsSync(process.logPath), false);
+      }).pipe(
+        Effect.provide(testLayer(dataRoot)),
+        Effect.ensuring(Effect.sync(() => rmSync(dataRoot, { recursive: true, force: true }))),
+      ),
     ),
   );
 });

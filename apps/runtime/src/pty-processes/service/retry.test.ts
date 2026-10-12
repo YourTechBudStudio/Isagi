@@ -4,9 +4,11 @@ import test from 'node:test';
 import { Deferred, Effect, Exit, Fiber, Ref, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import { makeLogCapture, runWithTestClock } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { makePersistenceRetry } from './retry.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 // Deferred terminal writes outlive the call that submits them, so the thing
 // under test here is ownership: the PTY service scope decides when this work

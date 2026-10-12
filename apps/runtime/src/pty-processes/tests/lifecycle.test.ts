@@ -25,8 +25,8 @@ import {
 import { TestClock } from 'effect/testing';
 
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
-import { expectNoProcessMatching, runScoped, runWithTestClock } from '@isagi/testing';
 
+import { expectNoProcessMatching } from '../../../test/test-support.js';
 import { CliAccessNone } from '../../cli-access/testing.js';
 import { publishOnlyRecordingEventBus } from '../../platform/events/testing.js';
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
@@ -45,6 +45,9 @@ import {
   type PtyOutputMessage,
   type PtyProcessEvent,
 } from '../types.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 // The PTY service owns long-lived work: one supervisor fiber per process, an
 // attachment's forwarders, two periodic loops, and the persistence retry. These
@@ -160,30 +163,32 @@ function markedLongRunningProcess(marker: string) {
 test('disposing the runtime terminates every live PTY and leaves no process', () =>
   withDataRoot('isagi-pty-dispose-', (dataRoot) => {
     const marker = `isagi-pty-dispose-${randomUUID()}`;
-    return runScoped(
-      Effect.gen(function* () {
-        const repository = yield* PtyRepository;
-        const service = yield* buildInScope(ptyServiceLayer(realNodePtyCatalog));
-        const pty = Context.get(service.context, PtyService);
-        const launched = yield* Effect.forEach([1, 2], () =>
-          pty.launch({ ...markedLongRunningProcess(marker), cwd: process.cwd() }),
-        );
-        for (const { ptyProcessId } of launched) {
-          assert.equal((yield* repository.findProcess(ptyProcessId))?.status, 'running');
-        }
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repository = yield* PtyRepository;
+          const service = yield* buildInScope(ptyServiceLayer(realNodePtyCatalog));
+          const pty = Context.get(service.context, PtyService);
+          const launched = yield* Effect.forEach([1, 2], () =>
+            pty.launch({ ...markedLongRunningProcess(marker), cwd: process.cwd() }),
+          );
+          for (const { ptyProcessId } of launched) {
+            assert.equal((yield* repository.findProcess(ptyProcessId))?.status, 'running');
+          }
 
-        yield* service.close;
+          yield* service.close;
 
-        yield* expectNoProcessMatching(marker);
-        for (const { ptyProcessId } of launched) {
-          const row = yield* repository.findProcess(ptyProcessId);
-          assert.equal(row?.status, 'killed');
-          assert.equal(row?.statusReason, 'runtime_shutdown');
-        }
-      }).pipe(
-        Effect.provide(persistenceLayer(dataRoot)),
-        // On a regression, do not leave the survivors keeping the test process alive.
-        Effect.ensuring(Effect.sync(() => spawnSync('pkill', ['-f', marker]))),
+          yield* expectNoProcessMatching(marker);
+          for (const { ptyProcessId } of launched) {
+            const row = yield* repository.findProcess(ptyProcessId);
+            assert.equal(row?.status, 'killed');
+            assert.equal(row?.statusReason, 'runtime_shutdown');
+          }
+        }).pipe(
+          Effect.provide(persistenceLayer(dataRoot)),
+          // On a regression, do not leave the survivors keeping the test process alive.
+          Effect.ensuring(Effect.sync(() => spawnSync('pkill', ['-f', marker]))),
+        ),
       ),
     );
   }));
@@ -191,32 +196,34 @@ test('disposing the runtime terminates every live PTY and leaves no process', ()
 test('a launch interrupted before the process starts leaves no row in starting and no process', () =>
   withDataRoot('isagi-pty-interrupted-launch-', (dataRoot) => {
     const marker = `isagi-pty-interrupted-${randomUUID()}`;
-    return runScoped(
-      Effect.gen(function* () {
-        const repository = yield* PtyRepository;
-        const service = yield* buildInScope(ptyServiceLayer(realNodePtyCatalog));
-        const pty = Context.get(service.context, PtyService);
-        const preparing = yield* Deferred.make<number>();
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repository = yield* PtyRepository;
+          const service = yield* buildInScope(ptyServiceLayer(realNodePtyCatalog));
+          const pty = Context.get(service.context, PtyService);
+          const preparing = yield* Deferred.make<number>();
 
-        const launch = yield* Effect.forkChild(
-          pty.launch({
-            ...markedLongRunningProcess(marker),
-            cwd: process.cwd(),
-            // Preparation never finishes: the interruption lands before any spawn.
-            envForProcess: ({ ptyProcessId }) =>
-              Deferred.succeed(preparing, ptyProcessId).pipe(Effect.andThen(Effect.never)),
-          }),
-        );
-        const ptyProcessId = yield* Deferred.await(preparing);
-        yield* Fiber.interrupt(launch);
+          const launch = yield* Effect.forkChild(
+            pty.launch({
+              ...markedLongRunningProcess(marker),
+              cwd: process.cwd(),
+              // Preparation never finishes: the interruption lands before any spawn.
+              envForProcess: ({ ptyProcessId }) =>
+                Deferred.succeed(preparing, ptyProcessId).pipe(Effect.andThen(Effect.never)),
+            }),
+          );
+          const ptyProcessId = yield* Deferred.await(preparing);
+          yield* Fiber.interrupt(launch);
 
-        assert.deepEqual(yield* repository.listProcesses({ statuses: ['starting'] }), []);
-        const row = yield* repository.findProcess(ptyProcessId);
-        assert.equal(row?.status, 'failed');
-        assert.equal(row?.statusReason, 'backend_launch_failed');
-        yield* service.close;
-        yield* expectNoProcessMatching(marker);
-      }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+          assert.deepEqual(yield* repository.listProcesses({ statuses: ['starting'] }), []);
+          const row = yield* repository.findProcess(ptyProcessId);
+          assert.equal(row?.status, 'failed');
+          assert.equal(row?.statusReason, 'backend_launch_failed');
+          yield* service.close;
+          yield* expectNoProcessMatching(marker);
+        }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+      ),
     );
   }));
 
@@ -383,109 +390,113 @@ test('the shutdown sweep terminates every live PTY at once, in one shared grace 
 
 test('a process supervisor records foreground changes and persists the exit it reports', () =>
   withDataRoot('isagi-pty-supervisor-', (dataRoot) =>
-    runScoped(
-      Effect.gen(function* () {
-        const events = yield* Queue.unbounded<PtyProcessEvent, Cause.Done>();
-        const bus = publishOnlyRecordingEventBus('the PTY service does not subscribe');
-        const backend = fakeNodePty({
-          launch: (input) =>
-            Effect.succeed({
-              ref: {
-                schemaVersion: 1,
-                backend: 'node_pty',
-                ptyProcessId: input.ptyProcessId,
-                pid: 4_242,
-              },
-              events: Stream.fromQueue(events),
-            }),
-        });
-        const layer = PtyService.layerNoDeps.pipe(
-          Layer.provide([
-            fakeCatalog(backend),
-            CliAccessNone,
-            PtyForegroundState.layer,
-            bus.layer,
-            Layer.succeed(UserShell, testUserShell()),
-          ]),
-        );
-        const service = yield* buildInScope(layer);
-        const pty = Context.get(service.context, PtyService);
-        const repository = yield* PtyRepository;
-        const { ptyProcessId } = yield* pty.launch({ command: 'zsh', args: [], cwd: '/repo' });
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const events = yield* Queue.unbounded<PtyProcessEvent, Cause.Done>();
+          const bus = publishOnlyRecordingEventBus('the PTY service does not subscribe');
+          const backend = fakeNodePty({
+            launch: (input) =>
+              Effect.succeed({
+                ref: {
+                  schemaVersion: 1,
+                  backend: 'node_pty',
+                  ptyProcessId: input.ptyProcessId,
+                  pid: 4_242,
+                },
+                events: Stream.fromQueue(events),
+              }),
+          });
+          const layer = PtyService.layerNoDeps.pipe(
+            Layer.provide([
+              fakeCatalog(backend),
+              CliAccessNone,
+              PtyForegroundState.layer,
+              bus.layer,
+              Layer.succeed(UserShell, testUserShell()),
+            ]),
+          );
+          const service = yield* buildInScope(layer);
+          const pty = Context.get(service.context, PtyService);
+          const repository = yield* PtyRepository;
+          const { ptyProcessId } = yield* pty.launch({ command: 'zsh', args: [], cwd: '/repo' });
 
-        yield* Queue.offer(events, { _tag: 'ForegroundChanged', state: 'working' });
-        yield* eventually(() =>
-          bus.events.some((event) => event.type === 'pty_foreground_command_started'),
-        );
-        yield* Queue.offer(events, { _tag: 'Exited', exitCode: 0, signal: null });
-        yield* Queue.end(events);
-        yield* eventually(() => bus.events.some((event) => event.type === 'pty_process_exited'));
+          yield* Queue.offer(events, { _tag: 'ForegroundChanged', state: 'working' });
+          yield* eventually(() =>
+            bus.events.some((event) => event.type === 'pty_foreground_command_started'),
+          );
+          yield* Queue.offer(events, { _tag: 'Exited', exitCode: 0, signal: null });
+          yield* Queue.end(events);
+          yield* eventually(() => bus.events.some((event) => event.type === 'pty_process_exited'));
 
-        const row = yield* repository.findProcess(ptyProcessId);
-        assert.equal(row?.status, 'exited');
-        assert.equal(row?.exitCode, 0);
-        yield* service.close;
-      }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+          const row = yield* repository.findProcess(ptyProcessId);
+          assert.equal(row?.status, 'exited');
+          assert.equal(row?.exitCode, 0);
+          yield* service.close;
+        }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+      ),
     ),
   ));
 
 test('an attachment forwards backend output in order and stops when its scope closes', () =>
   withDataRoot('isagi-pty-attach-scope-', (dataRoot) =>
-    runScoped(
-      Effect.gen(function* () {
-        const outputs: Queue.Enqueue<PtyOutputMessage>[] = [];
-        let released = 0;
-        const backend = fakeNodePty({
-          attach: (input) =>
-            Effect.acquireRelease(
-              Effect.sync(() => {
-                outputs.push(input.output);
-                return { replayBytes: 0, write: () => Effect.void, resize: () => Effect.void };
-              }),
-              () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const outputs: Queue.Enqueue<PtyOutputMessage>[] = [];
+          let released = 0;
+          const backend = fakeNodePty({
+            attach: (input) =>
+              Effect.acquireRelease(
                 Effect.sync(() => {
-                  released += 1;
+                  outputs.push(input.output);
+                  return { replayBytes: 0, write: () => Effect.void, resize: () => Effect.void };
                 }),
-            ),
-        });
-        const service = yield* buildInScope(ptyServiceLayer(fakeCatalog(backend)));
-        const pty = Context.get(service.context, PtyService);
-        const { ptyProcessId } = yield* pty.launch({ command: 'zsh', args: [], cwd: '/repo' });
+                () =>
+                  Effect.sync(() => {
+                    released += 1;
+                  }),
+              ),
+          });
+          const service = yield* buildInScope(ptyServiceLayer(fakeCatalog(backend)));
+          const pty = Context.get(service.context, PtyService);
+          const { ptyProcessId } = yield* pty.launch({ command: 'zsh', args: [], cwd: '/repo' });
 
-        const sent: PtyStreamOutputMessageSet[] = [];
-        const attachScope = yield* Scope.make();
-        const attachment = yield* pty
-          .attach({ ptyProcessId, mode: 'interactive', send: (message) => sent.push(message) })
-          .pipe(Scope.provide(attachScope));
-        const output = outputs[0];
-        assert.ok(output);
-        Queue.offerUnsafe(output, { type: 'output', data: 'a' });
-        Queue.offerUnsafe(output, { type: 'output', data: 'b' });
-        Queue.offerUnsafe(output, { type: 'exit', exitCode: 0, signal: null });
-        yield* eventually(() => sent.length === 3);
-        assert.deepEqual(sent, [
-          { type: 'output', data: 'a' },
-          { type: 'output', data: 'b' },
-          { type: 'exit', exitCode: 0, signal: null },
-        ]);
+          const sent: PtyStreamOutputMessageSet[] = [];
+          const attachScope = yield* Scope.make();
+          const attachment = yield* pty
+            .attach({ ptyProcessId, mode: 'interactive', send: (message) => sent.push(message) })
+            .pipe(Scope.provide(attachScope));
+          const output = outputs[0];
+          assert.ok(output);
+          Queue.offerUnsafe(output, { type: 'output', data: 'a' });
+          Queue.offerUnsafe(output, { type: 'output', data: 'b' });
+          Queue.offerUnsafe(output, { type: 'exit', exitCode: 0, signal: null });
+          yield* eventually(() => sent.length === 3);
+          assert.deepEqual(sent, [
+            { type: 'output', data: 'a' },
+            { type: 'output', data: 'b' },
+            { type: 'exit', exitCode: 0, signal: null },
+          ]);
 
-        yield* Scope.close(attachScope, Exit.void);
+          yield* Scope.close(attachScope, Exit.void);
 
-        assert.equal(released, 1);
-        Queue.offerUnsafe(output, { type: 'output', data: 'late' });
-        yield* Effect.sleep('20 millis');
-        assert.equal(sent.length, 3);
-        // The service forgot the attachment, so its id no longer writes.
-        const write = yield* pty
-          .write({ ptyProcessId, attachmentId: attachment.attachmentId, data: 'x' })
-          .pipe(Effect.result);
-        assert.ok(Result.isFailure(write) && write.failure instanceof PtyServiceError);
-        // A second attach is allowed again, and `detach` ends it early.
-        const again = yield* pty.attach({ ptyProcessId, mode: 'interactive', send: () => {} });
-        yield* again.detach;
-        assert.equal(released, 2);
-        yield* service.close;
-      }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+          assert.equal(released, 1);
+          Queue.offerUnsafe(output, { type: 'output', data: 'late' });
+          yield* Effect.sleep('20 millis');
+          assert.equal(sent.length, 3);
+          // The service forgot the attachment, so its id no longer writes.
+          const write = yield* pty
+            .write({ ptyProcessId, attachmentId: attachment.attachmentId, data: 'x' })
+            .pipe(Effect.result);
+          assert.ok(Result.isFailure(write) && write.failure instanceof PtyServiceError);
+          // A second attach is allowed again, and `detach` ends it early.
+          const again = yield* pty.attach({ ptyProcessId, mode: 'interactive', send: () => {} });
+          yield* again.detach;
+          assert.equal(released, 2);
+          yield* service.close;
+        }).pipe(Effect.provide(persistenceLayer(dataRoot))),
+      ),
     ),
   ));
 

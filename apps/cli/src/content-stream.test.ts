@@ -4,8 +4,6 @@ import test from 'node:test';
 
 import { Effect, Stream } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { ContentStreamFailure, streamContent } from './content-stream.js';
 
 const chunks = [Buffer.from('one '), Buffer.from('two '), Buffer.from('three')];
@@ -55,14 +53,16 @@ function destination(accept = Number.POSITIVE_INFINITY) {
 
 test('a complete stream reports the bytes written', async () => {
   const target = destination();
-  const written = await runScoped(streamContent(body(), target.stream));
+  const written = await Effect.runPromise(Effect.scoped(streamContent(body(), target.stream)));
   assert.equal(written, 13);
   assert.equal(Buffer.concat(target.received).toString(), 'one two three');
 });
 
 test('a write that fails part-way is the destination, even though the download is torn down too', async () => {
   const target = destination(1);
-  const failure = await runScoped(Effect.flip(streamContent(body(), target.stream)));
+  const failure = await Effect.runPromise(
+    Effect.scoped(Effect.flip(streamContent(body(), target.stream))),
+  );
   assert.ok(failure instanceof ContentStreamFailure);
   assert.equal(failure.side, 'destination');
   assert.equal((failure.cause as { code?: string }).code, 'ENOSPC');
@@ -70,8 +70,8 @@ test('a write that fails part-way is the destination, even though the download i
 
 test('a download that breaks part-way is the source, even though the write is torn down too', async () => {
   const target = destination();
-  const failure = await runScoped(
-    Effect.flip(streamContent(body({ breakAfter: 1 }), target.stream)),
+  const failure = await Effect.runPromise(
+    Effect.scoped(Effect.flip(streamContent(body({ breakAfter: 1 }), target.stream))),
   );
   assert.equal(failure.side, 'source');
   assert.equal(Buffer.concat(target.received).toString(), 'one ');
@@ -79,7 +79,9 @@ test('a download that breaks part-way is the source, even though the write is to
 
 test('an absent body writes nothing', async () => {
   const target = destination();
-  const written = await runScoped(streamContent(Stream.empty, target.stream));
+  const written = await Effect.runPromise(
+    Effect.scoped(streamContent(Stream.empty, target.stream)),
+  );
   assert.equal(written, 0);
   assert.equal(target.received.length, 0);
 });

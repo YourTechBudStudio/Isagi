@@ -6,8 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import {
   nativeClaudeTranscriptPath,
@@ -751,11 +750,13 @@ test('Claude conversation finds native transcript by session id when stored unde
 
 test('Claude conversation warns and returns empty for unreadable transcript paths', async () => {
   const logs = makeLogCapture();
-  const history = await runScoped(
-    readClaudeConversation({
-      agentSessionId: 10,
-      streams: [['claude-1', [stopRecord(0, '/missing/transcript.jsonl')]]],
-    }).pipe(Effect.provide(logs.layer)),
+  const history = await Effect.runPromise(
+    Effect.scoped(
+      readClaudeConversation({
+        agentSessionId: 10,
+        streams: [['claude-1', [stopRecord(0, '/missing/transcript.jsonl')]]],
+      }).pipe(Effect.provide(logs.layer)),
+    ),
   );
 
   assert.deepEqual(history, []);

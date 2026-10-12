@@ -3,8 +3,7 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import { makeLogCapture } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { withApiServer } from '../../platform/http/testing.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { registerAgentSessionsApi } from './api.js';

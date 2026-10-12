@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Stream, SubscriptionRef } from 'effect';
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Stream,
+  SubscriptionRef,
+  type Scope,
+} from 'effect';
 import type { HttpClientError } from 'effect/http';
 import { TestClock } from 'effect/testing';
-
-import { runWithTestClock } from '@isagi/testing';
 
 import { updaterSchedule } from './coordinator.js';
 import { UpdaterDiagnostics, type UpdaterDiagnosticRecord } from './diagnostics.js';
@@ -19,6 +27,9 @@ import {
   settle,
   testConfig,
 } from './test-support.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 type Readiness = 'clear' | 'unknown' | { readonly workingAgents: number };
 

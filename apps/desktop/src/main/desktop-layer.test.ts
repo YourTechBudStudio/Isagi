@@ -8,7 +8,6 @@ import test from 'node:test';
 import { Cause, Duration, Effect, Exit, Layer, ManagedRuntime, SubscriptionRef } from 'effect';
 
 import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/contracts';
-import { makeLogCapture } from '@isagi/testing';
 
 import {
   DESKTOP_UPDATE_CHANNEL,
@@ -16,6 +15,7 @@ import {
   makeDesktopServices,
   RUNTIME_STATUS_CHANNEL,
 } from './desktop-layer.js';
+import { makeLogCapture } from './log-capture-test-support.js';
 import {
   type RuntimeChildProcess,
   type RuntimeLifecycleFailure,

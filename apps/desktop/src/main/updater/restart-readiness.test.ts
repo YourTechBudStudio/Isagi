@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Duration, Effect, Fiber, Layer } from 'effect';
+import { Duration, Effect, Fiber, Layer, type Scope } from 'effect';
 import { FetchHttpClient } from 'effect/http';
 import { TestClock } from 'effect/testing';
-
-import { runWithTestClock } from '@isagi/testing';
 
 import type { RuntimeLifecycleFailure } from '../runtime-process/index.js';
 import {
@@ -14,6 +12,9 @@ import {
   type RestartReadinessDiagnosticCategory,
 } from './restart-readiness.js';
 import { activityResponse, settle, testRuntimeUrl } from './test-support.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 /** Reads readiness through the real `FetchHttpClient` over a fake `fetch`. */
 function reader(

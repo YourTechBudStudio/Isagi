@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer, Stream, SubscriptionRef } from 'effect';
+import { Effect, Layer, Stream, SubscriptionRef, type Scope } from 'effect';
+import { TestClock } from 'effect/testing';
 
 import type { DesktopUpdateSnapshot } from '@isagi/contracts';
-import { runWithTestClock } from '@isagi/testing';
 
 import type { DesktopUpdaterConfig } from './config.js';
 import { DesktopUpdater } from './service.js';
@@ -19,6 +19,9 @@ import {
   testConfig,
   unusedRuntimeHttp,
 } from './test-support.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 /** `DesktopUpdater.layer` for one installation, counting how often electron-updater is loaded. */
 const compose = Effect.fnUntraced(function* (

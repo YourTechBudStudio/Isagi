@@ -8,8 +8,6 @@ import test from 'node:test';
 
 import { Effect, Tracer } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { EditorDownloadFailed, EditorInstallIo, EditorInstallIoError } from '../install-io.js';
 
 /**
@@ -32,11 +30,13 @@ test('a download the server refuses carries its status and the URL it asked for'
   const url = `http://127.0.0.1:${port}/code-server.tar.gz`;
   try {
     await withTemporaryDirectory(async (directory) => {
-      const failure = await runScoped(
-        Effect.flip(
-          EditorInstallIo.use((io) =>
-            io.downloadTo({ url, destination: path.join(directory, 'artifact.tar.gz') }),
-          ).pipe(Effect.provide(EditorInstallIo.layer)),
+      const failure = await Effect.runPromise(
+        Effect.scoped(
+          Effect.flip(
+            EditorInstallIo.use((io) =>
+              io.downloadTo({ url, destination: path.join(directory, 'artifact.tar.gz') }),
+            ).pipe(Effect.provide(EditorInstallIo.layer)),
+          ),
         ),
       );
       assert.ok(failure instanceof EditorInstallIoError);
@@ -54,11 +54,13 @@ test('extracting an archive tar cannot read fails with tar’s own bounded outpu
   await withTemporaryDirectory(async (directory) => {
     const archive = path.join(directory, 'artifact.tar.gz');
     writeFileSync(archive, 'not a gzip stream');
-    const failure = await runScoped(
-      Effect.flip(
-        EditorInstallIo.use((io) =>
-          io.extractTarGz({ archive, into: directory, stripComponents: 1 }),
-        ).pipe(Effect.provide(EditorInstallIo.layer)),
+    const failure = await Effect.runPromise(
+      Effect.scoped(
+        Effect.flip(
+          EditorInstallIo.use((io) =>
+            io.extractTarGz({ archive, into: directory, stripComponents: 1 }),
+          ).pipe(Effect.provide(EditorInstallIo.layer)),
+        ),
       ),
     );
     assert.equal(failure.operation, 'extract');
@@ -83,13 +85,15 @@ test('every member runs under a span named for it', async () => {
     const executable = path.join(directory, 'code-server');
     writeFileSync(executable, '#!/bin/sh\n');
     chmodSync(executable, 0o755);
-    await runScoped(
-      EditorInstallIo.use((io) =>
-        Effect.gen(function* () {
-          yield* io.assertExecutable(executable);
-          yield* io.prepareEditorState({ editorsPath: path.join(directory, 'editors') });
-        }),
-      ).pipe(Effect.provide(EditorInstallIo.layer), Effect.withTracer(recordingTracer)),
+    await Effect.runPromise(
+      Effect.scoped(
+        EditorInstallIo.use((io) =>
+          Effect.gen(function* () {
+            yield* io.assertExecutable(executable);
+            yield* io.prepareEditorState({ editorsPath: path.join(directory, 'editors') });
+          }),
+        ).pipe(Effect.provide(EditorInstallIo.layer), Effect.withTracer(recordingTracer)),
+      ),
     );
   });
   assert.deepEqual(

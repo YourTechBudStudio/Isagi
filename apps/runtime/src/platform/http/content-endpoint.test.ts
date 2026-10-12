@@ -11,8 +11,8 @@ import {
   type ApiContentEndpoint,
   type WireSchema,
 } from '@isagi/contracts';
-import { makeLogCapture } from '@isagi/testing';
 
+import { makeLogCapture } from '../../../test/test-support.js';
 import {
   contentDisposition,
   registerContentEndpoint,

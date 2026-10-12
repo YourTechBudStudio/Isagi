@@ -7,8 +7,6 @@ import test from 'node:test';
 import { Effect, Exit, Queue, Scope, Stream } from 'effect';
 import type * as nodePty from 'node-pty';
 
-import { runScoped } from '@isagi/testing';
-
 import type { LaunchBackendSessionInput, PtyOutputMessage, PtyProcessEvent } from '../types.js';
 import {
   NodePtyBackend,
@@ -213,12 +211,14 @@ const collectEvents = (events: Stream.Stream<PtyProcessEvent>) =>
   Stream.runCollect(events).pipe(Effect.timeout('10 seconds'));
 
 test('a node-pty process that exits reports Exited on its events stream, which then ends', async () => {
-  const events = await runScoped(
-    Effect.gen(function* () {
-      const backend = yield* NodePtyBackend;
-      const launched = yield* backend.launch(shellLaunch(4_245, 'exit 3'));
-      return yield* collectEvents(launched.events);
-    }).pipe(Effect.provide(NodePtyBackend.layer)),
+  const events = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const backend = yield* NodePtyBackend;
+        const launched = yield* backend.launch(shellLaunch(4_245, 'exit 3'));
+        return yield* collectEvents(launched.events);
+      }).pipe(Effect.provide(NodePtyBackend.layer)),
+    ),
   );
 
   assert.deepEqual(events.at(-1), { _tag: 'Exited', exitCode: 3, signal: null });
@@ -226,13 +226,15 @@ test('a node-pty process that exits reports Exited on its events stream, which t
 });
 
 test('a killed node-pty process ends its events stream without an Exited', async () => {
-  const events = await runScoped(
-    Effect.gen(function* () {
-      const backend = yield* NodePtyBackend;
-      const launched = yield* backend.launch(shellLaunch(4_246, 'sleep 30'));
-      assert.deepEqual(yield* backend.kill(launched.ref), { terminated: true });
-      return yield* collectEvents(launched.events);
-    }).pipe(Effect.provide(NodePtyBackend.layer)),
+  const events = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const backend = yield* NodePtyBackend;
+        const launched = yield* backend.launch(shellLaunch(4_246, 'sleep 30'));
+        assert.deepEqual(yield* backend.kill(launched.ref), { terminated: true });
+        return yield* collectEvents(launched.events);
+      }).pipe(Effect.provide(NodePtyBackend.layer)),
+    ),
   );
 
   // The kill owns this incarnation's terminal fact; the stream still ends so its supervisor can finish.
@@ -246,39 +248,41 @@ test('a node-pty attachment replays nothing twice, receives live output and exit
   const root = mkdtempSync(join(tmpdir(), 'isagi-node-pty-attach-'));
   const logPath = join(root, 'process.ptylog');
   try {
-    const result = await runScoped(
-      Effect.gen(function* () {
-        const backend = yield* NodePtyBackend;
-        const launched = yield* backend.launch(
-          shellLaunch(
-            4_247,
-            'printf before; read line; printf "after:%s" "$line"; exit 0',
-            logPath,
-          ),
-        );
-        // Wait until the pre-attach output is in the log.
-        yield* Effect.sleep('20 millis').pipe(
-          Effect.repeat({ until: () => readFileSync(logPath, 'utf8').includes('before') }),
-          Effect.timeout('10 seconds'),
-        );
-        const output = yield* Queue.unbounded<PtyOutputMessage>();
-        const foreground = yield* Queue.unbounded<'idle' | 'working'>();
-        const scope = yield* Scope.make();
-        const attachment = yield* backend
-          .attach({ ref: launched.ref, cols: 80, rows: 24, output, foreground })
-          .pipe(Scope.provide(scope));
-        const replayBytes = attachment.replayBytes;
-        yield* attachment.write('x\n');
-        const messages = yield* Stream.fromQueue(output).pipe(
-          Stream.takeUntil((message) => message.type === 'exit'),
-          Stream.runCollect,
-          Effect.timeout('10 seconds'),
-        );
-        yield* Scope.close(scope, Exit.void);
-        // Detached: the queue gets nothing more, even from a later write attempt's echo.
-        const afterDetach = yield* Queue.size(output);
-        return { replayBytes, messages, afterDetach };
-      }).pipe(Effect.provide(NodePtyBackend.layer)),
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const backend = yield* NodePtyBackend;
+          const launched = yield* backend.launch(
+            shellLaunch(
+              4_247,
+              'printf before; read line; printf "after:%s" "$line"; exit 0',
+              logPath,
+            ),
+          );
+          // Wait until the pre-attach output is in the log.
+          yield* Effect.sleep('20 millis').pipe(
+            Effect.repeat({ until: () => readFileSync(logPath, 'utf8').includes('before') }),
+            Effect.timeout('10 seconds'),
+          );
+          const output = yield* Queue.unbounded<PtyOutputMessage>();
+          const foreground = yield* Queue.unbounded<'idle' | 'working'>();
+          const scope = yield* Scope.make();
+          const attachment = yield* backend
+            .attach({ ref: launched.ref, cols: 80, rows: 24, output, foreground })
+            .pipe(Scope.provide(scope));
+          const replayBytes = attachment.replayBytes;
+          yield* attachment.write('x\n');
+          const messages = yield* Stream.fromQueue(output).pipe(
+            Stream.takeUntil((message) => message.type === 'exit'),
+            Stream.runCollect,
+            Effect.timeout('10 seconds'),
+          );
+          yield* Scope.close(scope, Exit.void);
+          // Detached: the queue gets nothing more, even from a later write attempt's echo.
+          const afterDetach = yield* Queue.size(output);
+          return { replayBytes, messages, afterDetach };
+        }).pipe(Effect.provide(NodePtyBackend.layer)),
+      ),
     );
 
     assert.equal(result.replayBytes, Buffer.byteLength('before'));

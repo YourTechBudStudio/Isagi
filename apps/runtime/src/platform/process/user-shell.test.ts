@@ -4,8 +4,7 @@ import test, { describe } from 'node:test';
 
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
-import { expectNoProcessMatching, makeLogCapture, runScoped } from '@isagi/testing';
-
+import { expectNoProcessMatching, makeLogCapture } from '../../../test/test-support.js';
 import {
   resolveUserShellEnvironment,
   runUserShellCommand,
@@ -15,15 +14,17 @@ import {
 const environment = { SHELL: '/bin/zsh', PATH: '/bin:/usr/bin' };
 
 test('user-shell runner preserves arguments containing spaces', async () => {
-  const result = await runScoped(
-    runUserShellCommand(
-      {
-        command: 'printf',
-        args: ['%s', 'path with spaces'],
-        timeoutMs: 2_000,
-        maxOutputBytes: 1024,
-      },
-      environment,
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      runUserShellCommand(
+        {
+          command: 'printf',
+          args: ['%s', 'path with spaces'],
+          timeoutMs: 2_000,
+          maxOutputBytes: 1024,
+        },
+        environment,
+      ),
     ),
   );
   assert.equal(result.exitCode, 0);
@@ -32,11 +33,13 @@ test('user-shell runner preserves arguments containing spaces', async () => {
 
 test('a command name the shell cannot take runs directly and logs why', async () => {
   const logs = makeLogCapture();
-  const result = await runScoped(
-    runUserShellCommand(
-      { command: 'printf %s', args: ['x'], timeoutMs: 2_000, maxOutputBytes: 1024 },
-      environment,
-    ).pipe(Effect.provide(logs.layer)),
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      runUserShellCommand(
+        { command: 'printf %s', args: ['x'], timeoutMs: 2_000, maxOutputBytes: 1024 },
+        environment,
+      ).pipe(Effect.provide(logs.layer)),
+    ),
   );
   // Run directly, `printf %s` is not an executable name, so it cannot start.
   assert.equal(typeof result.spawnError, 'string');
@@ -53,19 +56,23 @@ test('a command name the shell cannot take runs directly and logs why', async ()
 });
 
 test('user-shell runner bounds output and command duration', async () => {
-  const bounded = await runScoped(
-    runUserShellCommand(
-      { command: 'printf', args: ['%05000d', '1'], timeoutMs: 2_000, maxOutputBytes: 64 },
-      environment,
+  const bounded = await Effect.runPromise(
+    Effect.scoped(
+      runUserShellCommand(
+        { command: 'printf', args: ['%05000d', '1'], timeoutMs: 2_000, maxOutputBytes: 64 },
+        environment,
+      ),
     ),
   );
   assert.equal(bounded.outputTruncated, true);
   assert.equal(Buffer.byteLength(bounded.stdout), 64);
 
-  const timed = await runScoped(
-    runUserShellCommand(
-      { command: 'sleep', args: ['1'], timeoutMs: 10, maxOutputBytes: 64 },
-      environment,
+  const timed = await Effect.runPromise(
+    Effect.scoped(
+      runUserShellCommand(
+        { command: 'sleep', args: ['1'], timeoutMs: 10, maxOutputBytes: 64 },
+        environment,
+      ),
     ),
   );
   assert.equal(timed.timedOut, true);
@@ -73,29 +80,31 @@ test('user-shell runner bounds output and command duration', async () => {
 
 test('login-shell environment resolution strips runtime controls and keeps discovered user paths', async () => {
   let calls = 0;
-  const result = await runScoped(
-    resolveUserShellEnvironment(
-      {
-        HOME: '/home/developer',
-        SHELL: '/bin/zsh',
-        PATH: '/usr/bin:/bin',
-        HOST: '127.0.0.1',
-        PORT: '0',
-        ELECTRON_RUN_AS_NODE: '1',
-        ISAGI_ALLOWED_ORIGINS: 'file://',
-      },
-      (_input, launchEnvironment) => {
-        calls += 1;
-        assert.equal(launchEnvironment.HOST, undefined);
-        assert.equal(launchEnvironment.PORT, undefined);
-        assert.equal(launchEnvironment.ELECTRON_RUN_AS_NODE, undefined);
-        assert.equal(launchEnvironment.ISAGI_ALLOWED_ORIGINS, undefined);
-        return Effect.succeed(
-          success(
-            'HOME=/home/developer\nSHELL=/bin/zsh\nPATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\nHOST=127.0.0.1\nPORT=0\nELECTRON_RUN_AS_NODE=1\nISAGI_ALLOWED_ORIGINS=file://\n',
-          ),
-        );
-      },
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      resolveUserShellEnvironment(
+        {
+          HOME: '/home/developer',
+          SHELL: '/bin/zsh',
+          PATH: '/usr/bin:/bin',
+          HOST: '127.0.0.1',
+          PORT: '0',
+          ELECTRON_RUN_AS_NODE: '1',
+          ISAGI_ALLOWED_ORIGINS: 'file://',
+        },
+        (_input, launchEnvironment) => {
+          calls += 1;
+          assert.equal(launchEnvironment.HOST, undefined);
+          assert.equal(launchEnvironment.PORT, undefined);
+          assert.equal(launchEnvironment.ELECTRON_RUN_AS_NODE, undefined);
+          assert.equal(launchEnvironment.ISAGI_ALLOWED_ORIGINS, undefined);
+          return Effect.succeed(
+            success(
+              'HOME=/home/developer\nSHELL=/bin/zsh\nPATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\nHOST=127.0.0.1\nPORT=0\nELECTRON_RUN_AS_NODE=1\nISAGI_ALLOWED_ORIGINS=file://\n',
+            ),
+          );
+        },
+      ),
     ),
   );
 
@@ -113,13 +122,15 @@ test('login-shell environment resolution falls back to its sanitized base enviro
     HOME: '/home/developer',
     PATH: '/usr/bin:/bin',
   };
-  const result = await runScoped(
-    resolveUserShellEnvironment(baseEnvironment, () =>
-      Effect.succeed({
-        ...success(''),
-        exitCode: 1,
-        stderr: 'shell startup failed',
-      }),
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      resolveUserShellEnvironment(baseEnvironment, () =>
+        Effect.succeed({
+          ...success(''),
+          exitCode: 1,
+          stderr: 'shell startup failed',
+        }),
+      ),
     ),
   );
 
@@ -171,17 +182,22 @@ const sleepingCommand = (marker: string) => ({
 describe('user-shell child lifecycle', { skip: posixOnly }, () => {
   test('interrupting user-shell kills its child process', async () => {
     const marker = uniqueSleep();
-    await runScoped(
-      Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(
-          runUserShellCommand({ ...sleepingCommand(marker), timeoutMs: 30_000 }, shellEnvironment),
-        );
-        yield* waitForProcess(marker);
-        yield* Fiber.interrupt(fiber);
-        const exit = yield* Fiber.await(fiber);
-        assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
-        yield* expectNoProcessMatching(marker);
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(
+            runUserShellCommand(
+              { ...sleepingCommand(marker), timeoutMs: 30_000 },
+              shellEnvironment,
+            ),
+          );
+          yield* waitForProcess(marker);
+          yield* Fiber.interrupt(fiber);
+          const exit = yield* Fiber.await(fiber);
+          assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+          yield* expectNoProcessMatching(marker);
+        }),
+      ),
     );
   });
 
@@ -189,41 +205,47 @@ describe('user-shell child lifecycle', { skip: posixOnly }, () => {
     // A caller's own deadline (`Effect.timeout` around the run) interrupts it: the failure is the typed
     // `TimeoutError`, and the scope that owns the process group kills the whole group.
     const marker = uniqueSleep();
-    await runScoped(
-      Effect.gen(function* () {
-        const timed = yield* Effect.forkChild(
-          Effect.flip(
-            runUserShellCommand(
-              { ...sleepingCommand(marker), timeoutMs: 30_000 },
-              shellEnvironment,
-            ).pipe(Effect.timeout('1 second')),
-          ),
-        );
-        yield* waitForProcess(marker);
-        const error = yield* Fiber.join(timed);
-        assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
-        yield* expectNoProcessMatching(marker);
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const timed = yield* Effect.forkChild(
+            Effect.flip(
+              runUserShellCommand(
+                { ...sleepingCommand(marker), timeoutMs: 30_000 },
+                shellEnvironment,
+              ).pipe(Effect.timeout('1 second')),
+            ),
+          );
+          yield* waitForProcess(marker);
+          const error = yield* Fiber.join(timed);
+          assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+          yield* expectNoProcessMatching(marker);
+        }),
+      ),
     );
   });
 
   test('a command past its own deadline reports timedOut and leaves no process behind', async () => {
     // `timeoutMs` is the runner's deadline: not a failure but a described outcome, with the group SIGKILLed.
     const marker = uniqueSleep();
-    const result = await runScoped(
-      runUserShellCommand({ ...sleepingCommand(marker), timeoutMs: 300 }, shellEnvironment),
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        runUserShellCommand({ ...sleepingCommand(marker), timeoutMs: 300 }, shellEnvironment),
+      ),
     );
     assert.equal(result.timedOut, true);
     assert.equal(result.signal, 'SIGKILL');
     assert.equal(result.spawnError, undefined);
-    await runScoped(expectNoProcessMatching(marker));
+    await Effect.runPromise(Effect.scoped(expectNoProcessMatching(marker)));
   });
 
   test('a shell that cannot start is described by spawnError, not a failure', async () => {
-    const result = await runScoped(
-      runUserShellCommand(
-        { command: 'true', args: [], timeoutMs: 2_000, maxOutputBytes: 64 },
-        { ...process.env, SHELL: '/definitely/not/a/shell' },
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        runUserShellCommand(
+          { command: 'true', args: [], timeoutMs: 2_000, maxOutputBytes: 64 },
+          { ...process.env, SHELL: '/definitely/not/a/shell' },
+        ),
       ),
     );
     assert.equal(result.exitCode, null);

@@ -3,8 +3,6 @@ import test from 'node:test';
 
 import { Console, Effect, Logger, Tracer } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { desktopConsoleLogger, DesktopLogger } from './desktop-logger.js';
 
 /** A console that records which method each line went to, with its arguments. */
@@ -25,10 +23,12 @@ function recordingConsole() {
 
 const logged = <A, E>(effect: Effect.Effect<A, E>) => {
   const { calls, console } = recordingConsole();
-  return runScoped(
-    effect.pipe(
-      Effect.provide(Logger.layer([desktopConsoleLogger])),
-      Effect.provideService(Console.Console, console),
+  return Effect.runPromise(
+    Effect.scoped(
+      effect.pipe(
+        Effect.provide(Logger.layer([desktopConsoleLogger])),
+        Effect.provideService(Console.Console, console),
+      ),
     ),
   ).then(() => calls);
 };
@@ -87,12 +87,14 @@ test('the desktop logger set keeps span events', async () => {
       return span;
     },
   });
-  await runScoped(
-    Effect.logInfo('inside a span').pipe(
-      Effect.withSpan('desktop.test'),
-      Effect.provide(DesktopLogger),
-      Effect.provideService(Console.Console, console),
-      Effect.withTracer(tracer),
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.logInfo('inside a span').pipe(
+        Effect.withSpan('desktop.test'),
+        Effect.provide(DesktopLogger),
+        Effect.provideService(Console.Console, console),
+        Effect.withTracer(tracer),
+      ),
     ),
   );
   assert.deepEqual(events, ['inside a span']);

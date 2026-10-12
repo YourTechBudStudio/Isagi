@@ -6,8 +6,6 @@ import websocket from '@fastify/websocket';
 import { Deferred, Effect, Fiber, Stream, type Scope } from 'effect';
 import Fastify from 'fastify';
 
-import { runScoped } from '@isagi/testing';
-
 import { acquireWsConnection, type WsConnection } from './websocket.js';
 
 /** The `ws` surface the adapter uses, driven by hand. `close()` behaves like ws: it emits `close` once. */
@@ -56,73 +54,83 @@ class FakeSocket extends EventEmitter {
 describe('acquireWsConnection with a fake socket', () => {
   test('incoming yields text frames in order and ends when the socket closes', async () => {
     const socket = new FakeSocket();
-    const frames = await runScoped(
-      Effect.gen(function* () {
-        const connection = yield* acquireWsConnection(socket);
-        socket.receive('one');
-        socket.receive('two');
-        socket.dropByClient();
-        return yield* Stream.runCollect(connection.incoming);
-      }),
+    const frames = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* acquireWsConnection(socket);
+          socket.receive('one');
+          socket.receive('two');
+          socket.dropByClient();
+          return yield* Stream.runCollect(connection.incoming);
+        }),
+      ),
     );
     assert.deepEqual(frames, ['one', 'two']);
   });
 
   test('send writes JSON only while the socket is open', async () => {
     const socket = new FakeSocket();
-    await runScoped(
-      Effect.gen(function* () {
-        const connection = yield* acquireWsConnection(socket);
-        yield* connection.send({ type: 'output', data: 'a' });
-        socket.readyState = 2;
-        yield* connection.send({ type: 'output', data: 'b' });
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* acquireWsConnection(socket);
+          yield* connection.send({ type: 'output', data: 'a' });
+          socket.readyState = 2;
+          yield* connection.send({ type: 'output', data: 'b' });
+        }),
+      ),
     );
     assert.deepEqual(socket.sent, ['{"type":"output","data":"a"}']);
   });
 
   test('closed completes when the client closes the socket', async () => {
     const socket = new FakeSocket();
-    await runScoped(
-      Effect.gen(function* () {
-        const connection = yield* acquireWsConnection(socket);
-        const waiter = yield* Effect.forkChild(connection.closed);
-        yield* Effect.yieldNow;
-        assert.equal(waiter.pollUnsafe(), undefined);
-        socket.dropByClient();
-        yield* Fiber.join(waiter);
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* acquireWsConnection(socket);
+          const waiter = yield* Effect.forkChild(connection.closed);
+          yield* Effect.yieldNow;
+          assert.equal(waiter.pollUnsafe(), undefined);
+          socket.dropByClient();
+          yield* Fiber.join(waiter);
+        }),
+      ),
     );
   });
 
   test('close closes an open socket once and is a no-op afterwards', async () => {
     const socket = new FakeSocket();
-    await runScoped(
-      Effect.gen(function* () {
-        const connection = yield* acquireWsConnection(socket);
-        yield* connection.close;
-        yield* connection.closed;
-        yield* connection.close;
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* acquireWsConnection(socket);
+          yield* connection.close;
+          yield* connection.closed;
+          yield* connection.close;
+        }),
+      ),
     );
     assert.equal(socket.closeCalls, 1);
   });
 
   test('closed completes as soon as the server closes the socket, before the close handshake ends', async () => {
     const socket = new FakeSocket({ handshake: true });
-    const frames = await runScoped(
-      Effect.gen(function* () {
-        const connection = yield* acquireWsConnection(socket);
-        socket.receive('before close');
-        const waiter = yield* Effect.forkChild(connection.closed);
-        yield* Effect.yieldNow;
-        assert.equal(waiter.pollUnsafe(), undefined);
+    const frames = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* acquireWsConnection(socket);
+          socket.receive('before close');
+          const waiter = yield* Effect.forkChild(connection.closed);
+          yield* Effect.yieldNow;
+          assert.equal(waiter.pollUnsafe(), undefined);
 
-        yield* connection.close;
-        yield* Fiber.join(waiter);
-        assert.equal(socket.readyState, 2, 'the handshake is still pending');
-        return yield* Stream.runCollect(connection.incoming);
-      }),
+          yield* connection.close;
+          yield* Fiber.join(waiter);
+          assert.equal(socket.readyState, 2, 'the handshake is still pending');
+          return yield* Stream.runCollect(connection.incoming);
+        }),
+      ),
     );
     assert.deepEqual(
       frames,
@@ -137,12 +145,14 @@ describe('acquireWsConnection with a fake socket', () => {
   test('closing the scope removes the listeners and closes the socket', async () => {
     const socket = new FakeSocket();
     let connection: WsConnection | undefined;
-    await runScoped(
-      Effect.gen(function* () {
-        connection = yield* acquireWsConnection(socket);
-        assert.equal(socket.listenerCount('message'), 1);
-        assert.equal(socket.listenerCount('close'), 1);
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          connection = yield* acquireWsConnection(socket);
+          assert.equal(socket.listenerCount('message'), 1);
+          assert.equal(socket.listenerCount('close'), 1);
+        }),
+      ),
     );
     assert.equal(socket.listenerCount('message'), 0);
     assert.equal(socket.listenerCount('close'), 0);
@@ -155,12 +165,14 @@ describe('acquireWsConnection with a fake socket', () => {
   test('a socket that closed before the connection was acquired completes closed immediately', async () => {
     const socket = new FakeSocket();
     socket.readyState = 3;
-    const frames = await runScoped(
-      Effect.gen(function* () {
-        const connection = yield* acquireWsConnection(socket);
-        yield* connection.closed;
-        return yield* Stream.runCollect(connection.incoming);
-      }),
+    const frames = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* acquireWsConnection(socket);
+          yield* connection.closed;
+          return yield* Stream.runCollect(connection.incoming);
+        }),
+      ),
     );
     assert.deepEqual(frames, []);
     assert.equal(socket.closeCalls, 0);

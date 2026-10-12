@@ -6,8 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { locateCodexRolloutPaths, readCodexConversationEntries } from './native-artifacts.js';
 
 test('Codex index-only lookup does not recursively scan native session storage', async () => {
@@ -154,21 +153,25 @@ test('Codex conversation reading degrades to the child page for missing, unrelat
       ]),
     );
 
-    const degraded = await runScoped(
-      readCodexConversationEntries({
-        agentSessionId: 12,
-        paths: [{ harnessSessionId: childId, path: childPath }],
-        codexDirectory,
-        missingIsExpected: false,
-      }).pipe(Effect.provide(logs.layer)),
+    const degraded = await Effect.runPromise(
+      Effect.scoped(
+        readCodexConversationEntries({
+          agentSessionId: 12,
+          paths: [{ harnessSessionId: childId, path: childPath }],
+          codexDirectory,
+          missingIsExpected: false,
+        }).pipe(Effect.provide(logs.layer)),
+      ),
     );
-    const cyclic = await runScoped(
-      readCodexConversationEntries({
-        agentSessionId: 12,
-        paths: [{ harnessSessionId: cyclicId, path: cyclicPath }],
-        codexDirectory,
-        missingIsExpected: false,
-      }).pipe(Effect.provide(logs.layer)),
+    const cyclic = await Effect.runPromise(
+      Effect.scoped(
+        readCodexConversationEntries({
+          agentSessionId: 12,
+          paths: [{ harnessSessionId: cyclicId, path: cyclicPath }],
+          codexDirectory,
+          missingIsExpected: false,
+        }).pipe(Effect.provide(logs.layer)),
+      ),
     );
 
     assert.deepEqual(

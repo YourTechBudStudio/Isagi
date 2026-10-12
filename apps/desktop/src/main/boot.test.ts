@@ -5,8 +5,6 @@ import { Cause, Effect, Exit, Fiber, Layer, Option } from 'effect';
 import { FetchHttpClient, type HttpClient } from 'effect/http';
 import { TestClock } from 'effect/testing';
 
-import { runWithTestClock } from '@isagi/testing';
-
 import {
   InvalidRuntimeUrl,
   ServerWaitFailed,
@@ -58,7 +56,12 @@ function fakeServer(answer: (attempt: number) => Response | Promise<Response>) {
   return {
     seen,
     run: <A, E>(effect: Effect.Effect<A, E, HttpClient.HttpClient>) =>
-      runWithTestClock(Effect.provide(effect, layer)),
+      effect.pipe(
+        Effect.provide(layer),
+        Effect.scoped,
+        Effect.provide(TestClock.layer()),
+        Effect.runPromise,
+      ),
   };
 }
 

@@ -11,7 +11,6 @@ import {
   type WorkspaceSnapshot,
   workflowContentEndpoints,
 } from '@isagi/contracts';
-import { runScoped } from '@isagi/testing';
 
 import {
   RuntimeApiError,
@@ -325,9 +324,11 @@ test('RuntimeHttpClient resolves globalThis.fetch per request', async () => {
     };
   try {
     globalThis.fetch = answering('first');
-    await runScoped(getWorkspace.pipe(Effect.withSpan('outer'), Effect.provide(layer)));
+    await Effect.runPromise(
+      Effect.scoped(getWorkspace.pipe(Effect.withSpan('outer'), Effect.provide(layer))),
+    );
     globalThis.fetch = answering('second');
-    await runScoped(getWorkspace.pipe(Effect.provide(layer)));
+    await Effect.runPromise(Effect.scoped(getWorkspace.pipe(Effect.provide(layer))));
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -19,8 +19,7 @@ import test from 'node:test';
 
 import { Effect, Layer, Result } from 'effect';
 
-import { makeLogCapture } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';

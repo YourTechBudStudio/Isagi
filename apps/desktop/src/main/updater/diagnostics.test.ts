@@ -6,8 +6,7 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import { makeLogCapture, runScoped } from '@isagi/testing';
-
+import { makeLogCapture } from '../log-capture-test-support.js';
 import { sanitizeText, UpdaterDiagnostics, type UpdaterDiagnosticRecord } from './diagnostics.js';
 import { testConfig } from './test-support.js';
 
@@ -112,12 +111,14 @@ test('diagnostics serialize writes, redact before truncation, and rotate by UTF-
       summary: `${secret} ${'界'.repeat(2_000)}`,
     }),
   );
-  await runScoped(
-    Effect.gen(function* () {
-      const diagnostics = yield* UpdaterDiagnostics;
-      // Started together: the trail itself serializes them.
-      yield* Effect.all(records.map(diagnostics.write), { concurrency: 'unbounded' });
-    }).pipe(Effect.provide(subject.layer)),
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const diagnostics = yield* UpdaterDiagnostics;
+        // Started together: the trail itself serializes them.
+        yield* Effect.all(records.map(diagnostics.write), { concurrency: 'unbounded' });
+      }).pipe(Effect.provide(subject.layer)),
+    ),
   );
 
   const currentPath = join(directory, 'updater.jsonl');
@@ -148,12 +149,14 @@ test('a trail that cannot be written warns once and never fails the updater', as
     code: 'updater_error',
     summary: 'no provider',
   };
-  await runScoped(
-    Effect.gen(function* () {
-      const diagnostics = yield* UpdaterDiagnostics;
-      yield* diagnostics.write(record);
-      yield* diagnostics.write(record);
-    }).pipe(Effect.provide(subject.layer)),
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const diagnostics = yield* UpdaterDiagnostics;
+        yield* diagnostics.write(record);
+        yield* diagnostics.write(record);
+      }).pipe(Effect.provide(subject.layer)),
+    ),
   );
   assert.deepEqual(
     subject.logs.map((line) => [line.level, line.message]),
@@ -164,19 +167,21 @@ test('a trail that cannot be written warns once and never fails the updater', as
 test('the logs directory is not asked for until the first record is written', async () => {
   // A development build never writes one, so it never asks Electron for its logs path.
   let asked = 0;
-  await runScoped(
-    Effect.gen(function* () {
-      yield* UpdaterDiagnostics;
-    }).pipe(
-      Effect.provide(
-        UpdaterDiagnostics.layer.pipe(
-          Layer.provide(
-            testConfig({
-              logsDirectory: () => {
-                asked += 1;
-                return tmpdir();
-              },
-            }),
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* UpdaterDiagnostics;
+      }).pipe(
+        Effect.provide(
+          UpdaterDiagnostics.layer.pipe(
+            Layer.provide(
+              testConfig({
+                logsDirectory: () => {
+                  asked += 1;
+                  return tmpdir();
+                },
+              }),
+            ),
           ),
         ),
       ),

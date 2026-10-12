@@ -17,8 +17,7 @@ import test from 'node:test';
 import { Effect, Exit, Layer, Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import { makeLogCapture, runScoped, runWithTestClock } from '@isagi/testing';
-
+import { makeLogCapture } from '../../../test/test-support.js';
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
@@ -36,6 +35,9 @@ import { TerminalSessionRepository } from '../terminal-sessions/repository.js';
 import { collectSessionGarbage, SessionGc } from './gc.js';
 import { SessionLifecycle } from './lifecycle.js';
 import type { AgentSessionRow } from './types.js';
+
+const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
 
 // Two hours: past the one-hour folder grace and the one-minute row grace.
 const oldDate = new Date(Date.now() - 2 * 60 * 60_000);
@@ -321,11 +323,13 @@ function runWithSessionGc<E>(
     InternalEvents.layer,
   ).pipe(Layer.provideMerge(artifacts), Layer.provideMerge(database));
 
-  return runScoped(
-    Effect.gen(function* () {
-      const agents = yield* AgentSessionRepository;
-      yield* body({ agents, artifacts: yield* AgentSessionArtifacts });
-    }).pipe(Effect.provide(layer)),
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const agents = yield* AgentSessionRepository;
+        yield* body({ agents, artifacts: yield* AgentSessionArtifacts });
+      }).pipe(Effect.provide(layer)),
+    ),
   );
 }
 

@@ -7,8 +7,6 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { runScoped } from '@isagi/testing';
-
 import { runtimePackageVersion } from '../platform/assets/index.js';
 import { DataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
@@ -77,7 +75,7 @@ test('a shim that cannot be written fails construction with CliShimError', async
   writeFileSync(join(root, 'isagi-cli'), 'not a directory');
   const shimPath = cliShimPath(root, runtimePackageVersion);
 
-  const failure = await runScoped(Effect.flip(cliAccessAt(root)));
+  const failure = await Effect.runPromise(Effect.scoped(Effect.flip(cliAccessAt(root))));
   assert.ok(failure instanceof CliShimError);
   assert.equal(failure.path, shimPath);
   assert.match(failure.message, /Could not write the isagi CLI shim/);
@@ -87,21 +85,23 @@ test('the launch environment puts the shim first on PATH and adds the URL only o
   const toolsPath = join(scratch(), 'tools');
   const binDirectory = join(cliShimPath(toolsPath, runtimePackageVersion), '..');
 
-  await runScoped(
-    Effect.gen(function* () {
-      const access = yield* cliAccessAt(toolsPath);
-      assert.equal(
-        statSync(join(binDirectory, 'isagi')).mode & 0o777,
-        0o755,
-        "building the service writes this version's shim",
-      );
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const access = yield* cliAccessAt(toolsPath);
+        assert.equal(
+          statSync(join(binDirectory, 'isagi')).mode & 0o777,
+          0o755,
+          "building the service writes this version's shim",
+        );
 
-      const before = yield* access.launchEnvironment(`/usr/bin${delimiter}/bin`);
-      assert.deepEqual(before, { PATH: `${binDirectory}${delimiter}/usr/bin${delimiter}/bin` });
+        const before = yield* access.launchEnvironment(`/usr/bin${delimiter}/bin`);
+        assert.deepEqual(before, { PATH: `${binDirectory}${delimiter}/usr/bin${delimiter}/bin` });
 
-      yield* access.publishRuntimeUrl('http://127.0.0.1:4100');
-      const after = yield* access.launchEnvironment(undefined);
-      assert.deepEqual(after, { PATH: binDirectory, ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' });
-    }),
+        yield* access.publishRuntimeUrl('http://127.0.0.1:4100');
+        const after = yield* access.launchEnvironment(undefined);
+        assert.deepEqual(after, { PATH: binDirectory, ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' });
+      }),
+    ),
   );
 });

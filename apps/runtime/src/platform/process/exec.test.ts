@@ -4,8 +4,7 @@ import { describe, test } from 'node:test';
 
 import { Effect, Fiber } from 'effect';
 
-import { expectNoProcessMatching, runScoped } from '@isagi/testing';
-
+import { expectNoProcessMatching } from '../../../test/test-support.js';
 import {
   coordinates,
   describeOperationalCause,
@@ -88,19 +87,23 @@ describe('classifyExecFailure precedence', () => {
 
 describe('execCommand', () => {
   test('a successful command returns its output', async () => {
-    const result = await runScoped(
-      execCommand(node, ['-e', 'process.stdout.write("out"); process.stderr.write("err")']),
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        execCommand(node, ['-e', 'process.stdout.write("out"); process.stderr.write("err")']),
+      ),
     );
     assert.deepEqual(result, { stdout: 'out', stderr: 'err' });
   });
 
   test('a nonzero exit fails with the exit code and the output written so far', async () => {
-    const error = await runScoped(
-      Effect.flip(
-        execCommand(node, [
-          '-e',
-          'process.stdout.write("partial"); console.error("no"); process.exit(3)',
-        ]),
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.flip(
+          execCommand(node, [
+            '-e',
+            'process.stdout.write("partial"); console.error("no"); process.exit(3)',
+          ]),
+        ),
       ),
     );
     assert.ok(error instanceof ExecFailed);
@@ -111,8 +114,10 @@ describe('execCommand', () => {
   });
 
   test('an unlaunchable command is a spawn failure, not an exit', async () => {
-    const error = await runScoped(
-      Effect.flip(execCommand('/definitely/not/a/command', [], { cwd: process.cwd() })),
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.flip(execCommand('/definitely/not/a/command', [], { cwd: process.cwd() })),
+      ),
     );
     assert.deepEqual(error.failure, { kind: 'spawn_failed', systemErrorCode: 'ENOENT' });
     assert.equal(error.command, '/definitely/not/a/command');
@@ -123,45 +128,49 @@ describe('execCommand', () => {
     const script =
       'process.stdout.write(JSON.stringify({ added: process.env.ISAGI_EXEC_TEST, path: process.env.PATH ?? null }))';
 
-    const merged = await runScoped(
-      execCommand(node, ['-e', script], { env: { ISAGI_EXEC_TEST: 'yes' } }),
+    const merged = await Effect.runPromise(
+      Effect.scoped(execCommand(node, ['-e', script], { env: { ISAGI_EXEC_TEST: 'yes' } })),
     );
     assert.deepEqual(JSON.parse(merged.stdout), { added: 'yes', path: process.env.PATH ?? null });
 
-    const unset = await runScoped(
-      execCommand(node, ['-e', script], {
-        unsetEnv: ['PATH'],
-        env: { ISAGI_EXEC_TEST: 'yes' },
-      }),
+    const unset = await Effect.runPromise(
+      Effect.scoped(
+        execCommand(node, ['-e', script], {
+          unsetEnv: ['PATH'],
+          env: { ISAGI_EXEC_TEST: 'yes' },
+        }),
+      ),
     );
     assert.deepEqual(JSON.parse(unset.stdout), { added: 'yes', path: null });
   });
 
   test('cwd is the child working directory', async () => {
-    const result = await runScoped(
-      execCommand(node, ['-e', 'process.stdout.write(process.cwd())'], { cwd: '/' }),
+    const result = await Effect.runPromise(
+      Effect.scoped(execCommand(node, ['-e', 'process.stdout.write(process.cwd())'], { cwd: '/' })),
     );
     assert.equal(result.stdout, '/');
   });
 
   test('a timed-out command is killed and reported as signalled', async () => {
     const marker = uniqueSleep();
-    const error = await runScoped(
-      Effect.flip(execCommand('sleep', [marker], { timeout: '100 millis' })),
+    const error = await Effect.runPromise(
+      Effect.scoped(Effect.flip(execCommand('sleep', [marker], { timeout: '100 millis' }))),
     );
     assert.deepEqual(error.failure, { kind: 'signalled', signal: 'SIGTERM' });
-    await runScoped(expectNoProcessMatching(marker));
+    await Effect.runPromise(Effect.scoped(expectNoProcessMatching(marker)));
   });
 
   test('interrupting execCommand kills its child process', async () => {
     const marker = uniqueSleep();
-    await runScoped(
-      Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(execCommand('sleep', [marker]));
-        yield* waitForProcess(marker);
-        yield* Fiber.interrupt(fiber);
-        yield* expectNoProcessMatching(marker);
-      }),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(execCommand('sleep', [marker]));
+          yield* waitForProcess(marker);
+          yield* Fiber.interrupt(fiber);
+          yield* expectNoProcessMatching(marker);
+        }),
+      ),
     );
   });
 });
@@ -232,17 +241,21 @@ describe('ExecFailed safe diagnostic', () => {
   });
 
   test('describes real command failures', async () => {
-    const exited = await runScoped(Effect.flip(execCommand('sh', ['-c', 'exit 3'])));
+    const exited = await Effect.runPromise(
+      Effect.scoped(Effect.flip(execCommand('sh', ['-c', 'exit 3']))),
+    );
     assert.equal(describeOperationalCause(exited), 'sh exited with code 3');
 
-    const missing = await runScoped(Effect.flip(execCommand('/definitely/not/a/command', [])));
+    const missing = await Effect.runPromise(
+      Effect.scoped(Effect.flip(execCommand('/definitely/not/a/command', []))),
+    );
     assert.equal(describeOperationalCause(missing), 'command could not be started (ENOENT)');
 
     const marker = uniqueSleep();
-    const timedOut = await runScoped(
-      Effect.flip(execCommand('sleep', [marker], { timeout: '100 millis' })),
+    const timedOut = await Effect.runPromise(
+      Effect.scoped(Effect.flip(execCommand('sleep', [marker], { timeout: '100 millis' }))),
     );
     assert.equal(describeOperationalCause(timedOut), 'sleep was killed by SIGTERM');
-    await runScoped(expectNoProcessMatching(marker));
+    await Effect.runPromise(Effect.scoped(expectNoProcessMatching(marker)));
   });
 });

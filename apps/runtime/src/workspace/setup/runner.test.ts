@@ -8,8 +8,7 @@ import test, { describe } from 'node:test';
 
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
-import { expectNoProcessMatching, runScoped } from '@isagi/testing';
-
+import { expectNoProcessMatching } from '../../../test/test-support.js';
 import { WorktreeSetupRepository } from './repository.js';
 import { runPostCreateSetup } from './runner.js';
 
@@ -373,20 +372,22 @@ const withCommandHook = <A, E>(
 describe('setup runner child lifecycle', { skip: posixOnly }, () => {
   test('interrupting the setup runner kills its child process', async () => {
     const marker = uniqueSleep();
-    await runScoped(
-      withCommandHook(
-        { run: `sleep ${marker} & sleep ${marker}`, timeout: '1h' },
-        (setup, captured) =>
-          Effect.gen(function* () {
-            const fiber = yield* Effect.forkChild(setup);
-            yield* waitForProcess(marker);
-            yield* Fiber.interrupt(fiber);
-            const exit = yield* Fiber.await(fiber);
-            assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
-            yield* expectNoProcessMatching(marker);
-            // An interrupted run is not a result: nothing is recorded.
-            assert.equal(captured.input, undefined);
-          }),
+    await Effect.runPromise(
+      Effect.scoped(
+        withCommandHook(
+          { run: `sleep ${marker} & sleep ${marker}`, timeout: '1h' },
+          (setup, captured) =>
+            Effect.gen(function* () {
+              const fiber = yield* Effect.forkChild(setup);
+              yield* waitForProcess(marker);
+              yield* Fiber.interrupt(fiber);
+              const exit = yield* Fiber.await(fiber);
+              assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
+              yield* expectNoProcessMatching(marker);
+              // An interrupted run is not a result: nothing is recorded.
+              assert.equal(captured.input, undefined);
+            }),
+        ),
       ),
     );
   });
@@ -395,26 +396,28 @@ describe('setup runner child lifecycle', { skip: posixOnly }, () => {
     // A caller's deadline (`Effect.timeout` around the run) interrupts it: the failure is the typed `TimeoutError`,
     // and the scope that owns the hook's process group kills the whole group.
     const marker = uniqueSleep();
-    await runScoped(
-      withCommandHook(
-        { run: `sleep ${marker} & sleep ${marker}`, timeout: '1h' },
-        (setup, captured) =>
-          Effect.gen(function* () {
-            const timed = yield* Effect.forkChild(
-              Effect.flip(
-                setup.pipe(
-                  Effect.tap(() => Effect.die('the setup run should not finish')),
-                  Effect.timeout('1 second'),
+    await Effect.runPromise(
+      Effect.scoped(
+        withCommandHook(
+          { run: `sleep ${marker} & sleep ${marker}`, timeout: '1h' },
+          (setup, captured) =>
+            Effect.gen(function* () {
+              const timed = yield* Effect.forkChild(
+                Effect.flip(
+                  setup.pipe(
+                    Effect.tap(() => Effect.die('the setup run should not finish')),
+                    Effect.timeout('1 second'),
+                  ),
                 ),
-              ),
-            );
-            // Proves the deadline lands on a live hook rather than on one that never started.
-            yield* waitForProcess(marker);
-            const error = yield* Fiber.join(timed);
-            assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
-            yield* expectNoProcessMatching(marker);
-            assert.equal(captured.input, undefined);
-          }),
+              );
+              // Proves the deadline lands on a live hook rather than on one that never started.
+              yield* waitForProcess(marker);
+              const error = yield* Fiber.join(timed);
+              assert.ok(Cause.isTimeoutError(error), `unexpected failure: ${String(error)}`);
+              yield* expectNoProcessMatching(marker);
+              assert.equal(captured.input, undefined);
+            }),
+        ),
       ),
     );
   });
@@ -423,13 +426,18 @@ describe('setup runner child lifecycle', { skip: posixOnly }, () => {
     // The hook's `timeout` is the runner's deadline: SIGTERM to the group, SIGKILL one second later when the group
     // ignores it, then a failed step that carries the signal and the output written before it.
     const marker = uniqueSleep();
-    const { result, step } = await runScoped(
-      withCommandHook(
-        { run: `trap '' TERM; echo started; sleep ${marker} & sleep ${marker}`, timeout: '300ms' },
-        (setup, captured) =>
-          setup.pipe(
-            Effect.map((outcome) => ({ result: outcome, step: captured.input?.steps[0] })),
-          ),
+    const { result, step } = await Effect.runPromise(
+      Effect.scoped(
+        withCommandHook(
+          {
+            run: `trap '' TERM; echo started; sleep ${marker} & sleep ${marker}`,
+            timeout: '300ms',
+          },
+          (setup, captured) =>
+            setup.pipe(
+              Effect.map((outcome) => ({ result: outcome, step: captured.input?.steps[0] })),
+            ),
+        ),
       ),
     );
     assert.equal(result.status, 'failed');
@@ -437,13 +445,19 @@ describe('setup runner child lifecycle', { skip: posixOnly }, () => {
     assert.equal(step?.status, 'failed');
     assert.equal(step?.signal, 'SIGKILL');
     assert.equal(step?.outputExcerpt, 'started\n');
-    await runScoped(expectNoProcessMatching(marker));
+    await Effect.runPromise(Effect.scoped(expectNoProcessMatching(marker)));
   });
 
   test('a command hook whose shell cannot start is recorded as a failed step with the spawn error', async () => {
-    const { result, step } = await runScoped(
-      withCommandHook({ run: 'true', timeout: '5s', cwd: 'missing-directory' }, (setup, captured) =>
-        setup.pipe(Effect.map((outcome) => ({ result: outcome, step: captured.input?.steps[0] }))),
+    const { result, step } = await Effect.runPromise(
+      Effect.scoped(
+        withCommandHook(
+          { run: 'true', timeout: '5s', cwd: 'missing-directory' },
+          (setup, captured) =>
+            setup.pipe(
+              Effect.map((outcome) => ({ result: outcome, step: captured.input?.steps[0] })),
+            ),
+        ),
       ),
     );
     assert.equal(result.status, 'failed');
