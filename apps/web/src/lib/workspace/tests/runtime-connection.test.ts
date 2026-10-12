@@ -1,5 +1,5 @@
 // The runtime-events connection as a resource atom: one socket at a time, backoff reconnects,
-// the open-time handshake order, and teardown on unmount (web-state §5.12).
+// the open-time handshake order, and teardown on unmount.
 import assert from 'node:assert/strict';
 import { mock, test, type TestContext } from 'node:test';
 

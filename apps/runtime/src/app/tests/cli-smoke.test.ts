@@ -1,7 +1,6 @@
 // CLI smoke: the built `isagi` bundle against a real booted runtime. CLI commands, flags, exit codes
 // and error codes are a public surface (agents script against them through the shipped skill), so
-// this pins what `runs list` and `runs show` print and return end to end. Pinned values were
-// observed on v3.
+// this pins what `runs list` and `runs show` print and return end to end.
 //
 // It lives in the runtime package because the CLI cannot import the runtime (the runtime already
 // depends on `@isagi/cli`). The bundle is `apps/cli/dist/isagi.mjs`, built by the runtime's

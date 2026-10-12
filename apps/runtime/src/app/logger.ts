@@ -57,7 +57,8 @@ export const RuntimeSettings: Effect.Effect<
  * - one logfmt line per entry, so multi-line causes stay one forwarded record in the desktop host;
  * - `Debug`/`Info` to stdout and `Warning`/`Error` to stderr, the split `console.info`/`console.warn` gave before;
  * - `Debug` entries only when `ISAGI_RUNTIME_DEBUG` enables them (what `runtimeDiagnosticsEnabled` gated);
- * - the tracer logger kept, so log entries still become span events.
+ * - `Logger.tracerLogger` listed explicitly: `Logger.layer([...])` replaces the whole logger set, so without it log
+ *   entries would stop becoming span events.
  *
  * The `ISAGI_RUNTIME_READY` and `ISAGI_RUNTIME_STARTUP_FAILED` protocol lines are written directly, never through
  * this logger.

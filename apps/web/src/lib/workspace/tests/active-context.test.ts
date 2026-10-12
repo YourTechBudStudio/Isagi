@@ -1,5 +1,4 @@
-// R23 (verification §4d): the old `['workspace']` prefix invalidation also re-read
-// `['workspace', 'active-context']`. That coupling is dropped deliberately (web-state §3.2).
+// The active context has its own key: refreshing the workspace deliberately does not re-read it.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

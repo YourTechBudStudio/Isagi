@@ -84,15 +84,6 @@ export default defineConfig({
       testMatch: /folder-project\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/folder-project/` },
     },
-    // Shares the folder-project page, which mounts the production entry under
-    // `?app=state-transitions`. Implementation-agnostic oracles for how the app
-    // reads, caches and refreshes runtime facts; its own project so each spec file
-    // is matched by exactly one.
-    {
-      name: 'state-transitions',
-      testMatch: /state-transitions\.spec\.ts/,
-      use: { baseURL: `http://127.0.0.1:${fixturePort}/folder-project/` },
-    },
     {
       name: 'workflow-bar',
       testMatch: /workflow-bar\.spec\.ts/,

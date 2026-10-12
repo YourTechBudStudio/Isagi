@@ -1,5 +1,5 @@
 // Background synchronization: the debounced, latest-wins active-context persistence and the
-// one-in-flight-per-project background reconcile (web-state §5.6).
+// one-in-flight-per-project background reconcile.
 import assert from 'node:assert/strict';
 import { mock, test, type TestContext } from 'node:test';
 

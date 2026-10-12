@@ -104,6 +104,53 @@
       "rules": {
         "react/react-in-jsx-scope": "off"
       }
+    },
+    {
+      "files": ["packages/contracts/src/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "zustand",
+                "message": "Use effect/reactivity atoms (ADR 0001)."
+              },
+              {
+                "name": "@tanstack/react-query",
+                "message": "Use effect/reactivity atoms (ADR 0001)."
+              },
+              {
+                "name": "@effect/atom-react",
+                "importNames": ["RegistryProvider"],
+                "message": "RegistryProvider creates a second registry; provide the app registry via RegistryContext."
+              },
+              {
+                "name": "effect",
+                "allowImportNames": ["Schema", "SchemaTransformation"],
+                "message": "Contracts stay descriptive: import only Schema and SchemaTransformation from effect."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "effect/unstable",
+                  "effect/unstable/*",
+                  "@effect/schema",
+                  "@effect/schema/*",
+                  "@effect/platform",
+                  "@effect/platform/*"
+                ],
+                "message": "Effect v4 only: stable effect@4 ships no effect/unstable/*; Schema and platform modules live in effect itself (effect, effect/http, effect/process, ...)."
+              },
+              {
+                "group": ["effect/*"],
+                "message": "Contracts stay descriptive: import only Schema and SchemaTransformation from effect."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

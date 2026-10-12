@@ -86,8 +86,7 @@ export const handleRuntimeEvent = Effect.fnUntraced(function* (event: RuntimeEve
     case 'surface_changed':
       yield* Reactivity.invalidate([keys.workspace]);
       if (event.payload.change === 'deleted') {
-        // The deleted surface's detail stays cached but is never read again (web-state §2.3
-        // delta 5); the local overrides and the focus revision are what must go.
+        // The deleted surface's detail stays cached but is never read again; the local overrides and the focus revision are what must go.
         cancelWorkbenchFocusPersistence(registry, event.payload.worktreeId);
         forgetSurface(registry, event.payload.worktreeId, event.payload.surfaceId);
         forgetPane(registry, event.payload.surfaceId);
@@ -223,7 +222,7 @@ export const connectRuntimeEvents = (open: OpenRuntimeEventsSocket) =>
   });
 
 /**
- * Each signal is a supervision point (effect-conventions §5.3): a defect while applying one (a
+ * Each signal is a supervision point: a defect while applying one (a
  * throwing listener, store action or rebuilt read) loses that signal only, and is logged. Without
  * this it would end the stream, close the socket and end the reconnect loop for the session.
  * Interruption is not a defect, so unmounting still stops the loop.

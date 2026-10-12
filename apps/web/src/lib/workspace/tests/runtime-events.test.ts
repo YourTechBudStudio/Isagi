@@ -116,8 +116,7 @@ test('surface deleted events refresh the workspace, leave the deleted detail unr
   await apply(surfaceDeletedEvent());
   await flush();
 
-  // The detail is not removed from the cache any more (web-state §2.3 delta 5), but nothing asks
-  // for it again either.
+  // The detail stays in the cache, but nothing asks for it again.
   assert.deepEqual(refreshed, [keys.workspace]);
   assert.equal(detailReads, 1);
   assert.deepEqual(registry.get(activeSurfaceByWorktreeAtom), { 20: 30 });
@@ -391,8 +390,8 @@ test('every runtime event type refreshes exactly its declared resources', async 
  * A session holding worktree 10's catalog (re-reads after the first stay in flight), the log
  * metadata of `old dev` and `other`, and worktree 11's catalog. `reads` counts the re-reads per
  * resource after the first load, which is how these tests see what an event refreshed: a second
- * invalidation handler on a held key would trip `invalidatedBy`'s re-registration (reported with
- * S4.W4), so they do not use the key recorder.
+ * invalidation handler on a held key would trip `invalidatedBy`'s re-registration, so they do not
+ * use the key recorder.
  */
 async function heldCatalog(t: TestContext, catalog: unknown) {
   const reread = controllable<WorktreeCommandsOutput>();

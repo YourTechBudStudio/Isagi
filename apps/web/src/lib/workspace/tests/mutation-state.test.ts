@@ -1,4 +1,4 @@
-// What components read from a mutation fn atom (web-state §6, §7.3 item 6): pending, error,
+// What components read from a mutation fn atom: pending, error,
 // reset, a rerun hiding the old error, the per-call `onError` equivalent, and that a write is
 // never aborted by its component going away.
 import assert from 'node:assert/strict';

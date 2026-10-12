@@ -12,8 +12,7 @@
     ".agents",
     ".pi",
     "apps/runtime/.generated",
-    "apps/runtime/src/harnesses/skill-content/*.md",
-    "packages/contracts/test/wire-goldens/"
+    "apps/runtime/src/harnesses/skill-content/*.md"
   ],
   "semi": true,
   "singleQuote": true,

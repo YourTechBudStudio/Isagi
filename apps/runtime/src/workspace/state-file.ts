@@ -159,7 +159,7 @@ function readStateFile(path: string): WorkspaceState {
 }
 
 /**
- * The validator for `state.json` (plan R29): deliberately lenient, so a file an older runtime wrote never reads as
+ * The validator for `state.json`: deliberately lenient, so a file an older runtime wrote never reads as
  * malformed. A missing or `null` revision is 0, and a missing or `null` id is `null`. Anything else that does not fit
  * throws, and `read` treats the file as malformed.
  */

@@ -12,7 +12,7 @@ export const runtimeTeardown: Runtime.Teardown = (exit, onExit) =>
 
 const shutdownSignals = ['SIGINT', 'SIGTERM'] as const;
 
-// `NodeRuntime.runMain` from `@effect/platform-node` is this plus a dependency we do not want (plan R1, critique C1).
+// `NodeRuntime.runMain` from `@effect/platform-node` does the same, but would add a platform dependency for this alone.
 const runMainWith = Runtime.makeRunMain(({ fiber, teardown }) => {
   let receivedSignal = false;
   const onSignal = () => {

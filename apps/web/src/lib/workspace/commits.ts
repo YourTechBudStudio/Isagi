@@ -3,14 +3,12 @@
  * and the terminal cache agree with the runtime again.
  *
  * Every export is an app effect (`AppRequirements`): palette commands run them with `ctx.app`,
- * React handlers with `useAppRun()`, tests with `runApp(registry, ...)`. The bodies keep the old
- * order of steps. Mapping from the React Query versions (web-state §3.1):
+ * React handlers with `useAppRun()`, tests with `runApp(registry, ...)`. How a commit re-reads:
  *
- * - a read-after-write (`fetchQuery({ staleTime: 0 })`, `cancelQueries` + `fetchQuery`) is
- *   `refreshWorkspace()`: the in-flight read is cancelled and the answer comes from a single read
- *   attempt that began after the write (as `fetchQuery`, it does not retry), so it is strictly
- *   causal everywhere;
- * - an awaited `invalidateQueries` is `revalidate(query)` (refetch and wait, only if held);
+ * - a read-after-write is `refreshWorkspace()`: the in-flight read is cancelled and the answer
+ *   comes from a single read attempt that began after the write (it does not retry), so it is
+ *   strictly causal everywhere;
+ * - refreshing a read and waiting for it is `revalidate(query)` (refetch and wait, only if held);
  * - writes are `Effect.uninterruptible`, so nothing aborts a request that reached the runtime.
  */
 import { Cause, Effect, Exit } from 'effect';
@@ -453,8 +451,8 @@ function surfaceSuccessor(
 }
 
 /**
- * The deleted surface's detail stays cached but is never read again (web-state §2.3 delta 5:
- * there is no `removeQueries`); the local overrides and the focus revision are what matter.
+ * The deleted surface's detail stays cached but is never read again (nothing evicts a held read);
+ * the local overrides and the focus revision are what matter.
  *
  * Deleting the active surface activates `successorSurfaceId` (persisting the runtime focus row,
  * whose `active_surface_id` the delete nulled), unless the user activated another surface meanwhile

@@ -18,7 +18,7 @@ import type { WorkspaceError } from './errors.js';
  *
  * Every table lists every code: the contract reason it reads as on those endpoints, or `null` where no service method
  * behind them produces it. Complete tables rather than switches with a default, so a new code fails to compile until
- * every family decides, and no code is ever relabelled as another (arch §2.2). A `null` that is reached is a runtime
+ * every family decides, and no code is ever relabelled as another. A `null` that is reached is a runtime
  * bug: `withReason` dies, and the request pipeline answers `api_unhandled_error`.
  */
 export type ReasonTable<Reason> = { readonly [Code in WorkspaceError['code']]: Reason | null };

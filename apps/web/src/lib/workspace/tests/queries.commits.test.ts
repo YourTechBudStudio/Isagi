@@ -246,8 +246,8 @@ test('delete surface success refetches workspace and clears only stale local ove
   );
   await flush();
 
-  // The deleted surface's detail is not read again (it is no longer removed from the cache,
-  // web-state §2.3 delta 5; nothing refreshes it either).
+  // The deleted surface's detail is not read again (it stays in the cache, and nothing refreshes
+  // it either).
   assert.equal(detailReads, 1);
   assert.deepEqual(registry.get(activeSurfaceByWorktreeAtom), { 20: 999 });
   assert.deepEqual(registry.get(activePaneBySurfaceAtom), { 999: 1001 });

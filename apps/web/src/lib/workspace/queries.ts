@@ -36,7 +36,7 @@ import { publishTerminalFactEffect } from './terminal-presentation/facts.js';
 
 // --- Workspace ------------------------------------------------------------------------------------
 //
-// The workspace is two atoms (web-state §5.1): `workspaceReadAtom` holds what the runtime answered,
+// The workspace is two atoms: `workspaceReadAtom` holds what the runtime answered,
 // tagged with the rail clock at the moment each read began, and `workspaceAtom` is that read
 // projected through `railOrderAtom` (pending and accepted-but-unconverged reorders). The cache never
 // holds the projection, so a read can land at any time without erasing a move it did not know about.
@@ -46,7 +46,7 @@ import { publishTerminalFactEffect } from './terminal-presentation/facts.js';
 /**
  * The runtime's workspace snapshot, decoded to the UI shape, with the rail clock at the moment the
  * read began (`get.once`: a rail change never re-reads). Default freshness policy, refreshed by
- * `keys.workspace` only (a workspace refresh does not re-read the active context, web-state §3.2).
+ * `keys.workspace` only (a workspace refresh does not re-read the active context).
  */
 export const workspaceReadAtom = query(
   (get) => {
@@ -236,8 +236,8 @@ export type CommandActionResult = AsyncResult.AsyncResult<CommandActionOutput, E
 
 /**
  * The persisted active context (the last selected project/worktree), used to restore the
- * selection. Its key is independent of the workspace's: a workspace refresh does not re-read it
- * (web-state §3.2). It is re-read after each accepted persistence (`background-sync.ts`).
+ * selection. Its key is independent of the workspace's: a workspace refresh does not re-read it.
+ * It is re-read after each accepted persistence (`background-sync.ts`).
  */
 export const activeContextAtom = query(() => fetchActiveContext(), {
   keys: [keys.activeContext],

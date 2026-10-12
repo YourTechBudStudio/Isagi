@@ -7,13 +7,35 @@
       "files": ["src/**"],
       "rules": {
         "import/no-cycle": "error",
-        "eslint/no-console": "error"
+        "eslint/no-console": "error",
+        "eslint/no-restricted-globals": [
+          "error",
+          {
+            "name": "setTimeout",
+            "message": "Runtime time is Effect.sleep or Schedule, so it stays interruptible and TestClock-controlled."
+          },
+          {
+            "name": "setInterval",
+            "message": "Runtime time is Effect.sleep or Schedule, so it stays interruptible and TestClock-controlled."
+          }
+        ]
       }
     },
     {
       "files": ["src/**/*.test.ts"],
       "rules": {
         "eslint/no-console": "off"
+      }
+    },
+    {
+      "files": [
+        "src/**/*.test.ts",
+        "src/**/tests/**",
+        "src/**/testing.ts",
+        "src/**/*test-support.ts"
+      ],
+      "rules": {
+        "eslint/no-restricted-globals": "off"
       }
     }
   ]

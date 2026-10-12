@@ -67,7 +67,7 @@ test('malformed state file recovery is logged and stays out of the returned stat
 });
 
 /**
- * `parseState` is a lenient validator on purpose (plan R29): a strict decode would call these files malformed, back
+ * `parseState` is a lenient validator on purpose: a strict decode would call these files malformed, back
  * them up and reset the user's active context. Each fixture is a shape an older runtime or a hand edit can leave.
  */
 test('state.json without activeContextRevision or with null ids still restores', async () => {

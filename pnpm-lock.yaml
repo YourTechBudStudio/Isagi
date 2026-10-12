@@ -32,9 +32,6 @@ importers:
       oxlint-tailwindcss:
         specifier: ^1.0.0
         version: 1.0.0(@oxlint/plugins@1.67.0)
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
 
   apps/cli:
     dependencies:

@@ -56,6 +56,8 @@ export async function runCli(
       ),
     ),
   );
+  // `Effect.runPromiseExit`, not a `runMain`: `runMain` ends with `process.exit`, which can cut off
+  // stdout still being streamed (checkpoint file bytes). `bin.ts` sets the exit code instead.
   const exit = await Effect.runPromiseExit(program);
 
   if (Exit.isSuccess(exit)) {

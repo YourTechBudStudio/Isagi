@@ -39,7 +39,7 @@ export function registerWorkspaceRoutes(
 }
 
 /**
- * Each endpoint maps the failures of its one service method next to it (arch §2.2). The service methods share one
+ * Each endpoint maps the failures of its one service method next to it. The service methods share one
  * declared failure union, so every endpoint names every tag in it: a tag the endpoint's contract describes becomes that
  * rejection, and a tag its method never produces dies (`notProduced`), which the request pipeline answers as
  * `api_unhandled_error`. Git, database and data-directory failures the contract declares pass through to the platform
