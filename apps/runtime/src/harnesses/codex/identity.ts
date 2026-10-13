@@ -1,3 +1,4 @@
+import type { Incarnation } from '../incarnation.js';
 import type { HarnessObservationRecord } from '../projection.js';
 
 export interface CodexStreamCandidate {
@@ -8,16 +9,16 @@ export interface CodexStreamCandidate {
 
 export function activeCodexStreamCandidates(
   streams: ReadonlyMap<string, readonly HarnessObservationRecord[]>,
-  activePtyProcessId: number | null,
+  activeIncarnation: Incarnation | null,
 ): readonly CodexStreamCandidate[] {
-  if (activePtyProcessId === null) return [];
+  if (activeIncarnation === null) return [];
   const candidates: CodexStreamCandidate[] = [];
   for (const [harnessSessionId, records] of streams) {
     const starts = records.filter(
       (record) =>
         record.harness === 'codex' &&
         record.nativeEvent === 'SessionStart' &&
-        record.ptyProcessId === activePtyProcessId,
+        record.incarnation === activeIncarnation,
     );
     const latest = starts.toSorted(compareStartRecords).at(-1);
     if (!latest) continue;

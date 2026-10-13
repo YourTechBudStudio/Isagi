@@ -100,7 +100,7 @@ test('OpenCode conversation does not fall back to hook message history', async (
               {
                 recordedAt: '2026-06-18T00:00:00.000Z',
                 seq: 0,
-                ptyProcessId: 20,
+                incarnation: 'pty:20' as const,
                 harness: 'opencode',
                 nativeEvent: 'chat.message',
                 event: {

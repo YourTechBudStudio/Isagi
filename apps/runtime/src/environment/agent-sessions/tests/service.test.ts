@@ -458,6 +458,8 @@ function fakeHarnesses(launchInputs: RecordedLaunchInput[]): HarnessAdapterRegis
         };
       }),
     buildHeadlessLaunch: () => Effect.die('buildHeadlessLaunch is not used'),
+    supportsSdk: () => false,
+    buildSdkInstrumentation: () => Effect.die('buildSdkInstrumentation is not used'),
   } satisfies HarnessAdapterRegistry['Service'];
 }
 

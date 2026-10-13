@@ -1,9 +1,12 @@
 import type { AgentHarness } from '@isagi/contracts';
 
+import type { Incarnation } from './incarnation.js';
+
 export interface HarnessObservationRecord {
   readonly recordedAt: string;
   readonly seq: number;
-  readonly ptyProcessId: number | null;
+  /** The execution that wrote this hook record, or `null` when it carries no marker. */
+  readonly incarnation: Incarnation | null;
   readonly harness: AgentHarness;
   readonly nativeEvent: string;
   readonly event: unknown;

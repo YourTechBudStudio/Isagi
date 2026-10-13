@@ -146,7 +146,7 @@ function questionRequestId(value: unknown, phase: 'asked' | 'completed') {
 }
 
 function start(record: HarnessObservationRecord) {
-  return { seq: record.seq, recordedAt: record.recordedAt, ptyProcessId: record.ptyProcessId };
+  return { seq: record.seq, recordedAt: record.recordedAt, incarnation: record.incarnation };
 }
 
 function statusFromEvent(value: unknown) {

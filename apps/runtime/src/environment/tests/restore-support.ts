@@ -300,6 +300,8 @@ export function recordingHarnessRegistry(
         return { command: 'pi', args, cwd: input.cwd };
       }),
     buildHeadlessLaunch: () => Effect.die('headless launch is not used'),
+    supportsSdk: () => false,
+    buildSdkInstrumentation: () => Effect.die('SDK instrumentation is not used'),
   } satisfies HarnessAdapterRegistry['Service'];
 }
 

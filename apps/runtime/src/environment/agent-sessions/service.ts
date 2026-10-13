@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Result } from 'effect';
+import { Clock, Context, Data, Effect, Layer, Result } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
@@ -8,6 +8,7 @@ import {
   HarnessAdapterRegistry,
   HarnessAdapterError,
   type HarnessLaunchOptions,
+  ptyIncarnation,
 } from '../../harnesses/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
@@ -62,15 +63,21 @@ const make = Effect.gen(function* () {
   ) {
     yield* controlPlane.assertCanCreateProcess(session.harness);
     const launch = yield* agentLaunchEnvelope(harnesses, session, options);
+    // Read before the process exists: a lower bound on anything it writes, which Codex rollout
+    // attribution relies on.
+    const since = new Date(yield* Clock.currentTimeMillis).toISOString();
     const process = yield* pty.launch(launch);
     yield* repository.setActivePtyProcess({
       agentSessionId: session.id,
       ptyProcessId: process.ptyProcessId,
     });
     yield* eventBus.publish({
-      type: 'agent_session_active_process_changed',
+      type: 'agent_session_execution_changed',
       agentSessionId: session.id,
-      ptyProcessId: process.ptyProcessId,
+      change: {
+        _tag: 'switched',
+        interval: { incarnation: ptyIncarnation(process.ptyProcessId), since },
+      },
     });
     return process.ptyProcessId;
   });

@@ -1,7 +1,11 @@
 import { eq, inArray } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
-import { HarnessObservationTargets, type HarnessObservationTarget } from '../../harnesses/index.js';
+import {
+  HarnessObservationTargets,
+  ptyIncarnation,
+  type HarnessObservationTarget,
+} from '../../harnesses/index.js';
 import { RuntimeDatabase } from '../../platform/persistence/index.js';
 import { ptyProcesses } from '../../pty-processes/tables.js';
 import { agentSessions } from '../tables.js';
@@ -24,6 +28,7 @@ export const HarnessObservationTargetsLayer = Layer.effect(
               activePtyProcessId: agentSessions.activePtyProcessId,
               status: ptyProcesses.status,
               statusReason: ptyProcesses.statusReason,
+              createdAt: ptyProcesses.createdAt,
             })
             .from(agentSessions)
             .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id));
@@ -33,7 +38,24 @@ export const HarnessObservationTargetsLayer = Layer.effect(
               : input.mode === 'one' && input.id !== undefined
                 ? base.where(eq(agentSessions.id, input.id)).all()
                 : base.all();
-          return rows.map((row) => row as HarnessObservationTarget);
+          return rows.map(
+            (row): HarnessObservationTarget => ({
+              agentSessionId: row.agentSessionId,
+              harness: row.harness,
+              // The pointer's row always exists (foreign key), so a pointer comes with `createdAt`.
+              activeExecution:
+                row.activePtyProcessId !== null && row.createdAt !== null
+                  ? {
+                      kind: 'pty',
+                      incarnation: ptyIncarnation(row.activePtyProcessId),
+                      ptyProcessId: row.activePtyProcessId,
+                      status: row.status,
+                      statusReason: row.statusReason,
+                      since: row.createdAt,
+                    }
+                  : null,
+            }),
+          );
         }),
     });
   }),

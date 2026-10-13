@@ -2,7 +2,11 @@ import { Effect } from 'effect';
 
 import { harnessEnvForProcess } from '../env.js';
 import type { AgentSessionArtifacts } from '../ledger.js';
-import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
+import type {
+  HarnessHeadlessLaunchContext,
+  HarnessLaunchContext,
+  SdkInstrumentation,
+} from '../types.js';
 
 export const buildClaudeLaunch = Effect.fn('harnesses.buildClaudeLaunch')(function* (
   input: HarnessLaunchContext,
@@ -35,11 +39,33 @@ export const buildClaudeLaunch = Effect.fn('harnesses.buildClaudeLaunch')(functi
     envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
       harnessEnvForProcess({
         agentSessionId: input.agentSessionId,
-        ptyProcessId,
+        incarnation: { kind: 'pty', ptyProcessId },
         artifacts: dependencies.artifacts,
       }),
   };
 });
+
+/** The PTY's hook settings and `ISAGI_*` variables, for an SDK worker's query (ADR 0007). */
+export const buildClaudeSdkInstrumentation = Effect.fn('harnesses.buildClaudeSdkInstrumentation')(
+  function* (
+    input: { readonly agentSessionId: number; readonly executionId: string },
+    dependencies: {
+      readonly settingsPath: string;
+      readonly artifacts: AgentSessionArtifacts['Service'];
+    },
+  ) {
+    const environment = yield* harnessEnvForProcess({
+      agentSessionId: input.agentSessionId,
+      incarnation: { kind: 'sdk', executionId: input.executionId },
+      artifacts: dependencies.artifacts,
+    });
+    return {
+      harness: 'claude',
+      environment,
+      settingsPath: dependencies.settingsPath,
+    } satisfies SdkInstrumentation;
+  },
+);
 
 export const buildClaudeHeadlessLaunch = Effect.fn('harnesses.buildClaudeHeadlessLaunch')(
   function* (input: HarnessHeadlessLaunchContext) {

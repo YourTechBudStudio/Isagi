@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { codexHookSource } from './codex/artifacts.js';
 import { commandHookSource } from './ledger.common.js';
+import { parseJsonlRecord } from './ledger.js';
 
 test('command hook skips malformed routing input without leaking raw stdin', () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-hook-malformed-'));
@@ -81,16 +82,83 @@ test('Codex command hook records SessionStart without mutating resumable metadat
   }
 });
 
-function runHook(script: string, root: string, input: string) {
+test('command hook marks each record with exactly the execution it ran under', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-hook-execution-'));
+  try {
+    const script = join(root, 'hook.mjs');
+    writeFileSync(script, commandHookSource('claude'), 'utf8');
+    const input = (sessionId: string) =>
+      JSON.stringify({ session_id: sessionId, hook_event_name: 'Stop' });
+    const marker = (sessionId: string) => {
+      const line = readFileSync(
+        join(root, 'artifacts', `${Buffer.from(sessionId).toString('hex')}.harness.jsonl`),
+        'utf8',
+      ).trim();
+      const record = JSON.parse(line) as Record<string, unknown>;
+      return [record.ptyProcessId, record.sdkExecutionId];
+    };
+
+    assert.equal(runHook(script, root, input('pty-session')).status, 0);
+    assert.equal(
+      runHook(script, root, input('sdk-session'), { ISAGI_SDK_EXECUTION_ID: 'execution-1' }).status,
+      0,
+    );
+    assert.equal(
+      runHook(script, root, input('empty-session'), { ISAGI_SDK_EXECUTION_ID: '' }).status,
+      0,
+    );
+
+    assert.deepEqual(marker('pty-session'), [20, null]);
+    assert.deepEqual(marker('sdk-session'), [null, 'execution-1']);
+    assert.deepEqual(marker('empty-session'), [null, null]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger records read a missing SDK execution marker as null and reject a malformed one', () => {
+  const line = (fields: Record<string, unknown>) =>
+    JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: '2026-07-09T00:00:00.000Z',
+      agentSessionId: 10,
+      harnessSessionId: 'session',
+      ptyProcessId: null,
+      harness: 'claude',
+      nativeEvent: 'Stop',
+      event: {},
+      ...fields,
+    });
+
+  assert.equal(parseJsonlRecord(line({ ptyProcessId: 20 }))?.sdkExecutionId, null);
+  assert.equal(parseJsonlRecord(line({ sdkExecutionId: null }))?.sdkExecutionId, null);
+  assert.equal(
+    parseJsonlRecord(line({ sdkExecutionId: 'execution-1' }))?.sdkExecutionId,
+    'execution-1',
+  );
+  assert.equal(parseJsonlRecord(line({ sdkExecutionId: '' })), null);
+  assert.equal(parseJsonlRecord(line({ sdkExecutionId: 7 })), null);
+});
+
+function runHook(
+  script: string,
+  root: string,
+  input: string,
+  execution: NodeJS.ProcessEnv = { ISAGI_PTY_PROCESS_ID: '20' },
+) {
+  // Only the execution marker this run names may reach the hook.
+  const inherited: NodeJS.ProcessEnv = { ...process.env };
+  delete inherited.ISAGI_PTY_PROCESS_ID;
+  delete inherited.ISAGI_SDK_EXECUTION_ID;
   return spawnSync(process.execPath, [script], {
     input,
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...inherited,
       ISAGI_AGENT_SESSION_ID: '10',
-      ISAGI_PTY_PROCESS_ID: '20',
       ISAGI_HARNESS_ARTIFACT_DIRECTORY: join(root, 'artifacts'),
       ISAGI_HARNESS_METADATA_PATH: join(root, 'artifacts', 'harness.json'),
+      ...execution,
     },
   });
 }

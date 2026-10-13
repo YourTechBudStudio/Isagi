@@ -18,15 +18,15 @@ export function reduceClaudeLifecycle(
     const payload = object(record.event);
     const promptKey =
       typeof payload.prompt_id === 'string' && payload.prompt_id
-        ? `${record.ptyProcessId}:${payload.prompt_id}`
+        ? `${record.incarnation}:${payload.prompt_id}`
         : null;
     if (record.nativeEvent === 'UserPromptSubmit') {
       if (promptKey && seenPrompts.has(promptKey)) continue;
       const replacedProcess =
         activeTurn &&
-        activeTurn.ptyProcessId !== null &&
-        record.ptyProcessId !== null &&
-        activeTurn.ptyProcessId !== record.ptyProcessId;
+        activeTurn.incarnation !== null &&
+        record.incarnation !== null &&
+        activeTurn.incarnation !== record.incarnation;
       // Background results are submitted as prompts inside the same logical
       // turn. A distinct user prompt supersedes interrupted work: Claude does
       // not emit Stop for user interrupts. UserPromptSubmit is still a start
@@ -154,7 +154,7 @@ function start(record: HarnessObservationRecord) {
   return {
     seq: record.seq,
     recordedAt: record.recordedAt,
-    ptyProcessId: record.ptyProcessId,
+    incarnation: record.incarnation,
   };
 }
 

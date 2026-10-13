@@ -23,14 +23,28 @@ export type InternalEvent =
     }
   | {
       /**
-       * Private handoff after AgentSession owns the active-process pointer.
-       * Generic PTY events remain owner-unaware.
+       * Private handoff after an agent session's active execution changed. Generic PTY events
+       * remain owner-unaware.
        *
-       * publishers: environment; subscribers: harnesses (observer).
+       * `switched` is published under the agent's lock after every controller change, carrying the
+       * new execution interval (the shape of the harnesses module's `ExecutionInterval`, spelled
+       * out because platform does not import modules): the new incarnation, or `null` when nothing
+       * replaced the old controller, and a `since` read before that execution existed. `health`
+       * means the active execution's liveness changed without a switch.
+       *
+       * publishers: environment (switched), fluidcast (health); subscribers: harnesses (observer).
        */
-      readonly type: 'agent_session_active_process_changed';
+      readonly type: 'agent_session_execution_changed';
       readonly agentSessionId: number;
-      readonly ptyProcessId: number;
+      readonly change:
+        | {
+            readonly _tag: 'switched';
+            readonly interval: {
+              readonly incarnation: `pty:${number}` | `sdk:${string}` | null;
+              readonly since: string;
+            };
+          }
+        | { readonly _tag: 'health' };
     }
   | {
       /** publishers: harnesses (observer); subscribers: workflows. */

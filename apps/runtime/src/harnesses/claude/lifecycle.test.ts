@@ -241,10 +241,10 @@ test('Claude replacement process opens its own turn even without prompt IDs', ()
   const lifecycle = reduceClaudeLifecycle([
     record('UserPromptSubmit', 0),
     question('PreToolUse', 1, 'old-question'),
-    { ...record('UserPromptSubmit', 2), ptyProcessId: 21 },
+    { ...record('UserPromptSubmit', 2), incarnation: 'pty:21' as const },
   ]);
   assert.equal(lifecycle.attention, 'working');
-  assert.equal(lifecycle.activeTurn?.ptyProcessId, 21);
+  assert.equal(lifecycle.activeTurn?.incarnation, 'pty:21');
   assert.equal(lifecycle.activeTurn?.seq, 2);
   assert.deepEqual(lifecycle.terminalEdges, [
     {
@@ -324,7 +324,14 @@ function record(
   seq: number,
   event: Record<string, unknown> = {},
 ): HarnessObservationRecord {
-  return { recordedAt: time(seq), seq, ptyProcessId: 20, harness: 'claude', nativeEvent, event };
+  return {
+    recordedAt: time(seq),
+    seq,
+    incarnation: 'pty:20' as const,
+    harness: 'claude',
+    nativeEvent,
+    event,
+  };
 }
 
 function question(nativeEvent: string, seq: number, toolUseId: string) {

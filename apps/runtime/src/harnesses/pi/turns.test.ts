@@ -49,7 +49,7 @@ function record(
   return {
     recordedAt: time(seq),
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'pi',
     nativeEvent,
     event: {
@@ -63,7 +63,7 @@ function agentError(seq: number, stopReason: 'error' | 'aborted'): HarnessObserv
   return {
     recordedAt: time(seq),
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'pi',
     nativeEvent: 'agent_error',
     event: {

@@ -29,7 +29,7 @@ function routesOver(acceptPolicy: HarnessControlPlane['Service']['acceptPolicy']
   return Layer.mergeAll(
     Layer.mock(HarnessControlPlane)({ acceptPolicy }),
     Layer.mock(HarnessLedgerObserver)({}),
-    Layer.mock(HarnessAdapterRegistry)({}),
+    Layer.mock(HarnessAdapterRegistry)({ supportsSdk: () => false }),
     Layer.mock(AgentSessionArtifacts)({
       paths: () => ({ directory: '/unused', metadataPath: '/unused/harness.json' }),
     }),

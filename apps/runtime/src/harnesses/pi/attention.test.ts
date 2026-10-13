@@ -29,7 +29,7 @@ function record(
   return {
     recordedAt: new Date().toISOString(),
     seq: 0,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'pi',
     nativeEvent,
     event: {

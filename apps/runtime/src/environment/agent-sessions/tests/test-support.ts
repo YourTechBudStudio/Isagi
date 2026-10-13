@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import { AgentSessionArtifacts } from '../../../harnesses/index.js';
+import { AgentSessionArtifacts, HarnessObservationTargets } from '../../../harnesses/index.js';
 import { HarnessLedgerObserverWithInternalsLayerNoDeps } from '../../../harnesses/testing.js';
 import { InternalEvents } from '../../../platform/events/index.js';
 import {
@@ -239,7 +239,14 @@ function databaseLayer(dataRoot: string) {
   return RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer(dataRoot)));
 }
 
-export function testLayer(dataRoot: string) {
+/**
+ * The observer stack over a test data root. `targets` replaces the environment's observation
+ * targets, for execution shapes the database cannot express yet (an SDK execution).
+ */
+export function testLayer(
+  dataRoot: string,
+  options: { readonly targets?: Layer.Layer<HarnessObservationTargets> } = {},
+) {
   const directoryLayer = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directoryLayer));
   const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directoryLayer));
@@ -247,7 +254,7 @@ export function testLayer(dataRoot: string) {
   const foreground = PtyForegroundState.layer;
   const observer = HarnessLedgerObserverWithInternalsLayerNoDeps.pipe(
     Layer.provide(directoryLayer),
-    Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
+    Layer.provide(options.targets ?? HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
     Layer.provide(artifacts),
     Layer.provide(internalBus),
   );

@@ -51,6 +51,7 @@ export interface AgentSessionHarnessJsonlRecord {
   readonly agentSessionId: number;
   readonly harnessSessionId: string;
   readonly ptyProcessId: number | null;
+  readonly sdkExecutionId: string | null;
   readonly harness: AgentHarness;
   readonly nativeEvent: string;
   readonly event: unknown;
@@ -256,16 +257,12 @@ const make = Effect.gen(function* () {
 export class AgentSessionArtifacts extends Context.Service<
   AgentSessionArtifacts,
   {
-    readonly paths: (input: {
-      readonly agentSessionId: number;
-      readonly ptyProcessId?: number | null | undefined;
-    }) => AgentSessionArtifactPaths;
+    readonly paths: (input: { readonly agentSessionId: number }) => AgentSessionArtifactPaths;
     readonly initializeMetadata: (
       agentSessionId: number,
     ) => Effect.Effect<void, AgentSessionArtifactError>;
     readonly prepareProcessArtifacts: (input: {
       readonly agentSessionId: number;
-      readonly ptyProcessId: number;
     }) => Effect.Effect<AgentSessionArtifactPaths, AgentSessionArtifactError>;
     readonly readMetadata: (
       agentSessionId: number,
@@ -370,6 +367,8 @@ export function parseJsonlRecord(line: string): AgentSessionHarnessJsonlRecord |
   ) {
     return null;
   }
+  const sdkExecutionId = optionalNonEmptyString(record.sdkExecutionId);
+  if (sdkExecutionId === undefined) return null;
   if (!isAgentHarness(record.harness)) return null;
   if (typeof record.nativeEvent !== 'string' || !record.nativeEvent) return null;
   if (!('event' in record)) return null;
@@ -379,10 +378,17 @@ export function parseJsonlRecord(line: string): AgentSessionHarnessJsonlRecord |
     agentSessionId: record.agentSessionId,
     harnessSessionId: record.harnessSessionId,
     ptyProcessId: record.ptyProcessId ?? null,
+    sdkExecutionId,
     harness: record.harness,
     nativeEvent: record.nativeEvent,
     event: record.event,
   };
+}
+
+/** Missing or `null` reads as `null`; anything but a non-empty string is invalid (`undefined`). */
+function optionalNonEmptyString(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 function isPositiveInteger(value: unknown): value is number {
