@@ -1,12 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-  appendFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -25,13 +18,21 @@ import {
 import { pollHarnessLedgerObserverForTest } from '../../../harnesses/testing.js';
 import { InternalEvents } from '../../../platform/events/index.js';
 import { tapInternalEvents } from '../../../platform/events/testing.js';
-import { seedActiveAgentSession, testLayer } from './test-support.js';
+import {
+  at,
+  edgeSummary,
+  hookRecord,
+  prepareAgent,
+  ptyMark,
+  rolloutLines,
+  sdkExecutionMark,
+  seedActiveAgentSession,
+  testLayer,
+} from './test-support.js';
 
 // Observation of an execution-keyed agent. Targets come from a stub, because nothing in the
 // environment can report an SDK execution yet; every timestamp is relative to the `since` values
 // the stub and the switch events carry, so each case exercises the interval rule it names.
-
-const base = Date.UTC(2026, 6, 9);
 
 test('background polling observes an SDK execution, and its open turn dies on a switch to a PTY', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-observer-sdk-switch-'));
@@ -483,13 +484,7 @@ test('a Codex turn left open before an observer restart still resolves as sessio
   }
 });
 
-type ExecutionMark = { readonly pty: number | null; readonly sdk: string | null };
-
-const sdkMark: ExecutionMark = { pty: null, sdk: 'execution-1' };
-
-function ptyMark(ptyProcessId: number): ExecutionMark {
-  return { pty: ptyProcessId, sdk: null };
-}
+const sdkMark = sdkExecutionMark('execution-1');
 
 function stubTargets(initial: readonly HarnessObservationTarget[]) {
   let current = initial;
@@ -554,63 +549,6 @@ function switched(agentSessionId: number, incarnation: Incarnation, sinceSeconds
   };
 }
 
-function prepareAgent(
-  root: string,
-  ledgerSessionId: string,
-  metadataSessionId: string | null = ledgerSessionId,
-  agentSessionId = 10,
-) {
-  const directory = join(root, 'sessions', 'agent-sessions', String(agentSessionId));
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    join(directory, 'harness.json'),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      harnessSessionId: metadataSessionId,
-      updatedAt: at(0),
-    })}\n`,
-    { mode: 0o600 },
-  );
-  const path = join(directory, `${Buffer.from(ledgerSessionId).toString('hex')}.harness.jsonl`);
-  writeFileSync(path, '', { mode: 0o600 });
-  return path;
-}
-
-function hookRecord(
-  harness: AgentHarness,
-  harnessSessionId: string,
-  nativeEvent: string,
-  seconds: number,
-  mark: ExecutionMark,
-  event: Record<string, unknown> = {},
-  agentSessionId = 10,
-  origin = base,
-) {
-  return `${JSON.stringify({
-    schemaVersion: 1,
-    recordedAt: at(seconds, origin),
-    agentSessionId,
-    harnessSessionId,
-    ptyProcessId: mark.pty,
-    sdkExecutionId: mark.sdk,
-    harness,
-    nativeEvent,
-    event: { session_id: harnessSessionId, hook_event_name: nativeEvent, ...event },
-  })}\n`;
-}
-
-function rolloutLines(
-  entries: readonly (readonly [type: string, seconds: number, payload: unknown])[],
-  origin = base,
-) {
-  return entries
-    .map(
-      ([type, seconds, payload]) =>
-        `${JSON.stringify({ type, timestamp: at(seconds, origin), payload })}\n`,
-    )
-    .join('');
-}
-
 function readMetadata(root: string, agentSessionId: number) {
   return JSON.parse(
     readFileSync(
@@ -618,18 +556,4 @@ function readMetadata(root: string, agentSessionId: number) {
       'utf8',
     ),
   ) as { readonly harnessSessionId: string | null };
-}
-
-function edgeSummary(
-  edges: readonly {
-    readonly type: string;
-    readonly seq: number | null;
-    readonly reason?: string;
-  }[],
-) {
-  return edges.map((edge) => [edge.type, edge.seq, edge.reason ?? null]);
-}
-
-function at(seconds: number, origin = base) {
-  return new Date(origin + seconds * 1000).toISOString();
 }

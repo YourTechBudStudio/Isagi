@@ -173,6 +173,8 @@ export const ptyCopy = {
           return 'Process missing';
         case 'pty_process_not_running':
           return 'Process not running';
+        case 'agent_worker_failed':
+          return 'Worker stopped';
       }
     }
 
@@ -225,6 +227,8 @@ export const ptyCopy = {
         return 'Isagi could not find the backing process for this session.';
       case 'pty_process_not_running':
         return 'The backing process is not running.';
+      case 'agent_worker_failed':
+        return 'The agent worker behind this pane stopped.';
       case null:
         return null;
     }

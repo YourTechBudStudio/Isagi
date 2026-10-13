@@ -113,6 +113,7 @@ export const agentSessionStatusReasonSchema = Schema.Literals([
   'harness_resume_failed',
   'pty_process_missing',
   'pty_process_not_running',
+  'agent_worker_failed',
 ]);
 
 export const terminalSessionStatusReasonSchema = Schema.Literals([
@@ -170,6 +171,14 @@ const sessionProjectionFields = {
   lastSeenAt: Schema.NullOr(Schema.String),
 } as const;
 
+export const agentSessionInteractionSchema = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal('terminal'),
+    fluidcast: Schema.Literals(['available', 'unavailable']),
+  }),
+  Schema.Struct({ mode: Schema.Literal('fluidcast'), fluidcastSessionId: Schema.String }),
+]);
+
 export const agentSessionMetadataSchema = Schema.Struct({
   id: positiveInteger,
   paneId: positiveInteger,
@@ -179,6 +188,12 @@ export const agentSessionMetadataSchema = Schema.Struct({
   harnessSessionId: Schema.NullOr(Schema.String),
   statusReason: Schema.NullOr(agentSessionStatusReasonSchema),
   recoveryAction: agentSessionRecoveryActionSchema,
+  /**
+   * Which controller the agent is under. In terminal mode, `fluidcast` says whether a switch to
+   * Fluidcast can be offered (the harness has an SDK worker and Fluidcast is configured); the
+   * launch gate is still checked when the switch is made.
+   */
+  interaction: agentSessionInteractionSchema,
   ...sessionProjectionFields,
 });
 
@@ -432,6 +447,7 @@ export type AgentHarness = typeof agentHarnessSchema.Type;
 export type HarnessLaunchBlockReason = typeof harnessLaunchBlockReasonSchema.Type;
 export type PaneSessionKind = typeof paneSessionKindSchema.Type;
 export type AgentSessionMetadata = typeof agentSessionMetadataSchema.Type;
+export type AgentSessionInteraction = typeof agentSessionInteractionSchema.Type;
 export type TerminalSessionMetadata = typeof terminalSessionMetadataSchema.Type;
 export type SurfacePaneSession = typeof surfacePaneSessionSchema.Type;
 export type SurfacePane = typeof surfacePaneSchema.Type;

@@ -32,14 +32,16 @@ import {
   type EditorReadinessObservation,
   type EditorUnavailable,
 } from '../../editor/index.js';
+import { FluidcastSessions } from '../../fluidcast/index.js';
 import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';
-import { displayNameForHarness } from '../../harnesses/index.js';
+import { displayNameForHarness, HarnessAdapterRegistry } from '../../harnesses/index.js';
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock, type EntityLockHeld } from '../../platform/locks/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import type { PtyLaunchError } from '../../pty-processes/index.js';
+import { AgentSessionInteraction, type AgentControl } from '../agent-sessions/interaction.js';
 import { AgentSessionService } from '../agent-sessions/service.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { restorePaneBoundSessions } from '../sessions/restore.js';
@@ -86,6 +88,9 @@ const make = Effect.gen(function* () {
   const lifecycle = yield* SessionLifecycle;
   const eventBus = yield* InternalEvents;
   const editors = yield* EditorContextService;
+  const interaction = yield* AgentSessionInteraction;
+  const fluidcast = yield* FluidcastSessions;
+  const harnesses = yield* HarnessAdapterRegistry;
   // The same module-scoped lock value `SessionLifecycle` and
   // `EditorContextService` are built on, so placement and the editor's own
   // lifecycle genuinely serialize against each other.
@@ -106,7 +111,7 @@ const make = Effect.gen(function* () {
     if (!target) return emptyPaneDeleteOutput;
     if (!target.panes.some(({ pane }) => pane.id === input.paneId)) return emptyPaneDeleteOutput;
     const plan = planSurfacePaneDelete(target, input.paneId);
-    const deps = { repository, pty, eventBus, editors, entityLock };
+    const deps = { repository, pty, eventBus, editors, entityLock, agents };
     // The lock decision inspects the pane the plan will actually delete,
     // not whether the surface happens to hold an editor. Deleting an
     // unrelated terminal pane from a surface that also holds one keeps the
@@ -189,7 +194,17 @@ const make = Effect.gen(function* () {
           title: pane.title,
           sortOrder: pane.sortOrder,
           session: sessionForPane(
-            { agentSessions, terminalSessions, editorContexts, readiness },
+            {
+              agentSessions,
+              terminalSessions,
+              editorContexts,
+              readiness,
+              control: interaction.control,
+              // The launch gate stays out of this read: a harness that cannot launch already shows
+              // the blocked view, and the switch itself re-checks the gate.
+              fluidcastAvailable: (harness) =>
+                harnesses.supportsSdk(harness) && fluidcast.availability === 'ready',
+            },
             pane,
           ),
         })),
@@ -217,7 +232,7 @@ const make = Effect.gen(function* () {
     }),
     deleteSurface: Effect.fn('SurfaceService.deleteSurface')(function* (surfaceId) {
       const target = yield* loadDeleteTarget(repository, surfaceId);
-      const deps = { repository, pty, eventBus, editors, entityLock };
+      const deps = { repository, pty, eventBus, editors, entityLock, agents };
       // Deleting this surface removes every one of its panes, so the whole
       // capture is what the lock decision inspects.
       if (editorContextIdsOfPanes(target.panes.map(({ pane }) => pane)).length === 0)
@@ -514,9 +529,12 @@ export class SurfaceService extends Context.Service<SurfaceService, SurfaceServi
   static readonly layerNoDeps = Layer.effect(SurfaceService, make);
   static readonly layer = SurfaceService.layerNoDeps.pipe(
     Layer.provide([
+      AgentSessionInteraction.layer,
       AgentSessionService.layer,
       EditorContextService.layer,
       EntityLock.layer,
+      FluidcastSessions.layer,
+      HarnessAdapterRegistry.layer,
       InternalEvents.layer,
       PtyService.layer,
       SessionLifecycle.layer,
@@ -832,6 +850,7 @@ interface SurfaceDeleteDependencies {
   readonly eventBus: InternalEvents['Service'];
   readonly editors: EditorContextService['Service'];
   readonly entityLock: EntityLock['Service'];
+  readonly agents: AgentSessionService['Service'];
 }
 
 function loadDeleteTargetOrNull(repository: SurfaceRepository['Service'], surfaceId: number) {
@@ -868,19 +887,24 @@ const deleteWholeSurface = Effect.fnUntraced(function* (
   // Cleanup acts on the panes the delete actually removed, read inside its
   // transaction: a first pane whose session was bound after `target` was
   // read still has that session stopped.
-  const deleted = yield* deps.repository.deleteSurface(target.surface.id);
+  const deleted = yield* commitAndFinish(
+    deps,
+    deps.repository.deleteSurface(target.surface.id),
+    (rows) =>
+      rows.deletedSurfaceId === null
+        ? null
+        : {
+            held,
+            surfaceChanged: {
+              worktreeId: target.surface.worktreeId,
+              surfaceId: target.surface.id,
+              change: 'deleted',
+              deletedPaneIds: rows.deletedPanes.map((pane) => pane.id),
+            },
+          },
+  );
   if (deleted.deletedSurfaceId === null) return emptyDeleteOutput;
   const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
-  yield* finishSurfaceDelete(deps, {
-    deletedPanes: deleted.deletedPanes,
-    held,
-    surfaceChanged: {
-      worktreeId: target.surface.worktreeId,
-      surfaceId: target.surface.id,
-      change: 'deleted',
-      deletedPaneIds,
-    },
-  });
   return {
     deletedSurfaceId: deleted.deletedSurfaceId,
     deletedPaneIds,
@@ -899,10 +923,22 @@ const deletePlannedPanes = Effect.fnUntraced(function* (
   // inside its transaction and removes only what that says, so a concurrent
   // delete can never leave a stale layout behind, and cleanup acts on the
   // sessions bound to the panes it actually removed.
-  const deleted = yield* deps.repository.deleteSurfacePane({
-    surfaceId: target.surface.id,
-    paneId: requestedPaneId,
-  });
+  const deleted = yield* commitAndFinish(
+    deps,
+    deps.repository.deleteSurfacePane({ surfaceId: target.surface.id, paneId: requestedPaneId }),
+    (rows) =>
+      rows.deletedPanes.length === 0
+        ? null
+        : {
+            held,
+            surfaceChanged: {
+              worktreeId: target.surface.worktreeId,
+              surfaceId: target.surface.id,
+              change: 'pane_deleted',
+              deletedPaneIds: rows.deletedPanes.map((pane) => pane.id),
+            },
+          },
+  );
   if (deleted.deletedPanes.length === 0) {
     // The pane existed at load time, yet the repository removed nothing. This
     // is not the idempotent "already gone" case (handled by the caller) — it
@@ -920,22 +956,52 @@ const deletePlannedPanes = Effect.fnUntraced(function* (
     );
     return emptyPaneDeleteOutput;
   }
-  const deletedPaneIds = deleted.deletedPanes.map((pane) => pane.id);
-  yield* finishSurfaceDelete(deps, {
-    deletedPanes: deleted.deletedPanes,
-    held,
-    surfaceChanged: {
-      worktreeId: target.surface.worktreeId,
-      surfaceId: target.surface.id,
-      change: 'pane_deleted',
-      deletedPaneIds,
-    },
-  });
-  return { deletedPaneIds } satisfies DeletePaneOutput;
+  return {
+    deletedPaneIds: deleted.deletedPanes.map((pane) => pane.id),
+  } satisfies DeletePaneOutput;
 });
 
+type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+
 /**
- * Everything after the placement removal has committed.
+ * Commits a pane or surface delete, then finishes it, as one sequence no interruption can split
+ * once the commit has run. `finishing` names what to finish, or `null` when nothing committed.
+ *
+ * - **Controllers.** Each deleted agent's current controller (a hidden Fluidcast session, or a
+ *   PTY an overlapping terminal switch launched) is ended first, uninterruptibly: once the
+ *   placements are gone nothing else would end a Fluidcast session. The agent IDs come straight
+ *   from the committed rows, so no read stands between the commit and the release. A switch
+ *   queued behind the release is refused, because the placement is gone.
+ * - **Publications.** They are installed with `ensuring` inside the protected sequence, before
+ *   the release can block, so a caller interrupted during the release or the cleanup still leaves
+ *   every client its invalidation event.
+ * - **Cleanup.** The rest (PTY teardown, editor release) stays interruptible, as before.
+ *
+ * Lock order: when the delete holds the worktree's editor lock, the release takes agent locks
+ * inside it (editor → agent). Nothing that holds an agent lock may take the editor lock, or the
+ * two deadlock. A Codex worker's stop can keep the editor lock for its ~3 s close.
+ */
+function commitAndFinish<A extends { readonly deletedPanes: readonly SurfacePaneRow[] }, E, R>(
+  deps: SurfaceDeleteDependencies,
+  commit: Effect.Effect<A, E, R>,
+  finishing: (deleted: A) => {
+    readonly held: EntityLockHeld | null;
+    readonly surfaceChanged: SurfaceChangedEvent['payload'];
+  } | null,
+) {
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const deleted = yield* commit;
+      const args = finishing(deleted);
+      if (args !== null)
+        yield* finishSurfaceDelete(deps, { deletedPanes: deleted.deletedPanes, ...args }, restore);
+      return deleted;
+    }),
+  );
+}
+
+/**
+ * Everything after the placement removal has committed; runs inside `commitAndFinish`.
  *
  * The publications are installed with `ensuring` rather than sequenced after the
  * cleanup because `releaseIncarnation` can still fail with a `DatabaseError`
@@ -952,7 +1018,13 @@ function finishSurfaceDelete(
     readonly held: EntityLockHeld | null;
     readonly surfaceChanged: SurfaceChangedEvent['payload'];
   },
+  restore: Restore,
 ) {
+  const releaseControllers = deps.agents.releaseControllers(
+    args.deletedPanes.flatMap((pane) =>
+      pane.sessionKind === 'agent_session' && pane.sessionId !== null ? [pane.sessionId] : [],
+    ),
+  );
   const cleanup = Effect.gen(function* () {
     // Agents and terminals only. An editor is never routed through this helper:
     // it is best-effort inside a `catchAll`, and clearing an editor's ownership
@@ -988,7 +1060,7 @@ function finishSurfaceDelete(
     yield* publishDeletedPaneSessionChanges(deps.eventBus, args.deletedPanes);
     yield* publishSurfaceChanged(deps.eventBus, args.surfaceChanged);
   });
-  return cleanup.pipe(Effect.ensuring(publications));
+  return releaseControllers.pipe(Effect.andThen(restore(cleanup)), Effect.ensuring(publications));
 }
 
 function terminateDeletedPanePtys(
@@ -1071,6 +1143,8 @@ function sessionForPane(
     readonly terminalSessions: readonly TerminalSessionRow[];
     readonly editorContexts: readonly EditorContextRow[];
     readonly readiness: ReadonlyMap<number, EditorReadinessObservation>;
+    readonly control: (agentSessionId: number) => AgentControl;
+    readonly fluidcastAvailable: (harness: AgentSessionRow['harness']) => boolean;
   },
   pane: SurfacePaneRow,
 ): SurfaceDetail['panes'][number]['session'] {
@@ -1078,7 +1152,8 @@ function sessionForPane(
   if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
     const agent = agentSessions.find((candidate) => candidate.id === pane.sessionId);
     if (!agent) return null;
-    const state = deriveAgentSessionState(agent);
+    const control = sources.control(agent.id);
+    const state = deriveAgentSessionState(agent, control);
     return {
       kind: 'agent_session',
       agentSession: {
@@ -1091,6 +1166,13 @@ function sessionForPane(
         status: state.status,
         statusReason: state.statusReason,
         recoveryAction: state.recoveryAction,
+        interaction:
+          control.mode === 'fluidcast'
+            ? { mode: 'fluidcast', fluidcastSessionId: control.fluidcastSessionId }
+            : {
+                mode: 'terminal',
+                fluidcast: sources.fluidcastAvailable(agent.harness) ? 'available' : 'unavailable',
+              },
         diagnosticCode: state.diagnosticCode,
         diagnosticDetail: state.diagnosticDetail,
         createdAt: agent.createdAt,

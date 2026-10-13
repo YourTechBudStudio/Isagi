@@ -10,6 +10,7 @@ import {
   Clock,
   Context,
   Deferred,
+  type Duration,
   Effect,
   Exit,
   Fiber,
@@ -91,12 +92,22 @@ interface Entry {
 }
 
 /**
+ * How long a session build may take before it counts as hung. Attaching reads the native session
+ * (Claude's transcript, Codex's `thread/read` over a spawned app-server), which can take a while for
+ * a long history. The bound matters because the caller holds the agent's lock, which deletes need.
+ */
+export const fluidcastBuildTimeout: Duration.Input = '60 seconds';
+
+/**
  * Live Fluidcast sessions as runtime-owned resources, like PTYs: each runs in its own child scope of
  * this layer, independent of any client, until it is stopped or the runtime shuts down. Nothing is
  * persisted. There is no service-level lock: callers sequence one agent's lifecycle with their own
  * per-agent lock.
  */
-export const makeFluidcastSessions = (build: FluidcastSessionBuilder) =>
+export const makeFluidcastSessions = (
+  build: FluidcastSessionBuilder,
+  options: { readonly buildTimeout: Duration.Input } = { buildTimeout: fluidcastBuildTimeout },
+) =>
   Effect.gen(function* () {
     // Read once: changes to the section take effect after a restart.
     const state = (yield* (yield* RuntimeConfig).get).fluidcast;
@@ -187,11 +198,30 @@ export const makeFluidcastSessions = (build: FluidcastSessionBuilder) =>
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const scope = yield* Scope.fork(layerScope);
-          // Only the build is interruptible; whatever ends it closes the session's scope.
+          // Only the build is interruptible; whatever ends it closes the session's scope. It is
+          // interruptible even for a caller that is not (the mode change runs uninterruptibly), so
+          // the timeout can cut a hung build instead of waiting for it.
           const built = yield* restore(
-            build({ ...input, fluidcastSessionId }, ready).pipe(
-              Scope.provide(scope),
-              Effect.provideContext(buildContext),
+            Effect.interruptible(
+              build({ ...input, fluidcastSessionId }, ready).pipe(
+                Scope.provide(scope),
+                Effect.provideContext(buildContext),
+              ),
+            ).pipe(
+              Effect.timeoutOrElse({
+                duration: options.buildTimeout,
+                orElse: () =>
+                  Effect.logWarning('fluidcast session build timed out').pipe(
+                    Effect.annotateLogs({
+                      agentSessionId: input.agentSessionId,
+                      fluidcastSessionId,
+                      harness: input.harness,
+                    }),
+                    Effect.andThen(
+                      Effect.fail(new FluidcastStartFailed({ reason: 'session_build_failed' })),
+                    ),
+                  ),
+              }),
             ),
           ).pipe(
             Effect.onExit((exit) =>

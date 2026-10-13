@@ -8,7 +8,7 @@ import { Effect, Stream } from 'effect';
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
 import type { CommandService } from '../../commands/index.js';
-import type { SurfaceService } from '../../environment/index.js';
+import type { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import type { InternalEvent, InternalEvents } from '../../platform/events/index.js';
 import type { Git } from '../../platform/git/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
@@ -113,8 +113,44 @@ export function surfaceServiceWith(input: {
   };
 }
 
+/**
+ * The agent-session fake a workspace delete sees. With no agent controllers in these tests, holding
+ * and releasing do nothing; `recordingAgentSessionService` records them for the delete tests.
+ */
+export const testAgentSessionService = {
+  startFresh: () => Effect.die('agent startFresh is not used by workspace tests'),
+  get: () => Effect.die('agent get is not used by workspace tests'),
+  ensureActivePtyProcess: () =>
+    Effect.die('agent ensureActivePtyProcess is not used by workspace tests'),
+  activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used by workspace tests'),
+  stopUnlessPlaced: () => Effect.die('agent stopUnlessPlaced is not used by workspace tests'),
+  setInteractionMode: () => Effect.die('agent setInteractionMode is not used by workspace tests'),
+  releaseControllers: () => Effect.void,
+  holdWorktreesForDeletion: () => Effect.void,
+  holdProjectForDeletion: () => Effect.void,
+} satisfies AgentSessionService['Service'];
+
+/** Records each hold (and when its scope ends) and each release into `log`, in order. */
+export function recordingAgentSessionService(log: string[]): AgentSessionService['Service'] {
+  return {
+    ...testAgentSessionService,
+    holdWorktreesForDeletion: (ids) =>
+      Effect.acquireRelease(
+        Effect.sync(() => void log.push(`hold:${ids.join(',')}`)),
+        () => Effect.sync(() => void log.push(`unhold:${ids.join(',')}`)),
+      ),
+    holdProjectForDeletion: (projectId) =>
+      Effect.acquireRelease(
+        Effect.sync(() => void log.push(`hold-project:${projectId}`)),
+        () => Effect.sync(() => void log.push(`unhold-project:${projectId}`)),
+      ),
+    releaseControllers: (ids) => Effect.sync(() => void log.push(`release:${ids.join(',')}`)),
+  };
+}
+
 export const noWorktreeDeleteDiagnostics: WorktreeDeleteDiagnostics = {
   agentSessionCount: 0,
+  agentSessionIds: [],
   agentSessionActivePtyProcessIds: [],
   commandRunCount: 0,
   commandRunPtyProcessIds: [],

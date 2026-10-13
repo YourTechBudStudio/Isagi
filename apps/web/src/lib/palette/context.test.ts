@@ -190,6 +190,7 @@ function surfaceDetail(input: {
                   status: 'running',
                   statusReason: null,
                   recoveryAction: 'resume_existing',
+                  interaction: { mode: 'terminal', fluidcast: 'unavailable' },
                   diagnosticCode: null,
                   diagnosticDetail: null,
                   createdAt: '2026-06-18T00:00:00.000Z',

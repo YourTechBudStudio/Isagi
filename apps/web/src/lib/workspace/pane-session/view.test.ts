@@ -42,6 +42,7 @@ function agentSession(overrides: {
     harnessSessionId: overrides.harnessSessionId ?? null,
     statusReason: null,
     recoveryAction: overrides.recoveryAction,
+    interaction: { mode: 'terminal', fluidcast: 'unavailable' },
     status: overrides.status,
     diagnosticCode: overrides.diagnosticCode ?? null,
     diagnosticDetail: null,

@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer, Logger, References } from 'effect';
 
 import { EditorContextService } from '../../editor/index.js';
+import { makeFakeFluidcastSessions, type FakeFluidcastSessions } from '../../fluidcast/testing.js';
 import {
   AgentSessionArtifacts,
   HarnessAdapterRegistry,
@@ -16,6 +17,7 @@ import { PtyService } from '../../pty-processes/index.js';
 import type { LaunchPtyProcessInput } from '../../pty-processes/index.js';
 import { ptyProcesses } from '../../pty-processes/tables.js';
 import { fakeTerminateMany } from '../../pty-processes/testing.js';
+import { AgentSessionInteraction } from '../agent-sessions/interaction.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { AgentSessionService } from '../agent-sessions/service.js';
 import { SurfaceService } from '../index.js';
@@ -75,6 +77,8 @@ export interface SessionWorldOptions {
    * specific identifier.
    */
   readonly allocatePtyProcessId?: ((input: LaunchPtyProcessInput) => number) | undefined;
+  /** The Fluidcast sessions behind the agents' interaction; disabled by default. */
+  readonly fluidcast?: FakeFluidcastSessions | undefined;
 }
 
 /**
@@ -114,8 +118,16 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
     recordingHarnessRegistry(options.harnessLaunches),
   );
 
+  // Off unless a test asks: restore and creation never switch an agent's controller.
+  const fluidcast = (options.fluidcast ?? makeFakeFluidcastSessions({ availability: 'disabled' }))
+    .layer;
+  const interaction = AgentSessionInteraction.layerNoDeps.pipe(Layer.provide(fluidcast));
+
   const agentService = AgentSessionService.layerNoDeps.pipe(
     Layer.provide(AllowAllHarnessControlPlaneLayer),
+    Layer.provide(artifacts),
+    Layer.provide(interaction),
+    Layer.provide(fluidcast),
     Layer.provide(agentRepository),
     Layer.provide(pty),
     Layer.provide(harnessRegistry),
@@ -139,6 +151,9 @@ export function sessionWorldLayers(dataRoot: string, options: SessionWorldOption
     sessionLifecycle,
     surfaceRepository,
     agentService,
+    interaction,
+    fluidcast,
+    harnessRegistry,
     terminalService,
     pty,
   } as const;
@@ -178,7 +193,14 @@ export function realRestoreLayer(dataRoot: string, options: SessionWorldOptions)
  * test. A death names the mistake if that assumption ever stops holding.
  */
 export function realSessionCreationLayer(dataRoot: string, options: SessionWorldOptions) {
-  const world = sessionWorldLayers(dataRoot, options);
+  return sessionCreationLayerFor(sessionWorldLayers(dataRoot, options));
+}
+
+/**
+ * `realSessionCreationLayer` over a session world the caller already holds, so other layers built
+ * from the same world values (a workspace sharing its database and agent service) are one graph.
+ */
+export function sessionCreationLayerFor(world: ReturnType<typeof sessionWorldLayers>) {
   const surfaceService = SurfaceService.layerNoDeps.pipe(
     Layer.provide(world.surfaceRepository),
     Layer.provide(world.agentService),
@@ -188,6 +210,9 @@ export function realSessionCreationLayer(dataRoot: string, options: SessionWorld
     Layer.provide(world.events),
     Layer.provide(Layer.succeed(EditorContextService, dyingEditorContextService)),
     Layer.provide(world.entityLock),
+    Layer.provide(world.interaction),
+    Layer.provide(world.fluidcast),
+    Layer.provide(world.harnessRegistry),
   );
   return Layer.mergeAll(
     world.database,
@@ -304,7 +329,8 @@ export function recordingHarnessRegistry(
         return { command: 'pi', args, cwd: input.cwd };
       }),
     buildHeadlessLaunch: () => Effect.die('headless launch is not used'),
-    supportsSdk: (_harness): _harness is SdkHarness => false,
+    // As the real definitions say; only a switch to Fluidcast asks.
+    supportsSdk: (harness): harness is SdkHarness => harness === 'claude' || harness === 'codex',
     buildSdkInstrumentation: () => Effect.die('SDK instrumentation is not used'),
   } satisfies HarnessAdapterRegistry['Service'];
 }

@@ -23,7 +23,16 @@ import type {
   TranscriptMessage,
   WorkerSummary,
 } from '@yourtechbudstudio/fluidcast-tool-agent/schema';
-import { Deferred, Effect, Layer, Redacted, Ref, Stream, SubscriptionRef } from 'effect';
+import {
+  Deferred,
+  type Duration,
+  Effect,
+  Layer,
+  Redacted,
+  Ref,
+  Stream,
+  SubscriptionRef,
+} from 'effect';
 import { HttpClient, HttpClientResponse } from 'effect/http';
 
 import {
@@ -300,6 +309,8 @@ export function fakeSessionsLayer(options: {
   readonly builder?: FluidcastSessionBuilder;
   readonly state?: FluidcastConfigState;
   readonly writeFails?: boolean;
+  /** Replaces the 60 s build bound, so a hung build can time out within a test. */
+  readonly buildTimeout?: Duration.Input;
 }) {
   const events = publishOnlyRecordingEventBus('FluidcastSessions does not subscribe');
   const writes: Array<{ agentSessionId: number; harnessSessionId: string }> = [];
@@ -322,7 +333,10 @@ export function fakeSessionsLayer(options: {
     });
   const layer = Layer.effect(
     FluidcastSessions,
-    makeFluidcastSessions(options.builder ?? build),
+    makeFluidcastSessions(
+      options.builder ?? build,
+      options.buildTimeout === undefined ? undefined : { buildTimeout: options.buildTimeout },
+    ),
   ).pipe(
     Layer.provide([
       Layer.succeed(RuntimeConfig, {

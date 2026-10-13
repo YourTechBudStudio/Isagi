@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import { Effect, Layer, Result } from 'effect';
 
+import { makeFakeFluidcastSessions } from '../../../fluidcast/testing.js';
 import {
+  AgentSessionArtifacts,
   HarnessLaunchBlocked,
   HarnessAdapterRegistry,
   type SdkHarness,
@@ -19,6 +21,7 @@ import type { PtyProcessRow } from '../../../pty-processes/index.js';
 import { fakeTerminateMany } from '../../../pty-processes/testing.js';
 import { SessionLifecycle } from '../../sessions/lifecycle.js';
 import type { AgentSessionRow } from '../../sessions/types.js';
+import { AgentSessionInteraction } from '../interaction.js';
 import { AgentSessionRepository } from '../repository.js';
 import { AgentSessionError, AgentSessionService } from '../service.js';
 
@@ -372,8 +375,18 @@ function testLayer(input: {
     Layer.provide(SessionLifecycle.layerNoDeps.pipe(Layer.provide(EntityLock.layer))),
     Layer.provide(InternalEvents.layer),
     Layer.provide(input.controlPlaneLayer ?? AllowAllHarnessControlPlaneLayer),
+    // These cases never switch an agent's controller (`service.interaction.test.ts` does).
+    Layer.provide(AgentSessionInteraction.layerNoDeps.pipe(Layer.provide(disabledFluidcast.layer))),
+    Layer.provide(disabledFluidcast.layer),
+    Layer.provide(
+      Layer.mock(AgentSessionArtifacts)({
+        paths: () => assert.fail('artifact paths are not used'),
+      }),
+    ),
   );
 }
+
+const disabledFluidcast = makeFakeFluidcastSessions({ availability: 'disabled' });
 
 function fakeRepository(
   state: ReturnType<typeof mutableAgentSession>,
@@ -405,6 +418,7 @@ function fakeRepository(
     delete: () => Effect.die('delete is not used'),
     findPlacement: () =>
       placement === undefined ? Effect.die('findPlacement is not used') : Effect.succeed(placement),
+    findProjectId: () => Effect.succeed(1),
   } satisfies AgentSessionRepository['Service'];
 }
 

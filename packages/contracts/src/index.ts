@@ -49,12 +49,30 @@ export const apiEndpoints: ApiEndpoints = {
 };
 
 export {
+  agentInteractionModeApiErrorSchema,
   agentSessionActivityApiErrorSchema,
   agentSessionActivityUnavailableErrorSchema,
+  agentSessionDeletingErrorSchema,
+  agentSessionMetadataUnusableErrorSchema,
+  agentSessionNotFoundErrorSchema,
   agentSessionsEndpoints,
+  fluidcastSessionUnreadableErrorSchema,
+  fluidcastStartFailedErrorSchema,
+  fluidcastUnavailableErrorSchema,
 } from './agent-sessions/api.js';
-export { agentSessionActivityOutputSchema } from './agent-sessions/types.js';
-export type { AgentSessionActivityOutput } from './agent-sessions/types.js';
+export type { AgentInteractionModeApiError } from './agent-sessions/api.js';
+export {
+  agentSessionActivityOutputSchema,
+  agentSessionInteractionModeSchema,
+  setAgentSessionInteractionModeInputSchema,
+  setAgentSessionInteractionModeOutputSchema,
+} from './agent-sessions/types.js';
+export type {
+  AgentSessionActivityOutput,
+  AgentSessionInteractionMode,
+  SetAgentSessionInteractionModeInput,
+  SetAgentSessionInteractionModeOutput,
+} from './agent-sessions/types.js';
 
 export { clientSettingsEndpoint } from './client-settings/api.js';
 export {
@@ -448,6 +466,7 @@ export {
 } from './surfaces/api.js';
 export {
   agentHarnessSchema,
+  agentSessionInteractionSchema,
   agentSessionMetadataSchema,
   agentSessionRecoveryActionSchema,
   agentSessionRouteParamsSchema,
@@ -496,6 +515,7 @@ export {
 } from './surfaces/types.js';
 export type {
   AgentHarness,
+  AgentSessionInteraction,
   AgentSessionMetadata,
   AgentSessionRecoveryAction,
   AgentSessionRouteParams,

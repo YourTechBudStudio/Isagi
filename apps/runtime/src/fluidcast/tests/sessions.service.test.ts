@@ -7,6 +7,7 @@ import { makeLogCapture } from '../../../test/test-support.js';
 import {
   FluidcastSessionNotFound,
   FluidcastSessionUnreadable,
+  FluidcastStartFailed,
   FluidcastUnavailable,
 } from '../errors.js';
 import type { FluidcastSessionId } from '../ids.js';
@@ -234,6 +235,46 @@ test('a failed start leaves no session behind', async () => {
       const missing = yield* Effect.flip(sessions.current(built.fluidcastSessionId));
       assert.ok(missing instanceof FluidcastSessionNotFound);
       assert.ok(logs.some((line) => line.message.includes('fluidcast session start failed')));
+    }),
+  );
+});
+
+test('a hung build times out as session_build_failed and closes its scope, even for an uninterruptible caller', async () => {
+  let closed = false;
+  await withSessions(
+    {
+      fakes: [],
+      buildTimeout: '30 millis',
+      // Attaching never answers. The finalizer stands in for whatever the build acquired.
+      builder: () =>
+        Effect.addFinalizer(() => Effect.sync(() => (closed = true))).pipe(
+          Effect.andThen(Effect.never),
+        ),
+    },
+    ({ sessions, logs }) =>
+      Effect.gen(function* () {
+        // The mode change calls `start` from an uninterruptible body; the bound must still fire.
+        const error = yield* Effect.flip(Effect.uninterruptible(sessions.start(startInput)));
+        assert.ok(error instanceof FluidcastStartFailed);
+        assert.equal(error.reason, 'session_build_failed');
+        assert.equal(closed, true);
+        const timedOut = logs.filter(
+          (line) => line.message === 'fluidcast session build timed out',
+        );
+        assert.equal(timedOut.length, 1);
+        assert.equal(timedOut[0]?.level, 'Warn');
+        assert.equal(timedOut[0]?.annotations.agentSessionId, 7);
+        assert.equal(timedOut[0]?.annotations.harness, 'claude');
+        assert.equal(typeof timedOut[0]?.annotations.fluidcastSessionId, 'string');
+      }),
+  );
+});
+
+test('a build that finishes inside the bound is not cut', async () => {
+  await withSessions({ fakes: [fakeBuiltSession()], buildTimeout: '5 seconds' }, ({ sessions }) =>
+    Effect.gen(function* () {
+      const { fluidcastSessionId } = yield* Effect.uninterruptible(sessions.start(startInput));
+      assert.equal(sessions.execution(fluidcastSessionId)?.worker.state, 'live');
     }),
   );
 });

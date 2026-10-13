@@ -7,10 +7,18 @@ import type {
 } from '@isagi/contracts';
 
 import { exitDetail } from '../../pty-processes/index.js';
+import type { AgentControl } from '../agent-sessions/interaction.js';
 import type { DerivedAgentSessionState, DerivedTerminalSessionState } from '../surfaces/types.js';
 import type { AgentSessionRow, TerminalSessionRow } from './types.js';
 
-export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentSessionState {
+/**
+ * The agent's status from its row and its current controller. In Fluidcast mode the interaction
+ * overrides the persisted PTY pointer, which still names the stopped terminal.
+ */
+export function deriveAgentSessionState(
+  session: AgentSessionRow,
+  control: AgentControl,
+): DerivedAgentSessionState {
   const process = session.activePtyProcess;
   if (session.harnessMetadataStatus === 'invalid') {
     return agentState(
@@ -29,6 +37,17 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
       'Harness metadata is missing.',
       'create_replacement',
     );
+  }
+  if (control.mode === 'fluidcast') {
+    return control.worker.state === 'live'
+      ? agentState('running', null, null, null, 'connect_existing')
+      : agentState(
+          'failed',
+          'agent_worker_failed',
+          null,
+          control.worker.reason,
+          'connect_existing',
+        );
   }
   if (!session.activePtyProcessId) {
     return agentState('starting', null, null, null, 'connect_existing');

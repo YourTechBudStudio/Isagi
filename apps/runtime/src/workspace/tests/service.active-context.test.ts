@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -28,6 +28,7 @@ import {
   testInternalEvents,
   testPtyService,
   testWorktreeDeleteDiagnostics,
+  testAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -58,6 +59,7 @@ test('active context persistence validates before writing state', async () => {
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -93,6 +95,7 @@ test('valid active context persistence writes after validation', async () => {
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(AgentSessionService, testAgentSessionService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),
@@ -140,6 +143,7 @@ test('active context persistence publishes internal activation changes for accep
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(AgentSessionService, testAgentSessionService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),

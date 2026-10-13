@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Effect, Layer } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { listDurableSessionInventory } from '../../environment/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
@@ -23,6 +23,7 @@ import {
   stateFileWithWriteCounter,
   testInternalEvents,
   testPtyService,
+  testAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -70,6 +71,11 @@ export interface LiveWorkspaceOptions {
    */
   readonly database?: RuntimeDatabase['Service'] | undefined;
   /**
+   * An existing database layer to share instead, for a test that composes the workspace with
+   * another module's real services in one build (one connection, one memoized layer).
+   */
+  readonly databaseLayer?: Layer.Layer<RuntimeDatabase, unknown> | undefined;
+  /**
    * The participant project deletion runs inside its transaction. Defaults to
    * `NoProjectDeletionParticipant`; cross-module tests in `app/tests` pass the real workflow
    * erasure, or a throwing one to observe the rollback.
@@ -89,6 +95,10 @@ export interface LiveWorkspaceOptions {
   readonly decorateSurfaces?:
     | ((inner: SurfaceService['Service']) => SurfaceService['Service'])
     | undefined;
+  /** The agent sessions a delete holds and releases; holding and releasing do nothing by default. */
+  readonly agentSessions?: AgentSessionService['Service'] | undefined;
+  /** The real agent-session service of a shared session world; overrides `agentSessions`. */
+  readonly agentSessionsLayer?: Layer.Layer<AgentSessionService, unknown> | undefined;
 }
 
 /** A deletion participant with nothing to erase, for workspace tests that own no other module. */
@@ -149,9 +159,11 @@ export function runWithLiveWorkspace<A, E>(
  */
 export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptions) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = options.database
-    ? Layer.succeed(RuntimeDatabase, options.database)
-    : RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
+  const database =
+    options.databaseLayer ??
+    (options.database
+      ? Layer.succeed(RuntimeDatabase, options.database)
+      : RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer)));
   const realRepository = ProjectRepository.layer.pipe(Layer.provide(database));
   const repository = options.decorateRepository
     ? Layer.effect(
@@ -189,6 +201,8 @@ export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptio
         Layer.succeed(PtyService, testPtyService),
         Layer.succeed(InternalEvents, options.internalEvents ?? testInternalEvents),
         surfaces,
+        options.agentSessionsLayer ??
+          Layer.succeed(AgentSessionService, options.agentSessions ?? testAgentSessionService),
         deleteDiagnostics,
         Layer.succeed(
           StateFile,

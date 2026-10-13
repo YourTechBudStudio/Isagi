@@ -129,6 +129,7 @@ test('session status reasons produce degraded pane status labels', () => {
     ptyCopy.sessionStatus('failed', 'pty_process_not_running', exit()),
     'Process not running',
   );
+  assert.equal(ptyCopy.sessionStatus('failed', 'agent_worker_failed', exit()), 'Worker stopped');
   assert.equal(ptyCopy.sessionStatus('killed', 'harness_process_killed', exit()), 'Killed');
   assert.equal(ptyCopy.sessionStatus('killed', 'shell_killed', exit()), 'Killed');
   assert.equal(ptyCopy.sessionStatus('killed', 'runtime_shutdown', exit()), 'Killed on shutdown');
@@ -155,6 +156,7 @@ test('session status reasons produce restrained pane notices', () => {
     harness_resume_failed: ptyCopy.sessionNotice('failed', 'harness_resume_failed'),
     pty_process_missing: ptyCopy.sessionNotice('failed', 'pty_process_missing'),
     pty_process_not_running: ptyCopy.sessionNotice('failed', 'pty_process_not_running'),
+    agent_worker_failed: ptyCopy.sessionNotice('failed', 'agent_worker_failed'),
   };
 
   assert.match(notices.runtime_shutdown ?? '', /runtime shut down/);
@@ -170,6 +172,7 @@ test('session status reasons produce restrained pane notices', () => {
   assert.match(notices.harness_resume_failed ?? '', /resume/);
   assert.match(notices.pty_process_missing ?? '', /backing process/);
   assert.match(notices.pty_process_not_running ?? '', /not running/);
+  assert.match(notices.agent_worker_failed ?? '', /worker/);
 });
 
 function surfaceRejected(reason: 'surface_not_found' | 'pane_not_found' | 'invalid_surface_title') {

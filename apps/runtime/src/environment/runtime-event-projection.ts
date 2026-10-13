@@ -10,6 +10,7 @@ import {
 } from '../platform/events/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
+import { AgentSessionInteraction } from './agent-sessions/interaction.js';
 import { AgentSessionRepository } from './agent-sessions/repository.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './sessions/status.js';
 import type { AgentSessionRow, TerminalSessionRow } from './sessions/types.js';
@@ -25,6 +26,7 @@ const layerNoDeps = Layer.effectDiscard(
     const terminals = yield* TerminalSessionRepository;
     const surfaces = yield* SurfaceRepository;
     const attention = yield* AgentSessionAttentionProjection;
+    const interaction = yield* AgentSessionInteraction;
     const events = yield* internalBus.subscribe([
       'durable_session_deleted',
       'agent_session_changed',
@@ -63,7 +65,13 @@ const layerNoDeps = Layer.effectDiscard(
               });
               return;
             }
-            yield* publishAgentSessionChanged(publicBus, surfaces, attention, agent.value);
+            yield* publishAgentSessionChanged(
+              publicBus,
+              surfaces,
+              attention,
+              interaction,
+              agent.value,
+            );
             return;
           }
           if (event.type === 'terminal_session_changed') {
@@ -115,6 +123,7 @@ export const RuntimeEventProjection = {
   layer: layerNoDeps.pipe(
     Layer.provide([
       AgentSessionAttentionProjection.layer,
+      AgentSessionInteraction.layer,
       AgentSessionRepository.layer,
       InternalEvents.layer,
       RuntimeEvents.layer,
@@ -183,6 +192,7 @@ const publishAgentSessionChanged = Effect.fnUntraced(function* (
   publicBus: RuntimeEvents['Service'],
   surfaces: SurfaceRepository['Service'],
   attention: AgentSessionAttentionProjection['Service'],
+  interaction: AgentSessionInteraction['Service'],
   agent: AgentSessionRow,
 ) {
   const placement = yield* resolveLookup(
@@ -194,7 +204,7 @@ const publishAgentSessionChanged = Effect.fnUntraced(function* (
     yield* publishAttentionSourceRemoved(publicBus, { kind: 'agent_session', id: agent.id });
     return;
   }
-  const state = deriveAgentSessionState(agent);
+  const state = deriveAgentSessionState(agent, interaction.control(agent.id));
   const attentionState = yield* attention.agentSessionAttention(agent);
   yield* publicBus.publish({
     ...nextRuntimeEventEnvelope(),
