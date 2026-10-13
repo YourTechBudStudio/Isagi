@@ -2,6 +2,8 @@ packages:
   - 'apps/*'
   - 'packages/*'
 catalog:
+  '@effect/ai-openai': 4.0.2
+  '@effect/ai-openai-compat': 4.0.2
   '@effect/atom-react': ~4.0.2
   effect: ~4.0.2
 allowBuilds:

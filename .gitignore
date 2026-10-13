@@ -20,5 +20,8 @@ data/.isagi/
 scratch
 TODO.md
 
+# Local link to a Fluidcast checkout (see the `link:` dependencies); each worktree creates its own.
+/.fluidcast
+
 # Disposable web prototypes; excluded from maintained fixture entries.
 apps/web/browser/playground/

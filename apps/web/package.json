@@ -22,12 +22,16 @@
     "@isagi/runtime-client": "workspace:*",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
+    "@yourtechbudstudio/fluidcast-client": "link:../../.fluidcast/packages/client",
+    "@yourtechbudstudio/fluidcast-harness": "link:../../.fluidcast/packages/harness",
+    "@yourtechbudstudio/fluidcast-react": "link:../../.fluidcast/packages/react",
+    "@yourtechbudstudio/fluidcast-tool-agent": "link:../../.fluidcast/packages/tool-agent",
     "effect": "catalog:",
     "elkjs": "^0.12.0",
     "lucide-react": "^1.17.0",
     "motion": "^12.40.0",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-router": "^7.18.0"
   },
   "devDependencies": {
