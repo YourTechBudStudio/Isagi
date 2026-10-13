@@ -13,6 +13,7 @@ import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { UserShell } from '../../platform/process/index.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
+import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
@@ -40,6 +41,7 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   );
   const userShellLayer = Layer.succeed(UserShell, testUserShell());
   const service = PtyService.layerNoDeps.pipe(
+    Layer.provide(LaunchEnvironment.layerNoDeps),
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(backendLayer),

@@ -159,3 +159,33 @@ test('policy mutation rejects a stale semantic revision without rewriting', asyn
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('policy mutation succeeds and preserves an invalid fluidcast section', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-config-invalid-fluidcast-'));
+  const path = join(root, 'config.yaml');
+  try {
+    writeFileSync(path, 'fluidcast:\n  enabled: true\n  speech: 42\n', 'utf8');
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* program(root);
+          const before = yield* service.get;
+          assert.equal(before.fluidcast.status, 'invalid');
+          const next = {
+            ...disabledHarnessPolicy,
+            claude: { enabled: true, installIsagiDocs: false },
+          };
+          const accepted = yield* service.acceptHarnessPolicy({
+            expectedPolicyRevision: before.harnesses.revision,
+            policy: next,
+          });
+          assert.deepEqual(accepted.harnesses.policy.claude, next.claude);
+          assert.equal(accepted.fluidcast.status, 'invalid');
+        }),
+      ),
+    );
+    assert.match(readFileSync(path, 'utf8'), /fluidcast:\n  enabled: true\n  speech: 42\n/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

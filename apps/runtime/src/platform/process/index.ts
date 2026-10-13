@@ -12,3 +12,4 @@ export { classifyExecFailure, execCommand, ExecFailed } from './exec.js';
 export type { ExecCommandOptions, ExecFailure, ExecResult } from './exec.js';
 export { ProcessSpawnFailed, spawnProcessGroup, terminateGroup } from './process-group.js';
 export type { ProcessExit, ProcessGroup, ProcessGroupSpec } from './process-group.js';
+export { ExecutableNotFound, resolveExecutableOnPath } from './executable-path.js';

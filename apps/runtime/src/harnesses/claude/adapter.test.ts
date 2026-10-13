@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Cause, Effect, Exit, Layer } from 'effect';
+import { Effect, Layer } from 'effect';
 
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
+import { harnessDefinition, supportedHarnesses, type SdkHarness } from '../definitions.js';
 import { HarnessAdapterRegistry } from '../registry.js';
 
 test('Claude SDK instrumentation reuses the PTY settings and marks the SDK execution', async () => {
@@ -53,34 +54,31 @@ test('Claude SDK instrumentation reuses the PTY settings and marks the SDK execu
   }
 });
 
-test('only Claude and Codex support SDK instrumentation, and other harnesses refuse it', async () => {
+test('SDK support is exactly the harnesses whose definitions declare launch.sdk', async () => {
   const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-sdk-support-')));
   try {
-    const { support, piExit } = await Effect.runPromise(
+    const support = await Effect.runPromise(
       Effect.gen(function* () {
         const registry = yield* HarnessAdapterRegistry;
-        return {
-          support: (['claude', 'codex', 'pi', 'opencode'] as const).map((harness) => [
-            harness,
-            registry.supportsSdk(harness),
-          ]),
-          piExit: yield* Effect.exit(
-            registry.buildSdkInstrumentation({
-              agentSessionId: 10,
-              harness: 'pi',
-              executionId: 'execution-1',
-            }),
-          ),
-        };
+        return supportedHarnesses.map((harness) => [harness, registry.supportsSdk(harness)]);
       }).pipe(Effect.provide(registryLayer(dataRoot))),
     );
-    assert.deepEqual(support, [
-      ['claude', true],
-      ['codex', true],
-      ['pi', false],
-      ['opencode', false],
-    ]);
-    assert.equal(Exit.isFailure(piExit) && Cause.hasDies(piExit.cause), true);
+    // `SdkHarness` is derived from the same definitions, so `buildSdkInstrumentation` cannot be
+    // called for any other harness; this keeps `supportsSdk`'s value in step with that type.
+    assert.deepEqual(
+      support,
+      supportedHarnesses.map((harness) => [
+        harness,
+        harnessDefinition(harness).launch.sdk !== undefined,
+      ]),
+    );
+    assert.deepEqual(
+      support
+        .filter(([, supported]) => supported)
+        .map(([harness]) => harness)
+        .sort(),
+      ['claude', 'codex'] satisfies SdkHarness[],
+    );
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

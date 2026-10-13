@@ -3,12 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints } from '@isagi/contracts';
 
-import {
-  errorMessage,
-  registerApiEndpoint,
-  type Rejection,
-  type RouteRuntime,
-} from '../platform/http/index.js';
+import { registerApiEndpoint, type Rejection, type RouteRuntime } from '../platform/http/index.js';
 import type {
   RuntimeConfigConflict,
   RuntimeConfigError,
@@ -78,8 +73,8 @@ function acceptPolicyRejection(
         data: { reason: error.reason },
       };
     case 'RuntimeConfigError':
-      // `config.yaml` could not be read or written. The contract has no code for it, so it reads as
-      // an unhandled runtime failure, exactly as before the route was typed.
-      return { code: 'api_unhandled_error', status: 500, message: errorMessage(error) };
+      // `config.yaml` could not be read, parsed or written. The contract has no code for it, so it
+      // reads as an unhandled runtime failure. Its message is authored from safe fields only.
+      return { code: 'api_unhandled_error', status: 500, message: error.message };
   }
 }

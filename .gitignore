@@ -20,8 +20,10 @@ data/.isagi/
 scratch
 TODO.md
 
-# Local link to a Fluidcast checkout (see the `link:` dependencies); each worktree creates its own.
+# Local link to a Fluidcast checkout, the source `pnpm fluidcast:pack` packs; each worktree creates its own.
 /.fluidcast
+# Fluidcast tarballs the `overrides` in pnpm-workspace.yaml install from (`pnpm fluidcast:pack`).
+/.fluidcast-packs
 
 # Disposable web prototypes; excluded from maintained fixture entries.
 apps/web/browser/playground/

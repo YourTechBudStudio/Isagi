@@ -354,6 +354,36 @@ test('the global config prose documents additional workflow directories without 
   assert.match(prose, /restart/i, 'prose never states a restart is required');
 });
 
+test('the global config reference documents Fluidcast voice mode', () => {
+  const emitted = files.get('references/config-global.md') ?? '';
+  const heading = '\n## Fluidcast voice mode\n';
+  const sectionIndex = emitted.indexOf(heading);
+  assert.notEqual(sectionIndex, -1, 'config-global.md lost its Fluidcast voice mode section');
+  const sectionStart = sectionIndex + heading.length;
+  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
+  assert.notEqual(nextHeadingIndex, -1, 'Fluidcast voice mode must precede another section');
+  const prose = emitted.slice(sectionStart, nextHeadingIndex);
+
+  for (const key of [
+    'enabled',
+    'languageModel',
+    'speech',
+    'preset',
+    'openai',
+    'openai-compatible',
+    'structuredOutput',
+    'baseUrl',
+    'apiKey',
+  ]) {
+    assert.match(prose, new RegExp(`\\b${key}\\b`), `Fluidcast prose never names ${key}`);
+  }
+  assert.match(prose, /restart/i, 'prose never states a restart is required');
+  assert.match(prose, /Claude Code and Codex/, 'prose never names the supported harnesses');
+  assert.match(prose, /memory only/i, 'prose never states hidden sessions are in memory only');
+  assert.match(prose, /CLAUDE_CONFIG_DIR/, 'prose never states the Claude attach limitation');
+  assert.doesNotMatch(prose, /apiKey: sk-(?!your-)/, 'examples must use placeholder keys');
+});
+
 test('skill references do not carry generated contents sections', () => {
   for (const [path, source] of handwritten) {
     if (path === 'SKILL.md') continue;

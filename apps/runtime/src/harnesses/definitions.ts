@@ -15,6 +15,13 @@ export const harnessDefinitions = {
 
 export const supportedHarnesses = Object.keys(harnessDefinitions) as readonly AgentHarness[];
 
+/** The harnesses an SDK worker can drive: exactly those whose definition declares `launch.sdk`. */
+export type SdkHarness = {
+  [H in AgentHarness]: (typeof harnessDefinitions)[H]['launch'] extends { readonly sdk: unknown }
+    ? H
+    : never;
+}[AgentHarness];
+
 export function harnessDefinition(harness: AgentHarness): HarnessDefinition {
   return harnessDefinitions[harness];
 }

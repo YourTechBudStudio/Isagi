@@ -5,7 +5,7 @@ import type { AgentHarness } from '@isagi/contracts';
 import { DataDirectory } from '../platform/persistence/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/index.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
-import { harnessDefinition } from './definitions.js';
+import { harnessDefinition, harnessDefinitions, type SdkHarness } from './definitions.js';
 import { AgentSessionArtifacts } from './ledger.js';
 import {
   HarnessAdapterError,
@@ -28,18 +28,11 @@ const make = Effect.gen(function* () {
     buildHeadlessLaunch: Effect.fn('HarnessAdapterRegistry.buildHeadlessLaunch')(function* (input) {
       return yield* harnessDefinition(input.harness).launch.headless(input);
     }),
-    supportsSdk: (harness) => harnessDefinition(harness).launch.sdk !== undefined,
+    supportsSdk: (harness): harness is SdkHarness =>
+      harnessDefinition(harness).launch.sdk !== undefined,
     buildSdkInstrumentation: Effect.fn('HarnessAdapterRegistry.buildSdkInstrumentation')(
       function* (input) {
-        const sdk = harnessDefinition(input.harness).launch.sdk;
-        if (!sdk) {
-          return yield* Effect.die(
-            new Error(
-              `Harness ${input.harness} has no SDK instrumentation; check supportsSdk first`,
-            ),
-          );
-        }
-        return yield* sdk(
+        return yield* harnessDefinitions[input.harness].launch.sdk(
           { agentSessionId: input.agentSessionId, executionId: input.executionId },
           dependencies,
         );
@@ -57,12 +50,11 @@ export class HarnessAdapterRegistry extends Context.Service<
     readonly buildHeadlessLaunch: (
       input: HarnessHeadlessLaunchContext,
     ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
-    /** Whether an SDK worker can drive this harness (it defines `launch.sdk`). */
-    readonly supportsSdk: (harness: AgentHarness) => boolean;
-    /** Dies when `supportsSdk(harness)` is false: callers check the capability first. */
+    /** Whether an SDK worker can drive this harness (it defines `launch.sdk`); narrows to `SdkHarness`. */
+    readonly supportsSdk: (harness: AgentHarness) => harness is SdkHarness;
     readonly buildSdkInstrumentation: (input: {
       readonly agentSessionId: number;
-      readonly harness: AgentHarness;
+      readonly harness: SdkHarness;
       readonly executionId: string;
     }) => Effect.Effect<SdkInstrumentation, HarnessAdapterError>;
   }

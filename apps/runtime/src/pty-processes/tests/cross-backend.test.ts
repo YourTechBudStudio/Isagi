@@ -13,6 +13,7 @@ import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { UserShell } from '../../platform/process/index.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
+import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
@@ -68,6 +69,7 @@ function serviceLayer(dataRoot: string, catalog: ReturnType<typeof fakeBackendCa
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const repository = PtyRepository.layer.pipe(Layer.provide(database));
   const service = PtyService.layerNoDeps.pipe(
+    Layer.provide(LaunchEnvironment.layerNoDeps),
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(Layer.succeed(PtyBackendCatalog, catalog)),

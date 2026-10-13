@@ -2,13 +2,13 @@ import { existsSync } from 'node:fs';
 
 import { Effect, FiberMap, Result, Stream } from 'effect';
 
-import type { CliAccess } from '../../cli-access/index.js';
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { InternalEvents } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { shellLaunchCommand } from '../../platform/process/index.js';
 import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyForegroundState } from '../foreground-state.js';
+import type { LaunchEnvironment } from '../launch-environment.js';
 import { appendLog, type PtyRepository } from '../repository.js';
 import {
   PtyLogError,
@@ -56,8 +56,7 @@ export interface PtyLaunchDependencies {
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
-  readonly userProcessEnvironment: NodeJS.ProcessEnv;
-  readonly cliAccess: CliAccess['Service'];
+  readonly launchEnvironment: LaunchEnvironment['Service'];
 }
 
 type PtyAllocationPhase = 'allocated' | 'starting' | 'settled' | 'abandoned';
@@ -252,14 +251,9 @@ function prepareLaunch(
     // `foreground.clear` and `envForProcess` have empty expected-error channels
     // by contract, so nothing they raise is folded into a launch failure.
     yield* deps.foreground.clear(ptyProcessId);
-    // Resolved per launch: the runtime URL is only known once the server listens, while the user
-    // environment was captured when the layer was built. Explicit overrides still win.
-    const cliEnvironment = yield* deps.cliAccess.launchEnvironment(
-      deps.userProcessEnvironment.PATH,
-    );
+    // Resolved per launch (see `LaunchEnvironment`). Explicit overrides still win.
     const processEnvironment: NodeJS.ProcessEnv = {
-      ...deps.userProcessEnvironment,
-      ...cliEnvironment,
+      ...(yield* deps.launchEnvironment.base),
       ...input.envOverrides,
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };

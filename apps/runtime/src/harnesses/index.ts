@@ -20,7 +20,7 @@ export {
 export { registerHarnessesRoutes } from './api.js';
 export { HarnessControlPlane, HarnessLaunchBlocked } from './control-plane/service.js';
 export type { HarnessConversationTurn } from './definition-types.js';
-export { harnessDefinition } from './definitions.js';
+export { harnessDefinition, type SdkHarness } from './definitions.js';
 export { AgentSessionArtifacts } from './ledger.js';
 export type { AgentSessionHarnessMetadataRead } from './ledger.js';
 export type { HarnessLaunchOptions, SdkInstrumentation } from './types.js';

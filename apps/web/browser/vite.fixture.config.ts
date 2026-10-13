@@ -4,8 +4,6 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-import { dedupe } from '../vite.config.js';
-
 /**
  * The fixture bundle is multi-entry: `/` is the terminal harness, `/update/` is
  * the update-surface gallery, `/rail-reorder/` is the rail drag playground, and
@@ -25,8 +23,6 @@ export default defineConfig({
   root: entry('./fixture'),
   base: '/',
   plugins: [react(), tailwindcss()],
-  // One React for the production sources and the linked Fluidcast player alike.
-  resolve: { dedupe },
   build: {
     outDir: '../../.browser-dist',
     emptyOutDir: true,

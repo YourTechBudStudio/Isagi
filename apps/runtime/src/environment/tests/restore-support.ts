@@ -2,7 +2,11 @@ import { eq } from 'drizzle-orm';
 import { Effect, Layer, Logger, References } from 'effect';
 
 import { EditorContextService } from '../../editor/index.js';
-import { AgentSessionArtifacts, HarnessAdapterRegistry } from '../../harnesses/index.js';
+import {
+  AgentSessionArtifacts,
+  HarnessAdapterRegistry,
+  type SdkHarness,
+} from '../../harnesses/index.js';
 import { AllowAllHarnessControlPlaneLayer } from '../../harnesses/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
@@ -300,7 +304,7 @@ export function recordingHarnessRegistry(
         return { command: 'pi', args, cwd: input.cwd };
       }),
     buildHeadlessLaunch: () => Effect.die('headless launch is not used'),
-    supportsSdk: () => false,
+    supportsSdk: (_harness): _harness is SdkHarness => false,
     buildSdkInstrumentation: () => Effect.die('SDK instrumentation is not used'),
   } satisfies HarnessAdapterRegistry['Service'];
 }

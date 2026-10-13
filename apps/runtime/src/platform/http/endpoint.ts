@@ -6,6 +6,7 @@ import {
   apiSuccessResponseSchema,
   type AnyApiContentEndpoint,
   type AnyApiEndpoint,
+  type AnyApiEventStreamEndpoint,
   type ApiEndpointBody,
   type ApiEndpointError,
   type ApiEndpointOutput,
@@ -43,8 +44,8 @@ import { coerceRouteParams, runRouteRequest, type RouteRuntime } from './route-r
  * against the endpoint's error schema at runtime, because schema filters are not type-level.
  */
 
-/** Either descriptor kind: a JSON endpoint or a content endpoint. */
-export type AnyRoute = AnyApiEndpoint | AnyApiContentEndpoint;
+/** Any descriptor kind: a JSON, content or event-stream endpoint. */
+export type AnyRoute = AnyApiEndpoint | AnyApiContentEndpoint | AnyApiEventStreamEndpoint;
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -112,7 +113,7 @@ const decodePart = (schema: unknown, value: unknown) =>
         Effect.mapError((cause) => new RequestDecodingFailed({ cause })),
       );
 
-/** The request pipeline shared by JSON and content endpoints. Never fails. */
+/** The request pipeline shared by every endpoint kind. Never fails. */
 export function runRoute<Endpoint extends AnyRoute, A, R>(
   endpoint: Endpoint,
   input: RouteInput,
@@ -122,7 +123,10 @@ export function runRoute<Endpoint extends AnyRoute, A, R>(
   const program = Effect.gen(function* () {
     const body = yield* decodePart('body' in endpoint ? endpoint.body : undefined, input.body);
     const params = yield* decodePart(endpoint.params, coerceRouteParams(input.params));
-    const query = yield* decodePart(endpoint.query, coerceRouteParams(input.query));
+    const query = yield* decodePart(
+      'query' in endpoint ? endpoint.query : undefined,
+      coerceRouteParams(input.query),
+    );
     return yield* handle({
       ...context,
       body: body as ApiEndpointBody<Endpoint>,

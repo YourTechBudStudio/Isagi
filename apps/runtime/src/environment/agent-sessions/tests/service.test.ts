@@ -3,7 +3,11 @@ import test from 'node:test';
 
 import { Effect, Layer, Result } from 'effect';
 
-import { HarnessLaunchBlocked, HarnessAdapterRegistry } from '../../../harnesses/index.js';
+import {
+  HarnessLaunchBlocked,
+  HarnessAdapterRegistry,
+  type SdkHarness,
+} from '../../../harnesses/index.js';
 import {
   AllowAllHarnessControlPlaneLayer,
   blockedHarnessControlPlaneLayer,
@@ -458,7 +462,7 @@ function fakeHarnesses(launchInputs: RecordedLaunchInput[]): HarnessAdapterRegis
         };
       }),
     buildHeadlessLaunch: () => Effect.die('buildHeadlessLaunch is not used'),
-    supportsSdk: () => false,
+    supportsSdk: (_harness): _harness is SdkHarness => false,
     buildSdkInstrumentation: () => Effect.die('buildSdkInstrumentation is not used'),
   } satisfies HarnessAdapterRegistry['Service'];
 }

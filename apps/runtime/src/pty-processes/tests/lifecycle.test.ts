@@ -35,6 +35,7 @@ import { UserShell } from '../../platform/process/index.js';
 import { NodePtyBackend } from '../adapters/node-pty.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
+import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService, SHUTDOWN_GRACEFUL_TIMEOUT_MS } from '../service.js';
 import { fakeBackendCatalog } from '../testing.js';
@@ -124,7 +125,9 @@ function ptyServiceLayer(catalog: Layer.Layer<PtyBackendCatalog>) {
   return PtyService.layerNoDeps.pipe(
     Layer.provide([
       catalog,
-      CliAccessNone,
+      LaunchEnvironment.layerNoDeps.pipe(
+        Layer.provide([CliAccessNone, Layer.succeed(UserShell, testUserShell())]),
+      ),
       PtyForegroundState.layer,
       publishOnlyRecordingEventBus('the PTY service does not subscribe').layer,
       Layer.succeed(UserShell, testUserShell()),
@@ -410,7 +413,9 @@ test('a process supervisor records foreground changes and persists the exit it r
           const layer = PtyService.layerNoDeps.pipe(
             Layer.provide([
               fakeCatalog(backend),
-              CliAccessNone,
+              LaunchEnvironment.layerNoDeps.pipe(
+                Layer.provide([CliAccessNone, Layer.succeed(UserShell, testUserShell())]),
+              ),
               PtyForegroundState.layer,
               bus.layer,
               Layer.succeed(UserShell, testUserShell()),

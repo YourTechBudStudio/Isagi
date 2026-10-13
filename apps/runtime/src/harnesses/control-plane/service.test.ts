@@ -139,6 +139,7 @@ test('start does not complete until initial host inventory is ready', async () =
             harnesses: policyState('valid', enabledPolicy()),
             workflows: { additionalDirectories: [] },
             terminal: terminalSettingsDefaults,
+            fluidcast: { status: 'disabled' },
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
         } satisfies RuntimeConfig['Service']),
@@ -330,6 +331,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
       harnesses: policyState('missing', disabledPolicy),
       workflows: { additionalDirectories: [] },
       terminal: terminalSettingsDefaults,
+      fluidcast: { status: 'disabled' },
     }),
     acceptHarnessPolicy: () => {
       committed = true;
@@ -426,6 +428,7 @@ function controlPlaneLayer(
       harnesses: state,
       workflows: { additionalDirectories: [] },
       terminal: terminalSettingsDefaults,
+      fluidcast: { status: 'disabled' },
     }),
     acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
   };

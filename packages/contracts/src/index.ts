@@ -107,11 +107,15 @@ export type {
 export type {
   AnyApiContentEndpoint,
   AnyApiEndpoint,
+  AnyApiEventStreamEndpoint,
   WireSchema,
   ApiContentEndpoint,
   ApiContentEndpointError,
   ApiContentEndpointParams,
   ApiContentEndpointQuery,
+  ApiEventStreamEndpoint,
+  ApiEventStreamEndpointError,
+  ApiEventStreamEndpointParams,
   ApiEndpoint,
   ApiEndpointBody,
   ApiEndpointError,
@@ -289,6 +293,13 @@ export { nonEmptyString, nonNegativeInteger, positiveInteger } from './scalars.j
 // have to enumerate every schema and DTO as the read model grows.
 export * from './workflows/types.js';
 export { workflowContentEndpoints, workflowsEndpoints } from './workflows/api.js';
+
+export {
+  fluidcastContentEndpoints,
+  fluidcastEndpoints,
+  fluidcastEventStreamEndpoints,
+} from './fluidcast/api.js';
+export * from './fluidcast/types.js';
 
 export { pathsEndpoints } from './paths/api.js';
 export {

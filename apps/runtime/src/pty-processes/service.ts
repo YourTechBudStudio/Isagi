@@ -15,13 +15,12 @@ import {
 
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
-import { CliAccess } from '../cli-access/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { runPeriodically } from '../platform/fibers/index.js';
 import { DataDirectory, DatabaseError } from '../platform/persistence/index.js';
-import { launchEnv, UserShell } from '../platform/process/index.js';
 import { PtyBackendCatalog } from './backend.js';
 import { PtyForegroundState } from './foreground-state.js';
+import { LaunchEnvironment } from './launch-environment.js';
 import { PtyRepository } from './repository.js';
 import { requireActiveAttachment, type ActiveAttachment } from './service/attachments.js';
 import { decodeBackendRef } from './service/backend-ref.js';
@@ -121,10 +120,8 @@ const make = Effect.gen(function* () {
   const foreground = yield* PtyForegroundState;
   const directory = yield* DataDirectory;
   const eventBus = yield* InternalEvents;
-  const userShell = yield* UserShell;
-  const cliAccess = yield* CliAccess;
+  const launchEnvironment = yield* LaunchEnvironment;
   const settings = yield* PtyProcessSettings;
-  const userProcessEnvironment = launchEnv(userShell.environment.values);
   const activeAttachments = new Map<number, ActiveAttachment>();
   const pendingAttachments = new Set<number>();
   const pinnedPtyProcessIds = new Set<number>();
@@ -179,8 +176,7 @@ const make = Effect.gen(function* () {
     activeAttachments,
     runtimeNamespace: namespace,
     sessionsPath: directory.paths.sessionsPath,
-    userProcessEnvironment,
-    cliAccess,
+    launchEnvironment,
   };
 
   const terminateWithReason = (
@@ -475,7 +471,7 @@ export class PtyService extends Context.Service<PtyService, PtyServiceShape>()(
   static readonly layerNoDeps = Layer.effect(PtyService, make);
   static readonly layer = PtyService.layerNoDeps.pipe(
     Layer.provide([
-      CliAccess.layer,
+      LaunchEnvironment.layer,
       InternalEvents.layer,
       PtyBackendCatalog.layer,
       PtyForegroundState.layer,

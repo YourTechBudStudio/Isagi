@@ -1,39 +1,42 @@
-// Version guard for the linked Fluidcast packages. They resolve their own `effect` and
-// `@effect/ai-openai` from the Fluidcast checkout (by real path), so the runtime runs two physical
-// copies of each. Two copies of one version interoperate; two different versions are not proven to,
-// and the catalogs can drift apart (Fluidcast uses `^` ranges). This pins equality instead of
-// deduplicating.
+// Guards the single physical copy of the Fluidcast packages' shared peers. Two copies of `effect`
+// do not interoperate: Isagi's `Schema` rejects SDK schemas that carry a check (an `Int` cursor in
+// every Snapshot). The packages therefore install from packed tarballs (`pnpm fluidcast:pack`, then
+// the `overrides` in pnpm-workspace.yaml), so pnpm resolves their peers from Isagi's graph. A link to
+// the checkout, or a stale install, would bring Fluidcast's own copies back.
 import assert from 'node:assert/strict';
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-/** The version of `name` as resolved from `from` (a file path or URL). */
-const versionFrom = (from: string, name: string): string => {
-  const manifest = createRequire(from).resolve(`${name}/package.json`);
-  return (JSON.parse(readFileSync(manifest, 'utf8')) as { readonly version: string }).version;
-};
+/** A module's real location, resolved from `from` (a file path or URL). */
+const realFrom = (from: string, specifier: string): string =>
+  realpathSync(createRequire(from).resolve(specifier));
 
-/** A linked entry's real location in the Fluidcast checkout, where its own dependencies resolve. */
-const linked = (entry: string): string => realpathSync(fileURLToPath(import.meta.resolve(entry)));
-
-const pairs = [
+const shared = [
   { name: 'effect', fluidcast: '@yourtechbudstudio/fluidcast-harness' },
-  { name: '@effect/ai-openai', fluidcast: '@yourtechbudstudio/fluidcast-core/speech/openai' },
+  {
+    name: '@effect/ai-openai/OpenAiClient',
+    fluidcast: '@yourtechbudstudio/fluidcast-core/speech/openai',
+  },
+  // `tool-agent`'s peer: the copy the Claude worker runs, and the runtime bundle carries.
+  {
+    name: '@anthropic-ai/claude-agent-sdk',
+    fluidcast: '@yourtechbudstudio/fluidcast-tool-agent/claude',
+  },
 ] as const;
 
-describe('linked Fluidcast packages', () => {
-  for (const { name, fluidcast } of pairs) {
-    test(`${fluidcast} resolves the same ${name} version as the runtime`, () => {
-      const isagi = versionFrom(import.meta.url, name);
-      const theirs = versionFrom(linked(fluidcast), name);
+describe('installed Fluidcast packages', () => {
+  for (const { name, fluidcast } of shared) {
+    test(`${fluidcast} uses the runtime's own ${name}`, () => {
+      const installed = realpathSync(fileURLToPath(import.meta.resolve(fluidcast)));
+      const theirs = realFrom(installed, name);
+      const ours = realFrom(import.meta.url, name);
       assert.equal(
         theirs,
-        isagi,
-        `${name} drifted: Isagi resolves ${isagi}, but ${fluidcast} resolves ${theirs}. Align the ` +
-          `two catalogs (Isagi's pnpm-workspace.yaml and Fluidcast's), then reinstall Fluidcast ` +
-          `(pnpm -C .fluidcast install) and Isagi (pnpm install).`,
+        ours,
+        `${fluidcast} resolves a second copy of ${name} (${theirs}). Install the Fluidcast packages ` +
+          `from their tarballs: pnpm fluidcast:pack, then pnpm install.`,
       );
     });
   }
