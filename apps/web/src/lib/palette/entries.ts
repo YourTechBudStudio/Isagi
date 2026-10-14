@@ -284,7 +284,8 @@ function isPaneTargetedSurfaceCommand(commandId: string) {
   return (
     commandId === 'delete-active-pane' ||
     commandId === 'split-pane-right' ||
-    commandId === 'split-pane-down'
+    commandId === 'split-pane-down' ||
+    commandId === 'toggle-pane-interaction'
   );
 }
 

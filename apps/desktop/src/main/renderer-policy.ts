@@ -91,11 +91,20 @@ export function rendererContentSecurityPolicy(input: {
     ...(development ? [webSocketOrigin(development)] : []),
     ...input.runtimeOrigins,
   ];
+  // An embedded Fluidcast player plays speech from blobs it buffered, or streams it progressively
+  // from the runtime's speech URL: the loopback runtime, or a configured one (its HTTP form only).
+  const mediaSources = [
+    "'self'",
+    'blob:',
+    loopbackFrameSource,
+    ...input.runtimeOrigins.filter((origin) => /^https?:/u.test(origin)),
+  ];
 
   return [
     ['default-src', "'self'"],
     ['frame-src', loopbackFrameSource],
     ['img-src', "'self' data: blob:"],
+    ['media-src', mediaSources.join(' ')],
     ['font-src', "'self'"],
     ['style-src', "'self' 'unsafe-inline'"],
     ['script-src', scriptSources.join(' ')],

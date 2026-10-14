@@ -65,6 +65,14 @@ export default defineConfig({
       use: { baseURL: `http://127.0.0.1:${fixturePort}/test-support/editor/` },
     },
     {
+      name: 'fluidcast-pane',
+      testMatch: /fluidcast-pane\.spec\.ts/,
+      use: {
+        baseURL: `http://127.0.0.1:${fixturePort}/test-support/fluidcast/`,
+        viewport: { width: 1440, height: 900 },
+      },
+    },
+    {
       name: 'rail-reorder',
       testMatch: /rail-reorder\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },

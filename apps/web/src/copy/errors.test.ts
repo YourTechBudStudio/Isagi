@@ -240,3 +240,35 @@ test('the reworded inconclusive-probe copy no longer asserts the path is a repos
     "Git couldn't tell Isagi what that folder is.",
   );
 });
+
+test('every interaction-mode refusal has its own copy, refined by reason where it matters', () => {
+  const copyFor = (code: string, status: number, data?: unknown) =>
+    runtimeErrorCopy.fromApiError({
+      code,
+      status,
+      message: 'diagnostic',
+      requestId: 'r',
+      ...(data === undefined ? {} : { data }),
+    } as ApiError);
+  const generic = copyFor('not_a_real_code', 500);
+
+  const lines = [
+    copyFor('agent_session_not_found', 404),
+    copyFor('agent_session_deleting', 409),
+    copyFor('agent_session_metadata_unusable', 409, { reason: 'harness_metadata_missing' }),
+    copyFor('fluidcast_unavailable', 409, { reason: 'disabled' }),
+    copyFor('fluidcast_unavailable', 409, { reason: 'invalid_config' }),
+    copyFor('fluidcast_unavailable', 409, { reason: 'harness_unsupported' }),
+    copyFor('fluidcast_session_unreadable', 422, { reason: 'SessionUnreadable' }),
+    copyFor('fluidcast_start_failed', 500, { reason: 'executable_not_found' }),
+    copyFor('fluidcast_start_failed', 500, { reason: 'session_build_failed' }),
+  ];
+
+  for (const line of lines) assert.notEqual(line, generic);
+  assert.equal(new Set(lines).size, lines.length);
+  // A launch block reuses the existing session-launch copy.
+  assert.equal(
+    copyFor('session_launch_rejected', 400, { reason: 'harness_disabled' }),
+    'This harness is disabled in Isagi configuration.',
+  );
+});

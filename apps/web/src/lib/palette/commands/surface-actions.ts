@@ -1,8 +1,9 @@
-import { PanelBottom, PanelRight, Pencil, Trash2 } from 'lucide-react';
+import { Mic, PanelBottom, PanelRight, Pencil, Trash2 } from 'lucide-react';
 
 import type { SplitPaneDirection, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
-import { surfaceActionsCopy } from '../../../copy/index.js';
+import { fluidcastCopy, surfaceActionsCopy } from '../../../copy/index.js';
+import { setPaneInteraction } from '../../fluidcast/commits.js';
 import { parseAgentHarness } from '../../harness-labels.js';
 import {
   deleteSurfaceFromPalette,
@@ -145,12 +146,69 @@ export const splitPaneDownCommand = splitPaneCommand({
   icon: PanelBottom,
 });
 
+/**
+ * Switches the active agent pane between its terminal and the Fluidcast player. Offered only on a
+ * surface that holds an agent pane. It never refuses silently: a non-agent pane is explained here,
+ * and a switch Fluidcast cannot make (turned off, invalid config, unsupported harness, launch
+ * blocked) reaches the runtime, whose reason becomes the palette's error.
+ */
+export const togglePaneInteractionCommand: PaletteCommand = {
+  id: 'toggle-pane-interaction',
+  label: fluidcastCopy.paletteLabel,
+  icon: Mic,
+  group: 'worktree-actions',
+  available: (ctx) => ctx.activeSurface?.paneKinds.includes('agent_session') === true,
+  preflight: async (ctx, values) => {
+    const target = activeSurfaceTargetFromValues(values, ctx);
+    if (!target) {
+      return { mode: 'unavailable' };
+    }
+    const detail = await fetchSurfaceDetail(ctx, target.surfaceId);
+    const explicitPaneId = Number(values.paneId);
+    const pane = Number.isInteger(explicitPaneId)
+      ? (detail.panes.find((candidate) => candidate.id === explicitPaneId) ?? null)
+      : resolveCommandPane(detail, ctx.activePaneId);
+    if (pane?.session?.kind !== 'agent_session') {
+      throw new UserVisibleError(fluidcastCopy.notAnAgentPane);
+    }
+    const { agentSession } = pane.session;
+    return {
+      mode: 'run',
+      values: {
+        surfaceId: String(target.surfaceId),
+        worktreeId: String(target.worktreeId),
+        paneId: String(pane.id),
+        agentSessionId: String(agentSession.id),
+        mode: agentSession.interaction.mode === 'fluidcast' ? 'terminal' : 'fluidcast',
+      },
+    };
+  },
+  run: async (values, ctx) => {
+    const target = activeSurfaceTargetFromValues(values, ctx);
+    const paneId = Number(values.paneId);
+    const agentSessionId = Number(values.agentSessionId);
+    const mode = values.mode;
+    if (
+      !target ||
+      !Number.isInteger(paneId) ||
+      !Number.isInteger(agentSessionId) ||
+      (mode !== 'terminal' && mode !== 'fluidcast')
+    ) {
+      return;
+    }
+    await ctx.app(
+      setPaneInteraction({ surfaceId: target.surfaceId, paneId, agentSessionId, mode }),
+    );
+  },
+};
+
 export const surfaceActionCommands: readonly PaletteCommand[] = [
   renameActiveSurfaceCommand,
   splitPaneRightCommand,
   splitPaneDownCommand,
   deleteActiveSurfaceCommand,
   deleteActivePaneCommand,
+  togglePaneInteractionCommand,
 ];
 
 function splitPaneCommand(input: {

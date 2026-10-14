@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
+import { isUnclaimedEscape } from '../../lib/escape.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import { isPaletteOpen } from '../../lib/palette/store.js';
 import { useRegistry } from '../../lib/state/registry.js';
@@ -81,7 +82,8 @@ export function WorkbenchDrawer() {
       if (isPaletteOpen(registry)) {
         return;
       }
-      if (event.key === 'Escape') {
+      // An Escape a pane already used (a Fluidcast player interrupting) does not close the drawer.
+      if (isUnclaimedEscape(event)) {
         closeDrawerAndRestoreFocus();
       }
     };

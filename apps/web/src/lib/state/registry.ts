@@ -7,6 +7,10 @@
  * functions take the registry as their first parameter. Never use atom-react's `RegistryProvider`
  * (it creates and later disposes a second registry) and never rely on `RegistryContext`'s default
  * value (a module-level registry).
+ *
+ * The one-registry rule covers Isagi's app state. The embedded Fluidcast player keeps private
+ * per-instance registries of its own; those are SDK internals, and Isagi code still never uses
+ * `RegistryProvider`.
  */
 import { scheduleTask } from '@effect/atom-react';
 import type { Effect } from 'effect';

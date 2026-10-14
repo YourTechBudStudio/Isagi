@@ -1,7 +1,12 @@
 import { Context, Layer } from 'effect';
 import { FetchHttpClient, type HttpClient } from 'effect/http';
 
-import { makeRequesters, type ContentRequester, type EndpointRequester } from './requester.js';
+import {
+  makeRequesters,
+  type ContentRequester,
+  type EndpointRequester,
+  type EventStreamRequester,
+} from './requester.js';
 
 /**
  * The platform `fetch` as an `HttpClient`. Provide it once at a process boundary.
@@ -28,6 +33,7 @@ export class RuntimeClient extends Context.Service<
     readonly runtimeUrl: string;
     readonly request: EndpointRequester;
     readonly requestContent: ContentRequester;
+    readonly requestEventStream: EventStreamRequester;
   }
 >()('isagi/runtime-client/RuntimeClient') {
   /** A client value for a URL known only at run time (desktop health checks, a re-resolved web URL). */

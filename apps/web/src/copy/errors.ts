@@ -185,6 +185,34 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       pane_not_found: "That pane isn't here anymore.",
     },
   },
+  agent_session_not_found: {
+    summary: "That agent isn't in a pane anymore.",
+  },
+  agent_session_deleting: {
+    summary: "That agent's worktree is being deleted, so it can't switch now.",
+  },
+  agent_session_metadata_unusable: {
+    summary:
+      "Isagi can't tell which conversation this agent was in, so it left the terminal alone.",
+  },
+  fluidcast_unavailable: {
+    summary: "Fluidcast isn't available for this agent.",
+    byReason: {
+      disabled: 'Fluidcast is turned off in Isagi configuration.',
+      invalid_config: "Isagi's fluidcast configuration is invalid. Fix it and restart the runtime.",
+      harness_unsupported: "This agent's harness doesn't support Fluidcast.",
+    },
+  },
+  fluidcast_session_unreadable: {
+    summary: "Fluidcast couldn't read this agent's conversation. The terminal was stopped.",
+  },
+  fluidcast_start_failed: {
+    summary: "Fluidcast didn't start. The terminal was stopped.",
+    byReason: {
+      executable_not_found:
+        "Couldn't find the agent's executable for Fluidcast. The terminal was stopped.",
+    },
+  },
   session_launch_rejected: {
     summary: "Couldn't start a session there.",
     byReason: {
