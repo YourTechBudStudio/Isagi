@@ -87,6 +87,8 @@ export interface FakeSocket {
   readonly closeCount: number;
   readonly open: () => void;
   readonly emitMessage: (payload: unknown) => void;
+  /** Close the socket from the far end, as a runtime that went away would. */
+  readonly close: () => void;
 }
 
 export interface FakeResizeObserver {

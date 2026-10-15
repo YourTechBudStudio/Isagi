@@ -309,6 +309,57 @@ test('agent session startup restore replaces stale node-pty running process rows
   assert.equal(state.session.activePtyProcessId, 99);
 });
 
+test('an automatic re-attach joins only the live incarnation it names and never launches', async () => {
+  const ensure = (
+    session: Parameters<typeof mutableAgentSession>[0],
+    expectedIncarnation: 'pty:20' | 'pty:21',
+  ) => {
+    const state = mutableAgentSession(session);
+    const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* AgentSessionService;
+        return yield* service
+          .ensureActivePtyProcess(10, { expectedIncarnation })
+          .pipe(Effect.result);
+      }).pipe(Effect.provide(testLayer({ state, launchInputs: [], ptyLaunches }))),
+    ).then((result) => ({ result, ptyLaunches }));
+  };
+
+  const joined = await ensure(
+    {
+      activePtyProcessId: 20,
+      activePtyProcess: ptyProcess({ id: 20, status: 'running', statusReason: null }),
+    },
+    'pty:20',
+  );
+  assert.ok(Result.isSuccess(joined.result));
+  assert.equal(joined.result.success, 20);
+
+  // The named process exited, or another one is live: refused, where a plain attach would launch.
+  for (const refused of [
+    await ensure(
+      {
+        activePtyProcessId: 20,
+        activePtyProcess: ptyProcess({ id: 20, status: 'exited', statusReason: null }),
+      },
+      'pty:20',
+    ),
+    await ensure(
+      {
+        activePtyProcessId: 20,
+        activePtyProcess: ptyProcess({ id: 20, status: 'running', statusReason: null }),
+      },
+      'pty:21',
+    ),
+  ]) {
+    assert.ok(Result.isFailure(refused.result));
+    assert.ok(refused.result.failure instanceof AgentSessionError);
+    assert.equal(refused.result.failure.code, 'process_incarnation_stale');
+    assert.deepEqual(refused.ptyLaunches, []);
+  }
+});
+
 test('stopUnlessPlaced leaves a placed session running and stops an unplaced one', async () => {
   const run = (input: {
     readonly placement: { readonly surfaceId: number; readonly paneId: number } | null;

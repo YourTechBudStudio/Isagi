@@ -25,6 +25,9 @@ export const terminalDiagnosticKinds = [
   'webgl_context_loss',
   'socket_opened',
   'socket_closed',
+  // Automatic rejoin after a presentation outlived its process
+  'rejoin_refused',
+  'rejoin_failed',
   // Workspace coordinator
   'inventory_rejected',
   // Substituted for anything outside this vocabulary.
@@ -50,6 +53,9 @@ export const terminalDiagnosticReasons = [
   // Coordinator reconciliation
   'delete_event_scope_mismatch',
   'conflicting_duplicate_identity',
+  // Rejoin refusals
+  'process_incarnation_stale',
+  'session_already_attached',
 ] as const;
 
 /** Every named gauge. Anything else is dropped rather than retained under its own name. */

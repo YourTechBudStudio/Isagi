@@ -35,12 +35,19 @@ export type StopUnlessPlacedOutcome =
 
 export interface AgentSessionEnsureActiveOptions extends HarnessLaunchOptions {
   readonly replaceEphemeralProcess?: boolean | undefined;
+  /**
+   * Attach to this live incarnation only: never launch or replace a process, and refuse with
+   * `process_incarnation_stale` when the session's live process is another one or none.
+   */
+  readonly expectedIncarnation?: Incarnation | undefined;
 }
 
 export type AgentSessionErrorCode =
   | 'session_not_found'
   | 'active_process_missing'
   | 'active_process_not_running'
+  /** The incarnation an attach named is no longer the session's live process. */
+  | 'process_incarnation_stale'
   | 'harness_metadata_missing'
   | 'harness_metadata_invalid'
   /** No pane holds the session any more, so it may not get a new controller. */
@@ -318,6 +325,8 @@ const make = Effect.gen(function* () {
           { kind: 'agent_session', sessionId: agentSessionId },
           Effect.gen(function* () {
             const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+            if (options?.expectedIncarnation !== undefined)
+              return yield* expectLiveIncarnation(session, options.expectedIncarnation);
             yield* validateHarnessMetadata(session);
             const process = session.activePtyProcess;
             const replaceEphemeralProcess =
@@ -448,6 +457,19 @@ export class AgentSessionService extends Context.Service<
 }
 
 const terminalResult: InteractionModeResult = { mode: 'terminal', fluidcastSessionId: null };
+
+function expectLiveIncarnation(session: AgentSessionRow, expected: Incarnation) {
+  return session.activePtyProcessId !== null &&
+    isLive(session.activePtyProcess) &&
+    ptyIncarnation(session.activePtyProcessId) === expected
+    ? Effect.succeed(session.activePtyProcessId)
+    : Effect.fail(
+        new AgentSessionError(
+          'process_incarnation_stale',
+          `Agent session ${session.id} is no longer running ${expected}.`,
+        ),
+      );
+}
 
 function isLive(process: AgentSessionRow['activePtyProcess']) {
   return process?.status === 'starting' || process?.status === 'running';

@@ -37,6 +37,7 @@ function agentPane(id: number, interaction: AgentSessionInteraction): SurfacePan
         recoveryAction: 'connect_existing',
         interaction,
         status: 'running',
+        processIncarnation: interaction.mode === 'terminal' ? `pty:${id}` : null,
         diagnosticCode: null,
         diagnosticDetail: null,
         createdAt: '2026-06-17T00:00:00.000Z',

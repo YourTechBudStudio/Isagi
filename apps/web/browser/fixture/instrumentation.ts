@@ -13,6 +13,9 @@ import {
   type AnsiRecipeStages,
 } from './ansi.js';
 
+/** The fixture runtime binds every stream to one process incarnation that never changes. */
+export const FIXTURE_PROCESS_INCARNATION = 'pty:1';
+
 export interface FixtureCounters {
   readonly claimAttempts: number;
   readonly terminalsCreated: number;
@@ -200,7 +203,11 @@ export function createInstrumentedEnvironment(input: {
     }
     socket.message({ type: 'replay_end' });
     publish({ replayEndAt: performance.now() });
-    socket.message({ type: 'session', status: 'running' });
+    socket.message({
+      type: 'session',
+      status: 'running',
+      processIncarnation: FIXTURE_PROCESS_INCARNATION,
+    });
   };
 
   return {
@@ -225,7 +232,11 @@ export function createInstrumentedEnvironment(input: {
     endReplay() {
       currentSocket().message({ type: 'replay_end' });
       publish({ replayEndAt: performance.now() });
-      currentSocket().message({ type: 'session', status: 'running' });
+      currentSocket().message({
+        type: 'session',
+        status: 'running',
+        processIncarnation: FIXTURE_PROCESS_INCARNATION,
+      });
     },
     sendLive(data: string) {
       currentSocket().message({ type: 'output', data });

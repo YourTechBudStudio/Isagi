@@ -45,7 +45,11 @@ import { AgentSessionInteraction, type AgentControl } from '../agent-sessions/in
 import { AgentSessionService } from '../agent-sessions/service.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { restorePaneBoundSessions } from '../sessions/restore.js';
-import { deriveAgentSessionState, deriveTerminalSessionState } from '../sessions/status.js';
+import {
+  deriveAgentSessionState,
+  deriveTerminalSessionState,
+  sessionProcessIncarnation,
+} from '../sessions/status.js';
 import { activePtyProcessIdsForSessions } from '../sessions/teardown.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
 import { TerminalSessionService } from '../terminal-sessions/service.js';
@@ -101,6 +105,7 @@ const make = Effect.gen(function* () {
     terminals,
     lifecycle,
     eventBus,
+    control: interaction.control,
   };
 
   const deleteSurfacePane = Effect.fn('SurfaceService.deleteSurfacePane')(function* (input: {
@@ -585,6 +590,7 @@ interface PaneSessionDependencies {
   readonly terminals: TerminalSessionService['Service'];
   readonly lifecycle: SessionLifecycle['Service'];
   readonly eventBus: InternalEvents['Service'];
+  readonly control: (agentSessionId: number) => AgentControl;
 }
 
 const createPaneSession = Effect.fnUntraced(function* (
@@ -618,6 +624,7 @@ const claimPaneSession = Effect.fnUntraced(function* (
     surfaceId: target.surface.id,
     paneId: target.pane.id,
     session,
+    expectedIncarnation: claim.expectedProcessIncarnation,
   });
   yield* publishReplacedPaneSessionChange(deps.eventBus, target.pane, session);
   return output;
@@ -667,19 +674,34 @@ const assignPaneSession = Effect.fnUntraced(function* (
     readonly surfaceId: number;
     readonly paneId: number;
     readonly session: PlacedSession;
+    /**
+     * Set by an automatic re-attach: the live incarnation the pane expects to rejoin. The claim
+     * then only rejoins it in place, and binds the attach token to it so its attach cannot launch
+     * a process.
+     */
+    readonly expectedIncarnation?: string | undefined;
   },
 ) {
   const { repository, lifecycle, eventBus } = deps;
   const key = { kind: input.session.kind, sessionId: input.session.sessionId };
   // Under the session's lock, shared with process launch and
   // `stopUnlessPlaced`: whoever decides a session is unplaced decides it
-  // before or after this binding, never across it.
-  const claimed = yield* lifecycle.withRestoreLock(
+  // before or after this binding, never across it. An automatic re-attach's
+  // preconditions are checked under it too, so a process that exits or a
+  // session that moves while the claim waits is seen, not overwritten.
+  const { claimed, rejoined } = yield* lifecycle.withRestoreLock(
     key,
-    repository.claimPaneSession({
-      paneId: input.paneId,
-      sessionKind: input.session.kind,
-      sessionId: input.session.sessionId,
+    Effect.gen(function* () {
+      const rejoin =
+        input.expectedIncarnation === undefined
+          ? null
+          : yield* expectAutomaticRejoin(deps, input, input.expectedIncarnation);
+      const outcome = yield* repository.claimPaneSession({
+        paneId: input.paneId,
+        sessionKind: input.session.kind,
+        sessionId: input.session.sessionId,
+      });
+      return { claimed: outcome, rejoined: rejoin };
     }),
   );
   if (claimed !== 'claimed')
@@ -694,13 +716,18 @@ const assignPaneSession = Effect.fnUntraced(function* (
       paneId: input.paneId,
       sessionId: input.session.sessionId,
     });
-  yield* lifecycle.supersedeAttachment(key);
-  const attachToken = yield* lifecycle.issueAttachToken(key);
-  yield* repository.setEnvironmentFocus({
-    worktreeId: input.worktreeId,
-    activeSurfaceId: input.surfaceId,
-    activePaneId: input.paneId,
+  // A rejoin superseded only a lingering attachment under the lock; it never takes the holder's.
+  if (rejoined === null) yield* lifecycle.supersedeAttachment(key);
+  const attachToken = yield* lifecycle.issueAttachToken(key, {
+    expectedIncarnation: rejoined ?? undefined,
   });
+  // Nobody chose this pane when a rejoin happens on its own, so the saved focus stays the user's.
+  if (rejoined === null)
+    yield* repository.setEnvironmentFocus({
+      worktreeId: input.worktreeId,
+      activeSurfaceId: input.surfaceId,
+      activePaneId: input.paneId,
+    });
   yield* publishSessionChanged(eventBus, input.session.kind, input.session.sessionId);
 
   return {
@@ -796,6 +823,70 @@ const ensureTerminalSessionInWorktree = Effect.fnUntraced(
     Effect.catchTag(effect, 'TerminalSessionError', (error) =>
       Effect.fail(sessionNotFound(error.message, worktreeId, terminalSessionId)),
     ),
+);
+
+/**
+ * An automatic re-attach's preconditions, checked under the session's lock: the session is still
+ * placed in this pane (a rejoin never relocates it), it still runs `expected` live, and no other
+ * attachment streams that process (a rejoin never takes it back). A lingering attachment to an
+ * older process is superseded. Returns the live incarnation the attach token is bound to.
+ */
+const expectAutomaticRejoin = Effect.fnUntraced(
+  function* (
+    deps: PaneSessionDependencies,
+    input: {
+      readonly worktreeId: number;
+      readonly paneId: number;
+      readonly session: PlacedSession;
+    },
+    expected: string,
+  ) {
+    const { session } = input;
+    const stale = (message: string) =>
+      new SurfaceError({
+        code: 'process_incarnation_stale',
+        message,
+        worktreeId: input.worktreeId,
+        paneId: input.paneId,
+        sessionId: session.sessionId,
+      });
+    const pane = yield* deps.repository.findPane(input.paneId);
+    if (pane?.sessionKind !== session.kind || pane.sessionId !== session.sessionId)
+      return yield* stale(
+        `Session ${session.sessionId} is no longer placed in pane ${input.paneId}.`,
+      );
+    const live =
+      session.kind === 'agent_session'
+        ? sessionProcessIncarnation(
+            yield* deps.agents.get(session.sessionId),
+            deps.control(session.sessionId),
+          )
+        : sessionProcessIncarnation(yield* deps.terminals.get(session.sessionId));
+    if (live === null || live !== expected)
+      return yield* stale(`Session ${session.sessionId} is no longer running ${expected}.`);
+    yield* deps.lifecycle.displaceObsoleteAttachment(
+      { kind: session.kind, sessionId: session.sessionId },
+      live,
+    );
+    return live;
+  },
+  (effect, _deps, input) =>
+    Effect.catchTags(effect, {
+      AgentSessionError: (error) =>
+        Effect.fail(sessionNotFound(error.message, input.worktreeId, input.session.sessionId)),
+      TerminalSessionError: (error) =>
+        Effect.fail(sessionNotFound(error.message, input.worktreeId, input.session.sessionId)),
+      SessionLifecycleError: (error) =>
+        Effect.fail(
+          new SurfaceError({
+            code: 'session_already_attached',
+            message: error.message,
+            worktreeId: input.worktreeId,
+            paneId: input.paneId,
+            sessionId: input.session.sessionId,
+          }),
+        ),
+    }),
 );
 
 function sessionNotFound(message: string, worktreeId: number, sessionId: number) {
@@ -1166,6 +1257,7 @@ function sessionForPane(
         status: state.status,
         statusReason: state.statusReason,
         recoveryAction: state.recoveryAction,
+        processIncarnation: sessionProcessIncarnation(agent, control),
         interaction:
           control.mode === 'fluidcast'
             ? { mode: 'fluidcast', fluidcastSessionId: control.fluidcastSessionId }
@@ -1196,6 +1288,7 @@ function sessionForPane(
         shellArgs: [...terminal.shellArgs],
         status: state.status,
         statusReason: state.statusReason,
+        processIncarnation: sessionProcessIncarnation(terminal),
         diagnosticCode: state.diagnosticCode,
         diagnosticDetail: state.diagnosticDetail,
         createdAt: terminal.createdAt,

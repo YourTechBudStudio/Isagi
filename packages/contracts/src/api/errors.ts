@@ -87,6 +87,10 @@ export const surfaceRejectionReasonSchema = Schema.Literals([
   'worktree_not_found',
   'session_not_found',
   'session_worktree_mismatch',
+  // An automatic re-attach claimed a process incarnation the session no longer runs.
+  'process_incarnation_stale',
+  // An automatic re-attach found another attachment already streaming that process.
+  'session_already_attached',
   'invalid_surface_title',
   'layout_node_stale',
   // Starting a surface's first pane when it already has panes.

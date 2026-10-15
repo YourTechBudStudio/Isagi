@@ -134,13 +134,28 @@ export function usePaneSession({
   const intent = derivePaneAttachmentIntent(session, running || userAttach);
   const initialInteractive = session?.status === 'running';
 
-  const resolveUrl = useCallback(() => {
-    if (session === null) {
-      return Effect.fail(new Error('No pane session is bound.'));
-    }
-    // The terminal subsystem runs this effect itself, so it gets the app's services bound in.
-    return provideApp(registry, resolveSessionPtyWebSocketUrl(worktreeId, paneId, session));
-  }, [paneId, registry, session, worktreeId]);
+  const resolveUrl = useCallback(
+    (options?: { readonly expectedProcessIncarnation?: string | undefined }) => {
+      if (session === null) {
+        return Effect.fail(new Error('No pane session is bound.'));
+      }
+      // The terminal subsystem runs this effect itself, so it gets the app's services bound in.
+      return provideApp(
+        registry,
+        resolveSessionPtyWebSocketUrl(
+          worktreeId,
+          paneId,
+          session,
+          options?.expectedProcessIncarnation,
+        ),
+      );
+    },
+    [paneId, registry, session, worktreeId],
+  );
+  const refreshProjection = useCallback(
+    () => invalidateKeys(registry, [keys.surface(surfaceId)]),
+    [registry, surfaceId],
+  );
 
   const handleCustomKey = useCallback(
     (event: KeyboardEvent, sendInput: (data: string) => void) =>
@@ -152,9 +167,11 @@ export function usePaneSession({
     placement: { worktreeId, surfaceId, paneId },
     connect: intent.connect,
     mounted: intent.mounted,
+    processIncarnation: session?.processIncarnation ?? null,
     attachmentRequest: attachEpoch,
     initiallyInteractive: initialInteractive,
     resolveUrl,
+    onStaleProjection: refreshProjection,
     onCustomKey: handleCustomKey,
   });
   const connection: PtyStreamConnectionState = {
@@ -298,6 +315,7 @@ export function usePaneSession({
       view.kind === 'unavailable');
   const errored =
     buildOrRestoreFailed ||
+    (sealed && attachment.rejoinFailed) ||
     view.kind === 'unsupported' ||
     view.kind === 'blocked' ||
     (view.kind === 'attachable' && view.resumeFailed);
@@ -312,7 +330,9 @@ export function usePaneSession({
         : paneStatusLabel(view, session, connection.phase, exit);
   const notice =
     sealed && !restoreFailure
-      ? ptyCopy.sealed[attachment.snapshot.sealReason ?? 'disconnected']
+      ? attachment.rejoinFailed
+        ? ptyCopy.sealed.rejoinFailed
+        : ptyCopy.sealed[attachment.snapshot.sealReason ?? 'disconnected']
       : paneNotice(view, session, connection, rendererWarning);
 
   return {
@@ -339,9 +359,13 @@ function resolveSessionPtyWebSocketUrl(
   worktreeId: number,
   paneId: number,
   session: PtyPaneSession,
+  expectedProcessIncarnation: string | undefined,
 ): Effect.Effect<string, Error, RuntimeApi> {
   return Effect.gen(function* () {
-    const claim = yield* claimPaneSession(worktreeId, claimInputForSession(paneId, session));
+    const claim = yield* claimPaneSession(
+      worktreeId,
+      claimInputForSession(paneId, session, expectedProcessIncarnation),
+    );
     const urlEffect =
       session.kind === 'agent_session'
         ? resolveAgentSessionPtyWebSocketUrl(session.id, claim.attachToken)

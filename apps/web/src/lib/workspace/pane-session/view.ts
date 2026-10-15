@@ -224,10 +224,12 @@ function blockedView(reason: HarnessLaunchBlockReason): PaneView {
 export function claimInputForSession(
   paneId: number,
   session: PtyPaneSession,
+  expectedProcessIncarnation?: string,
 ): PaneSessionClaimInput {
+  const expected = expectedProcessIncarnation === undefined ? {} : { expectedProcessIncarnation };
   return session.kind === 'agent_session'
-    ? { action: 'claim_agent_session', paneId, agentSessionId: session.id }
-    : { action: 'claim_terminal_session', paneId, terminalSessionId: session.id };
+    ? { action: 'claim_agent_session', paneId, agentSessionId: session.id, ...expected }
+    : { action: 'claim_terminal_session', paneId, terminalSessionId: session.id, ...expected };
 }
 
 export function startFreshInputForSession(

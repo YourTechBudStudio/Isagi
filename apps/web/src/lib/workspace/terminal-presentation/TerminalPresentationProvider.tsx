@@ -115,6 +115,7 @@ export function TerminalPresentationProvider({
       workspace: ownedWorkspace,
       facts: registry.get(terminalFactsAtom),
       fetchInventory: (signal) => runApp(registry, fetchDurableSessions(), { signal }),
+      refreshSurfaces: (surfaceIds) => invalidateKeys(registry, surfaceIds.map(keys.surface)),
     });
     start = coordinator.start;
     lifecycle.addFinalizer(coordinator.dispose);

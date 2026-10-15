@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
+import type { Incarnation } from '../../harnesses/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
 
 const attachTokenTtlMs = 5 * 60 * 1000;
@@ -19,6 +20,11 @@ export interface AttachTokenRecord {
   readonly key: SessionLifecycleKey;
   readonly issuedAt: number;
   readonly expiresAt: number;
+  /**
+   * The live incarnation an automatic re-attach claimed. The attach it admits may join only that
+   * process, never launch one; `null` admits the ordinary attach, which may.
+   */
+  readonly expectedIncarnation: Incarnation | null;
 }
 
 export class SessionLifecycleError extends Data.TaggedError('SessionLifecycleError')<{
@@ -26,7 +32,11 @@ export class SessionLifecycleError extends Data.TaggedError('SessionLifecycleErr
     | 'attach_token_missing'
     | 'attach_token_invalid'
     | 'attach_token_expired'
-    | 'attach_token_session_mismatch';
+    | 'attach_token_session_mismatch'
+    /** An automatic re-attach found another attachment already streaming the process it named. */
+    | 'session_already_attached'
+    /** An automatic re-attach's process stopped being the session's live one before it attached. */
+    | 'process_incarnation_stale';
   readonly message: string;
 }> {}
 
@@ -40,13 +50,26 @@ const make = Effect.gen(function* () {
   const tokensBySession = new Map<string, Set<string>>();
   const activeAttachments = new Map<
     string,
-    { readonly id: symbol; readonly handle: ActiveSessionAttachmentHandle }
+    {
+      readonly id: symbol;
+      readonly handle: ActiveSessionAttachmentHandle;
+      readonly incarnation: Incarnation | null;
+    }
   >();
+
+  const supersede = Effect.fnUntraced(function* (key: SessionLifecycleKey) {
+    revokeTokensForKey(tokens, tokensBySession, key);
+    const keyId = sessionKeyId(key);
+    const active = activeAttachments.get(keyId);
+    if (!active) return;
+    activeAttachments.delete(keyId);
+    yield* active.handle.moved;
+  });
 
   const service = SessionLifecycle.of({
     withRestoreLock: (key, effect) =>
       locks.withLock({ kind: key.kind, id: key.sessionId }, () => effect),
-    issueAttachToken: (key) =>
+    issueAttachToken: (key, options) =>
       Effect.sync(() => {
         const now = Date.now();
         const keyId = sessionKeyId(key);
@@ -68,6 +91,7 @@ const make = Effect.gen(function* () {
           key,
           issuedAt: now,
           expiresAt: now + attachTokenTtlMs,
+          expectedIncarnation: options?.expectedIncarnation ?? null,
         } satisfies AttachTokenRecord;
         tokens.set(record.token, record);
         sessionTokens.add(record.token);
@@ -111,20 +135,37 @@ const make = Effect.gen(function* () {
       Effect.sync(() => {
         const keyId = sessionKeyId(input.key);
         const id = Symbol(`session-attachment-${keyId}`);
-        activeAttachments.set(keyId, { id, handle: input.handle });
+        activeAttachments.set(keyId, {
+          id,
+          handle: input.handle,
+          incarnation: input.incarnation,
+        });
         return () => {
           if (activeAttachments.get(keyId)?.id === id) activeAttachments.delete(keyId);
         };
       }),
     hasActiveAttachment: (key) => Effect.sync(() => activeAttachments.has(sessionKeyId(key))),
     supersedeAttachment: Effect.fn('SessionLifecycle.supersedeAttachment')(function* (key) {
-      revokeTokensForKey(tokens, tokensBySession, key);
-      const keyId = sessionKeyId(key);
-      const active = activeAttachments.get(keyId);
-      if (!active) return;
-      activeAttachments.delete(keyId);
-      yield* active.handle.moved;
+      yield* supersede(key);
     }),
+    displaceObsoleteAttachment: Effect.fn('SessionLifecycle.displaceObsoleteAttachment')(
+      function* (key, incarnation) {
+        // Checked and displaced with no suspension between, so an attachment that registers
+        // meanwhile is either seen here or registers after, displacing this one as usual.
+        const keyId = sessionKeyId(key);
+        const active = activeAttachments.get(keyId);
+        if (active?.incarnation === incarnation)
+          return yield* new SessionLifecycleError({
+            code: 'session_already_attached',
+            message: `Another attachment already streams ${incarnation}.`,
+          });
+        // Unlike a takeover, outstanding attach tokens are left alone: one may be an explicit
+        // Reconnect whose socket has not arrived yet, and it must still win when it does.
+        if (!active) return;
+        activeAttachments.delete(keyId);
+        yield* active.handle.moved;
+      },
+    ),
   });
 
   return yield* Effect.acquireRelease(Effect.succeed(service), () =>
@@ -143,7 +184,10 @@ export class SessionLifecycle extends Context.Service<
       key: SessionLifecycleKey,
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E, R>;
-    readonly issueAttachToken: (key: SessionLifecycleKey) => Effect.Effect<AttachTokenRecord>;
+    readonly issueAttachToken: (
+      key: SessionLifecycleKey,
+      options?: { readonly expectedIncarnation?: Incarnation | undefined },
+    ) => Effect.Effect<AttachTokenRecord>;
     readonly consumeAttachToken: (input: {
       readonly key: SessionLifecycleKey;
       readonly token: string | null;
@@ -152,9 +196,21 @@ export class SessionLifecycle extends Context.Service<
     readonly registerActiveAttachment: (input: {
       readonly key: SessionLifecycleKey;
       readonly handle: ActiveSessionAttachmentHandle;
+      /** The process this attachment streams, so an automatic re-attach can leave its holder be. */
+      readonly incarnation: Incarnation | null;
     }) => Effect.Effect<() => void>;
     readonly hasActiveAttachment: (key: SessionLifecycleKey) => Effect.Effect<boolean>;
     readonly supersedeAttachment: (key: SessionLifecycleKey) => Effect.Effect<void>;
+    /**
+     * An automatic rejoin's narrower `supersedeAttachment`. It displaces only an attached socket
+     * to an older process, and refuses with `session_already_attached` rather than take
+     * `incarnation` from the attachment already streaming it (ADR 0006: no automatic take-back).
+     * It never revokes attach tokens, so a pending explicit attach (Reconnect, Resume) still lands.
+     */
+    readonly displaceObsoleteAttachment: (
+      key: SessionLifecycleKey,
+      incarnation: Incarnation,
+    ) => Effect.Effect<void, SessionLifecycleError>;
   }
 >()('isagi/runtime/environment/SessionLifecycle') {
   static readonly layerNoDeps = Layer.effect(SessionLifecycle, make);

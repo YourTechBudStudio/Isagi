@@ -3,7 +3,11 @@ import test from 'node:test';
 
 import type { FluidcastSessionId } from '../../fluidcast/index.js';
 import type { AgentControl } from '../agent-sessions/interaction.js';
-import { deriveAgentSessionState, deriveTerminalSessionState } from './status.js';
+import {
+  deriveAgentSessionState,
+  deriveTerminalSessionState,
+  sessionProcessIncarnation,
+} from './status.js';
 import type { AgentSessionRow, TerminalSessionRow } from './types.js';
 
 const now = '2026-06-16T00:00:00.000Z';
@@ -337,6 +341,82 @@ test('fresh never-launched terminal sessions project as attachable', () => {
     diagnosticCode: null,
     diagnosticDetail: null,
   });
+});
+
+test('the process incarnation names the live terminal process, and only a live one', () => {
+  const live = switchedAgent({
+    activePtyProcessId: 100,
+    activePtyProcess: ptyProcess({ id: 100, status: 'running' }),
+  });
+  assert.equal(sessionProcessIncarnation(live, terminal), 'pty:100');
+  assert.equal(
+    sessionProcessIncarnation(
+      switchedAgent({
+        activePtyProcessId: 100,
+        activePtyProcess: ptyProcess({ id: 100, status: 'starting' }),
+      }),
+      terminal,
+    ),
+    'pty:100',
+  );
+  // Stopped, missing, or never launched: nothing to attach to.
+  assert.equal(sessionProcessIncarnation(switchedAgent(), terminal), null);
+  assert.equal(
+    sessionProcessIncarnation(
+      switchedAgent({
+        activePtyProcessId: 100,
+        activePtyProcess: ptyProcess({ id: 100, status: 'exited', exitCode: 0 }),
+      }),
+      terminal,
+    ),
+    null,
+  );
+  assert.equal(
+    sessionProcessIncarnation(switchedAgent({ activePtyProcess: null }), terminal),
+    null,
+  );
+  assert.equal(
+    sessionProcessIncarnation(
+      switchedAgent({ activePtyProcessId: null, activePtyProcess: null }),
+      terminal,
+    ),
+    null,
+  );
+});
+
+test('an agent under Fluidcast has no terminal process incarnation', () => {
+  const live = switchedAgent({
+    activePtyProcessId: 100,
+    activePtyProcess: ptyProcess({ id: 100, status: 'running' }),
+  });
+  assert.equal(sessionProcessIncarnation(live, fluidcastControl({ state: 'live' })), null);
+  assert.equal(
+    sessionProcessIncarnation(switchedAgent(), fluidcastControl({ state: 'live' })),
+    null,
+  );
+});
+
+test('a terminal session carries the incarnation of its live shell', () => {
+  const session = {
+    id: 1,
+    worktreeId: 1,
+    cwd: '/repo',
+    shellCommand: 'bash',
+    shellArgs: [],
+    shellArgsJson: '[]',
+    activePtyProcessId: 7,
+    createdAt: now,
+    updatedAt: now,
+    activePtyProcess: ptyProcess({ id: 7, status: 'running' }),
+  } satisfies TerminalSessionRow;
+  assert.equal(sessionProcessIncarnation(session), 'pty:7');
+  assert.equal(
+    sessionProcessIncarnation({
+      ...session,
+      activePtyProcess: ptyProcess({ id: 7, status: 'killed', statusReason: 'runtime_shutdown' }),
+    }),
+    null,
+  );
 });
 
 function ptyProcess(

@@ -6,6 +6,7 @@ import type {
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
+import { ptyIncarnation, type Incarnation } from '../../harnesses/index.js';
 import { exitDetail } from '../../pty-processes/index.js';
 import type { AgentControl } from '../agent-sessions/interaction.js';
 import type { DerivedAgentSessionState, DerivedTerminalSessionState } from '../surfaces/types.js';
@@ -141,6 +142,24 @@ export function deriveAgentSessionState(
         session.harnessSessionId ? 'resume_existing' : 'relaunch_fresh',
       );
   }
+}
+
+/**
+ * The session's live terminal process incarnation, the opaque token clients bind a terminal
+ * presentation to (ADR 0006). `null` whenever no terminal process is live: none launched yet, the
+ * last one stopped, or (passing the agent's `control`) the agent is under Fluidcast, whose worker
+ * streams no terminal.
+ */
+export function sessionProcessIncarnation(
+  session: AgentSessionRow | TerminalSessionRow,
+  control?: AgentControl,
+): Incarnation | null {
+  if (control?.mode === 'fluidcast') return null;
+  const process = session.activePtyProcess;
+  if (session.activePtyProcessId === null || process === null) return null;
+  return process.status === 'starting' || process.status === 'running'
+    ? ptyIncarnation(session.activePtyProcessId)
+    : null;
 }
 
 export function deriveTerminalSessionState(

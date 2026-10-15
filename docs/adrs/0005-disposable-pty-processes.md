@@ -24,6 +24,7 @@ Isagi's product model is stronger if worktree environments are durable and proce
 - Runtime code may discard, replace, recreate, or garbage-collect PTY processes as operational state.
 - PTY backend fields such as backend name, backend ref, process id, log path, and backend-specific status belong to process records and diagnostics.
 - Runtime APIs and frontend surfaces should avoid exposing backend details as core product state. Backend facts may still be exposed when they are needed for diagnostics or support.
+- An opaque process incarnation token (ADR 0006) is not a backend detail; backend name, backend ref and OS pid remain diagnostics-only.
 - Tmux and node-pty should be treated as backend implementations with the same product status: process transports, not restoration semantics.
 - Startup reconciliation should mark stale process records honestly instead of pretending child processes survived.
 - Tests and logs should describe PTY lifecycle in process terms: launch, attach, output, resize, exit, kill, cleanup, and garbage collection.

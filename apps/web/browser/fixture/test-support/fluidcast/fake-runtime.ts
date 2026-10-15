@@ -278,6 +278,7 @@ function agentPane(id: number, title: string, fluidcastSessionId: string): Surfa
         recoveryAction: 'connect_existing',
         interaction: { mode: 'fluidcast', fluidcastSessionId },
         status: 'running',
+        processIncarnation: null,
         diagnosticCode: null,
         diagnosticDetail: null,
         createdAt: '2026-10-13T09:00:00.000Z',

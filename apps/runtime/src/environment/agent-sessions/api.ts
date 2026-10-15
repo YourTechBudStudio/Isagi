@@ -67,6 +67,7 @@ export function registerAgentSessionsApi(
             // Attach-only codes: a mode change never raises them.
             case 'active_process_missing':
             case 'active_process_not_running':
+            case 'process_incarnation_stale':
               return Effect.die(error);
           }
         },

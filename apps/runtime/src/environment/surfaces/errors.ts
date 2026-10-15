@@ -17,6 +17,8 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
     | 'pane_not_found'
     | 'session_not_found'
     | 'session_worktree_mismatch'
+    | 'process_incarnation_stale'
+    | 'session_already_attached'
     | 'invalid_surface_title'
     | 'layout_node_stale'
     | 'surface_not_empty';

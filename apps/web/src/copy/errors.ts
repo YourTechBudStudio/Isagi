@@ -485,6 +485,7 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   session_not_running: "This session isn't running anymore.",
   active_process_missing: 'This session has no active process to attach to yet.',
   active_process_not_running: "This session's active process is not running.",
+  process_incarnation_stale: 'The process this pane was following has already moved on.',
   harness_metadata_missing:
     'The harness session record is missing, so this pane needs a replacement.',
   harness_metadata_invalid:

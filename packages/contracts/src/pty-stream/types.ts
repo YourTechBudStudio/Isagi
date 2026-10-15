@@ -43,6 +43,7 @@ export const ptyStreamKnownErrorCodeSchema = Schema.Literals([
   'session_not_running',
   'active_process_missing',
   'active_process_not_running',
+  'process_incarnation_stale',
   'harness_metadata_missing',
   'harness_metadata_invalid',
   'unsupported_harness',
