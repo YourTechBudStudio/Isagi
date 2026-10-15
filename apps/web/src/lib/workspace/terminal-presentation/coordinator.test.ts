@@ -197,6 +197,7 @@ describe('surface projection excludes editor panes', () => {
         harnessSessionId: null,
         statusReason: null,
         recoveryAction: 'connect_existing',
+        interaction: { mode: 'terminal', fluidcast: 'unavailable' },
         status: 'running',
         diagnosticCode: null,
         diagnosticDetail: null,

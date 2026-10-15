@@ -6,6 +6,7 @@ import type { AgentHarness } from '@isagi/contracts';
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
+import { worktrees } from '../../projects/tables.js';
 import { ptyProcesses } from '../../pty-processes/tables.js';
 import { agentSessionRow } from '../sessions/row-mappers.js';
 import type { AgentSessionRow } from '../sessions/types.js';
@@ -129,6 +130,15 @@ const make = Effect.gen(function* () {
           .get();
         return pane ?? null;
       }),
+    findProjectId: (worktreeId) =>
+      database.use('find_agent_session_project', (db) => {
+        const row = db
+          .select({ projectId: worktrees.projectId })
+          .from(worktrees)
+          .where(eq(worktrees.id, worktreeId))
+          .get();
+        return row?.projectId ?? null;
+      }),
   });
 });
 
@@ -160,6 +170,8 @@ export class AgentSessionRepository extends Context.Service<
       { readonly surfaceId: number; readonly paneId: number } | null,
       DatabaseError
     >;
+    /** The project owning a worktree (a read-only join, ADR 0008), or null once it is gone. */
+    readonly findProjectId: (worktreeId: number) => Effect.Effect<number | null, DatabaseError>;
   }
 >()('isagi/runtime/environment/AgentSessionRepository') {
   static readonly layerNoDeps = Layer.effect(AgentSessionRepository, make);

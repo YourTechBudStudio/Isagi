@@ -92,6 +92,59 @@ Zero for any cache limit makes hidden heavy terminal entries immediately ineligi
 
 Omitting `terminal`, `cache`, or any nested field applies the documented default. A malformed value prevents Isagi from starting. Configure these settings only in `{{DATA_ROOT}}/config.yaml`; `.isagi/config.yaml` is project configuration and does not own terminal history or cache retention.
 
+## Fluidcast voice mode
+
+The top-level `fluidcast` section lets a Claude Code or Codex agent pane switch from its terminal to Fluidcast, a voice-and-visual player that talks through the same native agent conversation. It is off unless `enabled: true`; while it is off, Isagi does not validate the rest of the section.
+
+```yaml
+fluidcast:
+  enabled: true
+  languageModel:
+    provider: openai
+    apiKey: sk-your-openai-key
+    model: gpt-5-mini
+  speech:
+    apiKey: sk-your-openai-key
+    model: gpt-4o-mini-tts
+  preset:
+    voice:
+      name: alloy
+```
+
+The language model, which writes the voice's replies, and the speech connection are configured independently, each with its own `apiKey`, `model` and optional `baseUrl`. They may point at different services.
+
+- `languageModel.provider: openai` uses the OpenAI Responses API and requires `apiKey`.
+- `languageModel.provider: openai-compatible` uses any OpenAI-compatible Chat Completions API, such as a local model server at `baseUrl`; `apiKey` is optional. Set `structuredOutput: true` when a local model drifts from the reply format: Isagi then asks the server to constrain every reply to Fluidcast's output JSON Schema.
+- `languageModel` also accepts `reasoningEffort`, `temperature` and `maxOutputTokens`; missing values use the API's defaults.
+- `speech` targets an OpenAI-compatible `/audio/speech` API. `format` is `opus` (the default), `mp3` or `wav`.
+- `preset` picks the Guided Walkthrough profile, `detailed` (the default) or `compact`, and the voice: `voice.name` as the speech API knows it, plus optional delivery `instructions`.
+
+```yaml
+fluidcast:
+  enabled: true
+  languageModel:
+    provider: openai-compatible
+    baseUrl: http://localhost:1234/v1
+    model: local-model
+    structuredOutput: true
+  speech:
+    baseUrl: http://localhost:8880/v1
+    apiKey: placeholder-key
+    model: tts-1
+    format: mp3
+  preset:
+    profile: compact
+    voice:
+      name: af_sky
+      instructions: Calm and unhurried.
+```
+
+Keys written inline stay in the runtime: Isagi never sends them to the app, and its errors and logs never print config text. Isagi reads this section at startup, so changes take effect only after Isagi restarts. An invalid enabled section never stops Isagi from starting; voice mode is unavailable until it is fixed, and the runtime log names the invalid fields.
+
+The agent pane supplies everything else. The harness, working directory and executable come from the agent session, and Isagi instruments the voice session's worker the same way it instruments the terminal, so hook-based status and attention keep working. The harness must be enabled under `harnesses` and launchable. Only Claude Code and Codex support voice mode.
+
+A voice session lives in the runtime's memory only. Leaving a pane pauses it and returning resumes it paused, but restarting Isagi ends every voice session and returns each agent pane to its terminal; the native conversation itself is kept. For Claude Code, Isagi resolves `claude` on your login shell's `PATH`, but the Fluidcast attach step reads Claude's session files using the runtime's own environment: a `CLAUDE_CONFIG_DIR` set only in your login shell is not seen there, so continuing a conversation stored under it can fail.
+
 ## Schema
 
 For exact fields, defaults, and constraints, read the [validated schema](config-global.schema.ts). Its field descriptions are authoritative when prose and schema disagree.

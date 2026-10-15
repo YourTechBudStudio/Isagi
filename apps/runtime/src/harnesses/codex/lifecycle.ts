@@ -1,3 +1,4 @@
+import type { Incarnation } from '../incarnation.js';
 import type {
   ActiveHarnessTurn,
   HarnessLifecycleDiagnostic,
@@ -5,11 +6,16 @@ import type {
 } from '../lifecycle.js';
 import type { CodexRolloutEntry } from './native-artifacts.js';
 
-export interface CodexRolloutLifecycleRecord {
+/** A native rollout entry as the observer stores it. Codex writes no Isagi marker into it. */
+export interface CodexRolloutRecord {
   readonly seq: number;
   readonly recordedAt: string;
-  readonly ptyProcessId: number | null;
   readonly entry: CodexRolloutEntry;
+}
+
+/** A rollout record attributed to an execution at projection time (`attributeCodexRecords`). */
+export interface CodexRolloutLifecycleRecord extends CodexRolloutRecord {
+  readonly incarnation: Incarnation | null;
 }
 
 export function reduceCodexRolloutLifecycle(
@@ -50,7 +56,7 @@ export function reduceCodexRolloutLifecycle(
       state.activeTurn = {
         seq: record.seq,
         recordedAt: record.recordedAt,
-        ptyProcessId: record.ptyProcessId,
+        incarnation: record.incarnation,
         turnId,
       };
       attention = 'working';

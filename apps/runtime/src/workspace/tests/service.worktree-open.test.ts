@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { branchPathHash, Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -31,6 +31,7 @@ import {
   testInternalEvents,
   testPtyService,
   testWorktreeDeleteDiagnostics,
+  testAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -142,6 +143,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, dataDirectory),
@@ -211,6 +213,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
           Effect.provideService(ProjectRepository, repository),
           Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
+          Effect.provideService(AgentSessionService, testAgentSessionService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, invalidGit),
           Effect.provideService(DataDirectory, testDataDirectory),
@@ -282,6 +285,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
           Effect.provideService(ProjectRepository, repository),
           Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
+          Effect.provideService(AgentSessionService, testAgentSessionService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, dirtyPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -349,6 +353,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
           Effect.provideService(ProjectRepository, repository),
           Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
+          Effect.provideService(AgentSessionService, testAgentSessionService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, registeredPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -412,6 +417,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
           Effect.provideService(ProjectRepository, repository),
           Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
+          Effect.provideService(AgentSessionService, testAgentSessionService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, parentFailureGit),
           Effect.provideService(DataDirectory, dataDirectory),

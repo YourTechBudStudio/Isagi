@@ -49,12 +49,30 @@ export const apiEndpoints: ApiEndpoints = {
 };
 
 export {
+  agentInteractionModeApiErrorSchema,
   agentSessionActivityApiErrorSchema,
   agentSessionActivityUnavailableErrorSchema,
+  agentSessionDeletingErrorSchema,
+  agentSessionMetadataUnusableErrorSchema,
+  agentSessionNotFoundErrorSchema,
   agentSessionsEndpoints,
+  fluidcastSessionUnreadableErrorSchema,
+  fluidcastStartFailedErrorSchema,
+  fluidcastUnavailableErrorSchema,
 } from './agent-sessions/api.js';
-export { agentSessionActivityOutputSchema } from './agent-sessions/types.js';
-export type { AgentSessionActivityOutput } from './agent-sessions/types.js';
+export type { AgentInteractionModeApiError } from './agent-sessions/api.js';
+export {
+  agentSessionActivityOutputSchema,
+  agentSessionInteractionModeSchema,
+  setAgentSessionInteractionModeInputSchema,
+  setAgentSessionInteractionModeOutputSchema,
+} from './agent-sessions/types.js';
+export type {
+  AgentSessionActivityOutput,
+  AgentSessionInteractionMode,
+  SetAgentSessionInteractionModeInput,
+  SetAgentSessionInteractionModeOutput,
+} from './agent-sessions/types.js';
 
 export { clientSettingsEndpoint } from './client-settings/api.js';
 export {
@@ -107,11 +125,15 @@ export type {
 export type {
   AnyApiContentEndpoint,
   AnyApiEndpoint,
+  AnyApiEventStreamEndpoint,
   WireSchema,
   ApiContentEndpoint,
   ApiContentEndpointError,
   ApiContentEndpointParams,
   ApiContentEndpointQuery,
+  ApiEventStreamEndpoint,
+  ApiEventStreamEndpointError,
+  ApiEventStreamEndpointParams,
   ApiEndpoint,
   ApiEndpointBody,
   ApiEndpointError,
@@ -290,6 +312,13 @@ export { nonEmptyString, nonNegativeInteger, positiveInteger } from './scalars.j
 export * from './workflows/types.js';
 export { workflowContentEndpoints, workflowsEndpoints } from './workflows/api.js';
 
+export {
+  fluidcastContentEndpoints,
+  fluidcastEndpoints,
+  fluidcastEventStreamEndpoints,
+} from './fluidcast/api.js';
+export * from './fluidcast/types.js';
+
 export { pathsEndpoints } from './paths/api.js';
 export {
   pathSuggestInputSchema,
@@ -437,6 +466,7 @@ export {
 } from './surfaces/api.js';
 export {
   agentHarnessSchema,
+  agentSessionInteractionSchema,
   agentSessionMetadataSchema,
   agentSessionRecoveryActionSchema,
   agentSessionRouteParamsSchema,
@@ -485,6 +515,7 @@ export {
 } from './surfaces/types.js';
 export type {
   AgentHarness,
+  AgentSessionInteraction,
   AgentSessionMetadata,
   AgentSessionRecoveryAction,
   AgentSessionRouteParams,

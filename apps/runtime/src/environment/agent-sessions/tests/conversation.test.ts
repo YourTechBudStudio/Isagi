@@ -15,10 +15,7 @@ test('conversation history ignores hook-derived message records', async () => {
     const history = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
-        const paths = yield* artifacts.prepareProcessArtifacts({
-          agentSessionId: 10,
-          ptyProcessId: 20,
-        });
+        const paths = yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10 });
         appendPiMessage(harnessLogPath(paths.directory, 'pi-session-z'), {
           harnessSessionId: 'pi-session-z',
           recordedAt: '2026-06-18T00:00:10.000Z',
@@ -71,10 +68,7 @@ test('conversation history does not fall through from a pinned session to anothe
     const history = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
-        const paths = yield* artifacts.prepareProcessArtifacts({
-          agentSessionId: 10,
-          ptyProcessId: 20,
-        });
+        const paths = yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10 });
         appendClaudeStop(harnessLogPath(paths.directory, 'other-claude-session'), {
           harnessSessionId: 'other-claude-session',
           transcriptPath,

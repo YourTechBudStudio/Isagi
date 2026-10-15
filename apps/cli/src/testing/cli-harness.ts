@@ -92,6 +92,11 @@ export function fakeRuntime(
             if (!route) return Effect.die(new Error(`Unexpected request to ${endpoint.id}`));
             return answer(route(params));
           })) as unknown as RuntimeClient['Service']['requestContent'],
+        // The CLI opens no event streams.
+        requestEventStream: ((endpoint: { id: string }) =>
+          Stream.die(
+            new Error(`Unexpected event stream ${endpoint.id}`),
+          )) as unknown as RuntimeClient['Service']['requestEventStream'],
       }),
     );
   return { calls, layer };

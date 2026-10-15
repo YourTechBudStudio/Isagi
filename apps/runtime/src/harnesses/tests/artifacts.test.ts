@@ -135,7 +135,7 @@ test('agent session artifacts harden only their own directories and files on Uni
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
         yield* artifacts.initializeMetadata(10);
-        yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 });
+        yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10 });
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
     const directory = join(dataRoot, 'sessions', 'agent-sessions', '10');
@@ -158,9 +158,7 @@ test('agent session artifacts reject a symlinked Isagi harness directory', async
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
-        return yield* artifacts
-          .prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 })
-          .pipe(Effect.result);
+        return yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10 }).pipe(Effect.result);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
     assert.equal(Result.isFailure(result), true);
@@ -183,9 +181,7 @@ test('a refused artifact root is named in the failure and in the construction wa
     const failure = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
-        return yield* Effect.flip(
-          artifacts.prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 }),
-        );
+        return yield* Effect.flip(artifacts.prepareProcessArtifacts({ agentSessionId: 10 }));
       }).pipe(Effect.provide(testLayer(dataRoot)), Effect.provide(logs.layer)),
     );
 

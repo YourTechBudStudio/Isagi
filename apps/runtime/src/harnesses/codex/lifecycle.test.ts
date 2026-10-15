@@ -55,7 +55,7 @@ test('Codex ignores duplicate starts and diagnoses duplicate terminals without i
 let sequence = 0;
 function record(entry: Record<string, unknown>): CodexRolloutLifecycleRecord {
   const seq = sequence++;
-  return { seq, recordedAt: time(seq), ptyProcessId: 20, entry };
+  return { seq, recordedAt: time(seq), incarnation: 'pty:20' as const, entry };
 }
 
 function time(index: number) {

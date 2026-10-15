@@ -3,7 +3,17 @@ import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import { AgentSessionArtifacts } from '../../../harnesses/index.js';
+import type { AgentHarness } from '@isagi/contracts';
+
+import {
+  makeFakeFluidcastSessions,
+  type FakeFluidcastSessions,
+} from '../../../fluidcast/testing.js';
+import {
+  AgentSessionArtifacts,
+  HarnessObservationTargets,
+  sdkIncarnation,
+} from '../../../harnesses/index.js';
 import { HarnessLedgerObserverWithInternalsLayerNoDeps } from '../../../harnesses/testing.js';
 import { InternalEvents } from '../../../platform/events/index.js';
 import {
@@ -19,7 +29,8 @@ import { ptyProcesses } from '../../../pty-processes/tables.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../../sessions/types.js';
 import { agentSessions } from '../../tables.js';
 import { AgentSessionAttentionProjection } from '../attention.js';
-import { HarnessObservationTargetsLayer } from '../observation-targets.js';
+import { AgentSessionInteraction } from '../interaction.js';
+import { HarnessObservationTargetsLayerNoDeps } from '../observation-targets.js';
 
 export function appendRecord(
   path: string,
@@ -239,15 +250,35 @@ function databaseLayer(dataRoot: string) {
   return RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer(dataRoot)));
 }
 
-export function testLayer(dataRoot: string) {
+/**
+ * The observer stack over a test data root, with the real targets layer over one interaction.
+ * `targets` replaces the environment's observation targets with a stub. `fluidcast` is the fake
+ * behind the interaction (disabled by default); seed Fluidcast mode with `seedFluidcastMode`.
+ */
+export function testLayer(
+  dataRoot: string,
+  options: {
+    readonly targets?: Layer.Layer<HarnessObservationTargets>;
+    readonly fluidcast?: FakeFluidcastSessions;
+  } = {},
+) {
   const directoryLayer = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directoryLayer));
   const artifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(directoryLayer));
   const internalBus = InternalEvents.layer;
   const foreground = PtyForegroundState.layer;
+  const fluidcast = (options.fluidcast ?? makeFakeFluidcastSessions({ availability: 'disabled' }))
+    .layer;
+  const interaction = AgentSessionInteraction.layerNoDeps.pipe(Layer.provide(fluidcast));
   const observer = HarnessLedgerObserverWithInternalsLayerNoDeps.pipe(
     Layer.provide(directoryLayer),
-    Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
+    Layer.provide(
+      options.targets ??
+        HarnessObservationTargetsLayerNoDeps.pipe(
+          Layer.provide(database),
+          Layer.provide(interaction),
+        ),
+    ),
     Layer.provide(artifacts),
     Layer.provide(internalBus),
   );
@@ -256,10 +287,133 @@ export function testLayer(dataRoot: string) {
     Layer.provide(artifacts),
     Layer.provide(foreground),
     Layer.provide(observer),
+    Layer.provide(interaction),
   );
-  return Layer.mergeAll(attention, observer, artifacts, foreground, internalBus, database);
+  return Layer.mergeAll(
+    attention,
+    observer,
+    artifacts,
+    foreground,
+    internalBus,
+    database,
+    interaction,
+    fluidcast,
+  );
 }
+
+/**
+ * Puts an agent in Fluidcast mode the way a switch records it: starts a fake session, sets the
+ * interaction and publishes the `switched` interval, without the switch's admission or cleanup.
+ * The observer handles the event asynchronously; wait for its `agent_session_changed`.
+ */
+export const seedFluidcastMode = Effect.fnUntraced(function* (
+  fluidcast: FakeFluidcastSessions,
+  input: {
+    readonly agentSessionId: number;
+    readonly harness: Extract<AgentHarness, 'claude' | 'codex'>;
+    readonly harnessSessionId: string | null;
+  },
+) {
+  const interaction = yield* AgentSessionInteraction;
+  const bus = yield* InternalEvents;
+  const started = yield* fluidcast.service.start({ ...input, cwd: '/repo/isagi' });
+  interaction.set(input.agentSessionId, started);
+  yield* bus.publish({
+    type: 'agent_session_execution_changed',
+    agentSessionId: input.agentSessionId,
+    change: {
+      _tag: 'switched',
+      interval: { incarnation: sdkIncarnation(started.fluidcastSessionId), since: started.since },
+    },
+  });
+  return started;
+});
 
 function dataDirectoryLayer(dataRoot: string) {
   return Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
+}
+
+// Ledger and timing helpers for execution-keyed observation (PTY and SDK records).
+
+export const base = Date.UTC(2026, 6, 9);
+
+export type ExecutionMark = { readonly pty: number | null; readonly sdk: string | null };
+
+export function ptyMark(ptyProcessId: number): ExecutionMark {
+  return { pty: ptyProcessId, sdk: null };
+}
+
+export function prepareAgent(
+  root: string,
+  ledgerSessionId: string,
+  metadataSessionId: string | null = ledgerSessionId,
+  agentSessionId = 10,
+) {
+  const directory = join(root, 'sessions', 'agent-sessions', String(agentSessionId));
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(directory, 'harness.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      harnessSessionId: metadataSessionId,
+      updatedAt: at(0),
+    })}\n`,
+    { mode: 0o600 },
+  );
+  const path = join(directory, `${Buffer.from(ledgerSessionId).toString('hex')}.harness.jsonl`);
+  writeFileSync(path, '', { mode: 0o600 });
+  return path;
+}
+
+export function hookRecord(
+  harness: AgentHarness,
+  harnessSessionId: string,
+  nativeEvent: string,
+  seconds: number,
+  mark: ExecutionMark,
+  event: Record<string, unknown> = {},
+  agentSessionId = 10,
+  origin = base,
+) {
+  return `${JSON.stringify({
+    schemaVersion: 1,
+    recordedAt: at(seconds, origin),
+    agentSessionId,
+    harnessSessionId,
+    ptyProcessId: mark.pty,
+    sdkExecutionId: mark.sdk,
+    harness,
+    nativeEvent,
+    event: { session_id: harnessSessionId, hook_event_name: nativeEvent, ...event },
+  })}\n`;
+}
+
+export function rolloutLines(
+  entries: readonly (readonly [type: string, seconds: number, payload: unknown])[],
+  origin = base,
+) {
+  return entries
+    .map(
+      ([type, seconds, payload]) =>
+        `${JSON.stringify({ type, timestamp: at(seconds, origin), payload })}\n`,
+    )
+    .join('');
+}
+
+export function edgeSummary(
+  edges: readonly {
+    readonly type: string;
+    readonly seq: number | null;
+    readonly reason?: string;
+  }[],
+) {
+  return edges.map((edge) => [edge.type, edge.seq, edge.reason ?? null]);
+}
+
+export function at(seconds: number, origin = base) {
+  return new Date(origin + seconds * 1000).toISOString();
+}
+
+export function sdkExecutionMark(executionId: string): ExecutionMark {
+  return { pty: null, sdk: executionId };
 }

@@ -24,6 +24,7 @@ import {
   type LiveWorkspaceOptions,
   createGitProjectFixture,
   directoryTree,
+  recordingAgentSessionService,
 } from '../../workspace/testing.js';
 
 /**
@@ -184,6 +185,7 @@ describe('deleting a project', () => {
         assert.ok(branchesBefore.includes('feature/kept-on-disk'));
         assert.ok(worktreesTreeBefore.length > 0, 'the Isagi-created worktree exists on disk');
 
+        const agentLog: string[] = [];
         const outcome = await Effect.runPromise(
           Effect.gen(function* () {
             const service = yield* WorkspaceService;
@@ -198,6 +200,7 @@ describe('deleting a project', () => {
                   .all(),
               );
             const before = {
+              doomedSessionIds: (yield* sessionsOf(seeded.doomed)).map((row) => row.id),
               doomed: yield* projectRows(seeded.doomed),
               doomedRuns: yield* countRows(seeded.doomedRuns),
               doomedSessions: (yield* sessionsOf(seeded.doomed)).length,
@@ -216,8 +219,24 @@ describe('deleting a project', () => {
                 keptRuns: yield* countRows(seeded.keptRuns),
               },
             };
-          }).pipe(Effect.provide(liveWorkspaceLayer(dataRoot, passingCommands))),
+          }).pipe(
+            Effect.provide(
+              liveWorkspaceLayer(dataRoot, {
+                ...passingCommands,
+                agentSessions: recordingAgentSessionService(agentLog),
+              }),
+            ),
+          ),
         );
+
+        // The project is held, then the agents read from the database under that hold are
+        // released, before the cascade; the hold ends after it.
+        const ids = outcome.before.doomedSessionIds.join(',');
+        assert.deepEqual(agentLog, [
+          `hold-project:${seeded.doomed}`,
+          `release:${ids}`,
+          `unhold-project:${seeded.doomed}`,
+        ]);
 
         // The fixture was real before the delete, or nothing below means anything.
         assert.deepEqual(outcome.before.doomed, { projects: 1, worktrees: 2, runs: 2 });

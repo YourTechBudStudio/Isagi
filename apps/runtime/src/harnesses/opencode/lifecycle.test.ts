@@ -181,7 +181,7 @@ function record(
   return {
     recordedAt: time(seq),
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'opencode',
     nativeEvent,
     event: {
@@ -196,7 +196,7 @@ function question(nativeEvent: string, seq: number, requestId: string, nativeOrd
   return {
     recordedAt: time(seq),
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'opencode' as const,
     nativeEvent,
     event: {

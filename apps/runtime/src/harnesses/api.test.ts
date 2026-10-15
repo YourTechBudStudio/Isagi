@@ -1,16 +1,24 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer } from 'effect';
+import { Cause, Effect, Exit, Layer } from 'effect';
 
 import { withApiServer } from '../platform/http/testing.js';
+import { DataDirectory } from '../platform/persistence/index.js';
+import { makeTestDataDirectory } from '../platform/persistence/testing.js';
 import {
+  RuntimeConfig,
   RuntimeConfigConflict,
-  RuntimeConfigError,
+  runtimeConfigError,
+  type RuntimeConfigError,
   RuntimeHarnessConfigInvalid,
 } from '../runtime-config/index.js';
 import { registerHarnessesRoutes } from './api.js';
 import { ControlPlaneNotReady, HarnessControlPlane } from './control-plane/service.js';
+import type { SdkHarness } from './definitions.js';
 import { AgentSessionArtifacts } from './ledger.js';
 import { HarnessLedgerObserver } from './observer.service.js';
 import { HarnessAdapterRegistry } from './registry.js';
@@ -29,7 +37,9 @@ function routesOver(acceptPolicy: HarnessControlPlane['Service']['acceptPolicy']
   return Layer.mergeAll(
     Layer.mock(HarnessControlPlane)({ acceptPolicy }),
     Layer.mock(HarnessLedgerObserver)({}),
-    Layer.mock(HarnessAdapterRegistry)({}),
+    Layer.mock(HarnessAdapterRegistry)({
+      supportsSdk: (_harness): _harness is SdkHarness => false,
+    }),
     Layer.mock(AgentSessionArtifacts)({
       paths: () => ({ directory: '/unused', metadataPath: '/unused/harness.json' }),
     }),
@@ -101,7 +111,7 @@ test('accepting a harness policy maps each control-plane failure to its contract
   );
 
   const unreadable = await acceptPolicyFailingWith(
-    new RuntimeConfigError({ path: '/data/config.yaml', cause: new Error('EACCES') }),
+    runtimeConfigError('/data/config.yaml', { reason: 'read_failed', errno: 'EACCES' }),
   );
   assert.equal(unreadable.status, 500);
   assert.deepEqual(
@@ -109,8 +119,37 @@ test('accepting a harness policy maps each control-plane failure to its contract
     {
       code: 'api_unhandled_error',
       status: 500,
-      message: 'Unhandled runtime error',
+      message: 'config.yaml could not be read (EACCES): /data/config.yaml',
       requestId: undefined,
     },
   );
+});
+
+test('a harness-policy config failure reaches the client with its reason and location, never config text', async () => {
+  const sentinel = 'sk-isagi-SENTINEL-api';
+  const root = mkdtempSync(join(tmpdir(), 'isagi-harness-api-secrets-'));
+  try {
+    writeFileSync(
+      join(root, 'config.yaml'),
+      `fluidcast:\n  speech:\n    apiKey: ${sentinel}\n  bad: [${sentinel}\n`,
+      'utf8',
+    );
+    const exit = await Effect.runPromiseExit(
+      RuntimeConfig.use((config) => config.get).pipe(
+        Effect.provide(RuntimeConfig.layer),
+        Effect.provideService(DataDirectory, makeTestDataDirectory(root)),
+      ),
+    );
+    assert.ok(Exit.isFailure(exit));
+    const error = Cause.findErrorOption(exit.cause);
+    assert.ok(error._tag === 'Some');
+
+    const response = await acceptPolicyFailingWith(error.value);
+    const text = JSON.stringify(response.body);
+    assert.equal(response.status, 500);
+    assert.equal(text.includes(sentinel), false, `the API error leaked the sentinel: ${text}`);
+    assert.match(text, /config\.yaml is not valid YAML \([A-Z_]+ at \d+:\d+\)/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandError, CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -30,6 +30,7 @@ import {
   testInternalEvents,
   testPtyService,
   testWorktreeDeleteDiagnostics,
+  testAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -153,6 +154,7 @@ function provide<A, E>(
     Effect.provideService(ProjectRepository, input.repository),
     Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
     Effect.provideService(SurfaceService, testSurfaceService),
+    Effect.provideService(AgentSessionService, testAgentSessionService),
     Effect.provideService(
       StateFile,
       stateFileWithWriteCounter(() => {}),

@@ -16,7 +16,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import { HarnessLedgerObserver } from '../../../harnesses/index.js';
+import { HarnessLedgerObserver, ptyIncarnation } from '../../../harnesses/index.js';
 import { pollHarnessLedgerObserverForTest } from '../../../harnesses/testing.js';
 import { InternalEvents } from '../../../platform/events/index.js';
 import { tapInternalEvents } from '../../../platform/events/testing.js';
@@ -172,11 +172,9 @@ for (const withPromptIds of [true, false]) {
 
             // Raphael: the process is replaced while the old turn is still open.
             yield* insertReplacementPty(database, { agentSessionId: 10, ptyProcessId: 21 });
-            yield* bus.publish({
-              type: 'agent_session_active_process_changed',
-              agentSessionId: 10,
-              ptyProcessId: 21,
-            });
+            yield* bus.publish(
+              yield* ptySwitched(database, { agentSessionId: 10, ptyProcessId: 21 }),
+            );
             yield* changes.take;
             assert.equal(yield* observer.getAttention(10), 'error');
             append('UserPromptSubmit', 3, { prompt_id: 'resumed' }, 21);
@@ -883,11 +881,7 @@ test('active PTY replacement fails the unresolved turn with its opening sequence
             .where(eq(agentSessions.id, 10))
             .run();
         });
-        yield* bus.publish({
-          type: 'agent_session_active_process_changed',
-          agentSessionId: 10,
-          ptyProcessId: 21,
-        });
+        yield* bus.publish(yield* ptySwitched(database, { agentSessionId: 10, ptyProcessId: 21 }));
         yield* Effect.sleep('20 millis');
         // A delayed hook from the replaced process is still durable evidence,
         // but it cannot rewrite the already-published failure into success.
@@ -997,11 +991,7 @@ test('first active-process handoff publishes after baselining a post-startup ses
         const bus = yield* InternalEvents;
         const subscription = yield* tapInternalEvents(['agent_session_changed']);
         yield* insertRunningAgent(database, { agentSessionId: 11, ptyProcessId: 21 });
-        yield* bus.publish({
-          type: 'agent_session_active_process_changed',
-          agentSessionId: 11,
-          ptyProcessId: 21,
-        });
+        yield* bus.publish(yield* ptySwitched(database, { agentSessionId: 11, ptyProcessId: 21 }));
         const event = yield* subscription.take;
         assert.equal(yield* observer.getAttention(11), 'idle');
         yield* subscription.unsubscribe;
@@ -1027,11 +1017,7 @@ test('source rebase clears incarnation-bound sticky failures before sequences re
         const database = yield* RuntimeDatabase;
         const bus = yield* InternalEvents;
         yield* insertReplacementPty(database, { agentSessionId: 10, ptyProcessId: 21 });
-        yield* bus.publish({
-          type: 'agent_session_active_process_changed',
-          agentSessionId: 10,
-          ptyProcessId: 21,
-        });
+        yield* bus.publish(yield* ptySwitched(database, { agentSessionId: 10, ptyProcessId: 21 }));
         yield* Effect.sleep('20 millis');
         assert.equal((yield* observer.getTurnEdges(10)).at(-1)?.type, 'turn_failed');
 
@@ -1067,11 +1053,7 @@ test('sticky failure remains adjacent to its start before a newer active turn', 
         const database = yield* RuntimeDatabase;
         const bus = yield* InternalEvents;
         yield* insertReplacementPty(database, { agentSessionId: 10, ptyProcessId: 21 });
-        yield* bus.publish({
-          type: 'agent_session_active_process_changed',
-          agentSessionId: 10,
-          ptyProcessId: 21,
-        });
+        yield* bus.publish(yield* ptySwitched(database, { agentSessionId: 10, ptyProcessId: 21 }));
         yield* Effect.sleep('20 millis');
         appendFileSync(
           path,
@@ -1314,11 +1296,7 @@ test('one global poll refreshes multiple live agents', async () => {
         const bus = yield* InternalEvents;
         const handoff = yield* tapInternalEvents(['agent_session_changed']);
         yield* insertRunningAgent(database, { agentSessionId: 11, ptyProcessId: 21 });
-        yield* bus.publish({
-          type: 'agent_session_active_process_changed',
-          agentSessionId: 11,
-          ptyProcessId: 21,
-        });
+        yield* bus.publish(yield* ptySwitched(database, { agentSessionId: 11, ptyProcessId: 21 }));
         yield* handoff.take;
         yield* handoff.unsubscribe;
         appendFileSync(
@@ -1519,4 +1497,29 @@ function openCodeEvent(type: string, nativeOrder: number, properties: Record<str
 
 function time(index: number) {
   return `2026-07-09T00:00:0${index}.000Z`;
+}
+
+/** The switch event `launchProcessForSession` publishes, with the PTY row's `createdAt` as `since`. */
+function ptySwitched(
+  database: import('../../../platform/persistence/index.js').RuntimeDatabase['Service'],
+  input: { readonly agentSessionId: number; readonly ptyProcessId: number },
+) {
+  return database
+    .use('read_switched_pty', (db) =>
+      db
+        .select({ createdAt: ptyProcesses.createdAt })
+        .from(ptyProcesses)
+        .where(eq(ptyProcesses.id, input.ptyProcessId))
+        .get(),
+    )
+    .pipe(
+      Effect.map((row) => ({
+        type: 'agent_session_execution_changed' as const,
+        agentSessionId: input.agentSessionId,
+        change: {
+          _tag: 'switched' as const,
+          interval: { incarnation: ptyIncarnation(input.ptyProcessId), since: row!.createdAt },
+        },
+      })),
+    );
 }

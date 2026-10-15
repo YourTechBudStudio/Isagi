@@ -91,9 +91,30 @@ test('development adds only the dev WebSocket origin and the Vite script allowan
   );
   // The dev document's own origin is already `'self'`; restating it would be
   // noise that hides which sources are genuinely additional.
-  for (const directive of ['default-src', 'style-src', 'img-src', 'font-src'])
+  for (const directive of ['default-src', 'style-src', 'img-src', 'font-src', 'media-src'])
     assert.equal(development.get(directive), packaged.get(directive), directive);
   assert.doesNotMatch(development.get('default-src') ?? '', /4173/u);
+});
+
+test('media-src admits blobs and the loopback runtime in both modes', () => {
+  for (const target of [packagedTarget, developmentTarget]) {
+    assert.equal(
+      policyFor(target).get('media-src'),
+      "'self' blob: http://127.0.0.1:*",
+      target.mode,
+    );
+  }
+});
+
+test('an external runtime reaches media-src in its http form only', () => {
+  const external = rendererRuntimeOrigins({ externalRuntimeUrl: 'https://runtime.test:8443/base' });
+  for (const target of [packagedTarget, developmentTarget]) {
+    assert.equal(
+      policyFor(target, external.origins).get('media-src'),
+      "'self' blob: http://127.0.0.1:* https://runtime.test:8443",
+      target.mode,
+    );
+  }
 });
 
 test('an https dev origin contributes its wss form', () => {

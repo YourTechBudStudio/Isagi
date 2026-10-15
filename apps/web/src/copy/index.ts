@@ -32,6 +32,7 @@ export {
   worktreeCreateCopy,
   worktreeSetupReviewCopy,
 } from './palette.js';
+export { fluidcastCopy } from './fluidcast.js';
 export { docsResultCopy, onboardingCopy, startupCopy } from './startup.js';
 export { toastCopy } from './toasts.js';
 export { updateCopy } from './updates.js';

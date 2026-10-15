@@ -8,7 +8,7 @@ import type {
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
-import { SurfaceService } from '../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../environment/index.js';
 import { diagnosticPhase } from '../platform/diagnostics/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { Git, type GitCommandError } from '../platform/git/index.js';
@@ -38,6 +38,7 @@ export const worktreeDelete = Effect.gen(function* () {
   const git = yield* Git;
   const commands = yield* CommandService;
   const pty = yield* PtyService;
+  const agents = yield* AgentSessionService;
   const deleteDiagnostics = yield* WorktreeDeleteDiagnosticsReader;
   const internalEvents = yield* InternalEvents;
   const sessionDeletions = yield* durableSessionDeletions;
@@ -129,29 +130,44 @@ export const worktreeDelete = Effect.gen(function* () {
             project.id,
           ),
         );
-        yield* diagnosticPhase(
-          'workspace.delete_worktree.pty_teardown',
-          context,
-          terminateSessionPtys(pty, {
-            operation: 'worktree_delete',
-            ptyProcessIds: sessionPtyProcessIds(diagnostics),
-            projectId: project.id,
-            worktreeId: worktree.id,
+        // The worktree is held against new agent controllers from before the release until the
+        // cascade commits or fails; the scope removes only this delete's hold. The agents to
+        // release are read after the hold: an agent created later cannot switch, and one switched
+        // earlier is in this read. Workers stop before `git worktree remove`.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* agents.holdWorktreesForDeletion([worktree.id]);
+            const held = yield* deleteDiagnostics.read(worktree.id);
+            yield* diagnosticPhase(
+              'workspace.delete_worktree.agent_release',
+              context,
+              agents.releaseControllers(held.agentSessionIds),
+            );
+            yield* diagnosticPhase(
+              'workspace.delete_worktree.pty_teardown',
+              context,
+              terminateSessionPtys(pty, {
+                operation: 'worktree_delete',
+                ptyProcessIds: sessionPtyProcessIds(diagnostics),
+                projectId: project.id,
+                worktreeId: worktree.id,
+              }),
+            );
+            yield* diagnosticPhase(
+              'workspace.delete_worktree.git_remove',
+              context,
+              git.run(
+                input.request.checkoutRemovalMode === 'force'
+                  ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
+                  : ['-C', project.rootPath, 'worktree', 'remove', worktree.path],
+              ),
+            );
+            yield* diagnosticPhase(
+              'workspace.delete_worktree.db_delete',
+              context,
+              repository.deleteWorktree(worktree.id),
+            );
           }),
-        );
-        yield* diagnosticPhase(
-          'workspace.delete_worktree.git_remove',
-          context,
-          git.run(
-            input.request.checkoutRemovalMode === 'force'
-              ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
-              : ['-C', project.rootPath, 'worktree', 'remove', worktree.path],
-          ),
-        );
-        yield* diagnosticPhase(
-          'workspace.delete_worktree.db_delete',
-          context,
-          repository.deleteWorktree(worktree.id),
         );
         // Announced only after the cascade commits: every connected client — not just
         // the one that asked — drops the terminals these identities backed.

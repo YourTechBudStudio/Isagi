@@ -11,7 +11,8 @@ import { defineConfig } from 'vite';
  * `/folder-project/` is the folder-project presentation and recovery playground,
  * `/workflow-bar/` is the attached-run bar and its shared input flow,
  * `/workflow-inspector/` is the read-only Declared/Trace inspector over a fake runtime,
- * and `/test-support/editor/` is the editor-pane harness. Each entry is an isolated
+ * `/test-support/editor/` is the editor-pane harness, and `/test-support/fluidcast/` is the
+ * Fluidcast-pane harness over in-page Harness sessions. Each entry is an isolated
  * page built from the production sources, so nothing here reaches the shipped app
  * bundle.
  */
@@ -36,6 +37,7 @@ export default defineConfig({
         workflowBar: entry('./fixture/workflow-bar/index.html'),
         workflowInspector: entry('./fixture/workflow-inspector/index.html'),
         editorTestSupport: entry('./fixture/test-support/editor/index.html'),
+        fluidcastTestSupport: entry('./fixture/test-support/fluidcast/index.html'),
         // The stand-in workbench the editor pane frames, emitted so the iframe
         // has a real document to load.
         editorWorkbench: entry('./fixture/test-support/editor/workbench.html'),

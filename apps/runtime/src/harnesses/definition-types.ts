@@ -13,6 +13,7 @@ import type {
   HarnessAdapterError,
   HarnessHeadlessLaunchContext,
   HarnessLaunchContext,
+  SdkInstrumentation,
 } from './types.js';
 
 export const approvedHostEnvironmentKeys = [
@@ -92,6 +93,16 @@ export interface HarnessDefinition {
     readonly headless: (
       input: HarnessHeadlessLaunchContext,
     ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
+    /**
+     * Instrumentation for an SDK worker of this harness. Optional: only harnesses an SDK worker
+     * can drive define it, and its presence is the capability.
+     */
+    readonly sdk?:
+      | ((
+          input: { readonly agentSessionId: number; readonly executionId: string },
+          dependencies: HarnessDefinitionDependencies,
+        ) => Effect.Effect<SdkInstrumentation, HarnessAdapterError>)
+      | undefined;
     readonly extractHeadlessOutput: (raw: string) => string;
     readonly semanticHeadlessError?: ((raw: string) => string | null) | undefined;
     /**

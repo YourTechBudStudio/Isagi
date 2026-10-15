@@ -12,7 +12,12 @@ import {
   testInstallation,
   testSessionSocketDirectory,
 } from '../editor/testing.js';
-import { AgentSessionArtifacts, HarnessLedgerObserver } from '../harnesses/index.js';
+import { makeFakeFluidcastSessions, type FakeFluidcastSessions } from '../fluidcast/testing.js';
+import {
+  AgentSessionArtifacts,
+  HarnessAdapterRegistry,
+  HarnessLedgerObserver,
+} from '../harnesses/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { EntityLock } from '../platform/locks/index.js';
 import { LoopbackPortProbe } from '../platform/net/index.js';
@@ -23,10 +28,12 @@ import { PtyForegroundState, PtyService } from '../pty-processes/index.js';
 import { ptyProcesses } from '../pty-processes/tables.js';
 import { fakeTerminateMany } from '../pty-processes/testing.js';
 import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
-import { HarnessObservationTargetsLayer } from './agent-sessions/observation-targets.js';
+import { AgentSessionInteraction } from './agent-sessions/interaction.js';
+import { HarnessObservationTargetsLayerNoDeps } from './agent-sessions/observation-targets.js';
 import { AgentSessionService } from './agent-sessions/service.js';
 import { SurfaceService } from './index.js';
 import { SessionLifecycle } from './sessions/lifecycle.js';
+import type { AgentSessionRow } from './sessions/types.js';
 import { SurfaceRepository } from './surfaces/repository.js';
 import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from './tables.js';
 import { TerminalSessionRepository } from './terminal-sessions/repository.js';
@@ -131,6 +138,7 @@ export function addPaneToSurface(surfaceId: number) {
 export function insertAgentSessionForWorktree(input: {
   readonly worktreeId: number;
   readonly paneId: number;
+  readonly harness?: AgentSessionRow['harness'] | undefined;
 }) {
   return Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
@@ -141,7 +149,7 @@ export function insertAgentSessionForWorktree(input: {
         .insert(agentSessions)
         .values({
           worktreeId: input.worktreeId,
-          harness: 'pi',
+          harness: input.harness ?? 'pi',
           cwd: '/repo/isagi',
           activePtyProcessId: null,
           createdAt: now,
@@ -271,6 +279,8 @@ export function testLayer(
     readonly decorateSurfaceRepository?:
       | ((inner: SurfaceRepository['Service']) => SurfaceRepository['Service'])
       | undefined;
+    /** The Fluidcast sessions behind the agents' interaction; disabled by default. */
+    readonly fluidcast?: FakeFluidcastSessions | undefined;
   } = {},
 ) {
   mkdirSync(testSessionSocketDirectory(dataRoot), { recursive: true });
@@ -280,9 +290,22 @@ export function testLayer(
   const internalEventsLayer = InternalEvents.layer;
   const agentSessionArtifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(dataDirectoryLayer));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
+  const fluidcast = (options.fluidcast ?? makeFakeFluidcastSessions({ availability: 'disabled' }))
+    .layer;
+  // One interaction for every consumer, as `AgentSessionInteraction.layer` is in the app.
+  const interaction = AgentSessionInteraction.layerNoDeps.pipe(Layer.provide(fluidcast));
+  const harnessRegistry = HarnessAdapterRegistry.layer.pipe(
+    Layer.provide(dataDirectoryLayer),
+    Layer.provide(agentSessionArtifacts),
+  );
   const harnessLedgerObserver = HarnessLedgerObserver.layerNoDeps.pipe(
     Layer.provide(dataDirectoryLayer),
-    Layer.provide(HarnessObservationTargetsLayer.pipe(Layer.provide(database))),
+    Layer.provide(
+      HarnessObservationTargetsLayerNoDeps.pipe(
+        Layer.provide(database),
+        Layer.provide(interaction),
+      ),
+    ),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(internalEventsLayer),
   );
@@ -291,6 +314,7 @@ export function testLayer(
     Layer.provide(agentSessionArtifacts),
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(harnessLedgerObserver),
+    Layer.provide(interaction),
   );
   const projectRepository = ProjectRepository.layer.pipe(Layer.provide(database));
   const agentService = Layer.effect(
@@ -372,8 +396,12 @@ export function testLayer(
     Layer.provide(internalEventsLayer),
     Layer.provide(editorService),
     Layer.provide(entityLock),
+    Layer.provide(interaction),
+    Layer.provide(fluidcast),
+    Layer.provide(harnessRegistry),
   );
   return Layer.mergeAll(
+    interaction,
     database,
     editorRepository,
     editorService,
@@ -466,6 +494,12 @@ function fakeAgentSessionService(
       Effect.die('agent activePtyProcessId is not used by surface service tests'),
     stopUnlessPlaced: () =>
       Effect.die('agent stopUnlessPlaced is not used by surface service tests'),
+    setInteractionMode: () =>
+      Effect.die('agent setInteractionMode is not used by surface service tests'),
+    // Deletes release every agent's controller; with no controllers in these tests it does nothing.
+    releaseControllers: () => Effect.void,
+    holdWorktreesForDeletion: () => Effect.void,
+    holdProjectForDeletion: () => Effect.void,
     ...overrides,
   } satisfies AgentSessionService['Service'];
 }
@@ -541,6 +575,8 @@ export {
   paneBoundRestoreLayer,
   realRestoreLayer,
   realSessionCreationLayer,
+  sessionCreationLayerFor,
   sessionDataLayer,
+  sessionWorldLayers,
 } from './tests/restore-support.js';
 export type { HarnessLaunchRecord } from './tests/restore-support.js';

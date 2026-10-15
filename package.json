@@ -16,6 +16,7 @@
     "dev:prepare": "pnpm build && pnpm --filter @isagi/desktop stage:runtime -- --skip-runtime-build",
     "dev:uninstall-launcher": "pnpm --filter @isagi/desktop dev:uninstall-launcher",
     "fix": "pnpm lint:fix && pnpm format",
+    "fluidcast:pack": "node scripts/fluidcast-pack.mjs",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint . --threads=8 --deny-warnings --no-error-on-unmatched-pattern",

@@ -84,6 +84,9 @@ const runtimeApiMembers = {
   editorDiagnostics: true,
   retryEditorProvisioning: true,
   runtimeIdentity: true,
+  resolveRuntimeUrl: true,
+  setAgentInteractionMode: true,
+  sendFluidcastCommand: true,
 } satisfies Record<keyof RuntimeApiShape, true>;
 
 /**

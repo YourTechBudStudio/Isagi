@@ -1,8 +1,10 @@
 import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
 
+import { attributeCodexRecords } from './codex/attribution.js';
 import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';
-import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
+import type { CodexRolloutRecord } from './codex/lifecycle.js';
 import { harnessDefinition } from './definitions.js';
+import type { ExecutionInterval, Incarnation } from './incarnation.js';
 import type { AgentSessionHarnessMetadataRead } from './ledger.js';
 import {
   lifecycleTurnEdges,
@@ -10,6 +12,7 @@ import {
   type HarnessLifecycleDiagnostic,
   type HarnessTurnEdge,
 } from './lifecycle.js';
+import type { ActiveExecution } from './observation-targets.js';
 import {
   harnessObservationProjectionFromRecords,
   type HarnessObservationProjection,
@@ -36,7 +39,7 @@ export type AgentObserverState = {
   readonly ledgerCursors: Map<string, FileCursor>;
   readonly rolloutCursors: Map<string, FileCursor & { readonly harnessSessionId: string }>;
   readonly recordsByHarnessSessionId: Map<string, HarnessObservationRecord[]>;
-  readonly codexRecordsByHarnessSessionId: Map<string, CodexRolloutLifecycleRecord[]>;
+  readonly codexRecordsByHarnessSessionId: Map<string, CodexRolloutRecord[]>;
   readonly nextSeqByHarnessSessionId: Map<string, number>;
   readonly nextCodexSeqByHarnessSessionId: Map<string, number>;
   stickyFailures: Map<string, ObservedHarnessTurnEdge>;
@@ -84,9 +87,12 @@ export function projectAgentObserverState(input: {
   readonly agentSessionId: number;
   readonly harness: AgentHarness | undefined;
   readonly state: AgentObserverState;
-  readonly activePtyProcessId: number | null;
+  readonly active: ActiveExecution | null;
+  readonly intervals: ReadonlyArray<ExecutionInterval>;
   readonly processFacts: ReadonlyMap<number, ProcessFact>;
 }) {
+  const live = activeIncarnationIsLive(input);
+  const activeIncarnation = input.active?.incarnation ?? null;
   const recordsByHarnessSessionId = new Map<string, readonly HarnessObservationRecord[]>(
     [...input.state.recordsByHarnessSessionId.entries()].map(([id, records]) => [id, records]),
   );
@@ -106,7 +112,9 @@ export function projectAgentObserverState(input: {
       attention: 'idle' as const,
       marker: markerString([
         metadataMarker(input.state.metadata),
-        input.activePtyProcessId,
+        activeIncarnation,
+        live,
+        input.intervals.length,
         'idle',
       ]),
       diagnostics,
@@ -116,11 +124,16 @@ export function projectAgentObserverState(input: {
   const definition = harnessDefinition(input.harness);
 
   for (const harnessSessionId of streamIds) {
-    const records = currentIncarnationRecords(
-      recordsByHarnessSessionId.get(harnessSessionId) ?? [],
-    );
+    const hookRecords = recordsByHarnessSessionId.get(harnessSessionId) ?? [];
+    const records = currentIncarnationRecords(hookRecords);
     const codexRecords = currentIncarnationRecords(
-      input.state.codexRecordsByHarnessSessionId.get(harnessSessionId) ?? [],
+      attributeCodexRecords({
+        records: input.state.codexRecordsByHarnessSessionId.get(harnessSessionId) ?? [],
+        sessionStarts: hookRecords
+          .filter((record) => record.nativeEvent === 'SessionStart')
+          .map((record) => ({ incarnation: record.incarnation, recordedAt: record.recordedAt })),
+        intervals: input.intervals,
+      }),
     );
     const lifecycle = reduceHarnessLifecycle({ harness: input.harness, records, codexRecords });
     diagnostics.push(...lifecycle.diagnostics);
@@ -170,7 +183,7 @@ export function projectAgentObserverState(input: {
       ? codexAttention({
           recordsByHarnessSessionId,
           attentionByHarnessSessionId,
-          activePtyProcessId: input.activePtyProcessId,
+          activeIncarnation,
           selectedHarnessSessionId,
           confirmedHarnessSessionIds: input.state.confirmedCodexHarnessSessionIds,
           locatorMissCounts: input.state.codexLocatorMissCounts,
@@ -180,10 +193,9 @@ export function projectAgentObserverState(input: {
         : 'idle';
   const marker = markerString([
     metadataMarker(input.state.metadata),
-    input.activePtyProcessId,
-    input.activePtyProcessId === null
-      ? null
-      : (input.processFacts.get(input.activePtyProcessId) ?? null),
+    activeIncarnation,
+    live,
+    input.intervals.length,
     attention,
   ]);
   return { projection, edges, attention, marker, diagnostics, stickyFailures };
@@ -235,14 +247,14 @@ const CODEX_MISSING_NATIVE_ARTIFACT_GRACE_POLLS = 2;
 function codexAttention(input: {
   readonly recordsByHarnessSessionId: ReadonlyMap<string, readonly HarnessObservationRecord[]>;
   readonly attentionByHarnessSessionId: ReadonlyMap<string, AttentionState>;
-  readonly activePtyProcessId: number | null;
+  readonly activeIncarnation: Incarnation | null;
   readonly selectedHarnessSessionId: string | null;
   readonly confirmedHarnessSessionIds: ReadonlySet<string>;
   readonly locatorMissCounts: ReadonlyMap<string, number>;
 }): AttentionState {
   const activeCandidates = activeCodexStreamCandidates(
     input.recordsByHarnessSessionId,
-    input.activePtyProcessId,
+    input.activeIncarnation,
   );
   // Attention describes the thread the user is currently talking to, so it must
   // follow the same primary selection the observer uses to promote resumable
@@ -274,40 +286,72 @@ function selectedMetadataHarnessSessionId(metadata: AgentSessionHarnessMetadataR
   return metadata.status === 'valid' ? metadata.metadata.harnessSessionId : null;
 }
 
-function activeTurnIsDead(
-  activeTurn: { readonly ptyProcessId: number | null },
-  input: {
-    readonly activePtyProcessId: number | null;
-    readonly processFacts: ReadonlyMap<number, ProcessFact>;
-  },
-) {
-  if (activeTurn.ptyProcessId === null) return false;
-  const fact = input.processFacts.get(activeTurn.ptyProcessId);
-  const live = fact?.status === 'running' || fact?.status === 'starting';
-  return activeTurn.ptyProcessId !== input.activePtyProcessId || !live;
+export interface ExecutionLiveness {
+  readonly active: ActiveExecution | null;
+  readonly processFacts: ReadonlyMap<number, ProcessFact>;
 }
 
-function currentIncarnationRecords<A extends { readonly ptyProcessId: number | null }>(
+/** Whether the active execution can still write: a starting or running PTY, or a live SDK worker. */
+export function activeIncarnationIsLive(input: ExecutionLiveness): boolean {
+  const active = input.active;
+  if (active === null) return false;
+  if (active.kind === 'sdk') return active.live;
+  const status = input.processFacts.get(active.ptyProcessId)?.status ?? active.status;
+  return status === 'running' || status === 'starting';
+}
+
+/**
+ * An open turn is dead when its execution was replaced or is no longer live. An unattributed turn
+ * (`null`) is never dead, because nothing is known about the execution that opened it.
+ */
+function activeTurnIsDead(
+  turn: { readonly incarnation: Incarnation | null },
+  input: ExecutionLiveness,
+) {
+  if (turn.incarnation === null) return false;
+  return turn.incarnation !== input.active?.incarnation || !activeIncarnationIsLive(input);
+}
+
+/**
+ * Records in arrival order, dropping a late record from an execution that a newer one already
+ * replaced. Unattributed records are always kept.
+ */
+function currentIncarnationRecords<A extends { readonly incarnation: Incarnation | null }>(
   records: readonly A[],
 ): readonly A[] {
-  const seen = new Set<number>();
-  let current: number | null = null;
+  const seen = new Set<Incarnation>();
+  let current: Incarnation | null = null;
   const accepted: A[] = [];
   for (const record of records) {
-    if (record.ptyProcessId === null) {
+    if (record.incarnation === null) {
       accepted.push(record);
       continue;
     }
-    if (current === record.ptyProcessId) {
+    if (current === record.incarnation) {
       accepted.push(record);
       continue;
     }
-    if (seen.has(record.ptyProcessId)) continue;
-    current = record.ptyProcessId;
-    seen.add(record.ptyProcessId);
+    if (seen.has(record.incarnation)) continue;
+    current = record.incarnation;
+    seen.add(record.incarnation);
     accepted.push(record);
   }
   return accepted;
+}
+
+/**
+ * Records `interval` in the agent's list, ordered by `since`; a tie goes after existing entries.
+ * A read that seeds an interval can run before an earlier switch event is handled, and attribution
+ * needs the list in time order, which is also switch order.
+ */
+export function insertExecutionInterval(
+  intervals: ExecutionInterval[],
+  interval: ExecutionInterval,
+) {
+  const since = Date.parse(interval.since);
+  const index = intervals.findIndex((existing) => Date.parse(existing.since) > since);
+  if (index < 0) intervals.push(interval);
+  else intervals.splice(index, 0, interval);
 }
 
 function mergeStickyFailures(

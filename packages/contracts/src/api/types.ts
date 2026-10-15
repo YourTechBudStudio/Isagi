@@ -20,6 +20,8 @@ export type AnyApiContentEndpoint = ApiContentEndpoint<
   WireSchema | undefined
 >;
 
+export type AnyApiEventStreamEndpoint = ApiEventStreamEndpoint<WireSchema, WireSchema | undefined>;
+
 export interface ApiEndpoint<
   Body extends WireSchema | undefined,
   Output extends WireSchema,
@@ -109,3 +111,26 @@ export interface ApiContentEndpoint<
 export type ApiContentEndpointParams<Endpoint> = PartType<Endpoint, 'params'>;
 export type ApiContentEndpointQuery<Endpoint> = PartType<Endpoint, 'query'>;
 export type ApiContentEndpointError<Endpoint> = PartType<Endpoint, 'errors'>;
+
+/**
+ * A route whose success body is a server-sent event stream rather than the JSON success envelope.
+ *
+ * Like a content route, it is its own descriptor kind and never a member of an `ApiEndpoint`
+ * collection. It has no `output` schema: each event's `data` is one JSON value its owner encodes
+ * with its own schema, which a wire schema here cannot describe when the payload is opaque to
+ * contracts. A refusal before the stream opens is the ordinary JSON error envelope, so a client can
+ * rely on it for any non-200.
+ */
+export interface ApiEventStreamEndpoint<
+  Errors extends WireSchema,
+  Params extends WireSchema | undefined = undefined,
+> {
+  readonly id: string;
+  readonly method: 'GET';
+  readonly path: `/${string}`;
+  readonly params?: Params;
+  readonly errors: Errors;
+}
+
+export type ApiEventStreamEndpointParams<Endpoint> = PartType<Endpoint, 'params'>;
+export type ApiEventStreamEndpointError<Endpoint> = PartType<Endpoint, 'errors'>;

@@ -6,9 +6,11 @@ import { Effect, Layer } from 'effect';
 import type { RuntimeEvent } from '@isagi/contracts';
 
 import { makeLogCapture } from '../../../test/test-support.js';
+import { makeFakeFluidcastSessions } from '../../fluidcast/testing.js';
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from '../agent-sessions/attention.js';
+import { AgentSessionInteraction } from '../agent-sessions/interaction.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { RuntimeEventProjection } from '../runtime-event-projection.js';
 import { SurfaceRepository } from '../surfaces/repository.js';
@@ -47,6 +49,11 @@ function harness(input: {
     Layer.provide(Layer.succeed(AgentSessionRepository, dying('agents'))),
     Layer.provide(Layer.succeed(TerminalSessionRepository, dying('terminals'))),
     Layer.provide(Layer.succeed(AgentSessionAttentionProjection, dying('attention'))),
+    Layer.provide(
+      AgentSessionInteraction.layerNoDeps.pipe(
+        Layer.provide(makeFakeFluidcastSessions({ availability: 'disabled' }).layer),
+      ),
+    ),
   );
 }
 

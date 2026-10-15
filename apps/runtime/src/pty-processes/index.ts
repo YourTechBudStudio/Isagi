@@ -1,4 +1,5 @@
 export { PtyForegroundState } from './foreground-state.js';
+export { LaunchEnvironment } from './launch-environment.js';
 export { PtyService } from './service.js';
 export { PtyProcessesLayer } from './layer.js';
 export type { PtyAttachmentPlan, PtyLaunchError } from './service.js';

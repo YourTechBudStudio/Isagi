@@ -3,15 +3,20 @@ import test, { type TestContext } from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { SessionStatus, SurfaceDetail } from '@isagi/contracts';
+import type { AgentSessionInteraction, SessionStatus, SurfaceDetail } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
+import { fluidcastCopy, runtimeErrorCopy } from '../../../copy/index.js';
 import { makeTestRegistry } from '../../state/testing.js';
-import { formatRuntimeError } from '../../workspace/runtime-data.js';
+import { formatRuntimeError, formatRuntimeErrorSummary } from '../../workspace/runtime-data.js';
+import type { Surface } from '../../workspace/types.js';
 import { paletteTestSession } from '../test-support.js';
+import type { PaletteContext } from '../types.js';
 import {
   deleteActivePaneCommand,
   deleteActiveSurfaceCommand,
   renameActiveSurfaceCommand,
+  togglePaneInteractionCommand,
 } from './surface-actions.js';
 
 const originalFetch = globalThis.fetch;
@@ -252,4 +257,169 @@ function terminalSession(paneId: number, status: SessionStatus) {
       lastSeenAt: null,
     },
   } satisfies NonNullable<SurfaceDetail['panes'][number]['session']>;
+}
+
+// --- toggle-pane-interaction -------------------------------------------------------------------
+
+const agentSurface = (interaction: AgentSessionInteraction): SurfaceDetail => ({
+  id: 501,
+  worktreeId: 10,
+  title: 'Agent',
+  activePaneId: 601,
+  layout: { kind: 'leaf', nodeId: 'pane-601', paneId: 601, collapsed: false },
+  panes: [
+    {
+      id: 601,
+      surfaceId: 501,
+      title: 'claude',
+      sortOrder: 0,
+      session: {
+        kind: 'agent_session',
+        agentSession: {
+          id: 701,
+          paneId: 601,
+          worktreeId: 10,
+          harness: 'claude',
+          cwd: '/repo/isagi',
+          harnessSessionId: null,
+          statusReason: null,
+          recoveryAction: 'connect_existing',
+          interaction,
+          status: 'running',
+          diagnosticCode: null,
+          diagnosticDetail: null,
+          createdAt: '2026-06-17T00:00:00.000Z',
+          updatedAt: '2026-06-17T00:00:00.000Z',
+          lastSeenAt: null,
+        },
+      },
+    },
+  ],
+});
+
+function toggleContext(
+  session: Pick<PaletteContext, 'registry' | 'app'>,
+  paneKinds: Surface['paneKinds'],
+): PaletteContext {
+  return {
+    projects: [],
+    ...session,
+    launchableHarnesses: [],
+    editorAvailable: false,
+    activeProject: null,
+    activeWorktree: {
+      id: 10,
+      projectId: 1,
+      title: 'main',
+      path: '/repo/isagi',
+      branch: 'main',
+      head: 'abcdef0',
+      isRoot: true,
+      attention: 'idle',
+      parked: false,
+      surfaces: [{ id: 501, title: 'Agent', paneKinds, attention: 'idle' }],
+      activeSurfaceId: 501,
+    },
+    activeSurface: { id: 501, title: 'Agent', paneKinds, attention: 'idle' },
+    activePaneId: 601,
+  };
+}
+
+test('toggle-pane-interaction is offered only on a surface that holds an agent pane', (t) => {
+  const registry = makeTestRegistry();
+  t.after(() => registry.dispose());
+  const session = paletteTestSession(registry);
+  assert.equal(
+    togglePaneInteractionCommand.available?.(toggleContext(session, ['terminal_session'])),
+    false,
+  );
+  assert.equal(
+    togglePaneInteractionCommand.available?.(toggleContext(session, ['agent_session'])),
+    true,
+  );
+});
+
+test('toggle-pane-interaction explains a non-agent active pane in the palette instead of doing nothing', async (t) => {
+  const session = surfaceSession(t, surfaceDetail({ activePaneId: 601 }));
+
+  const error = await Promise.resolve(
+    togglePaneInteractionCommand.preflight?.(toggleContext(session, ['agent_session']), {}),
+  ).then(
+    () => null,
+    (cause: unknown) => cause,
+  );
+
+  assert.equal(formatRuntimeError(error), fluidcastCopy.notAnAgentPane);
+});
+
+for (const [interaction, target] of [
+  [{ mode: 'terminal', fluidcast: 'available' }, 'fluidcast'],
+  [{ mode: 'terminal', fluidcast: 'unavailable' }, 'fluidcast'],
+  [{ mode: 'fluidcast', fluidcastSessionId: 'fc-1' }, 'terminal'],
+] as const) {
+  test(`toggle-pane-interaction runs ${interaction.mode}${'fluidcast' in interaction ? `/${interaction.fluidcast}` : ''} -> ${target}`, async (t) => {
+    const session = surfaceSession(t, agentSurface(interaction));
+
+    const preflight = await togglePaneInteractionCommand.preflight?.(
+      toggleContext(session, ['agent_session']),
+      {},
+    );
+
+    assert.deepEqual(preflight, {
+      mode: 'run',
+      values: {
+        surfaceId: '501',
+        worktreeId: '10',
+        paneId: '601',
+        agentSessionId: '701',
+        mode: target,
+      },
+    });
+  });
+}
+
+for (const reason of ['disabled', 'invalid_config', 'harness_unsupported'] as const) {
+  test(`toggle-pane-interaction reports the runtime's ${reason} refusal as the palette error`, async (t) => {
+    const refusal = new RuntimeApiError({
+      endpointId: 'agent-sessions.set-interaction-mode',
+      apiError: {
+        code: 'fluidcast_unavailable',
+        status: 409,
+        message: 'diagnostic',
+        requestId: 'r',
+        data: { reason },
+      } as never,
+    });
+    const calls: Array<readonly [number, string]> = [];
+    const registry = makeTestRegistry({
+      api: {
+        setAgentInteractionMode: (agentSessionId, mode) =>
+          Effect.suspend(() => {
+            calls.push([agentSessionId, mode]);
+            return Effect.fail(refusal);
+          }),
+      },
+    });
+    t.after(() => registry.dispose());
+    const session = paletteTestSession(registry);
+
+    const error = await Promise.resolve(
+      togglePaneInteractionCommand.run(
+        {
+          surfaceId: '501',
+          worktreeId: '10',
+          paneId: '601',
+          agentSessionId: '701',
+          mode: 'fluidcast',
+        },
+        toggleContext(session, ['agent_session']),
+      ),
+    ).then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+
+    assert.deepEqual(calls, [[701, 'fluidcast']]);
+    assert.equal(formatRuntimeErrorSummary(error), runtimeErrorCopy.fromApiError(refusal.apiError));
+  });
 }

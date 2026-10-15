@@ -2,7 +2,7 @@
 
 status: accepted
 date: 2026-06-15
-updated: 2026-07-29
+updated: 2026-10-13
 
 ## Decision
 
@@ -46,7 +46,9 @@ Per-invocation integration paths are validated for the supported harnesses, each
 
 - Pi: a per-run extension.
 - OpenCode: a per-run plugin.
-- Claude Code: per-run command hooks for turn lifecycle, plus read-only reconstruction of conversation from the native transcript the launch produces.
-- Codex: per-run command hooks via process-scoped config overrides; the earlier hook-schema validation spike is resolved.
+- Claude Code: per-run command hooks for turn lifecycle, plus read-only reconstruction of conversation from the native transcript the launch produces. An SDK-driven execution passes the same runtime-owned hook settings as per-query `settings`.
+- Codex: per-run command hooks via process-scoped config overrides; the earlier hook-schema validation spike is resolved. An SDK-driven execution passes the same overrides as app-server arguments, with hook trust set per thread.
+
+Harness SDK executions are invocation-scoped in the same way as launched processes: they write no global, user, or project config.
 
 The specific hook and event names per harness live in the runtime adapters and in the change's decision log, not in this ADR, so the decision stays stable as harness versions evolve.

@@ -9,7 +9,7 @@ import { Effect, Schema, Stream } from 'effect';
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -25,7 +25,7 @@ import { WorktreeSetupService } from '../setup/service.js';
 import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../snapshot.js';
 import { StateFile, stateFromActiveContext, type WorkspaceState } from '../state-file.js';
 import { NoProjectDeletionParticipant } from '../testing.js';
-import { testWorktreeDeleteDiagnostics } from './test-support.js';
+import { testAgentSessionService, testWorktreeDeleteDiagnostics } from './test-support.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>
@@ -481,6 +481,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),

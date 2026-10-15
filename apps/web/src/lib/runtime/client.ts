@@ -3,12 +3,15 @@ import { Context, Effect, Layer } from 'effect';
 import {
   apiBasePath,
   apiEndpoints,
+  fluidcastEndpoints,
   workflowContentEndpoints,
   agentSessionPtyWebSocketEndpoint,
   commandLogStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   type AcceptHarnessPolicyInput,
+  type AgentSessionInteractionMode,
+  type SetAgentSessionInteractionModeOutput,
   type AcceptHarnessPolicyOutput,
   type ControlPlaneSnapshot,
   type EditorDiagnosticsOutput,
@@ -463,6 +466,23 @@ export interface RuntimeApiShape {
    * runtime-issued identifier is on the wire and the app resolves one runtime URL per session.
    */
   readonly runtimeIdentity: () => Effect.Effect<string, RuntimeUrlUnavailable>;
+  /**
+   * The runtime URL itself, checked to parse. For a client that keeps one URL for its lifetime, such
+   * as an embedded Fluidcast player, which builds its own requesters and speech URLs from it.
+   */
+  readonly resolveRuntimeUrl: () => Effect.Effect<string, RuntimeUrlUnavailable>;
+  readonly setAgentInteractionMode: (
+    agentSessionId: number,
+    mode: AgentSessionInteractionMode,
+  ) => Effect.Effect<
+    SetAgentSessionInteractionModeOutput,
+    RuntimeCallError<typeof apiEndpoints.agentSessions.setInteractionMode>
+  >;
+  /** One player command; the body is the Fluidcast SDK's encoded `Command`, opaque to contracts. */
+  readonly sendFluidcastCommand: (
+    fluidcastSessionId: string,
+    command: unknown,
+  ) => Effect.Effect<null, RuntimeCallError<typeof fluidcastEndpoints.command>>;
 }
 
 /**
@@ -658,6 +678,11 @@ export function makeRuntimeApi(
       request(apiEndpoints.editor.diagnostics, { editorContextId }, { ptyProcessId }),
     retryEditorProvisioning: () => request(apiEndpoints.editor.retryProvisioning),
     runtimeIdentity: () => atRuntimeUrl(normalizeRuntimeIdentity),
+    resolveRuntimeUrl: () => atRuntimeUrl((runtimeUrl) => new URL(runtimeUrl).href),
+    setAgentInteractionMode: (agentSessionId, mode) =>
+      request(apiEndpoints.agentSessions.setInteractionMode, { agentSessionId }, { mode }),
+    sendFluidcastCommand: (fluidcastSessionId, command) =>
+      request(fluidcastEndpoints.command, { fluidcastSessionId }, command),
   };
 }
 

@@ -1,4 +1,5 @@
 import { Effect, Schema, Stream } from 'effect';
+import { Sse } from 'effect/encoding';
 import {
   HttpClient,
   HttpClientRequest,
@@ -13,11 +14,14 @@ import {
   apiSuccessResponseSchema,
   type AnyApiContentEndpoint,
   type AnyApiEndpoint,
+  type AnyApiEventStreamEndpoint,
   type ApiContentEndpointError,
   type ApiEndpointError,
   type ApiEndpointOutput,
   type ApiEndpointRequestArgs,
   type ApiError,
+  type ApiEventStreamEndpointError,
+  type ApiEventStreamEndpointParams,
   type ApiInfrastructureError,
   type WireSchema,
 } from '@isagi/contracts';
@@ -39,6 +43,14 @@ export type RuntimeEndpointError<Endpoint> =
 /** The same three failures for a content route, read from the content descriptor's `errors`. */
 export type RuntimeContentEndpointError<Endpoint> =
   | RuntimeApiError<Extract<ApiContentEndpointError<Endpoint>, ApiError> | ApiInfrastructureError>
+  | RuntimeDecodeError
+  | RuntimeTransportError;
+
+/** The same three failures for an event-stream route, before or during the stream. */
+export type RuntimeEventStreamError<Endpoint> =
+  | RuntimeApiError<
+      Extract<ApiEventStreamEndpointError<Endpoint>, ApiError> | ApiInfrastructureError
+    >
   | RuntimeDecodeError
   | RuntimeTransportError;
 
@@ -65,6 +77,17 @@ export type ContentRequester = <Endpoint extends AnyApiContentEndpoint>(
   params: Readonly<Record<string, string | number>>,
   query?: ContentQuery,
 ) => Effect.Effect<RuntimeContent, RuntimeContentEndpointError<Endpoint>>;
+
+/**
+ * An event-stream route's events, each event's `data` parsed as JSON and otherwise undecoded: the
+ * payload belongs to the route's owner, which decodes it with its own schema. Comments and
+ * heartbeats are dropped. The request lives as long as the stream, so interrupting the stream aborts
+ * it.
+ */
+export type EventStreamRequester = <Endpoint extends AnyApiEventStreamEndpoint>(
+  endpoint: Endpoint,
+  params: ApiEventStreamEndpointParams<Endpoint>,
+) => Stream.Stream<unknown, RuntimeEventStreamError<Endpoint>>;
 
 /** A content route's absolute URL, for `<img>` sources and download links that bypass the requester. */
 export function contentEndpointUrl(
@@ -182,7 +205,45 @@ export const makeRequesters = Effect.fnUntraced(function* (runtimeUrl: string) {
       Effect.withSpan('RuntimeClient.requestContent', { attributes: { endpointId: endpoint.id } }),
     );
 
-  return { runtimeUrl, request, requestContent } as const;
+  // The stream owns the request's scope, so the fetch is aborted when the subscriber stops reading.
+  const scopedClient = HttpClient.withScope(client);
+  const requestEventStream: EventStreamRequester = (endpoint, params) =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const url = yield* urlFor(endpoint.id, endpoint.path, params, undefined);
+        const response = yield* scopedClient
+          .execute(HttpClientRequest.get(url).pipe(HttpClientRequest.accept('text/event-stream')))
+          .pipe(
+            Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+            Effect.mapError(
+              (error) =>
+                new RuntimeTransportError({ endpointId: endpoint.id, cause: platformCause(error) }),
+            ),
+          );
+        if (response.status !== 200) {
+          const payload = yield* readJson(endpoint.id, response);
+          return yield* failWithEnvelope(endpoint.id, endpoint.errors, payload);
+        }
+        return response.stream.pipe(
+          Stream.mapError(
+            (error) =>
+              new RuntimeTransportError({ endpointId: endpoint.id, cause: platformCause(error) }),
+          ),
+          Stream.decodeText,
+          Stream.pipeThroughChannel(Sse.decodeDataSchema(Schema.Unknown)),
+          // A frame that is not SSE, `data` that is not JSON, or a `retry` directive the runtime
+          // never sends: the response broke the contract.
+          Stream.mapError((error) =>
+            error instanceof RuntimeTransportError
+              ? error
+              : new RuntimeDecodeError({ endpointId: endpoint.id, cause: error }),
+          ),
+          Stream.map((event) => event.data),
+        );
+      }),
+    ) as Stream.Stream<unknown, RuntimeEventStreamError<typeof endpoint>>;
+
+  return { runtimeUrl, request, requestContent, requestEventStream } as const;
 });
 
 function isOk(response: HttpClientResponse.HttpClientResponse) {

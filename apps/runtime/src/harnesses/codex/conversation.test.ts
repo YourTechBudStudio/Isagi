@@ -155,7 +155,7 @@ function record(
   return {
     recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'codex',
     nativeEvent,
     event: { hook_event_name: nativeEvent, ...input },

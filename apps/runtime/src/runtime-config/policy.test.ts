@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, normalize, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Schema } from 'effect';
+import { Redacted, Schema } from 'effect';
 
 import {
   clientSettingsOutputSchema,
@@ -34,7 +34,7 @@ test('invalid harness values fail closed without becoming onboarding defaults', 
   const state = parseRuntimeConfig({ harnesses: { pi: { enabled: 'yes' } } }).harnesses;
   assert.equal(state.status, 'invalid');
   assert.equal(state.onboardingComplete, false);
-  assert.match(state.diagnostic ?? '', /boolean/i);
+  assert.equal(state.diagnostic, 'invalid harness policy at pi.enabled');
 });
 
 test('workflow directories default empty and normalize absolute and current-home paths', () => {
@@ -228,4 +228,71 @@ test('client settings wire schema requires normalized fields and enforces canoni
       );
     }
   }
+});
+
+const fluidcast = {
+  enabled: true,
+  languageModel: { provider: 'openai', apiKey: 'sk-test', model: 'gpt-test' },
+  speech: { model: 'tts-test', apiKey: 'sk-test' },
+  preset: { voice: { name: 'alloy' } },
+};
+
+test('fluidcast is disabled when missing or not enabled, without validating the rest', () => {
+  assert.deepEqual(parseRuntimeConfig({}).fluidcast, { status: 'disabled' });
+  assert.deepEqual(defaultRuntimeConfig.fluidcast, { status: 'disabled' });
+  for (const section of [{}, { enabled: false, speech: 42 }, { enabled: 'yes' }, 'nonsense']) {
+    assert.deepEqual(parseRuntimeConfig({ fluidcast: section }).fluidcast, {
+      status: 'disabled',
+    });
+  }
+});
+
+test('fluidcast is ready with the opus and detailed defaults applied', () => {
+  const state = parseRuntimeConfig({ fluidcast }).fluidcast;
+  assert.ok(state.status === 'ready');
+  assert.equal(state.config.speech.format, 'opus');
+  assert.equal(state.config.preset.profile, 'detailed');
+  assert.equal(state.config.languageModel.provider, 'openai');
+  assert.equal(Redacted.value(state.config.languageModel.apiKey!), 'sk-test');
+
+  const compatible = parseRuntimeConfig({
+    fluidcast: {
+      ...fluidcast,
+      languageModel: {
+        provider: 'openai-compatible',
+        model: 'local',
+        baseUrl: 'http://localhost:1234/v1',
+        structuredOutput: true,
+      },
+      speech: { ...fluidcast.speech, format: 'wav' },
+      preset: { profile: 'compact', voice: { name: 'alloy', instructions: 'Calm.' } },
+    },
+  }).fluidcast;
+  assert.ok(compatible.status === 'ready');
+  assert.equal(compatible.config.speech.format, 'wav');
+  assert.equal(compatible.config.preset.profile, 'compact');
+  assert.ok(compatible.config.languageModel.provider === 'openai-compatible');
+  assert.equal(compatible.config.languageModel.apiKey, undefined);
+  assert.equal(compatible.config.languageModel.structuredOutput, true);
+});
+
+test('an invalid enabled fluidcast section is invalid with issue paths and never throws', () => {
+  for (const [section, paths] of [
+    [{ ...fluidcast, speech: { model: 'tts-test' } }, ['fluidcast.speech.apiKey']],
+    [{ ...fluidcast, preset: { voice: { name: '' } } }, ['fluidcast.preset.voice.name']],
+    [
+      { ...fluidcast, languageModel: { ...fluidcast.languageModel, temperature: 3 } },
+      ['fluidcast.languageModel.temperature'],
+    ],
+  ] as const) {
+    assert.deepEqual(parseRuntimeConfig({ fluidcast: section }).fluidcast, {
+      status: 'invalid',
+      issuePaths: paths,
+    });
+  }
+  // The openai provider requires a key; the compatible one does not.
+  const missingKey = parseRuntimeConfig({
+    fluidcast: { ...fluidcast, languageModel: { provider: 'openai', model: 'gpt-test' } },
+  }).fluidcast;
+  assert.equal(missingKey.status, 'invalid');
 });

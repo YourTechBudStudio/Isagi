@@ -38,7 +38,7 @@ function record(
   return {
     recordedAt: time(seq),
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'pi',
     nativeEvent,
     event: { context: { hasPendingMessages: pending } },

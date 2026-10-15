@@ -11,7 +11,9 @@ export {
   type ContentQuery,
   type ContentRequester,
   type EndpointRequester,
+  type EventStreamRequester,
   type RuntimeContent,
   type RuntimeContentEndpointError,
   type RuntimeEndpointError,
+  type RuntimeEventStreamError,
 } from './requester.js';

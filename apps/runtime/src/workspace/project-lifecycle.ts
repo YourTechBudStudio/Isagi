@@ -11,6 +11,7 @@ import type {
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
+import { AgentSessionService } from '../environment/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import {
   classifyProjectRoot,
@@ -36,6 +37,7 @@ export const projectLifecycle = Effect.gen(function* () {
   const git = yield* Git;
   const commands = yield* CommandService;
   const pty = yield* PtyService;
+  const agents = yield* AgentSessionService;
   const deleteDiagnostics = yield* WorktreeDeleteDiagnosticsReader;
   const internalEvents = yield* InternalEvents;
   const deletionParticipant = yield* ProjectDeletionParticipant;
@@ -135,65 +137,77 @@ export const projectLifecycle = Effect.gen(function* () {
       } satisfies RelocateProjectOutput;
     }),
     deleteProject: Effect.fn('WorkspaceService.deleteProject')(function* (projectId: number) {
-      // Do not clear persisted active context here. Active context is
-      // frontend-owned restoration state; stale project/worktree references
-      // are intentionally reconciled by the frontend during startup and
-      // workspace refresh.
-      const worktrees = (yield* repository.listWorktrees).filter(
-        (worktree) => worktree.projectId === projectId,
-      );
-      for (const worktree of worktrees) {
-        yield* commandCleanup(
-          commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
-          worktree.id,
-          projectId,
-        );
-      }
-      // The cascade below erases every agent and terminal session of these worktrees, and with
-      // them the only rows that point at their live processes: stop those processes first, as
-      // deleting a single worktree does, or they run on with no owner.
-      const sessionPtys: number[] = [];
-      for (const worktree of worktrees) {
-        sessionPtys.push(...sessionPtyProcessIds(yield* deleteDiagnostics.read(worktree.id)));
-      }
-      yield* terminateSessionPtys(pty, {
-        operation: 'project_delete',
-        ptyProcessIds: sessionPtys,
-        projectId,
-      });
-      const doomed = yield* sessionDeletions.inWorktrees(
-        new Set(worktrees.map((worktree) => worktree.id)),
-      );
-      // Read *before* the delete: `worktrees.project_id` cascades from `projects`, so after the
-      // commit there is no way to enumerate which worktrees went with it, and the
-      // `project_deleted` event names exactly those ids.
-      const doomedWorktreeIds = worktrees.map((worktree) => worktree.id);
-      // The project's workflow runs are erased in the same transaction as its row, through the
-      // `ProjectDeletionParticipant` port. On the runtime's single SQLite connection, a launch
-      // commits wholly before this transaction (so its run is erased here) or wholly after it
-      // (so launch admission refuses it): a deleted project has no runs and can never gain
-      // one. The workflows domain owns the erasure SQL (ADR 0008); this service only owns the
-      // transaction boundary.
-      let erasedRuns = 0;
-      const deleted = yield* repository.deleteProject(projectId, (db) => {
-        erasedRuns = deletionParticipant.eraseInTransaction(db, projectId);
-      });
-      if (deleted) {
-        yield* sessionDeletions.publish(doomed);
-        yield* internalEvents.publish({
-          type: 'project_deleted',
-          projectId,
-          worktreeIds: doomedWorktreeIds,
-        });
-        yield* Effect.logInfo('Deleted project').pipe(
-          Effect.annotateLogs({
+      // The project is held against new agent controllers in any of its worktrees, including one
+      // added during this delete, from before its worktrees are listed until the cascade commits
+      // or fails; the scope removes only this delete's hold. The agents to release are read under
+      // it, so an agent switched earlier is released and one switched later is refused.
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* agents.holdProjectForDeletion(projectId);
+          // Do not clear persisted active context here. Active context is
+          // frontend-owned restoration state; stale project/worktree references
+          // are intentionally reconciled by the frontend during startup and
+          // workspace refresh.
+          const worktrees = (yield* repository.listWorktrees).filter(
+            (worktree) => worktree.projectId === projectId,
+          );
+          for (const worktree of worktrees) {
+            yield* commandCleanup(
+              commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
+              worktree.id,
+              projectId,
+            );
+          }
+          // The cascade below erases every agent and terminal session of these worktrees, and with
+          // them the only rows that point at their live processes: stop those processes first, as
+          // deleting a single worktree does, or they run on with no owner.
+          const sessionPtys: number[] = [];
+          for (const worktree of worktrees) {
+            sessionPtys.push(...sessionPtyProcessIds(yield* deleteDiagnostics.read(worktree.id)));
+          }
+          // The project's workflow runs are erased in the same transaction as its row, through the
+          // `ProjectDeletionParticipant` port. On the runtime's single SQLite connection, a launch
+          // commits wholly before this transaction (so its run is erased here) or wholly after it
+          // (so launch admission refuses it): a deleted project has no runs and can never gain
+          // one. The workflows domain owns the erasure SQL (ADR 0008); this service only owns the
+          // transaction boundary.
+          let erasedRuns = 0;
+          // Read *before* the delete: `worktrees.project_id` cascades from `projects`, so after the
+          // commit there is no way to enumerate which worktrees went with it, and the
+          // `project_deleted` event names exactly those ids.
+          const doomedWorktreeIds = worktrees.map((worktree) => worktree.id);
+          const agentSessionIds: number[] = [];
+          for (const worktreeId of doomedWorktreeIds) {
+            agentSessionIds.push(...(yield* deleteDiagnostics.read(worktreeId)).agentSessionIds);
+          }
+          yield* agents.releaseControllers(agentSessionIds);
+          yield* terminateSessionPtys(pty, {
+            operation: 'project_delete',
+            ptyProcessIds: sessionPtys,
             projectId,
-            worktrees: doomedWorktreeIds.length,
-            workflowRuns: erasedRuns,
-          }),
-        );
-      }
-      return { projectId, deleted } satisfies DeleteProjectOutput;
+          });
+          const doomed = yield* sessionDeletions.inWorktrees(new Set(doomedWorktreeIds));
+          const deleted = yield* repository.deleteProject(projectId, (db) => {
+            erasedRuns = deletionParticipant.eraseInTransaction(db, projectId);
+          });
+          if (deleted) {
+            yield* sessionDeletions.publish(doomed);
+            yield* internalEvents.publish({
+              type: 'project_deleted',
+              projectId,
+              worktreeIds: doomedWorktreeIds,
+            });
+            yield* Effect.logInfo('Deleted project').pipe(
+              Effect.annotateLogs({
+                projectId,
+                worktrees: doomedWorktreeIds.length,
+                workflowRuns: erasedRuns,
+              }),
+            );
+          }
+          return { projectId, deleted } satisfies DeleteProjectOutput;
+        }),
+      );
     }),
     // No pre-read: the repository transaction is the only validation site, so
     // there is no window in which the service's view and the stored rows can

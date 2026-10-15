@@ -133,7 +133,9 @@ async function openSecureArtifactFile(fs, path, mode) {
 // (command-based and plugin-based) emits this same `appendHarnessEvent` plus its
 // `safeJsonValue`/`harnessSessionLogFileName` helpers, so the on-disk record
 // schema and the log-file naming live in exactly one place. The reader in
-// `harnesses/ledger.ts` (`parseJsonlRecord`) must stay in lockstep.
+// `harnesses/ledger.ts` (`parseJsonlRecord`) must stay in lockstep, including
+// the execution marker: `ptyProcessId` for a PTY, `sdkExecutionId` for an SDK
+// worker, and `null` for whichever is absent.
 export function appendHarnessEventSource(harness: AgentHarness) {
   return String.raw`function safeJsonValue(value) {
   try {
@@ -175,6 +177,7 @@ async function appendHarnessEvent(harnessSessionId, nativeEvent, event) {
           agentSessionId,
           harnessSessionId,
           ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
+          sdkExecutionId: process.env.ISAGI_SDK_EXECUTION_ID || null,
           harness: ${JSON.stringify(harness)},
           nativeEvent,
           event,

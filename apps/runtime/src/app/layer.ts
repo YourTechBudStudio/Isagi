@@ -4,6 +4,7 @@ import { CliAccessLayer } from '../cli-access/index.js';
 import { CommandsLayer } from '../commands/index.js';
 import { EditorLayer } from '../editor/index.js';
 import { EnvironmentLayer, HarnessObservationTargetsLayer } from '../environment/index.js';
+import { FluidcastLayer } from '../fluidcast/index.js';
 import { HarnessesLayer } from '../harnesses/index.js';
 import { EventLoopWatchdog } from '../platform/diagnostics/index.js';
 import { EventsLayer } from '../platform/events/index.js';
@@ -38,6 +39,7 @@ export const ModulesLayer = Layer.mergeAll(
   CommandsLayer,
   EditorLayer,
   HarnessesLayer,
+  FluidcastLayer,
   EnvironmentLayer,
   WorkspaceLayer,
   WorkflowsLayer,

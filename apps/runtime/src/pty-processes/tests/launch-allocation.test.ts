@@ -6,7 +6,6 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber, FiberMap, Layer, Stream } from 'effect';
 
-import { noCliAccess } from '../../cli-access/testing.js';
 import {
   publishOnlyRecordingEventBus,
   type RecordingEventBus,
@@ -73,6 +72,7 @@ interface Harness {
   readonly dependencies: (
     backend: PtyBackendShape,
     repository?: PtyRepository['Service'],
+    baseEnvironment?: NodeJS.ProcessEnv,
   ) => PtyLaunchDependencies;
 }
 
@@ -102,7 +102,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
           reservations,
           pendingExits,
           sessionsPath: paths.paths.sessionsPath,
-          dependencies: (backend, override) => ({
+          dependencies: (backend, override, baseEnvironment = {}) => ({
             repository: override ?? repository,
             catalog: catalogWith(backend),
             eventBus: bus.service,
@@ -117,8 +117,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             activeAttachments: new Map(),
             runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
-            userProcessEnvironment: {},
-            cliAccess: noCliAccess,
+            launchEnvironment: { base: Effect.succeed(baseEnvironment) },
           }),
         });
       }).pipe(Effect.provide(PtyRepository.layer.pipe(Layer.provide(database)))),
@@ -664,6 +663,37 @@ test('a launch pending past the retention window is excluded from orphan GC', as
       const row = yield* harness.repository.findProcess(allocation.ptyProcessId);
       assert.notEqual(row, null);
       yield* allocation.abandon;
+    }),
+  );
+});
+
+test('a PTY environment layers the launch base, then overrides, then per-process values', async () => {
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      let launched: NodeJS.ProcessEnv | null = null;
+      const backend = backendStub('node_pty', {
+        launch: (input) => {
+          launched = input.env;
+          return backendStub('node_pty').launch(input);
+        },
+      });
+      const allocation = yield* allocateLaunch(
+        harness.dependencies(backend, undefined, {
+          BASE: 'base',
+          OVERRIDE: 'base',
+          PROCESS: 'base',
+        }),
+        {
+          command: 'pnpm',
+          args: ['dev'],
+          cwd: '/repo/isagi',
+          envOverrides: { OVERRIDE: 'override', PROCESS: 'override' },
+          envForProcess: () => Effect.succeed({ PROCESS: 'process' }),
+        },
+      );
+      yield* allocation.start;
+
+      assert.deepEqual(launched, { BASE: 'base', OVERRIDE: 'override', PROCESS: 'process' });
     }),
   );
 });

@@ -8,6 +8,7 @@ import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { workspaceBootCopy } from '../../copy/index.js';
 import { clientSettingsAtom } from '../../lib/client-settings/queries.js';
+import { useFluidcastPresentation } from '../../lib/fluidcast/presentation.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
 import {
   useCommandDispatcher,
@@ -29,6 +30,7 @@ import { activePaneBySurfaceAtom, setZen, zenAtom } from '../../lib/workspace/st
 import { TerminalPresentationProvider } from '../../lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
+import { useZenEscape } from './useZenEscape.js';
 import { WorkArea } from './WorkArea.js';
 
 function FirstRunDragRegion() {
@@ -103,14 +105,10 @@ export function WorkspacePage() {
     void window.isagi?.setHostChromeVisible?.(!zen);
   }, [zen]);
 
-  // Zen: Esc exits (unless the palette owns Esc); a provisional Mod+. toggles it.
+  // Zen: Esc exits (see `useZenEscape`); a provisional Mod+. toggles it.
+  useZenEscape();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && zen && !paletteOpen) {
-        event.preventDefault();
-        setZen(registry, false);
-        return;
-      }
       if (isPlatformModifierShortcut(event) && event.key === '.') {
         event.preventDefault();
         setZen(registry, !zen);
@@ -118,7 +116,11 @@ export function WorkspacePage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zen, paletteOpen, registry]);
+  }, [zen, registry]);
+
+  // Pauses the Fluidcast sessions that leave the active surface. Lives here, outside `WorkArea`,
+  // so a pane's mount or unmount never decides visibility.
+  useFluidcastPresentation(activeSurface?.id ?? null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

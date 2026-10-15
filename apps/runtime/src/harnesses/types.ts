@@ -52,6 +52,30 @@ export interface HarnessAdapter {
 }
 
 /**
+ * Per-invocation instrumentation for an SDK worker (ADR 0007): the harness's `ISAGI_*` variables
+ * plus the hook wiring the worker's own launch options carry. It shares its source with the PTY
+ * envelope, so both executions write the same ledger.
+ */
+export type SdkInstrumentation =
+  | {
+      readonly harness: 'claude';
+      readonly environment: NodeJS.ProcessEnv;
+      readonly settingsPath: string;
+    }
+  | {
+      readonly harness: 'codex';
+      readonly environment: NodeJS.ProcessEnv;
+      readonly args: {
+        readonly beforeSubcommand: ReadonlyArray<string>;
+        readonly appServer: ReadonlyArray<string>;
+      };
+      readonly thread: {
+        readonly config: { readonly bypass_hook_trust: true };
+        readonly sessionStartSource: 'startup';
+      };
+    };
+
+/**
  * A harness launch could not be prepared. `code` is the reason the agent-session and surface API
  * boundaries map to a contract error.
  *

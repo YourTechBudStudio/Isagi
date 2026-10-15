@@ -5,11 +5,18 @@ import type { HarnessDefinition } from '../definition-types.js';
 import { resolveDocsTarget } from '../docs-targets.js';
 import { extractClaudeHeadlessOutput } from '../headless-output.js';
 import { transcriptAt } from '../transcript-locator.js';
-import { buildClaudeHeadlessLaunch, buildClaudeLaunch } from './adapter.js';
+import {
+  buildClaudeHeadlessLaunch,
+  buildClaudeLaunch,
+  buildClaudeSdkInstrumentation,
+} from './adapter.js';
 import { claudeHookSource, claudeSettings } from './artifacts.js';
 import { nativeClaudeTranscriptPath, readClaudeConversation } from './conversation.js';
 import { extractClaudeHeadlessProvenance } from './headless-provenance.js';
 import { reduceClaudeLifecycle } from './lifecycle.js';
+
+const claudeSettingsPath = (dataRoot: string) =>
+  resolve(dataRoot, 'harness-integrations/claude/settings.json');
 
 export const claudeHarnessDefinition = {
   id: 'claude',
@@ -34,7 +41,12 @@ export const claudeHarnessDefinition = {
   launch: {
     interactive: (input, dependencies) =>
       buildClaudeLaunch(input, {
-        settingsPath: resolve(dependencies.dataRoot, 'harness-integrations/claude/settings.json'),
+        settingsPath: claudeSettingsPath(dependencies.dataRoot),
+        artifacts: dependencies.artifacts,
+      }),
+    sdk: (input, dependencies) =>
+      buildClaudeSdkInstrumentation(input, {
+        settingsPath: claudeSettingsPath(dependencies.dataRoot),
         artifacts: dependencies.artifacts,
       }),
     headless: buildClaudeHeadlessLaunch,
@@ -53,7 +65,7 @@ export const claudeHarnessDefinition = {
       return [
         { path: hookPath, content: claudeHookSource() },
         {
-          path: resolve(dataRoot, 'harness-integrations/claude/settings.json'),
+          path: claudeSettingsPath(dataRoot),
           content: `${JSON.stringify(claudeSettings({ hookPath }), null, 2)}\n`,
         },
       ];

@@ -17,6 +17,9 @@ import {
  */
 export { HarnessLedgerObserverInternals };
 
+/** For fakes of `AgentSessionArtifacts` that fail a write the way the real one does. */
+export { AgentSessionArtifactError } from './ledger.js';
+
 /**
  * `HarnessLedgerObserver.layerNoDeps` plus the observer's poll steps (`HarnessLedgerObserverInternals`),
  * built from the same instance. Test-only: the production layers provide the observer alone, so the

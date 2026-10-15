@@ -11,18 +11,24 @@ import { agentSessionRow, terminalSessionRow } from '../sessions/row-mappers.js'
 import { deriveAgentSessionState } from '../sessions/status.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../sessions/types.js';
 import { agentSessions, surfacePanes, terminalSessions, worktreeSurfaces } from '../tables.js';
+import { AgentSessionInteraction, type AgentControl } from './interaction.js';
 
 const make = Effect.gen(function* () {
   const artifacts = yield* AgentSessionArtifacts;
   const foreground = yield* PtyForegroundState;
   const database = yield* RuntimeDatabase;
   const observer = yield* HarnessLedgerObserver;
+  const interaction = yield* AgentSessionInteraction;
 
   const service = AgentSessionAttentionProjection.of({
     // Runs once per agent row on every attention read: untraced.
     agentSessionAttention: Effect.fnUntraced(function* (session) {
       const harnessAttention = yield* observer.getAttention(session.id);
-      return deriveAgentSessionAttention(session, harnessAttention ?? 'idle');
+      return deriveAgentSessionAttention(
+        session,
+        interaction.control(session.id),
+        harnessAttention ?? 'idle',
+      );
     }),
     terminalSessionAttention: (session) => deriveTerminalSessionAttention(session, foreground),
     listAttentionSources: Effect.suspend(() =>
@@ -48,6 +54,7 @@ export class AgentSessionAttentionProjection extends Context.Service<
   static readonly layer = AgentSessionAttentionProjection.layerNoDeps.pipe(
     Layer.provide([
       AgentSessionArtifacts.layer,
+      AgentSessionInteraction.layer,
       HarnessLedgerObserver.layer,
       PtyForegroundState.layer,
     ]),
@@ -159,6 +166,7 @@ function attentionSourceKey(source: AttentionSource) {
 
 function deriveAgentSessionAttention(
   session: AgentSessionRow,
+  control: AgentControl,
   harnessAttention: AttentionState,
 ): AttentionState {
   // Attention is a function of the single derived session state shared with the
@@ -168,7 +176,7 @@ function deriveAgentSessionAttention(
   // is calm (resumable / cleanly stopped) or a genuine error. A stale "waiting"
   // never survives a dead process: a stopped session is idle, and its pane shows
   // a resume prompt rather than nagging from the rail.
-  const state = deriveAgentSessionState(session);
+  const state = deriveAgentSessionState(session, control);
   switch (state.status) {
     case 'running':
       return harnessAttention;

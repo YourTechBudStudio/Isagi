@@ -430,6 +430,10 @@ function fakeAgentService(
     ensureActivePtyProcess: () => Effect.die('agent ensureActivePtyProcess is not configured'),
     activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used'),
     stopUnlessPlaced: () => Effect.die('agent stopUnlessPlaced is not used'),
+    setInteractionMode: () => Effect.die('agent setInteractionMode is not used'),
+    releaseControllers: () => Effect.void,
+    holdWorktreesForDeletion: () => Effect.void,
+    holdProjectForDeletion: () => Effect.void,
     ...overrides,
   } satisfies AgentSessionService['Service'];
 }

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandError, CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -30,6 +30,8 @@ import {
   surfaceServiceWith,
   testWorktreeDeleteDiagnostics,
   worktreeDeleteDiagnosticsWith,
+  recordingAgentSessionService,
+  testAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -79,6 +81,7 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(
           StateFile,
           stateFileWithWriteCounter(() => {}),
@@ -106,6 +109,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
   const events: string[] = [];
   const diagnostics = worktreeDeleteDiagnosticsWith({
     agentSessionCount: 1,
+    agentSessionIds: [10],
     agentSessionActivePtyProcessIds: [21],
     commandRunCount: 0,
     commandRunPtyProcessIds: [],
@@ -175,6 +179,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(AgentSessionService, recordingAgentSessionService(events)),
       Effect.provideService(
         StateFile,
         stateFileWithWriteCounter(() => {}),
@@ -194,10 +199,15 @@ test('delete worktree force removes checkout before deleting DB row and returns 
   });
   assert.deepEqual(events, [
     `commands:${fixtures.targetWorktree.id}`,
+    // Held, then released, before anything else stops: workers end before the checkout goes.
+    `hold:${fixtures.targetWorktree.id}`,
+    'release:10',
     'pty:21:1000',
     'pty:22:1000',
     `git:-C ${fixtures.project.rootPath} worktree remove --force ${fixtures.targetWorktree.path}`,
     `db:${fixtures.targetWorktree.id}`,
+    // The hold lasts through the cascade.
+    `unhold:${fixtures.targetWorktree.id}`,
   ]);
   fixtures.cleanup();
 });
@@ -258,6 +268,7 @@ test('delete worktree announces every durable session it cascaded away', async (
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, surfaces),
+      Effect.provideService(AgentSessionService, testAgentSessionService),
       Effect.provideService(
         StateFile,
         stateFileWithWriteCounter(() => {}),
@@ -296,6 +307,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
   let dbDeleteCalls = 0;
   const diagnostics = worktreeDeleteDiagnosticsWith({
     agentSessionCount: 1,
+    agentSessionIds: [10],
     agentSessionActivePtyProcessIds: [21],
     commandRunCount: 0,
     commandRunPtyProcessIds: [],
@@ -376,6 +388,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, recordingAgentSessionService(events)),
         Effect.provideService(
           StateFile,
           stateFileWithWriteCounter(() => {}),
@@ -395,7 +408,19 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
     events.filter((event) => event.startsWith('git:') || event === 'db'),
     [],
   );
-  assert.deepEqual(new Set(events), new Set(['commands', 'pty:21', 'pty:22']));
+  assert.deepEqual(
+    new Set(events),
+    new Set([
+      'commands',
+      `hold:${fixtures.targetWorktree.id}`,
+      'release:10',
+      'pty:21',
+      'pty:22',
+      `unhold:${fixtures.targetWorktree.id}`,
+    ]),
+  );
+  // A failed delete ends its own hold, so its still-placed agents become switchable again.
+  assert.equal(events.at(-1), `unhold:${fixtures.targetWorktree.id}`);
   fixtures.cleanup();
 });
 
@@ -460,6 +485,7 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(
           StateFile,
           stateFileWithWriteCounter(() => {}),
@@ -523,6 +549,7 @@ test('delete worktree reports safe branch deletion failure as partial success', 
       Effect.provideService(ProjectRepository, repository),
       Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
       Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(AgentSessionService, testAgentSessionService),
       Effect.provideService(
         StateFile,
         stateFileWithWriteCounter(() => {}),
@@ -570,6 +597,7 @@ test('delete worktree rejects before destructive work when root fallback is miss
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(
           StateFile,
           stateFileWithWriteCounter(() => {}),

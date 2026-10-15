@@ -35,6 +35,8 @@ export interface PaneChromeActions {
   readonly focusPane: () => void;
   readonly onSplitRight: () => void;
   readonly onSplitDown: () => void;
+  /** An agent pane's terminal/Fluidcast toggle; a failure toasts, as the cluster's delete does. */
+  readonly onToggleInteraction: () => void;
   readonly onDelete: (origin: DeleteOrigin) => void;
   /** A delete owning this pane or its surface is running; everything goes inert. */
   readonly locked: boolean;
@@ -74,7 +76,7 @@ export function usePaneChromeActions(input: {
   );
 
   const dispatchPaneCommand = useCallback(
-    (commandId: 'split-pane-right' | 'split-pane-down') => {
+    (commandId: 'split-pane-right' | 'split-pane-down' | 'toggle-pane-interaction') => {
       focusPane();
       void dispatchCommand(commandId, paneValues).catch(onDispatchError);
     },
@@ -87,6 +89,10 @@ export function usePaneChromeActions(input: {
 
   const onSplitDown = useCallback(() => {
     dispatchPaneCommand('split-pane-down');
+  }, [dispatchPaneCommand]);
+
+  const onToggleInteraction = useCallback(() => {
+    dispatchPaneCommand('toggle-pane-interaction');
   }, [dispatchPaneCommand]);
 
   const onDelete = useCallback(
@@ -111,6 +117,7 @@ export function usePaneChromeActions(input: {
     focusPane,
     onSplitRight,
     onSplitDown,
+    onToggleInteraction,
     onDelete,
     locked,
     menuDeletePending: showsDeleteSweep(paneDelete, 'menu'),

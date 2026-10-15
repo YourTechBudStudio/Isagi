@@ -25,7 +25,7 @@ import type {
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
-import { SurfaceService } from '../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../environment/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { Git, type GitCommandError } from '../platform/git/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
@@ -211,6 +211,7 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
   static readonly layerNoDeps = Layer.effect(WorkspaceService, make);
   static readonly layer = WorkspaceService.layerNoDeps.pipe(
     Layer.provide([
+      AgentSessionService.layer,
       CommandService.layer,
       Git.layer,
       InternalEvents.layer,

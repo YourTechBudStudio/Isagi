@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { apiEndpoints } from '@isagi/contracts';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -30,6 +30,7 @@ import {
   stateFileWithWriteCounter,
   testDataDirectory,
   testInternalEvents,
+  testAgentSessionService,
   testSurfaceService,
   worktree,
 } from './test-support.js';
@@ -143,6 +144,7 @@ function workspaceLayerWith(repository: ProjectRepository['Service']) {
         Layer.succeed(InternalEvents, testInternalEvents),
         Layer.succeed(WorktreeDeleteDiagnosticsReader, forbiddenDeleteDiagnostics),
         Layer.succeed(SurfaceService, forbiddenDurableSessions),
+        Layer.succeed(AgentSessionService, testAgentSessionService),
         Layer.succeed(
           StateFile,
           stateFileWithWriteCounter(() => {}),
@@ -392,6 +394,7 @@ test('a Git project still reaches the work the guard refuses for folders', async
         Layer.succeed(InternalEvents, testInternalEvents),
         Layer.succeed(WorktreeDeleteDiagnosticsReader, forbiddenDeleteDiagnostics),
         Layer.succeed(SurfaceService, forbiddenDurableSessions),
+        Layer.succeed(AgentSessionService, testAgentSessionService),
         Layer.succeed(
           StateFile,
           stateFileWithWriteCounter(() => {}),

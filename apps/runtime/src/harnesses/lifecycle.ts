@@ -2,6 +2,7 @@ import type { AttentionState } from '@isagi/contracts';
 
 import { type CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
 import { harnessDefinition } from './definitions.js';
+import type { Incarnation } from './incarnation.js';
 import type { HarnessObservationRecord } from './projection.js';
 
 export type HarnessTurnEdge =
@@ -28,7 +29,7 @@ export type HarnessTurnEdge =
 export interface ActiveHarnessTurn {
   readonly seq: number;
   readonly recordedAt: string;
-  readonly ptyProcessId: number | null;
+  readonly incarnation: Incarnation | null;
 }
 
 export interface HarnessLifecycleDiagnostic {

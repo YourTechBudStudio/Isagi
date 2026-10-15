@@ -17,6 +17,8 @@ import { type DatabaseError, RuntimeDatabase } from '../platform/persistence/ind
  */
 export interface WorktreeDeleteDiagnostics {
   readonly agentSessionCount: number;
+  /** Every agent the cascade removes, placed or not: their controllers are released first. */
+  readonly agentSessionIds: readonly number[];
   readonly agentSessionActivePtyProcessIds: readonly number[];
   readonly commandRunCount: number;
   readonly commandRunPtyProcessIds: readonly number[];
@@ -62,6 +64,7 @@ export class WorktreeDeleteDiagnosticsReader extends Context.Service<
                     .all();
             const agents = db
               .select({
+                id: agentSessions.id,
                 activePtyProcessId: agentSessions.activePtyProcessId,
               })
               .from(agentSessions)
@@ -91,6 +94,7 @@ export class WorktreeDeleteDiagnosticsReader extends Context.Service<
 
             return {
               agentSessionCount: agents.length,
+              agentSessionIds: agents.map((agent) => agent.id),
               agentSessionActivePtyProcessIds: compactIds(
                 agents.map((agent) => agent.activePtyProcessId),
               ),

@@ -1,6 +1,8 @@
 import { useAtomValue } from '@effect/atom-react';
 import { AnimatePresence } from 'motion/react';
 
+import type { AgentSessionMetadata } from '@isagi/contracts';
+
 import { surfaceDetailCopy } from '../../copy/index.js';
 import { queryError } from '../../lib/state/result.js';
 import { formatRuntimeError, surfaceDetailAtom } from '../../lib/workspace/queries.js';
@@ -9,6 +11,7 @@ import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
 import { workflowPresentationStatus } from '../../lib/workspace/workflow/derive.js';
 import { useAttachedWorkflowRun } from '../../lib/workspace/workflow/queries.js';
 import { EditorPaneContainer } from './EditorPaneContainer.js';
+import { FluidcastPane, type FluidcastAgentSession } from './FluidcastPane.js';
 import { PtyPane } from './PtyPane.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
 import { SurfaceLayout } from './SurfaceLayout.js';
@@ -41,20 +44,35 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
       <SurfaceLayout
         detail={detail.value}
         // The kind dispatch happens here, before `PtyPane`, so an editor pane
-        // never reaches PTY attach or terminal-presentation code at all.
-        renderPane={({ pane, focused, onFocus }) =>
-          pane.session?.kind === 'editor_context' ? (
-            <EditorPaneContainer
-              pane={pane}
-              editorContext={pane.session.editorContext}
-              surface={detail.value}
-              focused={focused}
-              onFocus={onFocus}
-            />
-          ) : (
-            <PtyPane pane={pane} surface={detail.value} focused={focused} onFocus={onFocus} />
-          )
-        }
+        // never reaches PTY attach or terminal-presentation code at all, and a
+        // Fluidcast-mode agent pane never mounts a terminal.
+        renderPane={({ pane, focused, onFocus }) => {
+          if (pane.session?.kind === 'editor_context') {
+            return (
+              <EditorPaneContainer
+                pane={pane}
+                editorContext={pane.session.editorContext}
+                surface={detail.value}
+                focused={focused}
+                onFocus={onFocus}
+              />
+            );
+          }
+          const agentSession =
+            pane.session?.kind === 'agent_session' ? pane.session.agentSession : null;
+          if (agentSession && isFluidcastMode(agentSession)) {
+            return (
+              <FluidcastPane
+                pane={pane}
+                surface={detail.value}
+                agentSession={agentSession}
+                focused={focused}
+                onFocus={onFocus}
+              />
+            );
+          }
+          return <PtyPane pane={pane} surface={detail.value} focused={focused} onFocus={onFocus} />;
+        }}
       />
       <AnimatePresence initial={false}>
         {workflowStatus ? (
@@ -63,4 +81,10 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
       </AnimatePresence>
     </div>
   );
+}
+
+function isFluidcastMode(
+  agentSession: AgentSessionMetadata,
+): agentSession is FluidcastAgentSession {
+  return agentSession.interaction.mode === 'fluidcast';
 }

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { branchPathHash, Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -31,6 +31,7 @@ import {
   testInternalEvents,
   testPtyService,
   testWorktreeDeleteDiagnostics,
+  testAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -85,6 +86,7 @@ test('opening a missing branch without a base asks the client for base selection
           Effect.provideService(ProjectRepository, repository),
           Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
           Effect.provideService(SurfaceService, testSurfaceService),
+          Effect.provideService(AgentSessionService, testAgentSessionService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, missingBaseGit),
           Effect.provideService(DataDirectory, makeTestDataDirectory(dataRoot)),
@@ -192,6 +194,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(
@@ -298,6 +301,7 @@ test('opening a missing branch can create it from the current detached worktree'
         Effect.provideService(ProjectRepository, repository),
         Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
         Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(AgentSessionService, testAgentSessionService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, makeTestDataDirectory(dataRoot)),
@@ -414,6 +418,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             Effect.provideService(ProjectRepository, repository),
             Effect.provideService(WorktreeDeleteDiagnosticsReader, testWorktreeDeleteDiagnostics),
             Effect.provideService(SurfaceService, testSurfaceService),
+            Effect.provideService(AgentSessionService, testAgentSessionService),
             Effect.provideService(StateFile, stateFile),
             Effect.provideService(Git, invalidBaseGit),
             Effect.provideService(DataDirectory, testDataDirectory),

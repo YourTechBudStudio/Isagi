@@ -38,7 +38,7 @@ export const buildOpenCodeLaunch = Effect.fn('harnesses.buildOpenCodeLaunch')(fu
     envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
       harnessEnvForProcess({
         agentSessionId: input.agentSessionId,
-        ptyProcessId,
+        incarnation: { kind: 'pty', ptyProcessId },
         artifacts: dependencies.artifacts,
         extraEnv: {
           OPENCODE_CONFIG_CONTENT: configContent,

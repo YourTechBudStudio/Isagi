@@ -1,4 +1,4 @@
-import { Cause, Context, Data, Effect, Layer, Semaphore, Stream } from 'effect';
+import { Cause, Clock, Context, Data, Effect, Layer, Semaphore, Stream } from 'effect';
 
 import type { AgentHarness, AttentionState } from '@isagi/contracts';
 
@@ -13,6 +13,7 @@ import {
   type CodexRolloutPath,
 } from './codex/native-artifacts.js';
 import { harnessDefinition } from './definitions.js';
+import { ledgerIncarnation, type ExecutionInterval } from './incarnation.js';
 import {
   discoverJsonlFiles,
   HarnessSourceUnreadable,
@@ -27,12 +28,17 @@ import {
   type AgentSessionHarnessJsonlRecord,
 } from './ledger.js';
 import { type HarnessLifecycleDiagnostic } from './lifecycle.js';
-import { HarnessObservationTargets, type HarnessObservationTarget } from './observation-targets.js';
+import {
+  HarnessObservationTargets,
+  type ActiveExecution,
+  type HarnessObservationTarget,
+} from './observation-targets.js';
 import {
   commitAgentObserverState,
   createAgentObserverState,
   diagnosticKey,
   edgeKey,
+  insertExecutionInterval,
   markerString,
   metadataMarker,
   projectAgentObserverState,
@@ -83,7 +89,11 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
   const eventBus = yield* InternalEvents;
   const states = new Map<number, AgentObserverState>();
   const locks = new Map<number, Semaphore.Semaphore>();
-  const activePtyByAgent = new Map<number, number | null>();
+  const activeExecutionByAgent = new Map<number, ActiveExecution | null>();
+  // Each agent's execution intervals in `since` order: seeded when the observer first reads the
+  // agent's target, then extended from switch events and from every active execution a read
+  // reports. Codex attribution reads them.
+  const intervalsByAgent = new Map<number, ExecutionInterval[]>();
   const harnessByAgent = new Map<number, AgentHarness>();
   const ownerByPty = new Map<number, number>();
   const processFacts = new Map<number, ProcessFact>();
@@ -112,34 +122,69 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
 
   const inventoryQuery = targets.list;
 
-  const applyInventory = (rows: readonly InventoryRow[], replace: boolean) => {
+  const applyInventory = Effect.fnUntraced(function* (
+    rows: readonly InventoryRow[],
+    replace: boolean,
+  ) {
+    const now = new Date(yield* Clock.currentTimeMillis).toISOString();
     const present = new Set<number>();
     for (const row of rows) {
       present.add(row.agentSessionId);
-      const previous = activePtyByAgent.get(row.agentSessionId);
-      if (previous !== undefined && previous !== row.activePtyProcessId && previous !== null) {
-        ownerByPty.delete(previous);
+      const previous = activeExecutionByAgent.get(row.agentSessionId);
+      const active = row.activeExecution;
+      const activePty = active?.kind === 'pty' ? active.ptyProcessId : null;
+      if (previous?.kind === 'pty' && previous.ptyProcessId !== activePty) {
+        ownerByPty.delete(previous.ptyProcessId);
       }
-      activePtyByAgent.set(row.agentSessionId, row.activePtyProcessId);
+      activeExecutionByAgent.set(row.agentSessionId, active);
       harnessByAgent.set(row.agentSessionId, row.harness);
-      if (row.activePtyProcessId !== null) {
-        ownerByPty.set(row.activePtyProcessId, row.agentSessionId);
-        if (row.status) {
-          processFacts.set(row.activePtyProcessId, {
-            status: row.status,
-            statusReason: row.statusReason,
+      const intervals = intervalsByAgent.get(row.agentSessionId);
+      if (!intervals) {
+        // First sight of this agent: its current execution covers everything from `since`, so
+        // only history older than that falls back to the preceding SessionStart.
+        intervalsByAgent.set(row.agentSessionId, [
+          { incarnation: active?.incarnation ?? null, since: active?.since ?? now },
+        ]);
+      } else if (
+        active &&
+        !intervals.some(
+          (interval) =>
+            interval.incarnation === active.incarnation && interval.since === active.since,
+        )
+      ) {
+        // A read can see an execution whose switch event is still queued. Recording it at its
+        // own `since` now keeps the active execution's records from being judged against an
+        // older interval and failed as dead; the event's own interval still lands later.
+        insertExecutionInterval(intervals, {
+          incarnation: active.incarnation,
+          since: active.since,
+        });
+      }
+      if (active?.kind === 'pty') {
+        ownerByPty.set(active.ptyProcessId, row.agentSessionId);
+        if (active.status) {
+          processFacts.set(active.ptyProcessId, {
+            status: active.status,
+            statusReason: active.statusReason,
           });
         }
       }
     }
     if (!replace) return;
-    for (const [agentSessionId, ptyProcessId] of activePtyByAgent) {
+    for (const [agentSessionId, active] of activeExecutionByAgent) {
       if (present.has(agentSessionId)) continue;
-      activePtyByAgent.delete(agentSessionId);
+      activeExecutionByAgent.delete(agentSessionId);
       harnessByAgent.delete(agentSessionId);
-      if (ptyProcessId !== null) ownerByPty.delete(ptyProcessId);
+      intervalsByAgent.delete(agentSessionId);
+      if (active?.kind === 'pty') ownerByPty.delete(active.ptyProcessId);
     }
-  };
+  });
+
+  const projectionInput = (agentSessionId: number) => ({
+    active: activeExecutionByAgent.get(agentSessionId) ?? null,
+    intervals: intervalsByAgent.get(agentSessionId) ?? [],
+    processFacts,
+  });
 
   const appendLedgerRecord = (agentSessionId: number, record: AgentSessionHarnessJsonlRecord) => {
     if (record.agentSessionId !== agentSessionId) return;
@@ -149,7 +194,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
     records.push({
       recordedAt: record.recordedAt,
       seq,
-      ptyProcessId: record.ptyProcessId,
+      incarnation: ledgerIncarnation(record),
       harness: record.harness,
       nativeEvent: record.nativeEvent,
       event: record.event,
@@ -166,12 +211,9 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
     const state = stateFor(agentSessionId);
     const records = state.codexRecordsByHarnessSessionId.get(harnessSessionId) ?? [];
     const seq = state.nextCodexSeqByHarnessSessionId.get(harnessSessionId) ?? 0;
-    records.push({
-      seq,
-      recordedAt: codexEntryTimestamp(entry),
-      ptyProcessId: activePtyByAgent.get(agentSessionId) ?? null,
-      entry,
-    });
+    // Stored unattributed: the projection attributes it by its own timestamp, never by whichever
+    // execution happens to be active when these bytes are tailed.
+    records.push({ seq, recordedAt: codexEntryTimestamp(entry), entry });
     state.codexRecordsByHarnessSessionId.set(harnessSessionId, records);
     state.nextCodexSeqByHarnessSessionId.set(harnessSessionId, seq + 1);
   };
@@ -248,7 +290,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
       state.metadata.status === 'valid' ? state.metadata.metadata.harnessSessionId : null;
     const activeCandidates = activeCodexStreamCandidates(
       state.recordsByHarnessSessionId,
-      activePtyByAgent.get(agentSessionId) ?? null,
+      activeExecutionByAgent.get(agentSessionId)?.incarnation ?? null,
     );
     const candidateIds = new Set([
       ...activeCandidates.map((candidate) => candidate.harnessSessionId),
@@ -397,8 +439,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
       agentSessionId,
       harness: harnessByAgent.get(agentSessionId),
       state,
-      activePtyProcessId: activePtyByAgent.get(agentSessionId) ?? null,
-      processFacts,
+      ...projectionInput(agentSessionId),
     });
     commitAgentObserverState(state, result);
     state.publishedEdgeKeys = new Set(result.edges.map(edgeKey));
@@ -641,8 +682,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
       agentSessionId,
       harness: harnessByAgent.get(agentSessionId),
       state,
-      activePtyProcessId: activePtyByAgent.get(agentSessionId) ?? null,
-      processFacts,
+      ...projectionInput(agentSessionId),
     });
     const priorMarker = state.projectionMarker;
     for (const edge of result.edges) {
@@ -688,7 +728,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
 
   const pollOnce = Effect.gen(function* () {
     const liveInventory = yield* inventoryQuery({ mode: 'live' });
-    applyInventory(liveInventory, false);
+    yield* applyInventory(liveInventory, false);
     yield* Effect.forEach(liveInventory, (row) => pollAgentSession(row.agentSessionId), {
       concurrency: 4,
       discard: true,
@@ -700,17 +740,24 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
     'pty_process_exited',
     'pty_process_failed',
     'pty_process_killed',
-    'agent_session_active_process_changed',
+    'agent_session_execution_changed',
   ]);
   yield* processEvents.pipe(
     Stream.runForEach((event) =>
       Effect.gen(function* () {
-        if (event.type === 'agent_session_active_process_changed') {
+        if (event.type === 'agent_session_execution_changed') {
+          // Record the interval from the payload before reading state, so a quick sequence of
+          // switches cannot skip one. A `health` change only alters liveness.
+          if (event.change._tag === 'switched') {
+            const intervals = intervalsByAgent.get(event.agentSessionId) ?? [];
+            insertExecutionInterval(intervals, event.change.interval);
+            intervalsByAgent.set(event.agentSessionId, intervals);
+          }
           const inventory = yield* inventoryQuery({ mode: 'one', id: event.agentSessionId });
-          applyInventory(inventory, false);
+          yield* applyInventory(inventory, false);
           yield* withAgentLock(
             event.agentSessionId,
-            // The ownership pointer is itself a projection input even when
+            // The active execution is itself a projection input even when
             // no artifact byte changed during this handoff. It is also a
             // guaranteed user-visible session transition.
             refreshAgent(event.agentSessionId, {
@@ -748,7 +795,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
   // Subscribe before inventory so no process transition can fall between the
   // snapshot and live event ownership.
   const startupInventory = yield* inventoryQuery({ mode: 'all' });
-  applyInventory(startupInventory, true);
+  yield* applyInventory(startupInventory, true);
   // The inventory read degrades to empty on its own; this only keeps a defect in it from failing startup.
   const startupArtifactIds = yield* artifacts.listAgentSessionIds.pipe(
     Effect.catchDefect((defect) =>
@@ -788,7 +835,7 @@ export const makeHarnessLedgerObserverContext = Effect.gen(function* () {
             ),
           ),
         );
-        applyInventory(inventory, false);
+        yield* applyInventory(inventory, false);
         return yield* withAgentLock(
           agentSessionId,
           Effect.gen(function* () {

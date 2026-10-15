@@ -1,15 +1,5 @@
 import { useAtomValue } from '@effect/atom-react';
-import {
-  Bot,
-  CircleDashed,
-  CirclePlus,
-  PanelBottom,
-  PanelRight,
-  RotateCw,
-  Trash2,
-  TriangleAlert,
-} from 'lucide-react';
-import type { ReactElement } from 'react';
+import { Bot, CircleDashed, CirclePlus, Mic, RotateCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useMemo, useRef } from 'react';
 
 import type {
@@ -19,19 +9,25 @@ import type {
   SurfacePane,
 } from '@isagi/contracts';
 
-import { AttentionDot } from '../../components/AttentionDot.js';
 import { Button } from '../../components/Button.js';
-import { ContextMenu } from '../../components/ContextMenu.js';
 import { PaneActionCluster } from '../../components/PaneActionCluster.js';
-import { agentSessionCopy, ptyCopy, type PaneRestorePrompt } from '../../copy/index.js';
+import {
+  agentSessionCopy,
+  fluidcastCopy,
+  ptyCopy,
+  type PaneRestorePrompt,
+} from '../../copy/index.js';
+import { useInteractionSwitchPending } from '../../lib/fluidcast/commits.js';
 import { usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import { attentionForPane, attentionSourcesAtom } from '../../lib/workspace/attention.js';
 import { paneHasSharedActions } from '../../lib/workspace/pane-session/presentation.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
 import { BlockedPanePrompt } from './BlockedPanePrompt.js';
+import { PaneFrame } from './PaneFrame.js';
 import { PaneTerminal } from './PaneTerminal.js';
 import { usePaneChromeActions } from './usePaneChromeActions.js';
+import { usePaneMenu } from './usePaneMenu.js';
 import { usePaneSession } from './usePaneSession.js';
 
 export function PtyPane({
@@ -94,66 +90,53 @@ export function PtyPane({
     autoAttach: focused,
   });
   const { locked: actionsLocked, onSplitRight, onSplitDown, onDelete } = chrome;
-  const paneMenuItems = useMemo(
-    () => [
-      { label: 'Split Right', icon: PanelRight, disabled: actionsLocked, onSelect: onSplitRight },
-      { label: 'Split Down', icon: PanelBottom, disabled: actionsLocked, onSelect: onSplitDown },
-      {
-        label: 'Delete pane',
-        icon: Trash2,
-        danger: true,
-        keepsMenuOpen: true,
-        pending: chrome.menuDeletePending,
-        disabled: actionsLocked,
-        onSelect: () => onDelete('menu'),
-      },
-    ],
-    [actionsLocked, chrome.menuDeletePending, onDelete, onSplitDown, onSplitRight],
-  );
   const sharedPaneActions = paneHasSharedActions(view.kind);
-  const withPaneMenu = useCallback(
-    (children: ReactElement) =>
-      sharedPaneActions && paneMenuItems.length > 0 ? (
-        <ContextMenu
-          items={paneMenuItems}
-          error={chrome.deleteError}
-          onResultDismissed={chrome.onDeleteResultDismissed}
-        >
-          {children}
-        </ContextMenu>
-      ) : (
-        children
-      ),
-    [chrome.deleteError, chrome.onDeleteResultDismissed, paneMenuItems, sharedPaneActions],
-  );
+  const withPaneMenu = usePaneMenu(chrome, sharedPaneActions);
+  const switchPending = useInteractionSwitchPending(pane.id);
+  // Offered only where a switch can start: a terminal-mode agent the runtime reports Fluidcast
+  // available for. The runtime still decides at the switch.
+  const canSwitchToFluidcast =
+    session?.kind === 'agent_session' &&
+    session.interaction.mode === 'terminal' &&
+    session.interaction.fluidcast === 'available';
 
   return (
-    <section
-      ref={shellRef}
-      aria-label={pane.title}
-      tabIndex={-1}
-      // Promoting a pane that is being deleted would retarget Cmd+W and the
-      // active-pane commands at it. The terminal keeps its own focus either way.
-      onPointerDown={actionsLocked ? undefined : onFocus}
-      className={`group relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-colors duration-ui ease-expo ${
-        errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'
-      } ${dimmed ? 'bg-elevated/38' : ''}`}
+    <PaneFrame
+      sectionRef={shellRef}
+      title={pane.title}
+      icon={Icon}
+      attention={attention}
+      statusLabel={statusLabel}
+      notice={notice}
+      focused={focused}
+      errored={errored}
+      dimmed={dimmed}
+      locked={actionsLocked}
+      onFocus={onFocus}
+      withPaneMenu={withPaneMenu}
+      cluster={
+        sharedPaneActions ? (
+          <PaneActionCluster
+            leadingAction={
+              canSwitchToFluidcast
+                ? {
+                    label: fluidcastCopy.toggle.toFluidcast,
+                    icon: <Mic size={13} />,
+                    pressed: false,
+                    pending: switchPending,
+                    onClick: chrome.onToggleInteraction,
+                  }
+                : undefined
+            }
+            onSplitRight={onSplitRight}
+            onSplitDown={onSplitDown}
+            onDelete={() => onDelete('pane')}
+            disabled={actionsLocked}
+            deletePending={chrome.clusterDeletePending}
+          />
+        ) : null
+      }
     >
-      {withPaneMenu(
-        <div className="flex min-h-9 items-center gap-2 border-b border-line/15 px-3 py-2">
-          <Icon size={13} className="text-fg-subtle" />
-          <AttentionDot state={attention} />
-          <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
-          <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-            {statusLabel}
-          </span>
-        </div>,
-      )}
-      {notice ? (
-        <div className="border-b border-line/12 px-3 py-1.5 font-mono text-[10.5px] text-fg-subtle">
-          {notice}
-        </div>
-      ) : null}
       {sealed && presentation && !restoreFailure ? (
         <div className="relative flex min-h-0 flex-1">
           <PaneTerminal
@@ -268,16 +251,7 @@ export function PtyPane({
           </div>,
         )
       )}
-      {sharedPaneActions ? (
-        <PaneActionCluster
-          onSplitRight={onSplitRight}
-          onSplitDown={onSplitDown}
-          onDelete={() => onDelete('pane')}
-          disabled={actionsLocked}
-          deletePending={chrome.clusterDeletePending}
-        />
-      ) : null}
-    </section>
+    </PaneFrame>
   );
 }
 

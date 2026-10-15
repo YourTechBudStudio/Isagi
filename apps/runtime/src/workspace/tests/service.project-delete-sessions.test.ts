@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { SurfaceService } from '../../environment/index.js';
+import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -29,6 +29,7 @@ import {
   testDataDirectory,
   testInternalEvents,
   testPtyService,
+  recordingAgentSessionService,
   testSurfaceService,
   testWorktreeSetup,
   testWorktreeSetupRepository,
@@ -53,6 +54,8 @@ const diagnostics = WorktreeDeleteDiagnosticsReader.of({
     return Effect.succeed({
       ...noWorktreeDeleteDiagnostics,
       agentSessionCount: ptys?.agents.length ?? 0,
+      // Agent ids follow their PTYs here (agent 121 runs PTY 21).
+      agentSessionIds: (ptys?.agents ?? []).map((ptyProcessId) => ptyProcessId + 100),
       agentSessionActivePtyProcessIds: ptys?.agents ?? [],
       terminalSessionCount: ptys?.terminals.length ?? 0,
       terminalSessionActivePtyProcessIds: ptys?.terminals ?? [],
@@ -112,6 +115,7 @@ function deleteProjectWith(input: {
     Effect.provideService(ProjectRepository, repository),
     Effect.provideService(WorktreeDeleteDiagnosticsReader, diagnostics),
     Effect.provideService(SurfaceService, testSurfaceService),
+    Effect.provideService(AgentSessionService, recordingAgentSessionService(input.events)),
     Effect.provideService(
       StateFile,
       stateFileWithWriteCounter(() => {}),
@@ -129,14 +133,19 @@ test('project delete stops every worktree session process before its rows cascad
   const output = await Effect.runPromise(deleteProjectWith({ events }));
 
   assert.deepEqual(output, { projectId: project.id, deleted: true });
-  // Commands first (as worktree delete does), then every session process of every worktree,
-  // and only then the row delete whose cascade erases the sessions that pointed at them.
-  assert.deepEqual(events.slice(0, 2), [
+  // The project is held before anything else, so no agent of it can gain a controller. Commands
+  // next (as worktree delete does), then every agent read under the hold is released, then every
+  // session process of every worktree stops, and only then the row delete whose cascade erases
+  // the sessions that pointed at them.
+  assert.deepEqual(events.slice(0, 4), [
+    `hold-project:${project.id}`,
     `commands:${worktree.id}`,
     `commands:${featureWorktree.id}`,
+    'release:121,131',
   ]);
-  assert.deepEqual(new Set(events.slice(2, 5)), new Set(['pty:21', 'pty:31', 'pty:32']));
-  assert.deepEqual(events.slice(5), [`db:${project.id}`]);
+  assert.deepEqual(new Set(events.slice(4, 7)), new Set(['pty:21', 'pty:31', 'pty:32']));
+  // The hold lasts through the cascade.
+  assert.deepEqual(events.slice(7), [`db:${project.id}`, `unhold-project:${project.id}`]);
 });
 
 test('project delete keeps the project when a session process cannot be stopped', async () => {
@@ -150,4 +159,6 @@ test('project delete keeps the project when a session process cannot be stopped'
   assert.equal(error.code, 'pty_teardown_failed');
   assert.equal(error.projectId, project.id);
   assert.ok(!events.includes(`db:${project.id}`), 'the project row survives a refused teardown');
+  // The failed delete ends its own hold, leaving its still-placed agents switchable.
+  assert.equal(events.at(-1), `unhold-project:${project.id}`);
 });

@@ -812,7 +812,7 @@ function stopRecord(
   return {
     recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'claude',
     nativeEvent: 'Stop',
     event: {
@@ -827,7 +827,7 @@ function promptRecord(seq: number, transcriptPath: string): HarnessObservationRe
   return {
     recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
     seq,
-    ptyProcessId: 20,
+    incarnation: 'pty:20' as const,
     harness: 'claude',
     nativeEvent: 'UserPromptSubmit',
     event: {

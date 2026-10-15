@@ -35,7 +35,7 @@ export const buildPiLaunch = Effect.fn('harnesses.buildPiLaunch')(function* (
     envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
       harnessEnvForProcess({
         agentSessionId: input.agentSessionId,
-        ptyProcessId,
+        incarnation: { kind: 'pty', ptyProcessId },
         artifacts: dependencies.artifacts,
       }),
   };

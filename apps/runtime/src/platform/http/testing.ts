@@ -1,6 +1,8 @@
-import { Effect, ManagedRuntime, type Layer } from 'effect';
+import cors from '@fastify/cors';
+import { Effect, Exit, FiberSet, Layer, ManagedRuntime, Scope } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { isAllowedRuntimeOrigin } from './origin.js';
 import type { RouteRuntime } from './route-runtime.js';
 
 /** A `RouteRuntime` over a test's `ManagedRuntime`. Production routes get theirs from the server's request fibers. */
@@ -43,5 +45,58 @@ export async function withApiServer<R, E, A>(
     }
   } finally {
     await runtime.dispose();
+  }
+}
+
+export interface ListeningServer {
+  /** `http://127.0.0.1:<port>` plus `apiBasePath`-relative paths are the caller's to add. */
+  readonly origin: string;
+  /** Interrupts every route fiber, as server shutdown does, without closing the listener. */
+  readonly interruptRoutes: () => Promise<void>;
+}
+
+/**
+ * Runs `run` against a real listening Fastify instance on port 0, with the server's CORS policy and
+ * routes run on a `FiberSet` over `layer`'s services the way `http-server.ts` runs them. For
+ * streaming routes, whose disconnect and shutdown behavior `inject` cannot exercise. Everything is
+ * torn down afterwards.
+ */
+export async function withListeningServer<R, A>(
+  layer: Layer.Layer<R>,
+  register: (fastify: FastifyInstance, runtime: RouteRuntime<R>) => void,
+  run: (server: ListeningServer) => Promise<A>,
+): Promise<A> {
+  const scope = Scope.makeUnsafe();
+  const fibers = await Effect.runPromise(
+    Effect.gen(function* () {
+      const services = yield* Layer.buildWithScope(layer, scope);
+      const set = yield* FiberSet.make<unknown, unknown>();
+      return yield* Effect.provideContext(
+        Effect.all({
+          runPromise: FiberSet.runtimePromise(set)<R>(),
+          runFork: FiberSet.runtime(set)<R>(),
+        }),
+        services,
+      );
+    }).pipe(Scope.provide(scope)),
+  );
+  const runtime: RouteRuntime<R> = {
+    runPromise: (effect, options) => fibers.runPromise(effect, options),
+    runFork: (effect) => void fibers.runFork(effect),
+  };
+  const fastify = Fastify({ logger: false });
+  try {
+    await fastify.register(cors, {
+      origin: (origin, callback) => callback(null, isAllowedRuntimeOrigin(origin)),
+    });
+    register(fastify, runtime);
+    const address = await fastify.listen({ host: '127.0.0.1', port: 0 });
+    return await run({
+      origin: address,
+      interruptRoutes: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+    });
+  } finally {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    await fastify.close();
   }
 }

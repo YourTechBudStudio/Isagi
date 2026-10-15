@@ -72,6 +72,100 @@ export const runtimeTerminalSettingsSchema = Schema.Struct({
     'Global terminal presentation history and cache retention settings. Missing fields use defaults. Changes require restarting Isagi.',
 });
 
+const fluidcastSecret = Schema.RedactedFromValue(Schema.String);
+
+const fluidcastLanguageModelCommon = {
+  model: Schema.NonEmptyString.annotate({
+    description: 'Model ID sent to the language-model API, for example gpt-5-mini.',
+  }),
+  baseUrl: Schema.optional(Schema.String).annotate({
+    description:
+      "API base URL. Missing uses the provider's default; set it for a proxy or a local server.",
+  }),
+  reasoningEffort: Schema.optional(
+    Schema.Literals(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
+  ).annotate({
+    description: 'Reasoning effort for the voice. Missing uses the API default.',
+  }),
+  temperature: Schema.optional(
+    Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 2 })),
+  ).annotate({
+    description: 'Sampling temperature from 0 through 2. Missing uses the API default.',
+  }),
+  maxOutputTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+    description: 'Upper bound on tokens per generation. Missing uses the API default.',
+  }),
+};
+
+export const runtimeFluidcastLanguageModelSchema = Schema.Union([
+  Schema.Struct({
+    provider: Schema.Literal('openai').annotate({
+      description: 'The OpenAI Responses API.',
+    }),
+    apiKey: fluidcastSecret.annotate({
+      description: 'API key for the language-model API. It stays in the runtime.',
+    }),
+    ...fluidcastLanguageModelCommon,
+  }),
+  Schema.Struct({
+    provider: Schema.Literal('openai-compatible').annotate({
+      description: 'Any OpenAI-compatible Chat Completions API, such as a local model server.',
+    }),
+    apiKey: Schema.optional(fluidcastSecret).annotate({
+      description: 'API key, if the server needs one. It stays in the runtime.',
+    }),
+    structuredOutput: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Whether to ask the server to constrain each reply to Fluidcast's output JSON Schema. Turn it on for local models that drift from the expected format. Missing defaults to false.",
+    }),
+    ...fluidcastLanguageModelCommon,
+  }),
+]).annotate({
+  description: "The language model that writes the voice's replies.",
+});
+
+export const runtimeFluidcastSchema = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean).annotate({
+    description:
+      'Whether agent panes can switch to Fluidcast voice mode. Missing defaults to false; while false, the rest of this section is not validated.',
+  }),
+  languageModel: runtimeFluidcastLanguageModelSchema,
+  speech: Schema.Struct({
+    model: Schema.NonEmptyString.annotate({
+      description: 'Text-to-speech model ID, for example gpt-4o-mini-tts.',
+    }),
+    apiKey: fluidcastSecret.annotate({
+      description: 'API key for the speech API. It stays in the runtime.',
+    }),
+    baseUrl: Schema.optional(Schema.String).annotate({
+      description:
+        "Base URL of an OpenAI-compatible /audio/speech API. Missing uses OpenAI's default.",
+    }),
+    format: Schema.optional(Schema.Literals(['opus', 'mp3', 'wav'])).annotate({
+      description: 'Audio format of the spoken replies. Missing defaults to opus.',
+    }),
+  }).annotate({
+    description: 'The speech connection, configured independently of the language model.',
+  }),
+  preset: Schema.Struct({
+    profile: Schema.optional(Schema.Literals(['compact', 'detailed'])).annotate({
+      description:
+        'Guided Walkthrough profile: detailed adds speaking guidance and examples to the prompt; compact leaves them out. Missing defaults to detailed.',
+    }),
+    voice: Schema.Struct({
+      name: Schema.NonEmptyString.annotate({
+        description: 'Voice name the speech API accepts, for example alloy.',
+      }),
+      instructions: Schema.optional(Schema.String).annotate({
+        description: 'Delivery instructions for the voice, for models that accept them.',
+      }),
+    }),
+  }).annotate({ description: 'The Guided Walkthrough preset and its voice.' }),
+}).annotate({
+  description:
+    'Fluidcast voice mode for Claude Code and Codex agent panes. Disabled unless enabled is true. An invalid section never stops Isagi from starting; voice mode is then unavailable. Changes require restarting Isagi.',
+});
+
 export const runtimeConfigSchema = Schema.Struct({
   pty: Schema.optional(
     Schema.Struct({
@@ -84,6 +178,7 @@ export const runtimeConfigSchema = Schema.Struct({
   }),
   workflows: Schema.optional(runtimeWorkflowSettingsSchema),
   terminal: Schema.optional(runtimeTerminalSettingsSchema),
+  fluidcast: Schema.optional(runtimeFluidcastSchema),
 }).annotate({ description: 'Runtime Isagi config from <dataRoot>/config.yaml.' });
 
 export type RuntimeConfigPtyBackend = typeof runtimeConfigPtyBackendSchema.Type;

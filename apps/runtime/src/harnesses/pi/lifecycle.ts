@@ -54,6 +54,6 @@ function activeTurnForRecord(
   return {
     seq: edge.seq,
     recordedAt: edge.recordedAt,
-    ptyProcessId: record?.ptyProcessId ?? null,
+    incarnation: record?.incarnation ?? null,
   };
 }

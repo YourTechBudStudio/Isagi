@@ -6,11 +6,18 @@ import type { HarnessDefinition } from '../definition-types.js';
 import { resolveDocsTarget } from '../docs-targets.js';
 import { extractCodexHeadlessOutput } from '../headless-output.js';
 import { transcriptAt } from '../transcript-locator.js';
-import { buildCodexHeadlessLaunch, buildCodexLaunch } from './adapter.js';
+import {
+  buildCodexHeadlessLaunch,
+  buildCodexLaunch,
+  buildCodexSdkInstrumentation,
+} from './adapter.js';
 import { codexHookSource } from './artifacts.js';
 import { readCodexConversation } from './conversation.js';
 import { reduceCodexRolloutLifecycle } from './lifecycle.js';
 import { hookCodexRolloutPaths, locateCodexRolloutPaths } from './native-artifacts.js';
+
+const codexHookPath = (dataRoot: string) =>
+  resolve(dataRoot, 'harness-integrations/codex/isagi-codex-hook.mjs');
 
 export const codexHarnessDefinition = {
   id: 'codex',
@@ -35,7 +42,12 @@ export const codexHarnessDefinition = {
   launch: {
     interactive: (input, dependencies) =>
       buildCodexLaunch(input, {
-        hookPath: resolve(dependencies.dataRoot, 'harness-integrations/codex/isagi-codex-hook.mjs'),
+        hookPath: codexHookPath(dependencies.dataRoot),
+        artifacts: dependencies.artifacts,
+      }),
+    sdk: (input, dependencies) =>
+      buildCodexSdkInstrumentation(input, {
+        hookPath: codexHookPath(dependencies.dataRoot),
         artifacts: dependencies.artifacts,
       }),
     headless: buildCodexHeadlessLaunch,
@@ -50,7 +62,7 @@ export const codexHarnessDefinition = {
   observation: {
     runtimeArtifacts: (dataRoot) => [
       {
-        path: resolve(dataRoot, 'harness-integrations/codex/isagi-codex-hook.mjs'),
+        path: codexHookPath(dataRoot),
         content: codexHookSource(),
       },
     ],

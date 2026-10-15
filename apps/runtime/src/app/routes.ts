@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { registerCommandsRoutes } from '../commands/index.js';
 import { registerEditorRoutes } from '../editor/index.js';
 import { registerEnvironmentRoutes } from '../environment/index.js';
+import { registerFluidcastRoutes } from '../fluidcast/index.js';
 import { registerHarnessesRoutes } from '../harnesses/index.js';
 import type { RouteRuntime } from '../platform/http/index.js';
 import { registerRuntimeConfigRoutes } from '../runtime-config/index.js';
@@ -29,4 +30,5 @@ export function registerRuntimeRoutes(
   registerRuntimeEventsRoutes(fastify, runtime);
   registerEditorRoutes(fastify, runtime);
   registerWorkflowsRoutes(fastify, runtime);
+  registerFluidcastRoutes(fastify, runtime);
 }

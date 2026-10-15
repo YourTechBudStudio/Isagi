@@ -34,7 +34,7 @@ test('Claude recovery reads the exact completed Stop, not a newer prompt respons
   ): HarnessObservationRecord => ({
     seq,
     recordedAt: time(second),
-    ptyProcessId: 1,
+    incarnation: 'pty:1' as const,
     harness: 'claude',
     nativeEvent,
     event,
@@ -112,7 +112,7 @@ test('Codex recovery fences native entries by the selected native start and comp
             {
               seq: 0,
               recordedAt: time(0),
-              ptyProcessId: 1,
+              incarnation: 'pty:1' as const,
               harness: 'codex',
               nativeEvent: 'SessionStart',
               event: { transcript_path: path },

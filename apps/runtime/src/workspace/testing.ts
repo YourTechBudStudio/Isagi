@@ -12,4 +12,4 @@ export {
 export { checkNewDirectory } from './new-directory.js';
 export { buildWorkspaceSnapshot } from './snapshot.js';
 export { createGitProjectFixture } from './tests/live-git-support.js';
-export { directoryTree } from './tests/test-support.js';
+export { directoryTree, recordingAgentSessionService } from './tests/test-support.js';

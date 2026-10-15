@@ -233,6 +233,10 @@ export function websocketError(error: SessionAttachError): {
       return { code: error.code, message: error.message };
     // Every session error code is also a socket error code: a new code that is not fails to compile here.
     case 'AgentSessionError':
+      // The interaction-mode refusals: only a mode change raises them, never an attach.
+      if (error.code === 'session_not_placed' || error.code === 'session_deleting')
+        return { code: 'unknown', message: error.message };
+      return { code: error.code, message: error.message };
     case 'TerminalSessionError':
       return { code: error.code, message: error.message };
     case 'HarnessAdapterError':
