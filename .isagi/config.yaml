@@ -1,6 +1,14 @@
 worktrees:
   hooks:
     postCreate:
+      # Fluidcast libraries install from tarballs packed from a local checkout (`pnpm fluidcast:pack`).
+      # Both link to the project root's copies, which must exist there first.
+      - type: symlink
+        src: .fluidcast
+        dest: .fluidcast
+      - type: symlink
+        src: .fluidcast-packs
+        dest: .fluidcast-packs
       - type: command
         run: pnpm install
       - type: command
