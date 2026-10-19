@@ -121,3 +121,33 @@ test('Retry refuses, leaving the run failed, when the agent session cannot be ob
     assert.equal(executions(harness, runId).length, 1);
   });
 });
+
+test('Resume keeps waiting on an agent whose controller is live, and delivers session_died once it is not', async () => {
+  await withEngine(async (harness) => {
+    const seen: NodeEvent[] = [];
+    harness.registry.publish('agent', spawnAndWait(seen));
+    const runId = await harness.launch('agent');
+    assert.equal(runRow(harness, runId).status, 'waiting');
+
+    // The pane switched to Fluidcast before the turn started: its terminal is stopped, but the
+    // controller liveness reads the live worker.
+    harness.agents.sessions.get(1)!.alive = true;
+    await harness.run(harness.engine.pause(runId));
+    await harness.run(harness.engine.resume(runId));
+    assert.equal(runRow(harness, runId).status, 'waiting');
+    assert.equal(seen.length, 0);
+
+    // The controller is gone: the turn will never start.
+    harness.agents.sessions.get(1)!.alive = false;
+    await harness.run(harness.engine.pause(runId));
+    await harness.run(harness.engine.resume(runId));
+    assert.deepEqual(
+      seen.map((event) =>
+        event.kind === 'agent_turn' && event.outcome === 'interrupted'
+          ? [event.outcome, event.reason]
+          : event,
+      ),
+      [['interrupted', 'session_died']],
+    );
+  });
+});

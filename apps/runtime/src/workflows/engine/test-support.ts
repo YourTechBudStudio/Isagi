@@ -14,6 +14,7 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
+import { notInTerminalMode } from '../../environment/testing.js';
 import { HarnessObserverRefreshError } from '../../harnesses/index.js';
 import { InternalEvents, type RuntimeEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
@@ -47,6 +48,7 @@ import type { WorkflowAgentHarness, WorkflowConversationMessage } from '../types
 import type { TurnEdge } from '../waits/latest-turn.js';
 import type {
   AgentPort,
+  AgentSendError,
   CheckpointsPort,
   HeadlessExit,
   HeadlessPort,
@@ -607,6 +609,8 @@ export class FakePlaces {
 interface FakeSession {
   readonly harness: WorkflowAgentHarness;
   alive: boolean;
+  /** Set while the agent's pane is not in terminal mode: a send is refused as the runtime does. */
+  sendRefusal: 'fluidcast' | 'fluidcast_failed' | null;
   readonly edges: TurnEdge[];
   readonly replies: Map<number, string>;
   nextSeq: number;
@@ -640,6 +644,7 @@ export class FakeAgents {
     this.sessions.set(agentSessionId, {
       harness,
       alive: true,
+      sendRefusal: null,
       edges: [],
       replies: new Map(),
       nextSeq: 1,
@@ -656,6 +661,7 @@ export class FakeAgents {
           this.sessions.set(agentSessionId, {
             harness: input.harness,
             alive: true,
+            sendRefusal: null,
             edges: [],
             replies: new Map(),
             nextSeq: 1,
@@ -667,13 +673,15 @@ export class FakeAgents {
           return { agentSessionId, paneId: 1000 + agentSessionId, sentAt, harnessSessionId: 'h1' };
         }),
       send: (input) =>
-        Effect.suspend(() => {
+        Effect.suspend((): Effect.Effect<{ readonly sentAt: string }, AgentSendError> => {
           const session = this.sessions.get(input.agentSessionId);
           if (!session) {
             return Effect.fail(
               new WorkflowOperationFailed({ message: `No agent session ${input.agentSessionId}.` }),
             );
           }
+          if (session.sendRefusal !== null)
+            return Effect.fail(notInTerminalMode(input.agentSessionId, session.sendRefusal));
           const sentAt = this.clock.now();
           this.prompts.push({
             kind: 'send',

@@ -52,10 +52,12 @@ export {
   agentInteractionModeApiErrorSchema,
   agentSessionActivityApiErrorSchema,
   agentSessionActivityUnavailableErrorSchema,
+  agentInteractionChangedErrorSchema,
   agentSessionDeletingErrorSchema,
   agentSessionMetadataUnusableErrorSchema,
   agentSessionNotFoundErrorSchema,
   agentSessionsEndpoints,
+  agentTerminalStopFailedErrorSchema,
   fluidcastSessionUnreadableErrorSchema,
   fluidcastStartFailedErrorSchema,
   fluidcastUnavailableErrorSchema,
@@ -64,12 +66,18 @@ export type { AgentInteractionModeApiError } from './agent-sessions/api.js';
 export {
   agentSessionActivityOutputSchema,
   agentSessionInteractionModeSchema,
+  agentSessionInteractionOriginSchema,
+  fluidcastHandoffFailureSchema,
+  fluidcastSessionUnreadableReasonSchema,
+  fluidcastStartFailedReasonSchema,
   setAgentSessionInteractionModeInputSchema,
   setAgentSessionInteractionModeOutputSchema,
 } from './agent-sessions/types.js';
 export type {
   AgentSessionActivityOutput,
   AgentSessionInteractionMode,
+  AgentSessionInteractionOrigin,
+  FluidcastHandoffFailure,
   SetAgentSessionInteractionModeInput,
   SetAgentSessionInteractionModeOutput,
 } from './agent-sessions/types.js';

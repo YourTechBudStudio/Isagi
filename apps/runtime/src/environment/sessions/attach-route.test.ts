@@ -20,7 +20,7 @@ import { fakeTerminateMany } from '../../pty-processes/testing.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
 import { TerminalSessionService } from '../terminal-sessions/service.js';
 import { agentSessionRowForTest } from '../testing.js';
-import { registerPtyApi } from './attach-route.js';
+import { registerPtyApi, websocketError } from './attach-route.js';
 import { SessionLifecycle, type AttachTokenRecord } from './lifecycle.js';
 import type { AgentSessionRow } from './types.js';
 
@@ -761,7 +761,9 @@ function fakeAgentSessionService(
     startFresh: () => Effect.die('startFresh is not used'),
     get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.succeed(20),
-    activePtyProcessId: () => Effect.succeed(20),
+    requireTerminalMode: () => Effect.succeed(0),
+    withRunningTerminal: (_agentSessionId, _generation, use) => use(20),
+    isControllerLive: () => Effect.succeed(true),
     stopUnlessPlaced: () => Effect.die('stopUnlessPlaced is not used'),
     setInteractionMode: () => Effect.die('agent setInteractionMode is not used'),
     releaseControllers: () => Effect.void,
@@ -976,3 +978,13 @@ function liveAgentRow(ptyProcessId: number): AgentSessionRow {
     activePtyProcess: { ...fakeRunningProcess(), id: ptyProcessId } as never,
   };
 }
+
+test('an attach refused because the agent left terminal mode, or its controller changed, is a stale incarnation', () => {
+  for (const code of ['not_in_terminal_mode', 'interaction_changed'] as const) {
+    const error = new AgentSessionError(code, `refused: ${code}`);
+    assert.deepEqual(websocketError(error), {
+      code: 'process_incarnation_stale',
+      message: `refused: ${code}`,
+    });
+  }
+});

@@ -172,6 +172,65 @@ test('Retry after a node function threw runs it again in a new row that knows it
   });
 });
 
+/** One node that sends into an existing agent session and waits for its turn. */
+function sendAndWait(agentSessionId: number) {
+  return workflow(
+    createGraph<{ n: number }>({
+      key: 'send',
+      title: 'Send',
+      init: () => ({ n: 0 }),
+      state: { n: reduce.replace<number>() } as never,
+      entry: 'ask',
+      nodes: {
+        ask: operation(async (ctx) => {
+          const target = await ctx.sendAgentPrompt({ agentSessionId, prompt: 'Carry on.' });
+          return suspend({ wait: wait.agentTurn(target) });
+        }),
+      },
+      edges: { out: edge({ from: 'ask', to: ['done'], choose: () => ({ to: 'done' }) }) },
+      outcomes: { done: outcome({ kind: 'success', output: () => null }) },
+    }),
+  );
+}
+
+test('a send refused while the pane is not in terminal mode fails its row; Retry after switching back sends again', async () => {
+  await withEngine(async (harness) => {
+    const agentSessionId = harness.agents.addSession();
+    harness.agents.sessions.get(agentSessionId)!.sendRefusal = 'fluidcast';
+    harness.registry.publish('send', sendAndWait(agentSessionId));
+    const runId = await harness.launch('send');
+    assert.equal(runRow(harness, runId).status, 'failed');
+    const operationsOf = () =>
+      harness.db.select().from(workflowOperations).where(eq(workflowOperations.runId, runId)).all();
+    const [refused] = operationsOf();
+    assert.equal(refused!.kind, 'send_prompt');
+    assert.equal(refused!.status, 'failed');
+    assert.deepEqual(JSON.parse(refused!.resultJson!), {
+      error: `Agent session ${agentSessionId} isn't in terminal mode: Fluidcast controls it. Switch its pane back to the terminal, then retry.`,
+    });
+    assert.equal(harness.agents.prompts.length, 0);
+
+    // The person switches the pane back to the terminal, then presses Retry.
+    harness.agents.sessions.get(agentSessionId)!.sendRefusal = null;
+    await harness.run(harness.engine.retry(runId));
+    assert.equal(runRow(harness, runId).status, 'waiting');
+    const rows = operationsOf();
+    assert.deepEqual(
+      rows.map((row) => [row.kind, row.status]),
+      [
+        ['send_prompt', 'failed'],
+        ['send_prompt', 'completed'],
+      ],
+    );
+    assert.notEqual(rows[1]!.executionId, rows[0]!.executionId);
+    assert.equal(harness.agents.prompts.length, 1);
+
+    await harness.agents.endTurn(agentSessionId, 'Done.');
+    await harness.settle();
+    assert.equal(runRow(harness, runId).status, 'completed');
+  });
+});
+
 test("Retry of a failed return path replays the child's step and the parent's code", async () => {
   await withEngine(async (harness) => {
     const build = (parentEdgeThrows: boolean) => {

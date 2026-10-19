@@ -299,6 +299,9 @@ export function websocketError(error: SessionAttachError): {
       // The interaction-mode refusals: only a mode change raises them, never an attach.
       if (error.code === 'session_not_placed' || error.code === 'session_deleting')
         return { code: 'unknown', message: error.message };
+      // The agent's controller is not the terminal this attach was admitted for.
+      if (error.code === 'not_in_terminal_mode' || error.code === 'interaction_changed')
+        return { code: 'process_incarnation_stale', message: error.message };
       return { code: error.code, message: error.message };
     case 'TerminalSessionError':
       return { code: error.code, message: error.message };

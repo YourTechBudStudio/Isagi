@@ -1,6 +1,7 @@
 import { Cause, Context, Effect, Layer } from 'effect';
 
 import type {
+  AgentSessionInteraction as AgentSessionInteractionProjection,
   CreateSurfaceOutput,
   DeletePaneOutput,
   DeleteSurfaceOutput,
@@ -1228,6 +1229,29 @@ function publishSessionChanged(
   }
 }
 
+/** The agent's controller as panes show it, each mode with the record's generation. */
+function projectInteraction(
+  control: AgentControl,
+  fluidcastAvailability: () => 'available' | 'unavailable',
+): AgentSessionInteractionProjection {
+  switch (control.mode) {
+    case 'terminal':
+      return {
+        mode: 'terminal',
+        generation: control.generation,
+        fluidcast: fluidcastAvailability(),
+      };
+    case 'fluidcast':
+      return {
+        mode: 'fluidcast',
+        generation: control.generation,
+        fluidcastSessionId: control.fluidcastSessionId,
+      };
+    case 'fluidcast_failed':
+      return { mode: 'fluidcast_failed', generation: control.generation, failure: control.failure };
+  }
+}
+
 function sessionForPane(
   sources: {
     readonly agentSessions: readonly AgentSessionRow[];
@@ -1258,13 +1282,9 @@ function sessionForPane(
         statusReason: state.statusReason,
         recoveryAction: state.recoveryAction,
         processIncarnation: sessionProcessIncarnation(agent, control),
-        interaction:
-          control.mode === 'fluidcast'
-            ? { mode: 'fluidcast', fluidcastSessionId: control.fluidcastSessionId }
-            : {
-                mode: 'terminal',
-                fluidcast: sources.fluidcastAvailable(agent.harness) ? 'available' : 'unavailable',
-              },
+        interaction: projectInteraction(control, () =>
+          sources.fluidcastAvailable(agent.harness) ? 'available' : 'unavailable',
+        ),
         diagnosticCode: state.diagnosticCode,
         diagnosticDetail: state.diagnosticDetail,
         createdAt: agent.createdAt,

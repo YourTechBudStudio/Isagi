@@ -89,7 +89,12 @@ test('claim pane session rejects sessions from another worktree', async () => {
         return yield* surfaces
           .claimPaneSession({
             worktreeId,
-            claim: { action: 'claim_agent_session', paneId: surface.paneId, agentSessionId: 77 },
+            claim: {
+              action: 'claim_agent_session',
+              paneId: surface.paneId,
+              agentSessionId: 77,
+              expectedInteractionGeneration: 0,
+            },
           })
           .pipe(Effect.result);
       }).pipe(
@@ -162,7 +167,12 @@ function rejoinScenario(input: {
       const explicit = input.pendingExplicit
         ? yield* surfaces.claimPaneSession({
             worktreeId,
-            claim: { action: 'claim_agent_session', paneId: rejoining.paneId, agentSessionId },
+            claim: {
+              action: 'claim_agent_session',
+              paneId: rejoining.paneId,
+              agentSessionId,
+              expectedInteractionGeneration: 0,
+            },
           })
         : null;
       const claim = surfaces
@@ -172,6 +182,7 @@ function rejoinScenario(input: {
             action: 'claim_agent_session',
             paneId: rejoining.paneId,
             agentSessionId,
+            expectedInteractionGeneration: 0,
             expectedProcessIncarnation: input.expected,
           },
         })

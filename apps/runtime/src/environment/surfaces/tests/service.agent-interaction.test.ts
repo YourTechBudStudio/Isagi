@@ -78,7 +78,11 @@ test('a terminal-mode pane offers Fluidcast only for an SDK harness with Fluidca
       { fluidcast: makeFakeFluidcastSessions({ availability }) },
       Effect.flatMap(agentPane(harness), ({ surfaceId }) => paneAgent(surfaceId)),
     );
-    assert.deepEqual(agent.interaction, { mode: 'terminal', fluidcast: expected }, harness);
+    assert.deepEqual(
+      agent.interaction,
+      { mode: 'terminal', generation: 0, fluidcast: expected },
+      harness,
+    );
   }
 });
 
@@ -102,7 +106,7 @@ test('a Fluidcast-mode pane reports its session, and its status and rail attenti
         cwd: '/repo/isagi',
         harnessSessionId: null,
       });
-      interaction.set(agentSessionId, started);
+      interaction.setFluidcast(agentSessionId, started);
       const live = yield* paneAgent(surfaceId);
       const liveRail = yield* railFor;
       const liveCount = yield* attention.workingAgentCount;
@@ -115,7 +119,11 @@ test('a Fluidcast-mode pane reports its session, and its status and rail attenti
   );
   // Never launched: the terminal pane is starting.
   assert.equal(result.terminal.status, 'starting');
-  assert.deepEqual(result.live.interaction, { mode: 'fluidcast', fluidcastSessionId: 'fc-1' });
+  assert.deepEqual(result.live.interaction, {
+    mode: 'fluidcast',
+    generation: 1,
+    fluidcastSessionId: 'fc-1',
+  });
   assert.equal(result.live.status, 'running');
   assert.equal(result.live.statusReason, null);
   // Running with no harness activity yet: idle, and not counted as working.
@@ -125,6 +133,62 @@ test('a Fluidcast-mode pane reports its session, and its status and rail attenti
   assert.equal(result.ended.statusReason, 'agent_worker_failed');
   assert.equal(result.ended.diagnosticDetail, 'worker_exited');
   assert.equal(result.endedRail, 'error');
+});
+
+test('a failed switch projects its failure and generation, offers no terminal, and reads its PTY row', async () => {
+  const fluidcast = makeFakeFluidcastSessions();
+  const result = await withSurfaces(
+    { fluidcast },
+    Effect.gen(function* () {
+      const { worktreeId, surfaceId, agentSessionId } = yield* agentPane('claude');
+      const interaction = yield* AgentSessionInteraction;
+      const surfaces = yield* SurfaceService;
+      // The terminal whose stop failed is still running and still the agent's pointer.
+      const host = yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: 'Host' });
+      const pty = yield* insertPtyProcess({
+        paneId: host.paneId,
+        worktreeId,
+        logPath: null,
+        status: 'running',
+      });
+      yield* (yield* RuntimeDatabase).use('test_point_agent_at_live_pty', (db) =>
+        db
+          .update(agentSessions)
+          .set({ activePtyProcessId: pty.ptyProcessId })
+          .where(eq(agentSessions.id, agentSessionId))
+          .run(),
+      );
+      const started = yield* fluidcast.service.start({
+        agentSessionId,
+        harness: 'claude',
+        cwd: '/repo/isagi',
+        harnessSessionId: null,
+      });
+      interaction.setFluidcast(agentSessionId, started);
+      interaction.setTerminal(agentSessionId);
+      interaction.setFailed(agentSessionId, {
+        code: 'terminal_stop_failed',
+        diagnostic: 'PTY kill error',
+      });
+      const failed = yield* paneAgent(surfaceId);
+      interaction.setTerminal(agentSessionId);
+      const back = yield* paneAgent(surfaceId);
+      return { failed, back, pty };
+    }),
+  );
+  assert.deepEqual(result.failed.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 3,
+    failure: { code: 'terminal_stop_failed', diagnostic: 'PTY kill error' },
+  });
+  assert.equal(result.failed.processIncarnation, null);
+  assert.equal(result.failed.status, 'running');
+  assert.deepEqual(result.back.interaction, {
+    mode: 'terminal',
+    generation: 4,
+    fluidcast: 'available',
+  });
+  assert.equal(result.back.processIncarnation, `pty:${result.pty.ptyProcessId}`);
 });
 
 test('a pane carries the incarnation of its live terminal process, and none without one', async () => {
@@ -182,7 +246,7 @@ test('a pane carries the incarnation of its live terminal process, and none with
         cwd: '/repo/isagi',
         harnessSessionId: null,
       });
-      (yield* AgentSessionInteraction).set(agentSessionId, started);
+      (yield* AgentSessionInteraction).setFluidcast(agentSessionId, started);
       const fluidcastMode = yield* paneAgent(surfaceId);
       return {
         neverLaunched,

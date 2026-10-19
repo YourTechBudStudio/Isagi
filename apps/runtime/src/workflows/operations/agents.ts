@@ -69,10 +69,7 @@ export function makeAgentPort(deps: AgentDeps): AgentPort {
         ? deps.observer.refreshTurnEdges(agentSessionId)
         : deps.observer.getTurnEdges(agentSessionId),
     isAlive: (agentSessionId) =>
-      deps.agents.activePtyProcessId(agentSessionId).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      ),
+      deps.agents.isControllerLive(agentSessionId).pipe(Effect.orElseSucceed(() => false)),
   };
 }
 
@@ -262,12 +259,17 @@ function requireSpawnPlacement(
   });
 }
 
-/** Sends a prompt into an existing session. Refused while a turn is in flight. */
+/**
+ * Sends a prompt into an existing session's terminal. Refused while a turn is in flight, and while
+ * the agent is not in terminal mode (Fluidcast controls it, or its switch to Fluidcast failed).
+ */
 export function sendAgentPrompt(
   deps: AgentDeps,
   input: { readonly agentSessionId: number; readonly prompt: string },
 ): Effect.Effect<{ readonly agentSessionId: number; readonly sentAt: string }, AgentSendError> {
   return Effect.gen(function* () {
+    // The unsupported-mode gate: before observer waiting, the PTY lookup and writing.
+    const generation = yield* deps.agents.requireTerminalMode(input.agentSessionId);
     yield* waitForObserverInitialization(deps.observer, input.agentSessionId);
     if (yield* isTurnInFlight(deps.observer, input.agentSessionId)) {
       return yield* Effect.fail(
@@ -276,9 +278,19 @@ export function sendAgentPrompt(
         }),
       );
     }
-    const ptyProcessId = yield* deps.agents.activePtyProcessId(input.agentSessionId);
-    const sentAt = new Date().toISOString();
-    yield* writePromptToPty(deps.pty, ptyProcessId, input.prompt);
+    // The lookup and both writes under the agent's lock, refused if the controller changed
+    // meanwhile, so a switch can never land between them.
+    const sentAt = yield* deps.agents.withRunningTerminal(
+      input.agentSessionId,
+      generation,
+      (ptyProcessId) =>
+        Effect.gen(function* () {
+          // Captured immediately before the write, as the turn's lower bound.
+          const writeStartedAt = new Date().toISOString();
+          yield* writePromptToPty(deps.pty, ptyProcessId, input.prompt);
+          return writeStartedAt;
+        }),
+    );
     return { agentSessionId: input.agentSessionId, sentAt };
   });
 }

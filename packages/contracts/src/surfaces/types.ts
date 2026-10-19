@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { fluidcastHandoffFailureSchema } from '../agent-sessions/types.js';
 import { editorContextMetadataSchema } from '../editor/types.js';
 import { sessionStatusSchema } from '../processes/types.js';
 import {
@@ -183,12 +184,28 @@ const sessionProjectionFields = {
   lastSeenAt: Schema.NullOr(Schema.String),
 } as const;
 
+/**
+ * `generation` increases on every change of the agent's interaction record and never repeats
+ * within one runtime; a restart returns every agent to terminal mode at generation 0.
+ * `fluidcast_failed` is a switch to Fluidcast that began cleanup but left no Fluidcast session
+ * running.
+ */
 export const agentSessionInteractionSchema = Schema.Union([
   Schema.Struct({
     mode: Schema.Literal('terminal'),
+    generation: nonNegativeInteger,
     fluidcast: Schema.Literals(['available', 'unavailable']),
   }),
-  Schema.Struct({ mode: Schema.Literal('fluidcast'), fluidcastSessionId: Schema.String }),
+  Schema.Struct({
+    mode: Schema.Literal('fluidcast'),
+    generation: nonNegativeInteger,
+    fluidcastSessionId: Schema.String,
+  }),
+  Schema.Struct({
+    mode: Schema.Literal('fluidcast_failed'),
+    generation: nonNegativeInteger,
+    failure: fluidcastHandoffFailureSchema,
+  }),
 ]);
 
 export const agentSessionMetadataSchema = Schema.Struct({
@@ -367,6 +384,11 @@ export const paneSessionClaimInputSchema = Schema.Union([
     action: Schema.Literal('claim_agent_session'),
     paneId: positiveInteger,
     agentSessionId: positiveInteger,
+    /**
+     * The `interaction.generation` of the projection the claim was made from; a claim made under
+     * an earlier controller is refused with `process_incarnation_stale`.
+     */
+    expectedInteractionGeneration: nonNegativeInteger,
     expectedProcessIncarnation: expectedProcessIncarnationField,
   }),
   Schema.Struct({

@@ -11,11 +11,12 @@ import {
 import type { AgentSessionRow, TerminalSessionRow } from './types.js';
 
 const now = '2026-06-16T00:00:00.000Z';
-const terminal: AgentControl = { mode: 'terminal' };
+const terminal: AgentControl = { mode: 'terminal', generation: 0 };
 
 function fluidcastControl(worker: Extract<AgentControl, { mode: 'fluidcast' }>['worker']) {
   return {
     mode: 'fluidcast',
+    generation: 1,
     fluidcastSessionId: 'fc-1' as FluidcastSessionId,
     since: now,
     worker,
@@ -382,6 +383,20 @@ test('the process incarnation names the live terminal process, and only a live o
     ),
     null,
   );
+});
+
+test('an agent whose switch to Fluidcast failed has no terminal process incarnation, even with a running PTY', () => {
+  const live = switchedAgent({
+    activePtyProcessId: 100,
+    activePtyProcess: ptyProcess({ id: 100, status: 'running' }),
+  });
+  const failed = {
+    mode: 'fluidcast_failed',
+    generation: 2,
+    failure: { code: 'terminal_stop_failed', diagnostic: 'PTY kill error' },
+  } satisfies AgentControl;
+  assert.equal(sessionProcessIncarnation(live, failed), null);
+  assert.equal(sessionProcessIncarnation(live, terminal), 'pty:100');
 });
 
 test('an agent under Fluidcast has no terminal process incarnation', () => {
