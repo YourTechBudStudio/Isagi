@@ -73,6 +73,14 @@ export interface PtyStreamStrategy<Target, Preamble extends { readonly type: str
     readonly message: PtyWebSocketInputMessage;
   }) => Effect.Effect<void, E, R>;
   readonly beforeAttach: (target: LiveTarget<Target>) => Effect.Effect<void, E, R>;
+  /**
+   * Runs the final attach (`beforeAttach`, the PTY attachment, registration) as one admitted unit, for a strategy
+   * whose attach must not interleave with other work on its target. Without it the attach runs as is.
+   */
+  readonly withAttachAdmission?: <A, E2, R2>(
+    target: LiveTarget<Target>,
+    attach: Effect.Effect<A, E2, R2>,
+  ) => Effect.Effect<A, E | E2, R | R2>;
   readonly recoverAttachFailure?: (input: {
     readonly target: LiveTarget<Target>;
     readonly cause: E | PtyAttachError;
@@ -355,29 +363,33 @@ const attachLive = Effect.fnUntraced(function* <
   live: Queue.Enqueue<PtyStreamOutputMessageSet>,
 ) {
   const pty = yield* PtyService;
-  yield* strategy.beforeAttach(target);
-  const attachment = yield* pty.attach({
-    ptyProcessId: target.ptyProcessId,
-    mode: strategy.mode,
-    supersede: strategy.supersede(target),
-    send: (message) => {
-      Queue.offerUnsafe(live, message);
-    },
-    displace: (attached) =>
-      strategy.displace({
+  // Registration stays inside the admitted unit, and its finalizer still lands on the connection's scope.
+  const attach = Effect.gen(function* () {
+    yield* strategy.beforeAttach(target);
+    const attachment = yield* pty.attach({
+      ptyProcessId: target.ptyProcessId,
+      mode: strategy.mode,
+      supersede: strategy.supersede(target),
+      send: (message) => {
+        Queue.offerUnsafe(live, message);
+      },
+      displace: (attached) =>
+        strategy.displace({
+          target,
+          controls: { send: ws.send, close: ws.close, detach: attached.detach },
+        }),
+    });
+    const release = yield* strategy
+      .registerAttachment({
         target,
-        controls: { send: ws.send, close: ws.close, detach: attached.detach },
-      }),
+        attachment,
+        controls: { send: ws.send, close: ws.close, detach: attachment.detach },
+      })
+      .pipe(Effect.tapError(() => attachment.detach));
+    yield* Effect.addFinalizer(() => Effect.sync(release));
+    return attachment;
   });
-  const release = yield* strategy
-    .registerAttachment({
-      target,
-      attachment,
-      controls: { send: ws.send, close: ws.close, detach: attachment.detach },
-    })
-    .pipe(Effect.tapError(() => attachment.detach));
-  yield* Effect.addFinalizer(() => Effect.sync(release));
-  return attachment;
+  return yield* strategy.withAttachAdmission?.(target, attach) ?? attach;
 });
 
 /**
