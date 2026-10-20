@@ -37,6 +37,7 @@ function agentPane(id: number, interaction: AgentSessionInteraction): SurfacePan
         recoveryAction: 'connect_existing',
         interaction,
         status: 'running',
+        processIncarnation: interaction.mode === 'terminal' ? `pty:${id}` : null,
         diagnosticCode: null,
         diagnosticDetail: null,
         createdAt: '2026-06-17T00:00:00.000Z',
@@ -49,9 +50,14 @@ function agentPane(id: number, interaction: AgentSessionInteraction): SurfacePan
 
 const fluidcast = (fluidcastSessionId: string): AgentSessionInteraction => ({
   mode: 'fluidcast',
+  generation: 1,
   fluidcastSessionId,
 });
-const terminal: AgentSessionInteraction = { mode: 'terminal', fluidcast: 'available' };
+const terminal: AgentSessionInteraction = {
+  mode: 'terminal',
+  generation: 0,
+  fluidcast: 'available',
+};
 
 function detail(surfaceId: number, panes: readonly SurfacePane[]): SurfaceDetail {
   return {

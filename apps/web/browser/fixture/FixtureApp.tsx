@@ -10,7 +10,11 @@ import { TerminalPresentationProvider } from '../../src/lib/workspace/terminal-p
 import { sendAgentComposerNewline } from '../../src/routes/workspace/agentComposerKeys.js';
 import { PaneTerminal } from '../../src/routes/workspace/PaneTerminal.js';
 import type { AnsiRecipe } from './ansi.js';
-import { createInstrumentedEnvironment, type FixtureTerminalState } from './instrumentation.js';
+import {
+  createInstrumentedEnvironment,
+  FIXTURE_PROCESS_INCARNATION,
+  type FixtureTerminalState,
+} from './instrumentation.js';
 import { createFixtureRegistry } from './test-support/registry.js';
 
 const params = new URLSearchParams(location.search);
@@ -314,12 +318,14 @@ function FixtureTerminal(input: {
     // Destination topology and cache visibility are separate facts. Surface navigation may
     // briefly have no registered destination while the pane itself remains mounted/visible.
     mounted: input.visible,
+    processIncarnation: FIXTURE_PROCESS_INCARNATION,
     attachmentRequest: input.attachmentRequest,
     initiallyInteractive: true,
     resolveUrl: () => {
       instrumentation.claimAttempt();
       return Effect.succeed(`fixture://terminal/${input.index + 1}`);
     },
+    onStaleProjection: () => undefined,
     onMilestone: instrumentation.observeMilestone,
     ...(identityKind === 'agent_session' ? { onCustomKey: sendAgentComposerNewline } : {}),
   });

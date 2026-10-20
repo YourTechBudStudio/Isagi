@@ -175,6 +175,8 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       pane_not_found: "That pane isn't here anymore.",
       invalid_surface_title: "That surface title won't work.",
       surface_not_empty: 'That surface already has panes. Split one instead.',
+      // A claim made under a controller the agent has since left.
+      process_incarnation_stale: 'The process this pane was following has already moved on.',
     },
   },
   worktree_environment_focus_rejected: {
@@ -211,7 +213,16 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     byReason: {
       executable_not_found:
         "Couldn't find the agent's executable for Fluidcast. The terminal was stopped.",
+      instrumentation_failed:
+        "Couldn't set up the agent's hooks for Fluidcast. The terminal was stopped.",
+      session_build_failed: "The Fluidcast session didn't come up. The terminal was stopped.",
     },
+  },
+  agent_terminal_stop_failed: {
+    summary: "Couldn't stop the terminal, so Fluidcast didn't start.",
+  },
+  agent_interaction_changed: {
+    summary: 'This agent changed before the switch reached it. Try again.',
   },
   session_launch_rejected: {
     summary: "Couldn't start a session there.",
@@ -485,6 +496,7 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   session_not_running: "This session isn't running anymore.",
   active_process_missing: 'This session has no active process to attach to yet.',
   active_process_not_running: "This session's active process is not running.",
+  process_incarnation_stale: 'The process this pane was following has already moved on.',
   harness_metadata_missing:
     'The harness session record is missing, so this pane needs a replacement.',
   harness_metadata_invalid:

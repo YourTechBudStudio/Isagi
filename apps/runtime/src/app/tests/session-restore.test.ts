@@ -7,8 +7,13 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
+import {
+  AgentSessionInteraction,
+  type AgentInteraction,
+} from '../../environment/agent-sessions/interaction.js';
 import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import type { PaneSessionBinding } from '../../environment/index.js';
+import { sessionProcessIncarnation } from '../../environment/sessions/status.js';
 import {
   agentSessions,
   surfacePanes,
@@ -24,8 +29,11 @@ import {
   realRestoreLayer,
   realSessionCreationLayer,
   sessionDataLayer,
+  sessionWorldLayers,
 } from '../../environment/testing.js';
 import { SurfaceRepository, TerminalSessionService } from '../../environment/testing.js';
+import { FluidcastStartFailed } from '../../fluidcast/index.js';
+import { makeFakeFluidcastSessions } from '../../fluidcast/testing.js';
 import { AgentSessionArtifacts, HarnessLaunchBlocked } from '../../harnesses/index.js';
 import { createFixtureWorkspace } from '../../platform/git/testing.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
@@ -428,7 +436,9 @@ function fakeAgentService(
     startFresh: () => Effect.die('agent startFresh is not used'),
     get: () => Effect.die('agent get is not used'),
     ensureActivePtyProcess: () => Effect.die('agent ensureActivePtyProcess is not configured'),
-    activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used'),
+    requireTerminalMode: () => Effect.die('agent requireTerminalMode is not used'),
+    withRunningTerminal: () => Effect.die('agent withRunningTerminal is not used'),
+    isControllerLive: () => Effect.die('agent isControllerLive is not used'),
     stopUnlessPlaced: () => Effect.die('agent stopUnlessPlaced is not used'),
     setInteractionMode: () => Effect.die('agent setInteractionMode is not used'),
     releaseControllers: () => Effect.void,
@@ -671,6 +681,137 @@ test('a folder project keeps its sessions, paths, and resume identity across a r
         args: ['--session', harnessSessionId],
       },
     ]);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    fixtures.cleanup();
+  }
+});
+
+test('agents in Fluidcast or a failed switch come back after a restart in terminal mode at generation 0, resuming their native sessions', async () => {
+  const fixtures = createFixtureWorkspace('fluidcast-restart');
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-fluidcast-restart-'));
+  const projectPath = fixtures.directory('app');
+  try {
+    const worktreeId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const added = yield* (yield* WorkspaceService).registerProject({ path: projectPath });
+        const worktree = (yield* (yield* ProjectRepository).listWorktrees).find(
+          (row) => row.projectId === added.projectId,
+        );
+        if (!worktree) throw new Error('Expected the folder project to own an environment.');
+        return worktree.id;
+      }).pipe(Effect.provide(liveWorkspaceLayer(dataRoot, {}))),
+    );
+
+    // ── Before the restart: one agent under Fluidcast, one whose switch failed ──
+    let failingAgent = 0;
+    const creationWorld = {
+      ptyLaunches: [] as LaunchPtyProcessInput[],
+      harnessLaunches: [] as HarnessLaunchRecord[],
+      fluidcast: makeFakeFluidcastSessions({
+        onStart: (input) =>
+          input.agentSessionId === failingAgent
+            ? Effect.fail(new FluidcastStartFailed({ reason: 'session_build_failed' }))
+            : Effect.void,
+      }),
+    };
+    const before = await Effect.runPromise(
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        const agents = yield* AgentSessionService;
+        const interaction = yield* AgentSessionInteraction;
+        const artifacts = yield* AgentSessionArtifacts;
+        const placeAgent = Effect.fnUntraced(function* (title: string) {
+          const surface = yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: title });
+          const bound = yield* surfaces.createPaneSession({
+            worktreeId,
+            create: { kind: 'agent_session', paneId: surface.paneId, harness: 'claude' },
+          });
+          if (bound.session.kind !== 'agent_session') throw new Error('Expected an agent pane.');
+          const agentSessionId = bound.session.agentSessionId;
+          yield* agents.ensureActivePtyProcess(agentSessionId);
+          yield* artifacts.writeHarnessSessionId({
+            agentSessionId,
+            harnessSessionId: `native-${agentSessionId}`,
+          });
+          return agentSessionId;
+        });
+        const toFluidcast = Effect.fnUntraced(function* (agentSessionId: number) {
+          const control = interaction.control(agentSessionId);
+          const row = yield* agents.get(agentSessionId);
+          return yield* agents.setInteractionMode({
+            agentSessionId,
+            mode: 'fluidcast',
+            from: {
+              generation: control.generation,
+              fluidcastSessionId: null,
+              processIncarnation: sessionProcessIncarnation(row, control),
+            },
+          });
+        });
+        const underFluidcast = yield* placeAgent('Fluidcast');
+        const failed = yield* placeAgent('Failed');
+        failingAgent = failed;
+        yield* toFluidcast(underFluidcast);
+        yield* Effect.flip(toFluidcast(failed));
+        return {
+          underFluidcast,
+          failed,
+          interactions: [interaction.get(underFluidcast), interaction.get(failed)],
+        };
+      }).pipe(Effect.provide(realSessionCreationLayer(dataRoot, creationWorld))),
+    );
+    assert.deepEqual(
+      before.interactions.map((current) => [current.mode, current.generation]),
+      [
+        ['fluidcast', 1],
+        ['fluidcast_failed', 1],
+      ],
+    );
+
+    // ── The restart: startup restore over a fresh runtime ───────────────────
+    const restartWorld = {
+      ptyLaunches: [] as LaunchPtyProcessInput[],
+      harnessLaunches: [] as HarnessLaunchRecord[],
+      fluidcast: makeFakeFluidcastSessions(),
+    };
+    const world = sessionWorldLayers(dataRoot, restartWorld);
+    const restored = paneBoundRestoreLayer.pipe(
+      Layer.provide(world.surfaceRepository),
+      Layer.provide(world.agentService),
+      Layer.provide(world.terminalService),
+    );
+    let after: ReadonlyArray<AgentInteraction> = [];
+    const restartLogs = await captureStartupLogs(() =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const interaction = yield* AgentSessionInteraction;
+          after = [interaction.get(before.underFluidcast), interaction.get(before.failed)];
+        }).pipe(Effect.provide(Layer.merge(restored, world.interaction)), Effect.scoped),
+      ),
+    );
+
+    assert.deepEqual(after, [
+      { mode: 'terminal', generation: 0 },
+      { mode: 'terminal', generation: 0 },
+    ]);
+    // Restored the ordinary way, and nothing announces the Fluidcast state that was lost.
+    assert.deepEqual(restartLogs.warn, []);
+    assert.deepEqual(restartLogs.info.at(-1)?.[1], {
+      attempted: 2,
+      relaunched: 2,
+      reused: 0,
+      skippedUnrecoverable: 0,
+      failed: 0,
+    });
+    assert.deepEqual(
+      restartWorld.harnessLaunches.map((launch) => [launch.agentSessionId, launch.latest]),
+      [
+        [before.underFluidcast, `native-${before.underFluidcast}`],
+        [before.failed, `native-${before.failed}`],
+      ],
+    );
+    assert.deepEqual(restartWorld.fluidcast.calls, []);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
     fixtures.cleanup();

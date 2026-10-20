@@ -9,6 +9,8 @@ import type { ApiEndpoint } from '../api/types.js';
 import { agentSessionRouteParamsSchema } from '../surfaces/types.js';
 import {
   agentSessionActivityOutputSchema,
+  fluidcastSessionUnreadableReasonSchema,
+  fluidcastStartFailedReasonSchema,
   setAgentSessionInteractionModeInputSchema,
   setAgentSessionInteractionModeOutputSchema,
 } from './types.js';
@@ -66,7 +68,7 @@ export const fluidcastSessionUnreadableErrorSchema = Schema.Struct({
   code: Schema.Literal('fluidcast_session_unreadable'),
   status: Schema.Literal(422),
   ...errorEnvelopeFields,
-  data: Schema.Struct({ reason: Schema.Literals(['SessionNotFound', 'SessionUnreadable']) }),
+  data: Schema.Struct({ reason: fluidcastSessionUnreadableReasonSchema }),
 });
 
 /** The Fluidcast session could not be built; the terminal was stopped and nothing replaced it. */
@@ -74,13 +76,21 @@ export const fluidcastStartFailedErrorSchema = Schema.Struct({
   code: Schema.Literal('fluidcast_start_failed'),
   status: Schema.Literal(500),
   ...errorEnvelopeFields,
-  data: Schema.Struct({
-    reason: Schema.Literals([
-      'executable_not_found',
-      'instrumentation_failed',
-      'session_build_failed',
-    ]),
-  }),
+  data: Schema.Struct({ reason: fluidcastStartFailedReasonSchema }),
+});
+
+/** The switch's `from` no longer names the agent's controller; nothing changed. */
+export const agentInteractionChangedErrorSchema = Schema.Struct({
+  code: Schema.Literal('agent_interaction_changed'),
+  status: Schema.Literal(409),
+  ...errorEnvelopeFields,
+});
+
+/** The terminal stop reported an error, so Fluidcast was not started; the message carries the diagnostic. */
+export const agentTerminalStopFailedErrorSchema = Schema.Struct({
+  code: Schema.Literal('agent_terminal_stop_failed'),
+  status: Schema.Literal(500),
+  ...errorEnvelopeFields,
 });
 
 export const agentInteractionModeApiErrorSchema = Schema.Union([
@@ -93,6 +103,8 @@ export const agentInteractionModeApiErrorSchema = Schema.Union([
   fluidcastUnavailableErrorSchema,
   fluidcastSessionUnreadableErrorSchema,
   fluidcastStartFailedErrorSchema,
+  agentInteractionChangedErrorSchema,
+  agentTerminalStopFailedErrorSchema,
 ]);
 
 export const agentSessionsEndpoints = {

@@ -20,6 +20,8 @@ export function createTerminalWorkspaceCoordinator(input: {
   readonly workspace: TerminalPresentationWorkspace;
   readonly facts: Channel<TerminalWorkspaceFact>;
   readonly fetchInventory: (signal: AbortSignal) => Promise<DurableSessionInventory>;
+  /** Re-read these surfaces' detail; the provider maps it to an exact invalidation. */
+  readonly refreshSurfaces: (surfaceIds: readonly number[]) => void;
 }) {
   const { cache } = input.workspace;
   let disposed = false;
@@ -120,7 +122,12 @@ export function createTerminalWorkspaceCoordinator(input: {
       applySurfaceProjection(fact.detail);
       return;
     }
-    if (fact.type === 'runtime_connected' || fact.type === 'durable_inventory_refresh_requested') {
+    if (fact.type === 'runtime_connected') {
+      refreshInventory();
+      refreshPlacedSurfaces();
+      return;
+    }
+    if (fact.type === 'durable_inventory_refresh_requested') {
       refreshInventory();
       return;
     }
@@ -178,6 +185,20 @@ export function createTerminalWorkspaceCoordinator(input: {
         }
       }
     }
+  };
+
+  /**
+   * Session changes published while the runtime-events socket was down never arrive, and a
+   * runtime that restarted has relaunched its pane-bound sessions as new process incarnations by
+   * then. Re-reading the surfaces that hold a terminal lets each pane see the incarnation it should
+   * be attached to, instead of holding a presentation of a process that no longer exists.
+   */
+  const refreshPlacedSurfaces = () => {
+    const surfaceIds = new Set<number>();
+    for (const entry of cache.getSnapshot().entries) {
+      if (entry.placement) surfaceIds.add(entry.placement.surfaceId);
+    }
+    if (surfaceIds.size > 0) input.refreshSurfaces([...surfaceIds]);
   };
 
   const applySurfaceProjection = (surface: SurfaceDetail) => {

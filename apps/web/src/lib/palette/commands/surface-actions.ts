@@ -1,9 +1,15 @@
+import { Schema } from 'effect';
 import { Mic, PanelBottom, PanelRight, Pencil, Trash2 } from 'lucide-react';
 
-import type { SplitPaneDirection, SurfaceDetail, SurfacePane } from '@isagi/contracts';
+import {
+  agentSessionInteractionOriginSchema,
+  type SplitPaneDirection,
+  type SurfaceDetail,
+  type SurfacePane,
+} from '@isagi/contracts';
 
 import { fluidcastCopy, surfaceActionsCopy } from '../../../copy/index.js';
-import { setPaneInteraction } from '../../fluidcast/commits.js';
+import { interactionOrigin, setPaneInteraction } from '../../fluidcast/commits.js';
 import { parseAgentHarness } from '../../harness-labels.js';
 import {
   deleteSurfaceFromPalette,
@@ -18,6 +24,8 @@ import type { ArgValues, PaletteCommand, PaletteContext } from '../types.js';
 import { harnessSelectArg } from './session-actions.js';
 
 const TITLE_MAX_LENGTH = 80;
+
+const isInteractionOrigin = Schema.is(agentSessionInteractionOriginSchema);
 
 export const renameActiveSurfaceCommand: PaletteCommand = {
   id: 'rename-active-surface',
@@ -150,7 +158,10 @@ export const splitPaneDownCommand = splitPaneCommand({
  * Switches the active agent pane between its terminal and the Fluidcast player. Offered only on a
  * surface that holds an agent pane. It never refuses silently: a non-agent pane is explained here,
  * and a switch Fluidcast cannot make (turned off, invalid config, unsupported harness, launch
- * blocked) reaches the runtime, whose reason becomes the palette's error.
+ * blocked) reaches the runtime, whose reason becomes the palette's error. Only a terminal goes to
+ * Fluidcast; a Fluidcast pane or a failed switch goes back to the terminal. The switch's `from` is
+ * the preflight's fresh read, the same one that chose the direction, so a change while the request
+ * waits is refused instead of acted on.
  */
 export const togglePaneInteractionCommand: PaletteCommand = {
   id: 'toggle-pane-interaction',
@@ -179,25 +190,28 @@ export const togglePaneInteractionCommand: PaletteCommand = {
         worktreeId: String(target.worktreeId),
         paneId: String(pane.id),
         agentSessionId: String(agentSession.id),
-        mode: agentSession.interaction.mode === 'fluidcast' ? 'terminal' : 'fluidcast',
+        mode: agentSession.interaction.mode === 'terminal' ? 'fluidcast' : 'terminal',
       },
+      payloads: { from: interactionOrigin(agentSession) },
     };
   },
-  run: async (values, ctx) => {
+  run: async (values, ctx, payloads) => {
     const target = activeSurfaceTargetFromValues(values, ctx);
     const paneId = Number(values.paneId);
     const agentSessionId = Number(values.agentSessionId);
     const mode = values.mode;
+    const from = payloads?.from;
     if (
       !target ||
       !Number.isInteger(paneId) ||
       !Number.isInteger(agentSessionId) ||
-      (mode !== 'terminal' && mode !== 'fluidcast')
+      (mode !== 'terminal' && mode !== 'fluidcast') ||
+      !isInteractionOrigin(from)
     ) {
       return;
     }
     await ctx.app(
-      setPaneInteraction({ surfaceId: target.surfaceId, paneId, agentSessionId, mode }),
+      setPaneInteraction({ surfaceId: target.surfaceId, paneId, agentSessionId, mode, from }),
     );
   },
 };

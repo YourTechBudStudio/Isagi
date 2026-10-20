@@ -55,14 +55,16 @@ function setup(
     onAttachmentEvent: () => {},
   } as TerminalPresentationWorkspace;
   let index = 0;
+  const refreshedSurfaces: number[][] = [];
   const coordinator = createTerminalWorkspaceCoordinator({
     workspace,
     facts,
     fetchInventory: () => fetches[index++]!.promise,
+    refreshSurfaces: (surfaceIds) => refreshedSurfaces.push([...surfaceIds]),
   });
   t.after(() => coordinator.dispose());
   coordinator.start();
-  return { cache, coordinator, diagnostics, facts, session };
+  return { cache, coordinator, diagnostics, facts, session, refreshedSurfaces };
 }
 
 describe('terminal workspace inventory reconciliation', () => {
@@ -139,6 +141,21 @@ describe('terminal workspace inventory reconciliation', () => {
     assert.equal(cache.getSnapshot().entries.length, 0);
   });
 
+  it('re-reads the surfaces holding a terminal when the runtime reconnects', (t) => {
+    const { cache, facts, refreshedSurfaces } = setup(t, [
+      deferred<DurableSessionInventory>(),
+      deferred<DurableSessionInventory>(),
+    ]);
+    cache.ensureSession({ kind: 'terminal_session', sessionId: 8 }, { ...placement, paneId: 4 });
+    cache.ensureSession({ kind: 'terminal_session', sessionId: 9 }, { ...placement, surfaceId: 5 });
+
+    // A restarted runtime relaunched these sessions while the socket was down; the change events
+    // it published then never arrived, so only a re-read shows the panes their new incarnations.
+    facts.publish({ type: 'runtime_connected' });
+
+    assert.deepEqual(refreshedSurfaces, [[2, 5]]);
+  });
+
   it('aborts inventory on disposal and makes its result inert', async (t) => {
     const request = deferred<DurableSessionInventory>();
     const { cache, coordinator } = setup(t, [request]);
@@ -199,6 +216,7 @@ describe('surface projection excludes editor panes', () => {
         recoveryAction: 'connect_existing',
         interaction: { mode: 'terminal', fluidcast: 'unavailable' },
         status: 'running',
+        processIncarnation: 'pty:1',
         diagnosticCode: null,
         diagnosticDetail: null,
         createdAt: '2026-01-01T00:00:00.000Z',

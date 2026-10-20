@@ -187,6 +187,8 @@ function environmentFocusRejection(error: SurfaceError): Effect.Effect<Environme
       });
     case 'session_not_found':
     case 'session_worktree_mismatch':
+    case 'process_incarnation_stale':
+    case 'session_already_attached':
     case 'invalid_surface_title':
     case 'layout_node_stale':
     case 'surface_not_empty':

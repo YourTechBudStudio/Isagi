@@ -140,6 +140,7 @@ export const ptyCopy = {
     disconnected: 'Connection ended. Final output is retained.',
     errored: 'Connection failed. Final output is retained.',
     superseded: 'Attachment was replaced. Final output is retained.',
+    rejoinFailed: "Couldn't follow this session's new process. Final output is retained.",
     reconnect: 'Reconnect',
     startFresh: 'Start fresh',
   },

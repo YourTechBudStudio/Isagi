@@ -37,6 +37,7 @@ export function registerAgentSessionsApi(
       agents.setInteractionMode({
         agentSessionId: request.params.agentSessionId,
         mode: request.body.mode,
+        from: request.body.from,
       }),
     ).pipe(
       Effect.catchTags({
@@ -56,6 +57,12 @@ export function registerAgentSessionsApi(
                 status: 409,
                 message: error.message,
               });
+            case 'interaction_changed':
+              return request.reject({
+                code: 'agent_interaction_changed',
+                status: 409,
+                message: error.message,
+              });
             case 'harness_metadata_missing':
             case 'harness_metadata_invalid':
               return request.reject({
@@ -64,14 +71,23 @@ export function registerAgentSessionsApi(
                 message: error.message,
                 data: { reason: error.code },
               });
-            // Attach-only codes: a mode change never raises them.
+            // Attach and send codes: a mode change never raises them. Switches launch directly,
+            // never through the terminal-mode gate.
             case 'active_process_missing':
             case 'active_process_not_running':
+            case 'process_incarnation_stale':
+            case 'not_in_terminal_mode':
               return Effect.die(error);
           }
         },
         HarnessLaunchBlocked: (blocked) => request.reject(sessionLaunchRejection(blocked)),
         HarnessAdapterError: (error) => Effect.die(error),
+        AgentTerminalStopFailed: (error) =>
+          request.reject({
+            code: 'agent_terminal_stop_failed',
+            status: 500,
+            message: `The agent's terminal could not be stopped, so Fluidcast was not started: ${error.diagnostic}.`,
+          }),
         FluidcastUnavailable: (error) =>
           request.reject({
             code: 'fluidcast_unavailable',

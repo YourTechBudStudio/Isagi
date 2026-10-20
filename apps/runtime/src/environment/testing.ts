@@ -490,8 +490,12 @@ function fakeAgentSessionService(
     get: () => Effect.die('agent get is not used by surface service tests'),
     ensureActivePtyProcess: () =>
       Effect.die('agent ensureActivePtyProcess is not used by surface service tests'),
-    activePtyProcessId: () =>
-      Effect.die('agent activePtyProcessId is not used by surface service tests'),
+    requireTerminalMode: () =>
+      Effect.die('agent requireTerminalMode is not used by surface service tests'),
+    withRunningTerminal: () =>
+      Effect.die('agent withRunningTerminal is not used by surface service tests'),
+    isControllerLive: () =>
+      Effect.die('agent isControllerLive is not used by surface service tests'),
     stopUnlessPlaced: () =>
       Effect.die('agent stopUnlessPlaced is not used by surface service tests'),
     setInteractionMode: () =>
@@ -565,7 +569,7 @@ export function agentSessionRowForTest(input: {
 }
 
 // Internals and builders other modules' tests use; never imported by production code.
-export { AgentSessionError } from './agent-sessions/service.js';
+export { AgentSessionError, notInTerminalMode } from './agent-sessions/service.js';
 export type { StopUnlessPlacedOutcome } from './agent-sessions/service.js';
 export { SurfaceRepository } from './surfaces/repository.js';
 export { TerminalSessionService } from './terminal-sessions/service.js';

@@ -12,6 +12,7 @@ import type {
 } from '@isagi/contracts';
 
 import {
+  claimInputForSession,
   derivePaneAttachmentIntent,
   derivePaneView,
   ptyPaneSession,
@@ -42,8 +43,9 @@ function agentSession(overrides: {
     harnessSessionId: overrides.harnessSessionId ?? null,
     statusReason: null,
     recoveryAction: overrides.recoveryAction,
-    interaction: { mode: 'terminal', fluidcast: 'unavailable' },
+    interaction: { mode: 'terminal', generation: 0, fluidcast: 'unavailable' },
     status: overrides.status,
+    processIncarnation: null,
     diagnosticCode: overrides.diagnosticCode ?? null,
     diagnosticDetail: null,
     createdAt: '2026-06-17T00:00:00.000Z',
@@ -63,6 +65,7 @@ function terminalSession(status: SessionStatus): PtyPaneSession {
     shellArgs: [],
     statusReason: null,
     status,
+    processIncarnation: null,
     diagnosticCode: null,
     diagnosticDetail: null,
     createdAt: '2026-06-17T00:00:00.000Z',
@@ -349,6 +352,7 @@ describe('ptyPaneSession', () => {
           shellArgs: [],
           statusReason: null,
           status: 'running',
+          processIncarnation: 'pty:4',
           diagnosticCode: null,
           diagnosticDetail: null,
           createdAt: '2026-01-01T00:00:00.000Z',
@@ -390,5 +394,31 @@ describe('ptyPaneSession', () => {
 
   it('returns null for an unbound pane', () => {
     assert.equal(ptyPaneSession(null), null);
+  });
+});
+
+describe('claimInputForSession', () => {
+  const session: PtyPaneSession = {
+    ...agentSession({ status: 'running', recoveryAction: 'connect_existing' }),
+    interaction: { mode: 'terminal', generation: 6, fluidcast: 'unavailable' },
+  } as PtyPaneSession;
+
+  it('names the interaction generation an agent claim was made under', () => {
+    assert.deepEqual(claimInputForSession(3, session), {
+      action: 'claim_agent_session',
+      paneId: 3,
+      agentSessionId: 1,
+      expectedInteractionGeneration: 6,
+    });
+  });
+
+  it('keeps an expected incarnation beside the generation on a rejoin', () => {
+    assert.deepEqual(claimInputForSession(3, session, 'pty:4'), {
+      action: 'claim_agent_session',
+      paneId: 3,
+      agentSessionId: 1,
+      expectedInteractionGeneration: 6,
+      expectedProcessIncarnation: 'pty:4',
+    });
   });
 });

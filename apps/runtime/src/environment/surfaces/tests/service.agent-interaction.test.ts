@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Deferred, Effect, Fiber, type Layer } from 'effect';
+import { eq } from 'drizzle-orm';
+import { Deferred, Effect, Fiber, type Layer, Result } from 'effect';
 
 import type { AgentSessionMetadata } from '@isagi/contracts';
 
@@ -14,12 +15,17 @@ import {
   type FakeFluidcastSessions,
 } from '../../../fluidcast/testing.js';
 import { tapInternalEvents } from '../../../platform/events/testing.js';
+import { RuntimeDatabase } from '../../../platform/persistence/index.js';
 import { AgentSessionAttentionProjection } from '../../agent-sessions/attention.js';
 import { AgentSessionInteraction } from '../../agent-sessions/interaction.js';
-import { SurfaceService } from '../../index.js';
+import { SurfaceError, SurfaceService } from '../../index.js';
+import { SessionLifecycle } from '../../sessions/lifecycle.js';
+import { agentSessions } from '../../tables.js';
 import {
   addPaneToSurface,
+  agentSessionRowForTest,
   insertAgentSessionForWorktree,
+  insertPtyProcess,
   insertWorktree,
   testLayer,
 } from '../../testing.js';
@@ -74,7 +80,11 @@ test('a terminal-mode pane offers Fluidcast only for an SDK harness with Fluidca
       { fluidcast: makeFakeFluidcastSessions({ availability }) },
       Effect.flatMap(agentPane(harness), ({ surfaceId }) => paneAgent(surfaceId)),
     );
-    assert.deepEqual(agent.interaction, { mode: 'terminal', fluidcast: expected }, harness);
+    assert.deepEqual(
+      agent.interaction,
+      { mode: 'terminal', generation: 0, fluidcast: expected },
+      harness,
+    );
   }
 });
 
@@ -98,7 +108,7 @@ test('a Fluidcast-mode pane reports its session, and its status and rail attenti
         cwd: '/repo/isagi',
         harnessSessionId: null,
       });
-      interaction.set(agentSessionId, started);
+      interaction.setFluidcast(agentSessionId, started);
       const live = yield* paneAgent(surfaceId);
       const liveRail = yield* railFor;
       const liveCount = yield* attention.workingAgentCount;
@@ -111,7 +121,11 @@ test('a Fluidcast-mode pane reports its session, and its status and rail attenti
   );
   // Never launched: the terminal pane is starting.
   assert.equal(result.terminal.status, 'starting');
-  assert.deepEqual(result.live.interaction, { mode: 'fluidcast', fluidcastSessionId: 'fc-1' });
+  assert.deepEqual(result.live.interaction, {
+    mode: 'fluidcast',
+    generation: 1,
+    fluidcastSessionId: 'fc-1',
+  });
   assert.equal(result.live.status, 'running');
   assert.equal(result.live.statusReason, null);
   // Running with no harness activity yet: idle, and not counted as working.
@@ -121,6 +135,263 @@ test('a Fluidcast-mode pane reports its session, and its status and rail attenti
   assert.equal(result.ended.statusReason, 'agent_worker_failed');
   assert.equal(result.ended.diagnosticDetail, 'worker_exited');
   assert.equal(result.endedRail, 'error');
+});
+
+test('a failed switch projects its failure and generation, offers no terminal, and reads its PTY row', async () => {
+  const fluidcast = makeFakeFluidcastSessions();
+  const result = await withSurfaces(
+    { fluidcast },
+    Effect.gen(function* () {
+      const { worktreeId, surfaceId, agentSessionId } = yield* agentPane('claude');
+      const interaction = yield* AgentSessionInteraction;
+      const surfaces = yield* SurfaceService;
+      // The terminal whose stop failed is still running and still the agent's pointer.
+      const host = yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: 'Host' });
+      const pty = yield* insertPtyProcess({
+        paneId: host.paneId,
+        worktreeId,
+        logPath: null,
+        status: 'running',
+      });
+      yield* (yield* RuntimeDatabase).use('test_point_agent_at_live_pty', (db) =>
+        db
+          .update(agentSessions)
+          .set({ activePtyProcessId: pty.ptyProcessId })
+          .where(eq(agentSessions.id, agentSessionId))
+          .run(),
+      );
+      const started = yield* fluidcast.service.start({
+        agentSessionId,
+        harness: 'claude',
+        cwd: '/repo/isagi',
+        harnessSessionId: null,
+      });
+      interaction.setFluidcast(agentSessionId, started);
+      interaction.setTerminal(agentSessionId);
+      interaction.setFailed(agentSessionId, {
+        code: 'terminal_stop_failed',
+        diagnostic: 'PTY kill error',
+      });
+      const failed = yield* paneAgent(surfaceId);
+      interaction.setTerminal(agentSessionId);
+      const back = yield* paneAgent(surfaceId);
+      return { failed, back, pty };
+    }),
+  );
+  assert.deepEqual(result.failed.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 3,
+    failure: { code: 'terminal_stop_failed', diagnostic: 'PTY kill error' },
+  });
+  assert.equal(result.failed.processIncarnation, null);
+  assert.equal(result.failed.status, 'running');
+  assert.deepEqual(result.back.interaction, {
+    mode: 'terminal',
+    generation: 4,
+    fluidcast: 'available',
+  });
+  assert.equal(result.back.processIncarnation, `pty:${result.pty.ptyProcessId}`);
+});
+
+test('a pane carries the incarnation of its live terminal process, and none without one', async () => {
+  const fluidcast = makeFakeFluidcastSessions();
+  const result = await withSurfaces(
+    { fluidcast },
+    Effect.gen(function* () {
+      const { worktreeId, surfaceId, agentSessionId } = yield* agentPane('claude');
+      const surfaces = yield* SurfaceService;
+      const neverLaunched = yield* paneAgent(surfaceId);
+
+      // Two live PTYs (the helper binds each to a terminal pane); the agent is then pointed at the
+      // second, which is all its projection reads.
+      const shellSurface = yield* surfaces.createSinglePaneSurface({
+        worktreeId,
+        titleBase: 'Shell',
+      });
+      const shell = yield* insertPtyProcess({
+        paneId: shellSurface.paneId,
+        worktreeId,
+        logPath: null,
+        status: 'running',
+      });
+      const agentPty = yield* insertPtyProcess({
+        paneId: yield* addPaneToSurface(shellSurface.surfaceId),
+        worktreeId,
+        logPath: null,
+        status: 'running',
+      });
+      yield* (yield* RuntimeDatabase).use('test_point_agent_at_live_pty', (db) =>
+        db
+          .update(agentSessions)
+          .set({ activePtyProcessId: agentPty.ptyProcessId })
+          .where(eq(agentSessions.id, agentSessionId))
+          .run(),
+      );
+      const terminalMode = yield* paneAgent(surfaceId);
+      const shellDetail = yield* surfaces.getSurfaceDetail(shellSurface.surfaceId);
+
+      const exitedSurface = yield* surfaces.createSinglePaneSurface({
+        worktreeId,
+        titleBase: 'Done',
+      });
+      yield* insertPtyProcess({
+        paneId: exitedSurface.paneId,
+        worktreeId,
+        logPath: null,
+        status: 'exited',
+      });
+      const exitedDetail = yield* surfaces.getSurfaceDetail(exitedSurface.surfaceId);
+
+      const started = yield* fluidcast.service.start({
+        agentSessionId,
+        harness: 'claude',
+        cwd: '/repo/isagi',
+        harnessSessionId: null,
+      });
+      (yield* AgentSessionInteraction).setFluidcast(agentSessionId, started);
+      const fluidcastMode = yield* paneAgent(surfaceId);
+      return {
+        neverLaunched,
+        terminalMode,
+        fluidcastMode,
+        shell,
+        agentPty,
+        shellDetail,
+        exitedDetail,
+      };
+    }),
+  );
+  const terminalOf = (detail: typeof result.shellDetail) => {
+    const session = detail.panes[0]?.session;
+    assert.equal(session?.kind, 'terminal_session');
+    return session.terminalSession;
+  };
+  assert.equal(result.neverLaunched.processIncarnation, null);
+  assert.equal(result.terminalMode.processIncarnation, `pty:${result.agentPty.ptyProcessId}`);
+  // The worker streams no terminal, whatever the persisted pointer still names.
+  assert.equal(result.fluidcastMode.processIncarnation, null);
+  assert.equal(
+    terminalOf(result.shellDetail).processIncarnation,
+    `pty:${result.shell.ptyProcessId}`,
+  );
+  assert.equal(terminalOf(result.exitedDetail).processIncarnation, null);
+});
+
+test('a claim made under an earlier controller is refused before it binds, displaces or issues anything', async () => {
+  const fluidcast = makeFakeFluidcastSessions();
+  const result = await withSurfaces(
+    {
+      fluidcast,
+      agentService: {
+        // A rejoin reads which process is live; only the id and status are read.
+        get: (agentSessionId) =>
+          Effect.sync(() => ({
+            ...agentSessionRowForTest({ id: agentSessionId, worktreeId: 1 }),
+            activePtyProcessId: 101,
+            activePtyProcess: { id: 101, status: 'running' } as never,
+          })),
+      },
+    },
+    Effect.gen(function* () {
+      const { worktreeId, surfaceId, paneId, agentSessionId } = yield* agentPane('claude');
+      const surfaces = yield* SurfaceService;
+      const lifecycle = yield* SessionLifecycle;
+      const interaction = yield* AgentSessionInteraction;
+      const key = { kind: 'agent_session', sessionId: agentSessionId } as const;
+      const spare = yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: 'Spare' });
+
+      // The agent runs a live terminal process M (`pty:101`); a lingering viewer streams an older
+      // one, which a rejoin to M would displace and an ordinary claim would supersede.
+      const live = 'pty:101' as const;
+      let moved = 0;
+      yield* lifecycle.registerActiveAttachment({
+        key,
+        incarnation: 'pty:100',
+        handle: { moved: Effect.sync(() => moved++) },
+      });
+
+      // Terminal era N (generation 0) → Fluidcast → terminal era M (generation 2).
+      const started = yield* fluidcast.service.start({
+        agentSessionId,
+        harness: 'claude',
+        cwd: '/repo/isagi',
+        harnessSessionId: null,
+      });
+      interaction.setFluidcast(agentSessionId, started);
+      interaction.setTerminal(agentSessionId);
+      const generation = interaction.control(agentSessionId).generation;
+
+      const claim = (input: {
+        readonly paneId: number;
+        readonly generation: number;
+        readonly rejoin?: boolean;
+      }) =>
+        surfaces
+          .claimPaneSession({
+            worktreeId,
+            claim: {
+              action: 'claim_agent_session',
+              paneId: input.paneId,
+              agentSessionId,
+              expectedInteractionGeneration: input.generation,
+              ...(input.rejoin ? { expectedProcessIncarnation: live } : {}),
+            },
+          })
+          .pipe(Effect.result);
+      const staleOrdinary = yield* claim({ paneId: spare.paneId, generation: 0 });
+      const staleRejoin = yield* claim({ paneId, generation: 0, rejoin: true });
+      const afterRefusals = {
+        moved,
+        held: yield* lifecycle.hasActiveAttachment(key),
+        spare: (yield* surfaces.getSurfaceDetail(spare.surfaceId)).panes[0]?.session ?? null,
+        placed: (yield* paneAgent(surfaceId)).id,
+      };
+
+      // Each token is consumed before the next claim, whose supersede would revoke it.
+      const tokenOf = (claimed: Effect.Success<ReturnType<typeof claim>>) => {
+        assert.ok(Result.isSuccess(claimed));
+        return lifecycle.consumeAttachToken({ key, token: claimed.success.attachToken });
+      };
+      const rejoinToken = yield* tokenOf(yield* claim({ paneId, generation, rejoin: true }));
+      const movedByCurrent = moved;
+      const ordinaryToken = yield* tokenOf(yield* claim({ paneId, generation }));
+      const tokens = [rejoinToken, ordinaryToken];
+      return {
+        generation,
+        live,
+        staleOrdinary,
+        staleRejoin,
+        afterRefusals,
+        movedByCurrent,
+        tokens,
+        agentSessionId,
+      };
+    }),
+  );
+  assert.equal(result.generation, 2);
+  for (const refused of [result.staleOrdinary, result.staleRejoin]) {
+    assert.equal(Result.isFailure(refused), true);
+    if (Result.isFailure(refused)) {
+      assert.equal(refused.failure instanceof SurfaceError, true);
+      assert.equal((refused.failure as SurfaceError).code, 'process_incarnation_stale');
+    }
+  }
+  // Nothing bound, nothing displaced: the agent stays in its pane and the lingering viewer stays.
+  assert.deepEqual(result.afterRefusals, {
+    moved: 0,
+    held: true,
+    spare: null,
+    placed: result.agentSessionId,
+  });
+  // The same rejoin made under the current controller does displace it.
+  assert.equal(result.movedByCurrent, 1);
+  assert.deepEqual(
+    result.tokens.map((token) => [token.expectedIncarnation, token.controllerGeneration]),
+    [
+      [result.live, 2],
+      [null, 2],
+    ],
+  );
 });
 
 test('pane and surface delete release the deleted agents before terminating their PTYs', async () => {

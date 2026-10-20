@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { fluidcastHandoffFailureSchema } from '../agent-sessions/types.js';
 import { editorContextMetadataSchema } from '../editor/types.js';
 import { sessionStatusSchema } from '../processes/types.js';
 import {
@@ -162,8 +163,20 @@ export const harnessLaunchBlockReasonSchema = Schema.Literals([
   'harness_probe_failed',
 ]);
 
+/**
+ * An opaque token naming one process incarnation of a durable session (ADR 0006). Clients compare
+ * it for equality only: a terminal presentation is valid for exactly the incarnation it streams.
+ */
+const processIncarnationSchema = Schema.String.check(Schema.isMinLength(1));
+
 const sessionProjectionFields = {
   status: sessionStatusSchema,
+  /**
+   * The session's live terminal process incarnation, or `null` when no terminal process is live
+   * (none launched yet, the last one stopped, or an agent under Fluidcast). It changes whenever
+   * the runtime replaces the process, which is when a client must re-attach.
+   */
+  processIncarnation: Schema.NullOr(processIncarnationSchema),
   diagnosticCode: Schema.NullOr(sessionDiagnosticCodeSchema),
   diagnosticDetail: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
@@ -171,12 +184,28 @@ const sessionProjectionFields = {
   lastSeenAt: Schema.NullOr(Schema.String),
 } as const;
 
+/**
+ * `generation` increases on every change of the agent's interaction record and never repeats
+ * within one runtime; a restart returns every agent to terminal mode at generation 0.
+ * `fluidcast_failed` is a switch to Fluidcast that began cleanup but left no Fluidcast session
+ * running.
+ */
 export const agentSessionInteractionSchema = Schema.Union([
   Schema.Struct({
     mode: Schema.Literal('terminal'),
+    generation: nonNegativeInteger,
     fluidcast: Schema.Literals(['available', 'unavailable']),
   }),
-  Schema.Struct({ mode: Schema.Literal('fluidcast'), fluidcastSessionId: Schema.String }),
+  Schema.Struct({
+    mode: Schema.Literal('fluidcast'),
+    generation: nonNegativeInteger,
+    fluidcastSessionId: Schema.String,
+  }),
+  Schema.Struct({
+    mode: Schema.Literal('fluidcast_failed'),
+    generation: nonNegativeInteger,
+    failure: fluidcastHandoffFailureSchema,
+  }),
 ]);
 
 export const agentSessionMetadataSchema = Schema.Struct({
@@ -343,16 +372,30 @@ export const paneSessionCreateInputSchema = Schema.Union([
   }),
 ]);
 
+/**
+ * Set only by an automatic re-attach: the claim, and the attach its token admits, may join only
+ * this live incarnation and never launch a process. Anything else is refused with
+ * `process_incarnation_stale`.
+ */
+const expectedProcessIncarnationField = Schema.optional(processIncarnationSchema);
+
 export const paneSessionClaimInputSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literal('claim_agent_session'),
     paneId: positiveInteger,
     agentSessionId: positiveInteger,
+    /**
+     * The `interaction.generation` of the projection the claim was made from; a claim made under
+     * an earlier controller is refused with `process_incarnation_stale`.
+     */
+    expectedInteractionGeneration: nonNegativeInteger,
+    expectedProcessIncarnation: expectedProcessIncarnationField,
   }),
   Schema.Struct({
     action: Schema.Literal('claim_terminal_session'),
     paneId: positiveInteger,
     terminalSessionId: positiveInteger,
+    expectedProcessIncarnation: expectedProcessIncarnationField,
   }),
 ]);
 
@@ -393,6 +436,8 @@ export const ptyWebSocketErrorCodeSchema = Schema.Union([
     'session_not_running',
     'active_process_missing',
     'active_process_not_running',
+    // An automatic re-attach named a process the session no longer runs; nothing was launched.
+    'process_incarnation_stale',
     'harness_metadata_missing',
     'harness_metadata_invalid',
     'unsupported_harness',
@@ -418,6 +463,11 @@ export const ptyWebSocketOutputMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal('session'),
     status: sessionStatusSchema,
+    /**
+     * The process incarnation this stream is bound to, or `null` when it is bound to none.
+     * Authoritative over the session projection, which can lag an attach that launched a process.
+     */
+    processIncarnation: Schema.NullOr(processIncarnationSchema),
     exitCode: Schema.optional(Schema.NullOr(nonNegativeInteger)),
     signal: Schema.optional(Schema.NullOr(Schema.String)),
   }),

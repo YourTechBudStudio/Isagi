@@ -28,6 +28,8 @@ Retry adds an execution that points at the failed one (`retry_of`) and copies wh
 
 There is no reuse of earlier side effects. A function that runs again sends its prompts and launches its jobs again, so keep each node to its preparation plus **one** side effect.
 
+A `sendAgentPrompt` refused because the agent's pane is in Fluidcast mode, or its switch to Fluidcast failed, is such a failure: switch the pane back to the terminal, then press Retry ([Agent work](workflow-agents.md#choose-a-capability)).
+
 ## After an app restart
 
 A node function that was running is interrupted and the run fails; press Retry to run it again. A run still preparing fails the same way. Every other active run is paused, including one whose result was saved but not yet routed; Resume continues it. A headless job that was running is delivered on Resume as `interrupted` with `{ reason: 'runtime_restarted', launchedAt }`, and an agent session that died is delivered as `interrupted` with `session_died`.

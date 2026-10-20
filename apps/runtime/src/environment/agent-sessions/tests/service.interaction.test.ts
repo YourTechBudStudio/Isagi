@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Deferred, Effect, Fiber, Layer, Scope, Exit } from 'effect';
+import { Cause, Deferred, Effect, Fiber, Layer, Scope, Exit } from 'effect';
+
+import type { AgentSessionInteractionOrigin } from '@isagi/contracts';
 
 import { makeLogCapture } from '../../../../test/test-support.js';
 import {
   FluidcastSessions,
+  FluidcastSessionUnreadable,
   FluidcastStartFailed,
   FluidcastUnavailable,
   type FluidcastAvailability,
@@ -29,13 +32,15 @@ import {
 import type { InternalEvent } from '../../../platform/events/index.js';
 import { publishOnlyRecordingEventBus } from '../../../platform/events/testing.js';
 import { EntityLock } from '../../../platform/locks/index.js';
-import { PtyService, type PtyProcessRow } from '../../../pty-processes/index.js';
+import { DatabaseError } from '../../../platform/persistence/index.js';
+import { PtyKillError, PtyService, type PtyProcessRow } from '../../../pty-processes/index.js';
 import { fakeTerminateMany } from '../../../pty-processes/testing.js';
 import { SessionLifecycle } from '../../sessions/lifecycle.js';
+import { sessionProcessIncarnation } from '../../sessions/status.js';
 import type { AgentSessionRow } from '../../sessions/types.js';
 import { AgentSessionInteraction } from '../interaction.js';
 import { AgentSessionRepository } from '../repository.js';
-import { AgentSessionError, AgentSessionService } from '../service.js';
+import { AgentSessionError, AgentSessionService, AgentTerminalStopFailed } from '../service.js';
 
 // The mode change and release over fakes that record one ordered log: PTY terminates and
 // launches, Fluidcast starts and stops, native-ID writes. Holds come from the real interaction.
@@ -60,6 +65,17 @@ interface WorldOptions {
   readonly writeFails?: boolean;
   /** Runs inside `pty.launch` before it returns: hold it with a `Deferred`. */
   readonly onLaunch?: (agentSessionId: number) => Effect.Effect<void>;
+  /** Every repository read after the first terminate fails, as a database fault mid-handoff. */
+  readonly readsFailAfterTerminate?: boolean;
+  /** The native ID the terminal persists while it stops, as a harness hook can. */
+  readonly nativeIdPersistedOnStop?: string;
+}
+
+/** Faults a test turns on and off while the world runs. */
+interface Faults {
+  /** `pty.terminate` reports an error and leaves the process running. */
+  terminateFails: boolean;
+  readsFail: boolean;
 }
 
 function makeWorld(options: WorldOptions = {}) {
@@ -81,6 +97,7 @@ function makeWorld(options: WorldOptions = {}) {
     makeFakeFluidcastSessions({ availability: options.availability ?? 'ready', log });
   const fluidcastLayer = options.fluidcastLayer ?? fluidcast.layer;
   const bus = publishOnlyRecordingEventBus('AgentSessionService does not subscribe');
+  const faults: Faults = { terminateFails: false, readsFail: false };
   let nextPty = 100;
 
   const setPtyStatus = (ptyProcessId: number, status: PtyProcessRow['status']) => {
@@ -90,10 +107,19 @@ function makeWorld(options: WorldOptions = {}) {
   };
 
   const terminate: PtyService['Service']['terminate'] = (input) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       log.push(`pty.terminate:${input.ptyProcessId}`);
+      if (faults.terminateFails)
+        return Effect.fail(
+          new PtyKillError({ ptyProcessId: input.ptyProcessId, cause: new Error('EPERM') }),
+        );
       setPtyStatus(input.ptyProcessId, 'killed');
-      return 'terminated_live' as const;
+      if (options.nativeIdPersistedOnStop !== undefined)
+        for (const [id, row] of world.rows)
+          if (row.activePtyProcessId === input.ptyProcessId)
+            world.rows.set(id, { ...row, harnessSessionId: options.nativeIdPersistedOnStop });
+      if (options.readsFailAfterTerminate) faults.readsFail = true;
+      return Effect.succeed('terminated_live' as const);
     });
 
   const pty = PtyService.of({
@@ -140,7 +166,10 @@ function makeWorld(options: WorldOptions = {}) {
           activePtyProcess: ptyRow(input.ptyProcessId, 'running'),
         });
       }),
-    find: (id) => Effect.sync(() => world.rows.get(id) ?? null),
+    find: (id) =>
+      faults.readsFail
+        ? Effect.fail(new DatabaseError({ operation: 'find_agent_session', cause: null }))
+        : Effect.sync(() => world.rows.get(id) ?? null),
     findByActivePtyProcessId: () => Effect.die('findByActivePtyProcessId is not used'),
     listOrphans: () => Effect.die('listOrphans is not used'),
     listIds: Effect.die('listIds is not used'),
@@ -205,6 +234,7 @@ function makeWorld(options: WorldOptions = {}) {
   return {
     world: { ...world, events: bus.events },
     fluidcast,
+    faults,
     run: <A, E>(
       body: Effect.Effect<A, E, AgentSessionService | AgentSessionInteraction | Scope.Scope>,
     ) => Effect.runPromise(Effect.scoped(body).pipe(Effect.provide(layer))),
@@ -269,14 +299,36 @@ function changedCount(events: readonly InternalEvent[], agentSessionId = 10) {
   ).length;
 }
 
-const toFluidcast = (agentSessionId = 10) =>
-  AgentSessionService.use((agents) =>
-    agents.setInteractionMode({ agentSessionId, mode: 'fluidcast' }),
-  );
-const toTerminal = (agentSessionId = 10) =>
-  AgentSessionService.use((agents) =>
-    agents.setInteractionMode({ agentSessionId, mode: 'terminal' }),
-  );
+/**
+ * The `from` a client would send for the agent as it is now, by the client's rule: the
+ * interaction's generation, its Fluidcast session only in `fluidcast` mode, and the incarnation the
+ * projection shows.
+ */
+const originOf = (agentSessionId = 10) =>
+  Effect.gen(function* () {
+    const control = (yield* AgentSessionInteraction).control(agentSessionId);
+    const row = yield* (yield* AgentSessionService).get(agentSessionId);
+    return {
+      generation: control.generation,
+      fluidcastSessionId: control.mode === 'fluidcast' ? control.fluidcastSessionId : null,
+      processIncarnation: sessionProcessIncarnation(row, control),
+    } satisfies AgentSessionInteractionOrigin;
+  }).pipe(Effect.orDie);
+
+/** A switch made from the agent's current state, or from `from` when given. */
+const switchTo =
+  (mode: 'terminal' | 'fluidcast') =>
+  (agentSessionId = 10, from?: AgentSessionInteractionOrigin) =>
+    Effect.gen(function* () {
+      const origin = from ?? (yield* originOf(agentSessionId));
+      return yield* (yield* AgentSessionService).setInteractionMode({
+        agentSessionId,
+        mode,
+        from: origin,
+      });
+    });
+const toFluidcast = switchTo('fluidcast');
+const toTerminal = switchTo('terminal');
 const release = (ids: ReadonlyArray<number>) =>
   AgentSessionService.use((agents) => agents.releaseControllers(ids));
 
@@ -301,7 +353,11 @@ test('switching to Fluidcast stops the terminal before the session starts, then 
     }),
   );
   assert.deepEqual(result.switched, { mode: 'fluidcast', fluidcastSessionId: 'fc-1' });
-  assert.deepEqual(result.interaction, { mode: 'fluidcast', fluidcastSessionId: 'fc-1' });
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast',
+    generation: 1,
+    fluidcastSessionId: 'fc-1',
+  });
   assert.deepEqual(world.log, ['pty.terminate:30', 'fluidcast.start:10']);
   assert.deepEqual(fluidcast.calls[0], {
     kind: 'start',
@@ -425,22 +481,32 @@ test('every refusal happens before anything stops, and leaves the terminal runni
   }
 });
 
-test('a failed start leaves terminal mode with the terminal stopped, and publishes a null interval', async () => {
-  const fluidcast = makeFakeFluidcastSessions({
-    onStart: () => Effect.fail(new FluidcastStartFailed({ reason: 'executable_not_found' })),
-  });
-  const { world, run } = makeWorld({ fluidcast });
-  const result = await run(
-    Effect.gen(function* () {
-      const error = yield* Effect.flip(toFluidcast());
-      return { error, interaction: (yield* AgentSessionInteraction).get(10) };
-    }),
-  );
-  assert.ok(result.error instanceof FluidcastStartFailed);
-  assert.deepEqual(result.interaction, { mode: 'terminal' });
-  assert.equal(world.rows.get(10)?.activePtyProcess?.status, 'killed');
-  assert.deepEqual(switches(world.events), [null]);
-  assert.equal(changedCount(world.events), 1);
+test('each failed start records its reason, with the terminal stopped and a null interval', async () => {
+  for (const reason of [
+    'executable_not_found',
+    'instrumentation_failed',
+    'session_build_failed',
+  ] as const) {
+    const fluidcast = makeFakeFluidcastSessions({
+      onStart: () => Effect.fail(new FluidcastStartFailed({ reason })),
+    });
+    const { world, run } = makeWorld({ fluidcast });
+    const result = await run(
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(toFluidcast());
+        return { error, interaction: (yield* AgentSessionInteraction).get(10) };
+      }),
+    );
+    assert.ok(result.error instanceof FluidcastStartFailed, reason);
+    assert.deepEqual(result.interaction, {
+      mode: 'fluidcast_failed',
+      generation: 1,
+      failure: { code: 'fluidcast_start_failed', reason },
+    });
+    assert.equal(world.rows.get(10)?.activePtyProcess?.status, 'killed', reason);
+    assert.deepEqual(switches(world.events), [null], reason);
+    assert.equal(changedCount(world.events), 1, reason);
+  }
 });
 
 test('a start that hangs is bounded inside the uninterruptible switch', async () => {
@@ -454,7 +520,11 @@ test('a start that hangs is bounded inside the uninterruptible switch', async ()
   );
   assert.ok(result.error instanceof FluidcastStartFailed);
   assert.equal(result.error.reason, 'session_build_failed');
-  assert.deepEqual(result.interaction, { mode: 'terminal' });
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 1,
+    failure: { code: 'fluidcast_start_failed', reason: 'session_build_failed' },
+  });
   assert.deepEqual(switches(world.events), [null]);
 });
 
@@ -524,7 +594,7 @@ test('a failed terminal launch after the stop publishes a null interval', async 
     }),
   );
   assert.ok(result.error instanceof AgentSessionError);
-  assert.deepEqual(result.interaction, { mode: 'terminal' });
+  assert.deepEqual(result.interaction, { mode: 'terminal', generation: 2 });
   assert.deepEqual(switches(world.events), ['sdk:fc-1', null]);
 });
 
@@ -590,7 +660,10 @@ test("one agent's switches serialize behind its lock", async () => {
     Effect.gen(function* () {
       const first = yield* Effect.forkChild(toFluidcast());
       yield* eventually(() => log.includes('fluidcast.start:10'));
-      const second = yield* Effect.forkChild(toTerminal());
+      // Made from the state the first switch produces, so it is current once it holds the lock.
+      const second = yield* Effect.forkChild(
+        toTerminal(10, { generation: 1, fluidcastSessionId: 'fc-1', processIncarnation: null }),
+      );
       yield* Effect.sleep('20 millis');
       // The terminal switch waits for the lock; it has not stopped the session being started.
       assert.equal(fluidcast.calls.filter((call) => call.kind === 'stop').length, 0);
@@ -617,7 +690,7 @@ test("a caller's interruption does not cut a switch that holds the lock", async 
       return (yield* AgentSessionInteraction).get(10);
     }),
   );
-  assert.deepEqual(interaction, { mode: 'fluidcast', fluidcastSessionId: 'fc-1' });
+  assert.deepEqual(interaction, { mode: 'fluidcast', generation: 1, fluidcastSessionId: 'fc-1' });
   assert.deepEqual(switches(world.events), ['sdk:fc-1']);
 });
 
@@ -653,7 +726,7 @@ test('release stops a hidden Fluidcast session and is idempotent', async () => {
       return (yield* AgentSessionInteraction).get(10);
     }),
   );
-  assert.deepEqual(interaction, { mode: 'terminal' });
+  assert.deepEqual(interaction, { mode: 'terminal', generation: 2 });
   assert.deepEqual(fluidcast.live(), []);
   // The stopped terminal is not terminated again, and the second release ends nothing.
   assert.deepEqual(world.log, ['pty.terminate:30', 'fluidcast.start:10', 'fluidcast.stop:fc-1']);
@@ -689,7 +762,7 @@ test('a Fluidcast start holding the lock when a pane delete releases it complete
       };
     }),
   );
-  assert.deepEqual(after.interaction, { mode: 'terminal' });
+  assert.deepEqual(after.interaction, { mode: 'terminal', generation: 2 });
   assert.deepEqual(fluidcast.live(), []);
   assert.ok(after.later instanceof AgentSessionError);
   assert.equal(after.later.code, 'session_not_placed');
@@ -824,4 +897,577 @@ test('a project hold refuses every agent of every worktree in that project, and 
   assertDeleting(result.first);
   assertDeleting(result.second);
   assert.equal(result.other.mode, 'fluidcast');
+});
+
+// ── Failed handoffs, Retry and Back to terminal ──────────────────────────────
+
+/** A Fluidcast fake whose first `count` starts fail with `failure`, then succeed. */
+function failingStarts(
+  failure: FluidcastSessionUnreadable | FluidcastStartFailed | (() => never),
+  count = 1,
+  log?: string[],
+) {
+  let remaining = count;
+  return makeFakeFluidcastSessions({
+    ...(log === undefined ? {} : { log }),
+    onStart: () => {
+      if (remaining === 0) return Effect.void;
+      remaining -= 1;
+      return typeof failure === 'function' ? Effect.sync(failure) : Effect.fail(failure);
+    },
+  });
+}
+
+const interactionOf = (agentSessionId = 10) =>
+  Effect.map(AgentSessionInteraction, (interaction) => interaction.get(agentSessionId));
+
+test('an unreadable session records its reason and the start received the native ID persisted while stopping', async () => {
+  const fluidcast = failingStarts(new FluidcastSessionUnreadable({ reason: 'SessionNotFound' }));
+  const { world, run } = makeWorld({
+    fluidcast,
+    agents: [{ id: 10, harnessSessionId: null }],
+    nativeIdPersistedOnStop: 'persisted-while-stopping',
+  });
+  const result = await run(
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(toFluidcast());
+      return { error, interaction: yield* interactionOf() };
+    }),
+  );
+  assert.ok(result.error instanceof FluidcastSessionUnreadable);
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 1,
+    failure: { code: 'fluidcast_session_unreadable', reason: 'SessionNotFound' },
+  });
+  const start = fluidcast.calls.find((call) => call.kind === 'start');
+  assert.equal(start?.kind === 'start' && start.input.harnessSessionId, 'persisted-while-stopping');
+  assert.deepEqual(switches(world.events), [null]);
+  assert.equal(changedCount(world.events), 1);
+});
+
+test('a database failure after the stop records fluidcast_preparation_failed, not terminal mode', async () => {
+  const { world, run } = makeWorld({ readsFailAfterTerminate: true });
+  const logs = makeLogCapture();
+  const result = await run(
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(toFluidcast());
+      return { error, interaction: yield* interactionOf() };
+    }).pipe(Effect.provide(logs.layer)),
+  );
+  assert.ok(result.error instanceof DatabaseError);
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 1,
+    failure: {
+      code: 'fluidcast_preparation_failed',
+      diagnostic: 'Database operation find_agent_session failed',
+    },
+  });
+  assert.deepEqual(world.log, ['pty.terminate:30']);
+  assert.deepEqual(switches(world.events), [null]);
+  const warning = logs.lines.find(
+    (line) => line.message === 'agent session fluidcast handoff failed',
+  );
+  assert.equal(warning?.annotations.agentSessionId, 10);
+  assert.equal(warning?.annotations.generation, 1);
+  assert.equal(warning?.annotations.code, 'fluidcast_preparation_failed');
+});
+
+test('a defect after the stop is recorded and still propagates as a defect', async () => {
+  const fluidcast = failingStarts(() => {
+    throw new Error('worker exploded with a secret in its message');
+  });
+  const { world, run } = makeWorld({ fluidcast });
+  const result = await run(
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(toFluidcast());
+      return { exit, interaction: yield* interactionOf() };
+    }),
+  );
+  assert.ok(Exit.isFailure(result.exit) && Cause.hasDies(result.exit.cause));
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 1,
+    failure: { code: 'fluidcast_preparation_failed', diagnostic: 'Error' },
+  });
+  assert.deepEqual(switches(world.events), [null]);
+});
+
+test('a terminal stop that reports an error blocks Fluidcast and publishes no null interval', async () => {
+  const { world, fluidcast, faults, run } = makeWorld();
+  faults.terminateFails = true;
+  const result = await run(
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(toFluidcast());
+      return { error, interaction: yield* interactionOf() };
+    }),
+  );
+  assert.ok(result.error instanceof AgentTerminalStopFailed);
+  assert.equal(result.error.ptyProcessId, 30);
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast_failed',
+    generation: 1,
+    failure: {
+      code: 'terminal_stop_failed',
+      diagnostic: 'PTY kill error (ptyProcess=30): Error',
+    },
+  });
+  assert.deepEqual(fluidcast.calls, []);
+  assert.equal(world.rows.get(10)?.activePtyProcess?.status, 'running');
+  // Nothing ended: the terminal's own interval stays open.
+  assert.deepEqual(switches(world.events), []);
+  assert.equal(changedCount(world.events), 1);
+});
+
+test('Retry from a failed state starts Fluidcast without stopping the stopped terminal again', async () => {
+  const fluidcast = failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' }));
+  const { world, run } = makeWorld({ fluidcast });
+  const result = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      return { retried: yield* toFluidcast(), interaction: yield* interactionOf() };
+    }),
+  );
+  assert.equal(result.retried.mode, 'fluidcast');
+  assert.deepEqual(result.interaction, {
+    mode: 'fluidcast',
+    generation: 2,
+    fluidcastSessionId: result.retried.fluidcastSessionId,
+  });
+  assert.deepEqual(world.log, ['pty.terminate:30']);
+  assert.deepEqual(switches(world.events), [null, `sdk:${result.retried.fluidcastSessionId}`]);
+});
+
+test('a failing Retry replaces the record and raises the generation', async () => {
+  let attempt = 0;
+  const fluidcast = makeFakeFluidcastSessions({
+    onStart: () =>
+      Effect.fail(
+        attempt++ === 0
+          ? new FluidcastSessionUnreadable({ reason: 'SessionUnreadable' })
+          : new FluidcastStartFailed({ reason: 'instrumentation_failed' }),
+      ),
+  });
+  const { run } = makeWorld({ fluidcast });
+  const interaction = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      yield* Effect.flip(toFluidcast());
+      return yield* interactionOf();
+    }),
+  );
+  assert.deepEqual(interaction, {
+    mode: 'fluidcast_failed',
+    generation: 2,
+    failure: { code: 'fluidcast_start_failed', reason: 'instrumentation_failed' },
+  });
+});
+
+test('Retry after a stop failure stops the terminal, then starts', async () => {
+  const { world, faults, run } = makeWorld();
+  faults.terminateFails = true;
+  const result = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      faults.terminateFails = false;
+      return yield* toFluidcast();
+    }),
+  );
+  assert.equal(result.mode, 'fluidcast');
+  assert.deepEqual(world.log, ['pty.terminate:30', 'pty.terminate:30', 'fluidcast.start:10']);
+  assert.deepEqual(switches(world.events), ['sdk:fc-1']);
+});
+
+test('Back to terminal resumes the stored native session, or launches fresh without one', async () => {
+  for (const harnessSessionId of ['claude-session', null]) {
+    const fluidcast = failingStarts(new FluidcastStartFailed({ reason: 'session_build_failed' }));
+    const { world, run } = makeWorld({ fluidcast, agents: [{ id: 10, harnessSessionId }] });
+    const result = await run(
+      Effect.gen(function* () {
+        yield* Effect.flip(toFluidcast());
+        return { back: yield* toTerminal(), interaction: yield* interactionOf() };
+      }),
+    );
+    assert.deepEqual(result.back, { mode: 'terminal', fluidcastSessionId: null });
+    assert.deepEqual(result.interaction, { mode: 'terminal', generation: 2 });
+    assert.deepEqual(world.launches, [{ agentSessionId: 10, resume: harnessSessionId }]);
+    assert.deepEqual(switches(world.events), [null, 'pty:100']);
+    // One change for the failure, one for Back.
+    assert.equal(changedCount(world.events), 2);
+  }
+});
+
+test('Back to terminal whose launch fails stays in terminal mode and returns the error', async () => {
+  const fluidcast = failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' }));
+  const { world, run } = makeWorld({ fluidcast });
+  const result = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      world.rows.set(10, { ...world.rows.get(10)!, harnessMetadataStatus: 'invalid' });
+      const error = yield* Effect.flip(toTerminal());
+      return { error, interaction: yield* interactionOf() };
+    }),
+  );
+  assert.ok(result.error instanceof AgentSessionError);
+  assert.equal(result.error.code, 'harness_metadata_invalid');
+  assert.deepEqual(result.interaction, { mode: 'terminal', generation: 2 });
+  assert.deepEqual(world.launches, []);
+  assert.deepEqual(switches(world.events), [null]);
+  assert.equal(changedCount(world.events), 2);
+});
+
+test('Back to terminal after a stop failure keeps the running terminal and launches nothing', async () => {
+  const { world, faults, run } = makeWorld();
+  faults.terminateFails = true;
+  const result = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      return { back: yield* toTerminal(), interaction: yield* interactionOf() };
+    }),
+  );
+  assert.deepEqual(result.back, { mode: 'terminal', fluidcastSessionId: null });
+  assert.deepEqual(result.interaction, { mode: 'terminal', generation: 2 });
+  assert.deepEqual(world.log, ['pty.terminate:30']);
+  assert.deepEqual(switches(world.events), []);
+  assert.equal(changedCount(world.events), 2);
+});
+
+test('an admission refusal from a failed state leaves the record and its generation', async () => {
+  const fluidcast = failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' }));
+  const { world, run } = makeWorld({ fluidcast });
+  const result = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      const before = yield* interactionOf();
+      world.placements.set(10, null);
+      const retry = yield* Effect.flip(toFluidcast());
+      const back = yield* Effect.flip(toTerminal());
+      return { before, retry, back, after: yield* interactionOf() };
+    }),
+  );
+  for (const refused of [result.retry, result.back]) {
+    assert.ok(refused instanceof AgentSessionError);
+    assert.equal(refused.code, 'session_not_placed');
+  }
+  assert.deepEqual(result.after, result.before);
+  assert.deepEqual(world.log, ['pty.terminate:30']);
+});
+
+test('a switch from a controller that is no longer current is refused and changes nothing', async () => {
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    /** A fresh world's options for each direction. */
+    readonly options?: () => WorldOptions;
+    /** Reaches the state the stale origin was captured in, and returns it. */
+    readonly setup: Effect.Effect<
+      AgentSessionInteractionOrigin,
+      unknown,
+      AgentSessionService | AgentSessionInteraction
+    >;
+  }> = [
+    {
+      name: 'an earlier generation',
+      setup: Effect.gen(function* () {
+        const stale = yield* originOf();
+        yield* toFluidcast();
+        yield* toTerminal();
+        const current = yield* originOf();
+        // Only the generation is stale: the relaunched terminal's incarnation is current.
+        return { ...current, generation: stale.generation };
+      }),
+    },
+    {
+      name: 'a stopped Fluidcast instance',
+      setup: Effect.gen(function* () {
+        yield* toFluidcast();
+        const stale = yield* originOf();
+        yield* toTerminal();
+        yield* toFluidcast();
+        const current = yield* originOf();
+        return { ...current, fluidcastSessionId: stale.fluidcastSessionId };
+      }),
+    },
+    {
+      name: 'an old terminal incarnation',
+      options: () => ({
+        agents: [{ id: 10, activePtyProcessId: 30, activePtyProcess: ptyRow(30, 'exited') }],
+      }),
+      setup: Effect.gen(function* () {
+        // Captured before the pane's own relaunch, which keeps the generation.
+        const stale = yield* originOf();
+        yield* toTerminal();
+        return stale;
+      }),
+    },
+    {
+      name: 'a previous failure',
+      options: () => ({
+        fluidcast: failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' }), 2),
+      }),
+      setup: Effect.gen(function* () {
+        yield* Effect.flip(toFluidcast());
+        const stale = yield* originOf();
+        yield* Effect.flip(toFluidcast());
+        return stale;
+      }),
+    },
+  ];
+  for (const testCase of cases) {
+    for (const mode of ['fluidcast', 'terminal'] as const) {
+      const { world, run } = makeWorld(testCase.options?.());
+      const result = await run(
+        Effect.gen(function* () {
+          const stale = yield* testCase.setup;
+          const before = yield* interactionOf();
+          const log = [...world.log];
+          const events = world.events.length;
+          const error = yield* Effect.flip(switchTo(mode)(10, stale));
+          return {
+            error,
+            before,
+            after: yield* interactionOf(),
+            unchangedLog: log.length === world.log.length,
+            newEvents: world.events.length - events,
+          };
+        }),
+      );
+      const label = `${testCase.name} → ${mode}`;
+      assert.ok(result.error instanceof AgentSessionError, label);
+      assert.equal(result.error.code, 'interaction_changed', label);
+      assert.deepEqual(result.after, result.before, label);
+      assert.ok(result.unchangedLog, label);
+      assert.equal(result.newEvents, 0, label);
+    }
+  }
+});
+
+test('release clears a failed record and publishes it ended', async () => {
+  const fluidcast = failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' }));
+  const { world, run } = makeWorld({ fluidcast });
+  const interaction = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      yield* release([10]);
+      return yield* interactionOf();
+    }),
+  );
+  assert.deepEqual(interaction, { mode: 'terminal', generation: 2 });
+  assert.deepEqual(world.log, ['pty.terminate:30']);
+  assert.deepEqual(switches(world.events), [null, null]);
+});
+
+// ── Terminal gates ───────────────────────────────────────────────────────────
+
+const ensure = (
+  options?: Parameters<AgentSessionService['Service']['ensureActivePtyProcess']>[1],
+) => AgentSessionService.use((agents) => agents.ensureActivePtyProcess(10, options));
+
+function assertRefusedWith(error: unknown, code: string, label: string) {
+  assert.ok(error instanceof AgentSessionError, label);
+  assert.equal(error.code, code, label);
+}
+
+test('ensuring a terminal is refused unless the agent is in terminal mode at the expected generation', async () => {
+  // Fluidcast: the stopped terminal would be relaunched, or named by an expected incarnation.
+  const underFluidcast = makeWorld();
+  const fluidcastRefusals = await underFluidcast.run(
+    Effect.gen(function* () {
+      yield* toFluidcast();
+      return {
+        launch: yield* Effect.flip(ensure()),
+        expected: yield* Effect.flip(ensure({ expectedIncarnation: 'pty:30' })),
+      };
+    }),
+  );
+  assertRefusedWith(fluidcastRefusals.launch, 'not_in_terminal_mode', 'fluidcast launch');
+  assertRefusedWith(fluidcastRefusals.expected, 'not_in_terminal_mode', 'fluidcast expected');
+  assert.match(
+    (fluidcastRefusals.launch as AgentSessionError).message,
+    /Fluidcast controls it\. Switch its pane back to the terminal, then retry\.$/,
+  );
+  assert.deepEqual(underFluidcast.world.launches, []);
+
+  // A failed switch whose stop failed: the running terminal would be reused.
+  const failed = makeWorld();
+  failed.faults.terminateFails = true;
+  const failedRefusals = await failed.run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast());
+      return {
+        reuse: yield* Effect.flip(ensure()),
+        expected: yield* Effect.flip(ensure({ expectedIncarnation: 'pty:30' })),
+        // The mode is checked first, whatever generation the token carries.
+        stale: yield* Effect.flip(ensure({ controllerGeneration: 0 })),
+      };
+    }),
+  );
+  for (const [label, error] of Object.entries(failedRefusals))
+    assertRefusedWith(error, 'not_in_terminal_mode', `failed ${label}`);
+  assert.match(
+    (failedRefusals.reuse as AgentSessionError).message,
+    /its switch to Fluidcast failed\. Switch its pane back to the terminal, then retry\.$/,
+  );
+  assert.deepEqual(failed.world.launches, []);
+
+  // Back in terminal mode at a newer generation: a token from the earlier one is refused.
+  const roundTrip = makeWorld();
+  const tokens = await roundTrip.run(
+    Effect.gen(function* () {
+      yield* toFluidcast();
+      yield* toTerminal();
+      return {
+        stale: yield* Effect.flip(ensure({ controllerGeneration: 0 })),
+        current: yield* ensure({ controllerGeneration: 2 }),
+      };
+    }),
+  );
+  assertRefusedWith(tokens.stale, 'interaction_changed', 'stale generation');
+  assert.equal(tokens.current, 100);
+});
+
+test('a running-terminal write is refused after the controller changed, mode first', async () => {
+  const { world, run } = makeWorld();
+  const result = await run(
+    Effect.gen(function* () {
+      const agents = yield* AgentSessionService;
+      const used: number[] = [];
+      const use = (ptyProcessId: number) => Effect.sync(() => void used.push(ptyProcessId));
+      yield* agents.withRunningTerminal(10, 0, use);
+      yield* toFluidcast();
+      const underFluidcast = yield* Effect.flip(agents.withRunningTerminal(10, 0, use));
+      yield* toTerminal();
+      const stale = yield* Effect.flip(agents.withRunningTerminal(10, 0, use));
+      yield* agents.withRunningTerminal(10, 2, use);
+      return { used, underFluidcast, stale };
+    }),
+  );
+  assert.deepEqual(result.used, [30, 100]);
+  assertRefusedWith(result.underFluidcast, 'not_in_terminal_mode', 'under Fluidcast');
+  assertRefusedWith(result.stale, 'interaction_changed', 'stale generation');
+  assert.deepEqual(world.log, [
+    'pty.terminate:30',
+    'fluidcast.start:10',
+    'fluidcast.stop:fc-1',
+    'pty.launch:100',
+  ]);
+});
+
+test('a switch queued behind a running-terminal write runs only after the write', async () => {
+  const held = Effect.runSync(Deferred.make<void>());
+  const { world, run } = makeWorld();
+  await run(
+    Effect.gen(function* () {
+      const agents = yield* AgentSessionService;
+      const writing = yield* Effect.forkChild(
+        agents.withRunningTerminal(10, 0, (ptyProcessId) =>
+          Effect.gen(function* () {
+            world.log.push(`write:start:${ptyProcessId}`);
+            yield* Deferred.await(held);
+            world.log.push(`write:end:${ptyProcessId}`);
+          }),
+        ),
+      );
+      yield* eventually(() => world.log.includes('write:start:30'));
+      const switching = yield* Effect.forkChild(toFluidcast());
+      yield* Effect.sleep('20 millis');
+      assert.deepEqual(world.log, ['write:start:30']);
+      yield* Deferred.succeed(held, undefined);
+      yield* Fiber.join(writing);
+      yield* Fiber.join(switching);
+    }),
+  );
+  assert.deepEqual(world.log, [
+    'write:start:30',
+    'write:end:30',
+    'pty.terminate:30',
+    'fluidcast.start:10',
+  ]);
+});
+
+test("the controller's liveness follows its mode", async () => {
+  const live = (agentSessionId = 10) =>
+    AgentSessionService.use((agents) => agents.isControllerLive(agentSessionId));
+
+  const terminal = makeWorld({
+    agents: [
+      { id: 10 },
+      { id: 11, activePtyProcessId: 31, activePtyProcess: ptyRow(31, 'exited') },
+    ],
+  });
+  assert.deepEqual(await terminal.run(Effect.all([live(10), live(11)])), [true, false]);
+
+  const fluidcast = makeWorld();
+  const fluidcastLiveness = await fluidcast.run(
+    Effect.gen(function* () {
+      const switched = yield* toFluidcast();
+      const whileLive = yield* live();
+      fluidcast.fluidcast.fault(switched.fluidcastSessionId!, 'worker_exited');
+      return { whileLive, afterFault: yield* live() };
+    }),
+  );
+  assert.deepEqual(fluidcastLiveness, { whileLive: true, afterFault: false });
+
+  // A failed switch reads its PTY row: running only when its stop failed.
+  const stopFailed = makeWorld();
+  stopFailed.faults.terminateFails = true;
+  assert.equal(await stopFailed.run(Effect.andThen(Effect.flip(toFluidcast()), live())), true);
+  const startFailed = makeWorld({
+    fluidcast: failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' })),
+  });
+  assert.equal(await startFailed.run(Effect.andThen(Effect.flip(toFluidcast()), live())), false);
+});
+
+// ── Interaction state ────────────────────────────────────────────────────────
+
+test('the generation rises exactly on record changes and never repeats', async () => {
+  const { run } = makeWorld({ agents: [{ id: 10 }, { id: 11 }] });
+  const result = await run(
+    Effect.gen(function* () {
+      const interaction = yield* AgentSessionInteraction;
+      const seen: number[] = [interaction.get(10).generation];
+      interaction.setTerminal(10);
+      seen.push(interaction.get(10).generation);
+      seen.push(
+        interaction.setFluidcast(10, {
+          fluidcastSessionId: 'fc-a' as never,
+          since: '2026-10-01T00:00:00.000Z',
+        }),
+      );
+      interaction.setTerminal(10);
+      seen.push(interaction.get(10).generation);
+      seen.push(
+        interaction.setFailed(10, { code: 'fluidcast_preparation_failed', diagnostic: 'x' }),
+      );
+      seen.push(interaction.setFailed(10, { code: 'terminal_stop_failed', diagnostic: 'y' }));
+      interaction.setTerminal(10);
+      seen.push(interaction.get(10).generation);
+      interaction.setFluidcast(11, {
+        fluidcastSessionId: 'fc-b' as never,
+        since: '2026-10-01T00:00:00.000Z',
+      });
+      return {
+        seen,
+        fluidcastAgents: interaction.fluidcastAgentIds(),
+        other: interaction.get(11).generation,
+      };
+    }),
+  );
+  // A terminal-mode `setTerminal` changes nothing; every record change is a new value.
+  assert.deepEqual(result.seen, [0, 0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(result.fluidcastAgents, [11]);
+  assert.equal(result.other, 1);
+});
+
+test('a failed switch is not listed among the Fluidcast agents', async () => {
+  const fluidcast = failingStarts(new FluidcastStartFailed({ reason: 'executable_not_found' }));
+  const { run } = makeWorld({ fluidcast, agents: [{ id: 10 }, { id: 11 }] });
+  const ids = await run(
+    Effect.gen(function* () {
+      yield* Effect.flip(toFluidcast(10));
+      yield* toFluidcast(11);
+      return (yield* AgentSessionInteraction).fluidcastAgentIds();
+    }),
+  );
+  assert.deepEqual(ids, [11]);
 });

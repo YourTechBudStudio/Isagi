@@ -1,6 +1,10 @@
 import { Clock, Context, Data, Effect, Layer, Result, type Scope } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  AgentSessionInteractionOrigin,
+  FluidcastHandoffFailure,
+} from '@isagi/contracts';
 
 import {
   FluidcastSessions,
@@ -18,14 +22,22 @@ import {
   type HarnessLaunchOptions,
   type Incarnation,
   ptyIncarnation,
+  type SdkHarness,
   sdkIncarnation,
 } from '../../harnesses/index.js';
+import {
+  describeOperationalCause,
+  describeSafely,
+  type SafeDescription,
+  type SafeDiagnostic,
+} from '../../platform/diagnostics/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { PtyService, type PtyLaunchError } from '../../pty-processes/index.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
+import { sessionProcessIncarnation } from '../sessions/status.js';
 import type { AgentSessionRow } from '../sessions/types.js';
-import { AgentSessionInteraction } from './interaction.js';
+import { AgentSessionInteraction, type AgentControl } from './interaction.js';
 import { AgentSessionRepository } from './repository.js';
 
 export type StopUnlessPlacedOutcome =
@@ -35,18 +47,34 @@ export type StopUnlessPlacedOutcome =
 
 export interface AgentSessionEnsureActiveOptions extends HarnessLaunchOptions {
   readonly replaceEphemeralProcess?: boolean | undefined;
+  /**
+   * Attach to this live incarnation only: never launch or replace a process, and refuse with
+   * `process_incarnation_stale` when the session's live process is another one or none.
+   */
+  readonly expectedIncarnation?: Incarnation | undefined;
+  /**
+   * The interaction generation an attach token was issued under: refused with
+   * `interaction_changed` when the agent's controller has changed since.
+   */
+  readonly controllerGeneration?: number | undefined;
 }
 
 export type AgentSessionErrorCode =
   | 'session_not_found'
   | 'active_process_missing'
   | 'active_process_not_running'
+  /** The incarnation an attach named is no longer the session's live process. */
+  | 'process_incarnation_stale'
   | 'harness_metadata_missing'
   | 'harness_metadata_invalid'
   /** No pane holds the session any more, so it may not get a new controller. */
   | 'session_not_placed'
   /** A worktree or project delete holds the session's worktree or project. */
-  | 'session_deleting';
+  | 'session_deleting'
+  /** The agent is not in terminal mode: Fluidcast controls it, or a switch to Fluidcast failed. */
+  | 'not_in_terminal_mode'
+  /** The request was made under an earlier controller than the agent's current one. */
+  | 'interaction_changed';
 
 export interface InteractionModeResult {
   readonly mode: 'terminal' | 'fluidcast';
@@ -61,20 +89,36 @@ export type SetInteractionModeError =
   | PtyLaunchError
   | FluidcastUnavailable
   | FluidcastSessionUnreadable
-  | FluidcastStartFailed;
+  | FluidcastStartFailed
+  | AgentTerminalStopFailed;
 
 /**
  * An agent session operation was refused. Constructed positionally (`new AgentSessionError(code, message)`), as it was
  * before it became a tagged error, so existing call sites keep their shape.
  */
-export class AgentSessionError extends Data.TaggedError('AgentSessionError')<{
-  readonly code: AgentSessionErrorCode;
-  readonly message: string;
-}> {
+export class AgentSessionError
+  extends Data.TaggedError('AgentSessionError')<{
+    readonly code: AgentSessionErrorCode;
+    readonly message: string;
+  }>
+  implements SafeDiagnostic
+{
   constructor(code: AgentSessionErrorCode, message: string) {
     super({ code, message });
   }
+
+  [describeSafely](): SafeDescription {
+    return { label: `Agent session refused ${this.code}`, cause: null };
+  }
 }
+
+/** The terminal stop that precedes a switch to Fluidcast reported an error, so Fluidcast was not started. */
+export class AgentTerminalStopFailed extends Data.TaggedError('AgentTerminalStopFailed')<{
+  readonly agentSessionId: number;
+  readonly ptyProcessId: number;
+  /** Rendered with `describeOperationalCause`, so it is safe to show and log. */
+  readonly diagnostic: string;
+}> {}
 
 const make = Effect.gen(function* () {
   const repository = yield* AgentSessionRepository;
@@ -131,6 +175,93 @@ const make = Effect.gen(function* () {
       );
   });
 
+  /**
+   * The agent's generation when it is in terminal mode. Reads in-memory state when run, and takes
+   * no lock: a caller that needs the answer to stay current runs it while holding the agent's lock.
+   */
+  const requireTerminalMode = (agentSessionId: number, expectedGeneration?: number) =>
+    Effect.suspend(() => {
+      const current = interaction.get(agentSessionId);
+      if (current.mode !== 'terminal')
+        return Effect.fail(notInTerminalMode(agentSessionId, current.mode));
+      if (expectedGeneration !== undefined && expectedGeneration !== current.generation)
+        return Effect.logDebug('agent session request refused: controller changed').pipe(
+          Effect.annotateLogs({
+            agentSessionId,
+            expectedGeneration,
+            currentGeneration: current.generation,
+          }),
+          Effect.andThen(Effect.fail(interactionChanged(agentSessionId))),
+        );
+      return Effect.succeed(current.generation);
+    });
+
+  /** A switch's `from` must name the controller the agent is under now, read under its lock. */
+  const assertCurrentController = (
+    session: AgentSessionRow,
+    control: AgentControl,
+    from: AgentSessionInteractionOrigin,
+  ) => {
+    const fluidcastSessionId = control.mode === 'fluidcast' ? control.fluidcastSessionId : null;
+    const processIncarnation = sessionProcessIncarnation(session, control);
+    return from.generation === control.generation &&
+      from.fluidcastSessionId === fluidcastSessionId &&
+      from.processIncarnation === processIncarnation
+      ? Effect.void
+      : Effect.logDebug('agent interaction request refused: controller changed').pipe(
+          Effect.annotateLogs({
+            agentSessionId: session.id,
+            expected: from,
+            current: { generation: control.generation, fluidcastSessionId, processIncarnation },
+          }),
+          Effect.andThen(Effect.fail(interactionChanged(session.id))),
+        );
+  };
+
+  /**
+   * Records a switch to Fluidcast that failed after cleanup began, so the agent is never quietly
+   * back in terminal mode. Taps expected errors and defects separately, so either continues as it
+   * was. A reported stop failure ended nothing, so it publishes no null interval: the terminal's
+   * own interval is still open.
+   */
+  const recordHandoffFailure =
+    (agentSessionId: number) =>
+    <A, R>(handoff: Effect.Effect<A, HandoffError, R>) => {
+      const record = (failure: FluidcastHandoffFailure) =>
+        Effect.gen(function* () {
+          const generation = interaction.setFailed(agentSessionId, failure);
+          yield* failure.code === 'terminal_stop_failed'
+            ? publishChanged(agentSessionId)
+            : publishControllerEnded(agentSessionId);
+          yield* Effect.logWarning('agent session fluidcast handoff failed').pipe(
+            Effect.annotateLogs({ agentSessionId, generation, ...failure }),
+          );
+        });
+      return handoff.pipe(
+        Effect.tapError((error) => record(classifyHandoffError(error))),
+        Effect.tapDefect((defect) =>
+          record({
+            code: 'fluidcast_preparation_failed',
+            diagnostic: describeOperationalCause(defect),
+          }),
+        ),
+      );
+    };
+
+  /** The only cleanup failure a switch to Fluidcast honours: `PtyService.terminate` failing. */
+  const stopTerminalForHandoff = (agentSessionId: number, ptyProcessId: number) =>
+    pty.terminate({ ptyProcessId, gracefulTimeoutMs: 1_000 }).pipe(
+      Effect.mapError(
+        (error) =>
+          new AgentTerminalStopFailed({
+            agentSessionId,
+            ptyProcessId,
+            diagnostic: describeOperationalCause(error),
+          }),
+      ),
+      Effect.asVoid,
+    );
+
   /** Best-effort: a PTY that does not stop is logged, and the caller carries on. */
   const terminatePty = (agentSessionId: number, ptyProcessId: number) =>
     pty.terminate({ ptyProcessId, gracefulTimeoutMs: 1_000 }).pipe(
@@ -168,12 +299,17 @@ const make = Effect.gen(function* () {
     return process.ptyProcessId;
   });
 
-  const switchToFluidcast = Effect.fnUntraced(function* (agentSessionId: number) {
+  const switchToFluidcast = Effect.fnUntraced(function* (
+    agentSessionId: number,
+    from: AgentSessionInteractionOrigin,
+  ) {
     const session = yield* findAgentSessionOrFail(repository, agentSessionId);
-    const current = interaction.get(agentSessionId);
-    if (current.mode === 'fluidcast')
-      return { mode: 'fluidcast', fluidcastSessionId: current.fluidcastSessionId } as const;
-    // Admission: every refusal happens before anything stops.
+    const control = interaction.control(agentSessionId);
+    yield* assertCurrentController(session, control, from);
+    if (control.mode === 'fluidcast')
+      return { mode: 'fluidcast', fluidcastSessionId: control.fluidcastSessionId } as const;
+    // Admission: every refusal happens before anything stops and leaves the state as it is,
+    // including a `fluidcast_failed` record.
     yield* assertMayCreateController(session);
     yield* validateHarnessMetadata(session);
     if (fluidcast.availability !== 'ready')
@@ -184,43 +320,68 @@ const make = Effect.gen(function* () {
     if (!harnesses.supportsSdk(harness))
       return yield* new FluidcastUnavailable({ reason: 'harness_unsupported' });
     yield* controlPlane.assertCanCreateProcess(harness);
-    // Cleanup before replacement, so the native session has one writer.
+    return yield* handOffToFluidcast(session, harness).pipe(recordHandoffFailure(agentSessionId));
+  });
+
+  /** Cleanup, then the replacement. Every failure from here on is recorded as `fluidcast_failed`. */
+  const handOffToFluidcast = Effect.fnUntraced(function* (
+    session: AgentSessionRow,
+    harness: SdkHarness,
+  ) {
+    // A stop that reports an error ends the handoff here: starting Fluidcast over a terminal that
+    // may still be running would knowingly create a second writer.
     if (session.activePtyProcessId !== null && isLive(session.activePtyProcess))
-      yield* terminatePty(agentSessionId, session.activePtyProcessId);
-    const started = yield* fluidcast
-      .start({
-        agentSessionId,
-        harness,
-        cwd: session.cwd,
-        harnessSessionId: session.harnessSessionId,
-      })
-      // The terminal is already stopped and the mode stays terminal.
-      .pipe(Effect.tapError(() => publishControllerEnded(agentSessionId)));
-    interaction.set(agentSessionId, started);
-    yield* publishSwitched(
-      agentSessionId,
-      sdkIncarnation(started.fluidcastSessionId),
-      started.since,
-    );
-    yield* publishChanged(agentSessionId);
+      yield* stopTerminalForHandoff(session.id, session.activePtyProcessId);
+    // Re-read: the terminal may have persisted its native ID while stopping. A known ID always
+    // attaches; neither Isagi nor the SDK falls back to a new conversation for it.
+    const latest = yield* findAgentSessionOrFail(repository, session.id);
+    const started = yield* fluidcast.start({
+      agentSessionId: session.id,
+      harness,
+      cwd: latest.cwd,
+      harnessSessionId: latest.harnessSessionId,
+    });
+    interaction.setFluidcast(session.id, started);
+    yield* publishSwitched(session.id, sdkIncarnation(started.fluidcastSessionId), started.since);
+    yield* publishChanged(session.id);
     return { mode: 'fluidcast', fluidcastSessionId: started.fluidcastSessionId } as const;
   });
 
-  const switchToTerminal = Effect.fnUntraced(function* (agentSessionId: number) {
+  /**
+   * Keeps a live PTY; otherwise launches one with the stored native ID (a resume, or fresh when
+   * none was recorded). Whether it launched, so the caller decides what to publish.
+   */
+  const ensureTerminalRunning = Effect.fnUntraced(function* (session: AgentSessionRow) {
+    if (isLive(session.activePtyProcess)) return false;
+    yield* validateHarnessMetadata(session);
+    yield* launchProcessForSession(session);
+    return true;
+  });
+
+  const switchToTerminal = Effect.fnUntraced(function* (
+    agentSessionId: number,
+    from: AgentSessionInteractionOrigin,
+  ) {
     const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+    const control = interaction.control(agentSessionId);
+    yield* assertCurrentController(session, control, from);
     // A terminal switch must not launch a PTY for an owner that is going away either.
     yield* assertMayCreateController(session);
-    const current = interaction.get(agentSessionId);
-    if (current.mode === 'terminal') {
-      if (isLive(session.activePtyProcess)) return terminalResult;
-      yield* validateHarnessMetadata(session);
-      yield* launchProcessForSession(session);
-      yield* publishChanged(agentSessionId);
+    if (control.mode === 'terminal') {
+      if (yield* ensureTerminalRunning(session)) yield* publishChanged(agentSessionId);
       return terminalResult;
     }
-    interaction.delete(agentSessionId);
+    if (control.mode === 'fluidcast_failed') {
+      // Back to terminal: terminal mode first, so a launch that fails leaves the pane's own
+      // recovery (Resume / Start fresh) in charge. The record changed either way. A terminal whose
+      // stop failed is still live and is kept; its interval never closed.
+      interaction.setTerminal(agentSessionId);
+      yield* ensureTerminalRunning(session).pipe(Effect.ensuring(publishChanged(agentSessionId)));
+      return terminalResult;
+    }
+    interaction.setTerminal(agentSessionId);
     // Final once the worker's scope has closed: no `SessionStarted` can arrive later.
-    const stopped = yield* fluidcast.stop(current.fluidcastSessionId);
+    const stopped = yield* fluidcast.stop(control.fluidcastSessionId);
     yield* Effect.gen(function* () {
       const latest = yield* findAgentSessionOrFail(repository, agentSessionId);
       // The worker may have created the native session without the ID being persisted yet (or
@@ -255,8 +416,11 @@ const make = Effect.gen(function* () {
           let ended = false;
           const current = interaction.get(agentSessionId);
           if (current.mode === 'fluidcast') {
-            interaction.delete(agentSessionId);
+            interaction.setTerminal(agentSessionId);
             yield* fluidcast.stop(current.fluidcastSessionId);
+            ended = true;
+          } else if (current.mode === 'fluidcast_failed') {
+            interaction.setTerminal(agentSessionId);
             ended = true;
           }
           // Read now, under the lock: a terminal switch that held the lock before this release
@@ -283,8 +447,8 @@ const make = Effect.gen(function* () {
         { kind: 'agent_session', sessionId: input.agentSessionId },
         Effect.uninterruptible<InteractionModeResult, SetInteractionModeError, never>(
           input.mode === 'fluidcast'
-            ? switchToFluidcast(input.agentSessionId)
-            : switchToTerminal(input.agentSessionId),
+            ? switchToFluidcast(input.agentSessionId, input.from)
+            : switchToTerminal(input.agentSessionId, input.from),
         ),
       );
     }),
@@ -317,7 +481,13 @@ const make = Effect.gen(function* () {
         return yield* lifecycle.withRestoreLock(
           { kind: 'agent_session', sessionId: agentSessionId },
           Effect.gen(function* () {
+            // Every branch below creates or hands out a terminal controller, so none runs while
+            // Fluidcast controls the agent or its switch failed. Switches launch directly, never
+            // through here.
+            yield* requireTerminalMode(agentSessionId, options?.controllerGeneration);
             const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+            if (options?.expectedIncarnation !== undefined)
+              return yield* expectLiveIncarnation(session, options.expectedIncarnation);
             yield* validateHarnessMetadata(session);
             const process = session.activePtyProcess;
             const replaceEphemeralProcess =
@@ -349,22 +519,24 @@ const make = Effect.gen(function* () {
         }),
       );
     }),
-    activePtyProcessId: Effect.fn('AgentSessionService.activePtyProcessId')(
-      function* (agentSessionId) {
-        const session = yield* findAgentSessionOrFail(repository, agentSessionId);
-        if (!session.activePtyProcessId || !session.activePtyProcess)
-          return yield* new AgentSessionError(
-            'active_process_missing',
-            `Agent session ${agentSessionId} has no active PTY process.`,
-          );
-        if (session.activePtyProcess.status !== 'running')
-          return yield* new AgentSessionError(
-            'active_process_not_running',
-            `Agent session ${agentSessionId} active process is not running.`,
-          );
-        return session.activePtyProcessId;
-      },
-    ),
+    requireTerminalMode,
+    withRunningTerminal: (agentSessionId, generation, use) =>
+      lifecycle
+        .withRestoreLock(
+          { kind: 'agent_session', sessionId: agentSessionId },
+          Effect.gen(function* () {
+            yield* requireTerminalMode(agentSessionId, generation);
+            const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+            return yield* use(yield* runningPtyProcessId(session));
+          }),
+        )
+        .pipe(Effect.withSpan('AgentSessionService.withRunningTerminal')),
+    isControllerLive: Effect.fn('AgentSessionService.isControllerLive')(function* (agentSessionId) {
+      const control = interaction.control(agentSessionId);
+      if (control.mode === 'fluidcast') return control.worker.state === 'live';
+      const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+      return Result.isSuccess(yield* Effect.result(runningPtyProcessId(session)));
+    }),
   });
 });
 
@@ -390,9 +562,33 @@ export class AgentSessionService extends Context.Service<
       | HarnessAdapterError
       | HarnessLaunchBlocked
     >;
-    readonly activePtyProcessId: (
+    /**
+     * The agent's generation when it is in terminal mode; `not_in_terminal_mode` otherwise, and
+     * `interaction_changed` when `expectedGeneration` is given and differs. Reads in-memory state
+     * only and takes no lock: a caller that needs the answer to stay current calls it while
+     * holding the agent's lock.
+     */
+    readonly requireTerminalMode: (
       agentSessionId: number,
-    ) => Effect.Effect<number, DatabaseError | AgentSessionError>;
+      expectedGeneration?: number,
+    ) => Effect.Effect<number, AgentSessionError>;
+    /**
+     * Under the agent's lock: refuses unless the agent is in terminal mode at `generation`,
+     * resolves its running PTY, then runs `use` with the lock still held. `use` must not take the
+     * agent's lock again.
+     */
+    readonly withRunningTerminal: <A, E, R>(
+      agentSessionId: number,
+      generation: number,
+      use: (ptyProcessId: number) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | DatabaseError | AgentSessionError, R>;
+    /**
+     * Whether the agent's current controller can still act: its Fluidcast worker in `fluidcast`
+     * mode, otherwise a running PTY.
+     */
+    readonly isControllerLive: (
+      agentSessionId: number,
+    ) => Effect.Effect<boolean, DatabaseError | AgentSessionError>;
     /**
      * Stops a process its launcher started, unless a pane holds the session. The
      * placement read and the stop happen under the session's lock, which a claim
@@ -404,12 +600,16 @@ export class AgentSessionService extends Context.Service<
       readonly ptyProcessId: number;
     }) => Effect.Effect<StopUnlessPlacedOutcome, DatabaseError>;
     /**
-     * Switches the agent between its terminal and a Fluidcast session under its lock: admission,
-     * best-effort cleanup of the old controller, then the replacement. Idempotent per mode.
+     * Switches the agent between its terminal and a Fluidcast session under its lock: the `from`
+     * check, admission, cleanup of the old controller, then the replacement. Idempotent per mode
+     * for a current `from`. A switch to Fluidcast that fails after cleanup began leaves the agent
+     * in `fluidcast_failed`; switching to terminal from there is Back to terminal, and to
+     * Fluidcast is Retry.
      */
     readonly setInteractionMode: (input: {
       readonly agentSessionId: number;
       readonly mode: 'terminal' | 'fluidcast';
+      readonly from: AgentSessionInteractionOrigin;
     }) => Effect.Effect<InteractionModeResult, SetInteractionModeError>;
     /**
      * Ends each agent's current controller (Fluidcast session or PTY), read under its lock. Never
@@ -448,6 +648,84 @@ export class AgentSessionService extends Context.Service<
 }
 
 const terminalResult: InteractionModeResult = { mode: 'terminal', fluidcastSessionId: null };
+
+function expectLiveIncarnation(session: AgentSessionRow, expected: Incarnation) {
+  return session.activePtyProcessId !== null &&
+    isLive(session.activePtyProcess) &&
+    ptyIncarnation(session.activePtyProcessId) === expected
+    ? Effect.succeed(session.activePtyProcessId)
+    : Effect.fail(
+        new AgentSessionError(
+          'process_incarnation_stale',
+          `Agent session ${session.id} is no longer running ${expected}.`,
+        ),
+      );
+}
+
+/**
+ * The refusal of terminal work while the agent is not in terminal mode. A workflow author reads it
+ * on a failed `send_prompt`, so it says what to do.
+ */
+export function notInTerminalMode(
+  agentSessionId: number,
+  mode: 'fluidcast' | 'fluidcast_failed',
+): AgentSessionError {
+  return new AgentSessionError(
+    'not_in_terminal_mode',
+    `Agent session ${agentSessionId} isn't in terminal mode: ${mode === 'fluidcast' ? 'Fluidcast controls it' : 'its switch to Fluidcast failed'}. Switch its pane back to the terminal, then retry.`,
+  );
+}
+
+function interactionChanged(agentSessionId: number) {
+  return new AgentSessionError(
+    'interaction_changed',
+    `Agent session ${agentSessionId} changed controllers after this request was made.`,
+  );
+}
+
+/** Everything a handoff to Fluidcast can fail with once cleanup has begun. */
+type HandoffError =
+  | AgentTerminalStopFailed
+  | FluidcastUnavailable
+  | FluidcastSessionUnreadable
+  | FluidcastStartFailed
+  | DatabaseError
+  | AgentSessionError;
+
+function classifyHandoffError(error: HandoffError): FluidcastHandoffFailure {
+  switch (error._tag) {
+    case 'AgentTerminalStopFailed':
+      return { code: 'terminal_stop_failed', diagnostic: error.diagnostic };
+    case 'FluidcastSessionUnreadable':
+      return { code: 'fluidcast_session_unreadable', reason: error.reason };
+    case 'FluidcastStartFailed':
+      return { code: 'fluidcast_start_failed', reason: error.reason };
+    // `FluidcastUnavailable` here is the start's own re-check losing a race with a config change.
+    case 'FluidcastUnavailable':
+    case 'DatabaseError':
+    case 'AgentSessionError':
+      return { code: 'fluidcast_preparation_failed', diagnostic: describeOperationalCause(error) };
+  }
+}
+
+/** The session's PTY when it is running; the refusals a write into it needs. */
+function runningPtyProcessId(session: AgentSessionRow) {
+  if (!session.activePtyProcessId || !session.activePtyProcess)
+    return Effect.fail(
+      new AgentSessionError(
+        'active_process_missing',
+        `Agent session ${session.id} has no active PTY process.`,
+      ),
+    );
+  if (session.activePtyProcess.status !== 'running')
+    return Effect.fail(
+      new AgentSessionError(
+        'active_process_not_running',
+        `Agent session ${session.id} active process is not running.`,
+      ),
+    );
+  return Effect.succeed(session.activePtyProcessId);
+}
 
 function isLive(process: AgentSessionRow['activePtyProcess']) {
   return process?.status === 'starting' || process?.status === 'running';

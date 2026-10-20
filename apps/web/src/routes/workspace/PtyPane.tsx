@@ -25,6 +25,7 @@ import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
 import { BlockedPanePrompt } from './BlockedPanePrompt.js';
 import { PaneFrame } from './PaneFrame.js';
+import { PanePrompt } from './PanePrompt.js';
 import { PaneTerminal } from './PaneTerminal.js';
 import { usePaneChromeActions } from './usePaneChromeActions.js';
 import { usePaneMenu } from './usePaneMenu.js';
@@ -272,46 +273,36 @@ function RestorePrompt({
   readonly startFreshPending: boolean;
   readonly startFreshError: string | null;
 }) {
-  const Icon = prompt === 'resume_failed' ? TriangleAlert : CircleDashed;
+  const failed = prompt === 'resume_failed';
+  const startFreshAction = {
+    label: agentSessionCopy.action.startFresh,
+    icon: CirclePlus,
+    variant: onResume ? 'ghost' : 'secondary',
+    disabled: startFreshPending,
+    onClick: onStartFresh,
+  } as const;
 
   return (
-    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
-      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-        <Icon
-          size={18}
-          aria-hidden
-          className={prompt === 'resume_failed' ? 'text-error' : 'text-waiting'}
-        />
-        <p className="font-mono text-[12px] text-fg-muted">{agentSessionCopy.body[prompt]}</p>
-        {diagnosticCode ? (
-          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
-            <span className="text-fg-muted">{diagnosticCode}</span>
-            {diagnosticDetail ? ` · ${diagnosticDetail}` : null}
-          </p>
-        ) : null}
-        {startFreshError ? (
-          <p className="font-mono text-[10.5px] leading-relaxed text-error">{startFreshError}</p>
-        ) : null}
-        <div className="mt-0.5 flex flex-wrap items-center justify-center gap-2">
-          {onResume ? (
-            <Button variant="secondary" size="sm" icon={RotateCw} onClick={onResume}>
-              {prompt === 'resume_failed'
-                ? agentSessionCopy.action.retry
-                : agentSessionCopy.action.resume}
-            </Button>
-          ) : null}
-          <Button
-            variant={onResume ? 'ghost' : 'secondary'}
-            size="sm"
-            icon={CirclePlus}
-            disabled={startFreshPending}
-            onClick={onStartFresh}
-          >
-            {agentSessionCopy.action.startFresh}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <PanePrompt
+      icon={failed ? TriangleAlert : CircleDashed}
+      iconClassName={failed ? 'text-error' : 'text-waiting'}
+      body={agentSessionCopy.body[prompt]}
+      diagnostic={diagnosticCode ? { code: diagnosticCode, detail: diagnosticDetail } : null}
+      error={startFreshError}
+      actions={
+        onResume
+          ? [
+              {
+                label: failed ? agentSessionCopy.action.retry : agentSessionCopy.action.resume,
+                icon: RotateCw,
+                variant: 'secondary',
+                onClick: onResume,
+              },
+              startFreshAction,
+            ]
+          : [startFreshAction]
+      }
+    />
   );
 }
 
@@ -387,34 +378,29 @@ function MovedPrompt({
   readonly startFreshError: string | null;
 }) {
   return (
-    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
-      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-        <RotateCw size={18} aria-hidden className="text-waiting" />
-        <div className="space-y-1">
-          <p className="font-mono text-[12px] text-fg-muted">{ptyCopy.movedAttachment.title}</p>
-          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
-            {ptyCopy.movedAttachment.body}
-          </p>
-        </div>
-        {startFreshError ? (
-          <p className="font-mono text-[10.5px] leading-relaxed text-error">{startFreshError}</p>
-        ) : null}
-        <div className="mt-0.5 flex flex-wrap items-center justify-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={CirclePlus}
-            disabled={pending}
-            onClick={onStartFresh}
-          >
-            {ptyCopy.movedAttachment.action.startFresh}
-          </Button>
-          <Button variant="ghost" size="sm" icon={RotateCw} disabled={pending} onClick={onReclaim}>
-            {ptyCopy.movedAttachment.action.claim}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <PanePrompt
+      icon={RotateCw}
+      iconClassName="text-waiting"
+      title={ptyCopy.movedAttachment.title}
+      body={ptyCopy.movedAttachment.body}
+      error={startFreshError}
+      actions={[
+        {
+          label: ptyCopy.movedAttachment.action.startFresh,
+          icon: CirclePlus,
+          variant: 'secondary',
+          disabled: pending,
+          onClick: onStartFresh,
+        },
+        {
+          label: ptyCopy.movedAttachment.action.claim,
+          icon: RotateCw,
+          variant: 'ghost',
+          disabled: pending,
+          onClick: onReclaim,
+        },
+      ]}
+    />
   );
 }
 

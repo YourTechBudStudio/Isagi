@@ -10,7 +10,7 @@ import {
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   type AcceptHarnessPolicyInput,
-  type AgentSessionInteractionMode,
+  type SetAgentSessionInteractionModeInput,
   type SetAgentSessionInteractionModeOutput,
   type AcceptHarnessPolicyOutput,
   type ControlPlaneSnapshot,
@@ -473,7 +473,7 @@ export interface RuntimeApiShape {
   readonly resolveRuntimeUrl: () => Effect.Effect<string, RuntimeUrlUnavailable>;
   readonly setAgentInteractionMode: (
     agentSessionId: number,
-    mode: AgentSessionInteractionMode,
+    input: SetAgentSessionInteractionModeInput,
   ) => Effect.Effect<
     SetAgentSessionInteractionModeOutput,
     RuntimeCallError<typeof apiEndpoints.agentSessions.setInteractionMode>
@@ -679,8 +679,8 @@ export function makeRuntimeApi(
     retryEditorProvisioning: () => request(apiEndpoints.editor.retryProvisioning),
     runtimeIdentity: () => atRuntimeUrl(normalizeRuntimeIdentity),
     resolveRuntimeUrl: () => atRuntimeUrl((runtimeUrl) => new URL(runtimeUrl).href),
-    setAgentInteractionMode: (agentSessionId, mode) =>
-      request(apiEndpoints.agentSessions.setInteractionMode, { agentSessionId }, { mode }),
+    setAgentInteractionMode: (agentSessionId, input) =>
+      request(apiEndpoints.agentSessions.setInteractionMode, { agentSessionId }, input),
     sendFluidcastCommand: (fluidcastSessionId, command) =>
       request(fluidcastEndpoints.command, { fluidcastSessionId }, command),
   };

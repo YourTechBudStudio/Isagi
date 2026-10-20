@@ -24,6 +24,10 @@ Putting durable restoration identity above process incarnations lets Isagi recre
 - An agent session persists independently of its active PTY process.
 - A durable entity may point to its current active process incarnation when one exists.
 - Opening or attaching to a durable entity may lazily create a new process incarnation if the previous one is missing or dead.
+- The runtime names an entity's current process incarnation with an opaque token, on the entity's projection and on its attach stream. A client presentation is valid for one incarnation; clients compare tokens for equality only and re-attach when the token changes.
+- An automatic re-attach may only rejoin the existing live incarnation. It never launches a process, relocates a session, takes over another attachment, or moves focus; those stay with explicit user actions such as opening a pane, Reconnect or Resume.
+- Accepted limitation: if the rejoined process exits between the runtime accepting the rejoin and the stream attaching, the previous presentation's output is lost.
+- An agent session has one controller at a time, either its terminal process or an SDK execution. Paths that create, attach to or write to a terminal incarnation refuse when the terminal isn't the controller. A request that acts on a controller carries the controller identity it was issued under, and the runtime refuses it, before any side effect, if that controller is no longer current.
 - Restoration failure leaves the durable entity visible with a recoverable state and diagnostics.
 - Future terminal, browser, editor, artifact, or command restoration should use this layer rather than overloading PTY or process records.
 - Worktree-environment restoration should remain explicit operational work owned by the runtime. The frontend may request restoration by opening or attaching to a pane, but it must not infer operational state from persisted active context.

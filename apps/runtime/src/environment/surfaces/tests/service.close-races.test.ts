@@ -336,7 +336,12 @@ test('a claim waits for a holder of the session lock that found the session unpl
         const claiming = yield* Effect.forkChild(
           surfaces.claimPaneSession({
             worktreeId,
-            claim: { action: 'claim_agent_session', paneId: spare.paneId, agentSessionId: 77 },
+            claim: {
+              action: 'claim_agent_session',
+              paneId: spare.paneId,
+              agentSessionId: 77,
+              expectedInteractionGeneration: 0,
+            },
           }),
         );
         for (let turn = 0; turn < 20; turn += 1) yield* Effect.yieldNow;

@@ -122,7 +122,9 @@ export const testAgentSessionService = {
   get: () => Effect.die('agent get is not used by workspace tests'),
   ensureActivePtyProcess: () =>
     Effect.die('agent ensureActivePtyProcess is not used by workspace tests'),
-  activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used by workspace tests'),
+  requireTerminalMode: () => Effect.die('agent requireTerminalMode is not used by workspace tests'),
+  withRunningTerminal: () => Effect.die('agent withRunningTerminal is not used by workspace tests'),
+  isControllerLive: () => Effect.die('agent isControllerLive is not used by workspace tests'),
   stopUnlessPlaced: () => Effect.die('agent stopUnlessPlaced is not used by workspace tests'),
   setInteractionMode: () => Effect.die('agent setInteractionMode is not used by workspace tests'),
   releaseControllers: () => Effect.void,

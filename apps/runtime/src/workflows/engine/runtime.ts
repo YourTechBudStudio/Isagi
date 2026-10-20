@@ -158,7 +158,9 @@ export type AgentSpawnError =
 
 export type AgentSendError =
   | WorkflowOperationFailed
-  | Fails<AgentSessions['activePtyProcessId']>
+  // Spelled out: `withRunningTerminal` is generic, so `Fails` cannot infer through it.
+  | DatabaseError
+  | Fails<AgentSessions['requireTerminalMode']>
   | Fails<Pty['writeInput']>;
 
 export type AgentReadError = WorkflowOperationFailed | Fails<AgentSessions['get']>;

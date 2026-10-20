@@ -43,6 +43,12 @@ export interface TerminalAttachmentSnapshot {
   readonly interactive: boolean;
   readonly rendererWarning: string | null;
   readonly sealReason: TerminalSealReason | null;
+  /**
+   * The process incarnation the runtime bound this stream to, from the socket's first message;
+   * `null` until it arrives. The presentation shows that incarnation's output and no other, so a
+   * pane compares it with the projected incarnation to tell whether it is still current.
+   */
+  readonly processIncarnation: string | null;
   readonly readiness:
     | { readonly phase: 'covered' }
     | { readonly phase: 'revealed' }
@@ -157,6 +163,7 @@ export function createTerminalPresentationController(
     interactive: input.initiallyInteractive,
     rendererWarning: null,
     sealReason: null,
+    processIncarnation: null,
     readiness: Object.freeze({ phase: 'covered' }),
   });
   const listeners = new Set<() => void>();
@@ -505,6 +512,7 @@ export function createTerminalPresentationController(
         return;
       }
       case 'session':
+        publish({ processIncarnation: message.processIncarnation });
         setInteractive(message.status === 'running');
         if (message.status === 'exited') {
           publish({
