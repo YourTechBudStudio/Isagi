@@ -44,6 +44,22 @@ export function missingStatusReasonForBackend(backend: PtyBackendName): PtyProce
   return backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing';
 }
 
+// Whether an incarnation ended because the runtime itself stopped: a graceful
+// shutdown kills it as `runtime_shutdown`, and a crash leaves a node-pty
+// process for the next startup to record as `runtime_ephemeral_lost`. Neither
+// says anything about the work the process was doing, so every domain that owns
+// an incarnation treats this as an interruption to bring back rather than an
+// outcome to show. One definition, so the domains cannot disagree on it.
+export function interruptedByRuntime(row: {
+  readonly status: string;
+  readonly statusReason?: string | null | undefined;
+}): boolean {
+  return (
+    (row.status === 'killed' && row.statusReason === 'runtime_shutdown') ||
+    (row.status === 'failed' && row.statusReason === 'runtime_ephemeral_lost')
+  );
+}
+
 // The durable PTY process row, owned here because the process facts are this
 // domain's (ADR 0005). Read-side composition in `surfaces` joins it onto a
 // session row; it does not own it.

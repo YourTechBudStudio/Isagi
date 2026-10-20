@@ -6,7 +6,9 @@ import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';
 import type { DurablePtyTerminationReason, PtyService } from '../pty-processes/index.js';
 import {
-  runtimeStoppedDiagnosticDetail,
+  commandStateForCompletedRun,
+  runtimeInterruptedCommandOutcome,
+  terminalCommandOutcomeForPtyRow,
   terminalPtyFactsForRow,
   type CommandRunDiagnosticInput,
 } from './outcomes.js';
@@ -251,9 +253,9 @@ const noProcessDetail = 'The launch never started a process.';
  * so nothing here competes with a live flow, and nothing published here has a
  * client to reach.
  *
- * It never launches anything. A `suspended` command is left exactly as it is:
- * restoring the runtime is not the user returning to a worktree, and the
- * activation plan for a startup cause carries no resume entries.
+ * It never launches anything. A command the runtime interrupted is left
+ * `suspended`, and the startup activation pass that follows resumes it through
+ * the same path a worktree switch uses.
  */
 export const reconcileCommandsAtBoot = Effect.fnUntraced(function* (
   deps: CommandConvergenceDependencies,
@@ -380,32 +382,45 @@ const repairResolvedRunningCommand = Effect.fnUntraced(function* (
 ) {
   const run = yield* deps.commandRepository.findLatestRun(target);
 
-  if (run && run.status === 'running') {
-    // The interruption case. Identical bytes to the diagnostic the event path
-    // writes when the subscriber is still alive at shutdown, so which of the
-    // two orderings happened is invisible to the user.
+  if (run?.status === 'running') {
+    // The run was still open when the runtime stopped, but that alone does not
+    // say the runtime ended it: a process can exit, or its backend lose it,
+    // with the PTY row recording that just before the command subscriber stops.
+    // So the incarnation's own terminal facts decide, through the same mapping
+    // the event path uses, and only a runtime ending suspends the command for
+    // the activation pass to resume. With no terminal facts to read — no linked
+    // process, or a row that is gone — the run was cut off with the runtime,
+    // which is the interruption.
+    const process =
+      run.ptyProcessId === null ? null : yield* deps.pty.findProcess(run.ptyProcessId);
+    const terminal = terminalPtyFactsForRow(process);
+    const outcome = terminal
+      ? terminalCommandOutcomeForPtyRow(terminal, 'event')
+      : runtimeInterruptedCommandOutcome;
     yield* deps.finalizeCommandRunByRun({
       runId: run.id,
       worktreeId: target.worktreeId,
       commandName: target.commandName,
-      runStatus: 'failed',
-      stateStatus: 'failed',
-      runDiagnostic: { reason: 'runtime_stopped', detail: runtimeStoppedDiagnosticDetail },
+      runStatus: outcome.runStatus,
+      stateStatus: outcome.stateStatus,
+      runDiagnostic: outcome.diagnostic,
     });
     return;
   }
 
   if (run) {
     // The run already knows how this ended; the state is what is stale.
-    // Repairing it to the run's own outcome is what keeps a bare `failed`
-    // from being written over a clean `exited`.
+    // Repairing it from the run's own record is what keeps a bare `failed`
+    // from being written over a clean `exited`, and a runtime interruption
+    // from losing its suspension.
+    const status = commandStateForCompletedRun({ ...run, status: run.status });
     yield* deps.commandRepository.transitionState({
       worktreeId: target.worktreeId,
       commandName: target.commandName,
-      status: run.status,
+      status,
       activePtyProcessId: null,
     });
-    yield* deps.publishCommandChanged(target.worktreeId, target.commandName, run.status);
+    yield* deps.publishCommandChanged(target.worktreeId, target.commandName, status);
     return;
   }
 

@@ -110,10 +110,10 @@ const make = Effect.gen(function* () {
 interface WorkspaceServiceShape {
   readonly get: Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
   /**
-   * Startup: announces the persisted active worktree, if it still exists, as a
-   * `worktree_activation_change` with cause `startup_restored`, so subscribers that act on the
-   * active worktree (command lifecycle) converge on it before the first request. Run once, before
-   * routes are registered.
+   * Startup: announces the persisted active worktree, or `null` when there is none or it no longer
+   * exists, as a `worktree_activation_change` with cause `startup_restored`, so subscribers that
+   * act on startup (command lifecycle) converge before the first request. Always published, once,
+   * before routes are registered.
    */
   readonly publishRestoredActivation: Effect.Effect<void, StateFileError | DatabaseError>;
   readonly durableSessions: Effect.Effect<DurableSessionInventory, WorkspaceServiceError>;

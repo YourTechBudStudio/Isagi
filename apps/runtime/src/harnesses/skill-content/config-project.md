@@ -116,7 +116,8 @@ Commands run in your login shell's environment. On top of that baseline Isagi la
 
 - `postCreate`: Git checkout creation only, after setup succeeds or is skipped; never registration or recovery.
 - `activate.start`: first-start automation only; does not revive exited, failed, or explicitly stopped commands.
-- `deactivate.stop`: suspends running commands on leaving. They resume on a user-driven return, not runtime restart; manual Stop clears resume intent.
+- `deactivate.stop`: suspends running commands on leaving. They resume when the worktree is next active; manual Stop clears resume intent.
+- Runtime restart: commands running when Isagi stopped are suspended, not failed. The active worktree's resume when Isagi starts, `deactivate.stop: false` commands resume in every worktree, and the rest resume when their worktree is next active.
 - `preDelete.stop: false` does not keep commands running after project removal.
 
 ### Ports and HTTP URLs

@@ -48,6 +48,35 @@ test('a mounted context asks the runtime for a workbench exactly once', async ({
   expect(await page.evaluate(() => window.editorTestSupport!.ensureRequests().length)).toBe(1);
 });
 
+test('a pane that stays mounted relaunches the workbench a restarted runtime ended', async ({
+  page,
+}) => {
+  await expect(workbench(page).locator('.status')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.editorTestSupport!.ensureRequests().length))
+    .toBe(1);
+
+  // The runtime restarted underneath the page: its boot returned the context to
+  // idle, and the change event went out before this client reconnected.
+  await page.evaluate(() => {
+    window.editorTestSupport!.setEditor({
+      activePtyProcessId: null,
+      processStatus: null,
+      workbenchReadiness: null,
+      endpoint: null,
+    });
+    window.editorTestSupport!.announceRuntimeConnected();
+  });
+
+  await expect
+    .poll(() => page.evaluate(() => window.editorTestSupport!.ensureRequests()))
+    .toEqual([
+      { editorContextId: 7, intent: 'reuse' },
+      { editorContextId: 7, intent: 'reuse' },
+    ]);
+  await expect(workbench(page).locator('.status')).toBeVisible();
+});
+
 test('a launch failure is reported once, by the projection, never twice', async ({ page }) => {
   await page.goto('./?failFirstEnsure=launch');
 

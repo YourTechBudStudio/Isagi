@@ -30,11 +30,13 @@ type ActivationCause = 'active_context_changed' | 'startup_restored';
 
 export interface ActivationPlanEntry {
   readonly commandName: string;
-  // `resume` brings back a command a worktree switch suspended; `automation` is
+  // `resume` brings back a suspended command; `automation` is
   // a configured `activate.start` opt-in's first start. The two sets are
   // disjoint by construction — `suspended` versus absent/`idle` — so no
-  // precedence rule is needed.
-  readonly reason: 'resume' | 'automation';
+  // precedence rule is needed. `keep_alive` is the startup resume of a
+  // suspended `deactivate.stop: false` command outside the active worktree; it
+  // never comes from an activation plan.
+  readonly reason: 'resume' | 'automation' | 'keep_alive';
 }
 
 // What one plan entry did, reported to the pass so its summary counts observed
@@ -351,10 +353,16 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
     const command = fresh.config.commands.find((candidate) => candidate.name === entry.commandName);
     if (!command) return yield* discard('config_removed');
 
-    if (entry.reason === 'resume') {
+    if (entry.reason === 'resume' || entry.reason === 'keep_alive') {
       // An explicit Stop between the snapshot and now cleared the intent, and
       // it is the newer decision.
       if (state?.status !== 'suspended') return yield* discard('state_changed');
+      // Outside the active worktree only a keep-alive command may resume. If
+      // `deactivate.stop` was turned on since the pass selected it, it waits
+      // for its worktree's activation like any other suspended command.
+      if (entry.reason === 'keep_alive' && command.lifecycle.deactivate.stop) {
+        return yield* discard('config_changed');
+      }
     } else {
       if (state && state.status !== 'idle') return yield* discard('state_changed');
       // `activate.start` flipped off after planning must not launch.
@@ -375,6 +383,68 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
     return 'executed' as const;
   });
 
+  // Startup only, after the active worktree's pass. A keep-alive command
+  // (`deactivate.stop: false`) is meant to run whichever worktree is active, so
+  // if the runtime interrupted one in another worktree it comes back now rather
+  // than waiting for the user to visit. Deactivation never suspends a keep-alive
+  // command, so a suspended one here was interrupted by the runtime. Every other
+  // suspended command keeps waiting for its worktree's activation.
+  const resumeKeepAliveCommands = Effect.fnUntraced(function* (activeWorktreeId: number | null) {
+    const suspended = yield* commandRepository.listSuspendedStates;
+    const byWorktree = new Map<number, string[]>();
+    for (const state of suspended) {
+      if (state.worktreeId === activeWorktreeId) continue;
+      const names = byWorktree.get(state.worktreeId);
+      if (names) names.push(state.commandName);
+      else byWorktree.set(state.worktreeId, [state.commandName]);
+    }
+
+    let resumed = 0;
+    let discarded = 0;
+    let errored = 0;
+    for (const [worktreeId, commandNames] of byWorktree) {
+      const loaded = yield* worktreeCatalog(worktreeId).pipe(Effect.result);
+      if (loaded._tag === 'Failure') {
+        errored += 1;
+        yield* logLifecycleError(`keepAlive:${worktreeId}`)(loaded.failure);
+        continue;
+      }
+      const { worktreeRootPath, catalog } = loaded.success;
+      if (catalog.status === 'config_error') {
+        yield* logLifecycleSkipped('keepAlive', worktreeId, catalog.diagnostic.message);
+        continue;
+      }
+      const keepAlive = new Set(
+        catalog.config.commands
+          .filter((command) => !command.lifecycle.deactivate.stop)
+          .map((command) => command.name),
+      );
+      for (const commandName of commandNames) {
+        if (!keepAlive.has(commandName)) continue;
+        const outcome = yield* deps
+          .withLock(
+            { worktreeId, commandName },
+            executeActivationEntry(worktreeId, worktreeRootPath, {
+              commandName,
+              reason: 'keep_alive',
+            }),
+          )
+          .pipe(Effect.result);
+        if (outcome._tag === 'Failure') {
+          errored += 1;
+          yield* logLifecycleError(`keepAlive:${commandName}`)(outcome.failure);
+        } else if (outcome.success === 'discarded') {
+          discarded += 1;
+        } else {
+          resumed += 1;
+        }
+      }
+    }
+    yield* Effect.logInfo('Command keep-alive resume pass completed').pipe(
+      Effect.annotateLogs({ resumed, discarded, errored }),
+    );
+  });
+
   const applyActivationLifecycle = Effect.fnUntraced(function* (input: {
     readonly previousWorktreeId: number | null;
     readonly nextWorktreeId: number | null;
@@ -390,6 +460,11 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
     if (input.nextWorktreeId !== null) {
       yield* activateWorktreeCommands(input.nextWorktreeId, input.cause).pipe(
         Effect.catch(logLifecycleError('activate')),
+      );
+    }
+    if (input.cause === 'startup_restored') {
+      yield* resumeKeepAliveCommands(input.nextWorktreeId).pipe(
+        Effect.catch(logLifecycleError('keepAlive')),
       );
     }
   });
@@ -434,13 +509,11 @@ export function buildActivationPlan(input: {
   const entries: ActivationPlanEntry[] = [];
   for (const command of input.commands) {
     const state = stateByName.get(command.name);
-    // A resume is a user-driven return. Restoring the runtime is not one: after
-    // a restart the user is looking at a worktree they did not just choose, and
-    // nothing should start without them.
+    // Suspended means the command was cut short — by leaving the worktree or
+    // by the runtime stopping — and is waiting to come back. Arriving at the
+    // worktree, including the runtime restoring it as active, brings it back.
     if (state?.status === 'suspended') {
-      if (input.cause === 'active_context_changed') {
-        entries.push({ commandName: command.name, reason: 'resume' });
-      }
+      entries.push({ commandName: command.name, reason: 'resume' });
       continue;
     }
     // First start only. Any prior outcome — `exited`, `failed`, `stopped`,
@@ -466,7 +539,7 @@ function logLifecycleError(operation: string) {
 // The pass names a fixed lifecycle hook; `diagnostic` is the config loader's
 // runtime-authored validation message, the same text the drawer shows.
 function logLifecycleSkipped(
-  pass: 'postCreate' | 'preDelete' | 'deactivate' | 'activate',
+  pass: 'postCreate' | 'preDelete' | 'deactivate' | 'activate' | 'keepAlive',
   worktreeId: number,
   diagnostic: string,
 ) {

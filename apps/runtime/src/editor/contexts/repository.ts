@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, type InferSelectModel, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, type InferSelectModel, type SQL } from 'drizzle-orm';
 import { Context, Data, Effect, Layer } from 'effect';
 
 import type { EditorAttemptFailureReason } from '@isagi/contracts';
@@ -158,6 +158,14 @@ const make = Effect.gen(function* () {
       );
       return rows.map((row) => editorContextRow(row.context, row.process));
     }),
+    listHoldingIncarnation: Effect.fn('EditorContextRepository.listHoldingIncarnation')(
+      function* () {
+        const rows = yield* database.use('list_editor_contexts_holding_incarnation', (db) =>
+          selectJoined(db).where(isNotNull(editorContexts.activePtyProcessId)).all(),
+        );
+        return rows.map((row) => editorContextRow(row.context, row.process));
+      },
+    ),
     create: Effect.fn('EditorContextRepository.create')(function* (input) {
       const record = yield* database.use('create_editor_context', (db) => {
         const now = timestamp();
@@ -343,6 +351,8 @@ export class EditorContextRepository extends Context.Service<
     readonly listForIds: (
       ids: readonly number[],
     ) => Effect.Effect<EditorContextRow[], DatabaseError>;
+    /** Every context that holds an incarnation pointer, with its process joined. */
+    readonly listHoldingIncarnation: () => Effect.Effect<EditorContextRow[], DatabaseError>;
     /**
      * Insert with `attempt: none`, no pointer, no endpoint. Concurrent inserts
      * for one worktree are prevented by the per-worktree lock the caller holds;

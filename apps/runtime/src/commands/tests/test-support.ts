@@ -228,6 +228,9 @@ export interface CommandRepositoryOptions {
   // from. Splicing that array — or rewriting the config file — from here is how
   // a test forces a stale-plan race deterministically, with no clocks.
   readonly afterListStates?: ((states: CommandStateRow[]) => void) | undefined;
+  // Runs before every state read, so a test can change config between a pass
+  // selecting a command and its executor re-reading it under the lock.
+  readonly beforeFindState?: (() => void) | undefined;
   // Records re-adoption calls, so a test can prove which incarnation a degraded
   // ownership repair bound the command to and what diagnostic it wrote.
   readonly onReadopt?:
@@ -438,13 +441,17 @@ export function commandRepository(
         return snapshot;
       }),
     findState: (input) =>
-      Effect.succeed(
-        states.find(
-          (state) =>
-            state.worktreeId === input.worktreeId && state.commandName === input.commandName,
-        ) ?? null,
-      ),
+      Effect.sync(() => {
+        options.beforeFindState?.();
+        return (
+          states.find(
+            (state) =>
+              state.worktreeId === input.worktreeId && state.commandName === input.commandName,
+          ) ?? null
+        );
+      }),
     listRunningStates: Effect.succeed([...(options.runningStates ?? [])]),
+    listSuspendedStates: Effect.sync(() => states.filter((state) => state.status === 'suspended')),
     listRunningStatesForWorktree: (worktreeId) =>
       Effect.succeed(
         (options.runningStates ?? []).filter((state) => state.worktreeId === worktreeId),

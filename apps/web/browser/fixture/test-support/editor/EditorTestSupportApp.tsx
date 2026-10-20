@@ -15,6 +15,7 @@ import {
   setActiveSurface,
   setSelection,
 } from '../../../../src/lib/workspace/store.js';
+import { publishTerminalFact } from '../../../../src/lib/workspace/terminal-presentation/facts.js';
 import { TerminalPresentationProvider } from '../../../../src/lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { Surface } from '../../../../src/routes/workspace/Surface.js';
 import { createFixtureRegistry } from '../registry.js';
@@ -55,6 +56,10 @@ export function EditorTestSupportApp({ runtime }: { readonly runtime: EditorRunt
       // `editor_context_changed` event, which invalidates surface detail. This
       // harness has no event socket, so the invalidation is asked for directly.
       refetchSurface: () => runApp(fixtureRegistry, revalidate(surfaceDetailAtom(SURFACE_ID))),
+      // Production publishes this when the runtime-events socket opens; the
+      // harness has no socket, so a reconnect is announced directly.
+      announceRuntimeConnected: () =>
+        publishTerminalFact(fixtureRegistry, { type: 'runtime_connected' }),
     };
     return () => {
       delete window.editorTestSupport;
@@ -132,6 +137,8 @@ declare global {
     editorTestSupport?: EditorRuntimeControls & {
       /** Stand in for the `editor_context_changed` event's invalidation. */
       readonly refetchSurface: () => Promise<void>;
+      /** Stand in for the runtime-events socket opening, as after a runtime restart. */
+      readonly announceRuntimeConnected: () => void;
     };
   }
 }

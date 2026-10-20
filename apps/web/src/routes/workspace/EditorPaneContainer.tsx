@@ -17,6 +17,7 @@ import { disabledQuery } from '../../lib/state/policy.js';
 import { useRegistry } from '../../lib/state/registry.js';
 import { queryError } from '../../lib/state/result.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
+import { terminalFactsAtom } from '../../lib/workspace/terminal-presentation/facts.js';
 import { EditorPane, type EditorDiagnosticsState } from './EditorPane.js';
 import { usePaneChromeActions } from './usePaneChromeActions.js';
 
@@ -117,6 +118,20 @@ export function EditorPaneContainer({
     ensuredRef.current = editorContextId;
     startRef.current('reuse');
   }, [editorContextId]);
+
+  // And one more each time the runtime connection opens. A reconnect may be a
+  // restarted runtime that returned this context to idle because it ended the
+  // Code Server, and the pane stays mounted through that, so the mount-time
+  // `reuse` never fires again. `reuse` launches only an idle context and leaves
+  // a live or settled one alone, so a reconnect to the same runtime is a no-op,
+  // and its invalidation also refreshes a projection the socket missed.
+  useEffect(
+    () =>
+      registry.get(terminalFactsAtom).subscribe((fact) => {
+        if (fact.type === 'runtime_connected') startRef.current('reuse');
+      }),
+    [registry],
+  );
 
   // A *change* of incarnation invalidates the notice: it described a request
   // against a process that no longer exists.

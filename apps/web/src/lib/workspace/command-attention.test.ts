@@ -133,8 +133,9 @@ describe('commandDetailNotice', () => {
   });
 
   it('does not promise that a suspended command restarts when the user comes back', () => {
-    // After a runtime restart the user *is* back and nothing auto-starts. Copy
-    // that said "when you return" would be a lie in exactly the case where the
+    // A suspension visible in the active worktree is one whose resume did not
+    // happen, so the user *is* back and it did not restart. Copy that said
+    // "when you return" would be a lie in exactly the case where the
     // suspension is visible longest.
     const text = commandDetailNotice({ status: 'suspended', presentation: 'configured' })!.text;
 

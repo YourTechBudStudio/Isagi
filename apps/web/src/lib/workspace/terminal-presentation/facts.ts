@@ -3,7 +3,8 @@
  *
  * One channel per app session (registry): the runtime-events connection, workspace commits and the
  * surface-detail read publish here, and the coordinator of the mounted terminal workspace
- * subscribes. Publishing is synchronous and needs no subscriber.
+ * subscribes. Mounted editor panes also listen for `runtime_connected`, to relaunch a Code Server
+ * a restarted runtime ended. Publishing is synchronous and needs no subscriber.
  */
 import { Effect } from 'effect';
 import { Atom, type AtomRegistry } from 'effect/reactivity';

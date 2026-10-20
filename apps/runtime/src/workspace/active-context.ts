@@ -99,13 +99,13 @@ export const activeContext = Effect.gen(function* () {
     publishRestoredActivation: Effect.gen(function* () {
       const state = yield* stateFile.read;
       const worktreeId = state.workspace.activeWorktreeId;
-      if (worktreeId === null) return;
-      const worktree = yield* repository.findWorktree(worktreeId);
-      if (!worktree) return;
+      const worktree = worktreeId === null ? null : yield* repository.findWorktree(worktreeId);
+      // Published even with no active worktree: startup work that is not tied
+      // to the active one, such as resuming keep-alive commands, rides it too.
       yield* internalEvents.publish({
         type: 'worktree_activation_change',
         previousWorktreeId: null,
-        nextWorktreeId: worktree.id,
+        nextWorktreeId: worktree?.id ?? null,
         cause: 'startup_restored',
       });
     }).pipe(Effect.withSpan('WorkspaceService.publishRestoredActivation')),
