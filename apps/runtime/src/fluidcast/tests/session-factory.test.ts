@@ -6,7 +6,7 @@ import type { SubscriptionMessage } from '@yourtechbudstudio/fluidcast-harness/p
 import type { TranscriptEntry } from '@yourtechbudstudio/fluidcast-tool-agent';
 import { Effect, Exit, Layer, Option, Stream } from 'effect';
 
-import { continueContextLabel, continueMessage, continueReminder } from '../continuation.js';
+import { continueCallLabel, continueMessage } from '../continuation.js';
 import { FluidcastSessionUnreadable, FluidcastStartFailed } from '../errors.js';
 import type { FluidcastSessionId } from '../ids.js';
 import { buildFluidcastModels } from '../models.js';
@@ -110,17 +110,23 @@ test('a native session with an answer opens on a continuation start that waits f
       assert.ok(state.start !== null, 'a preloaded start is waiting');
       assert.match(JSON.stringify(state.start), new RegExp(continueMessage));
       assert.match(JSON.stringify(state.start), /The plan has three steps\./);
-      assert.match(JSON.stringify(state.start), new RegExp(continueContextLabel));
+      assert.equal(state.start.call?.label, continueCallLabel);
+      assert.equal(state.start.call?.call.tool, 'forward_agent');
       yield* Effect.sleep('50 millis');
       assert.equal(http.bodies.length, 0, 'nothing generates before Start');
 
       yield* Effect.orDie(built.session.command({ _tag: 'Start' }));
       const request = yield* awaitGeneration(http);
-      // The prompt escapes the reminder's `<context>`, so match the part after it.
-      const reminderTail = continueReminder.slice(continueReminder.indexOf(' above'));
+      const body = JSON.stringify(request);
       assert.ok(
-        JSON.stringify(request).includes(reminderTail),
-        "the continuation reminder reaches the voice's prompt",
+        body.includes(
+          '<tool_result call=\\"call_1\\" tool=\\"forward_agent\\">The plan has three steps.',
+        ),
+        "the last answer reaches the voice's prompt as the answered call's result",
+      );
+      assert.ok(
+        body.includes('Present only the first segment of this result now'),
+        "the preset's reply reminder reaches the voice's prompt",
       );
     }),
   );

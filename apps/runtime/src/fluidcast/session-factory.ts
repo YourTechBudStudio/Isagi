@@ -36,12 +36,7 @@ import {
 import { resolveExecutableOnPath } from '../platform/process/index.js';
 import { LaunchEnvironment } from '../pty-processes/index.js';
 import type { FluidcastConfig } from '../runtime-config/index.js';
-import {
-  continueContextLabel,
-  continueMessage,
-  continueReminders,
-  lastAnswer,
-} from './continuation.js';
+import { continueStart, lastAnswer } from './continuation.js';
 import { FluidcastSessionUnreadable, FluidcastStartFailed } from './errors.js';
 import type { FluidcastSessionId } from './ids.js';
 import type { FluidcastModels } from './models.js';
@@ -144,15 +139,7 @@ export const buildFluidcastSession = (
       ...preset,
       speechFormat: config.speech.format,
       tools: [showTool(), askTool(), tool.tool],
-      ...(answer === undefined
-        ? {}
-        : {
-            reminders: continueReminders(preset.reminders),
-            start: {
-              message: continueMessage,
-              context: { label: continueContextLabel, text: answer },
-            },
-          }),
+      ...(answer === undefined ? {} : { start: continueStart(answer) }),
     };
 
     // The schema is built once per session, from the same speakers and tools as the prompt.

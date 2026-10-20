@@ -1973,13 +1973,13 @@ packages:
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
 
   '@yourtechbudstudio/fluidcast-client@file:.fluidcast-packs/yourtechbudstudio-fluidcast-client-0.0.0.tgz':
-    resolution: {integrity: sha512-XzrUaCKvTYeF6Jo9RFcwr9kmXsMtExR6CVKp/d2tqjmvKU3OCZrvz0GzYm9ljqgYKUQZdkaP8CkI3sggoA9j0Q==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-client-0.0.0.tgz}
+    resolution: {integrity: sha512-RvQZ64iv0OEV2cFV6R/OfZgzSywqnZe4UeWtv238JAI0JMsly/SFUhTWt4losjEhqeAVE7xyGymvJY8IoTnXNQ==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-client-0.0.0.tgz}
     version: 0.0.0
     peerDependencies:
       effect: ^4.0.2
 
   '@yourtechbudstudio/fluidcast-core@file:.fluidcast-packs/yourtechbudstudio-fluidcast-core-0.0.0.tgz':
-    resolution: {integrity: sha512-46khbNIn6g6dwXYTLJ2GKTY5X5TzktoE0xTnl/VmVHpbJNPzxvVqog7SigvO1SQgxXCE2yG+rVWobftM8gswQA==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-core-0.0.0.tgz}
+    resolution: {integrity: sha512-ckmAJf/sPaYMPTxOgZMCkPhioPcDLkgq+b5aG9bQP2QzRN1pfgRL/+N8VNnFmyDwAZJAZ4p+UXKHmYwRrbmxGA==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-core-0.0.0.tgz}
     version: 0.0.0
     peerDependencies:
       '@effect/ai-openai': ^4.0.2
@@ -1989,13 +1989,13 @@ packages:
         optional: true
 
   '@yourtechbudstudio/fluidcast-harness@file:.fluidcast-packs/yourtechbudstudio-fluidcast-harness-0.0.0.tgz':
-    resolution: {integrity: sha512-SE4ajQ8wn0GPjoJDD0u0Z/5LUhzp9bBOjKDVcrxDN1ulxKM2dZeOvNFS15c7p4fcBU4Y0MQ1botiLQZ61u321w==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-harness-0.0.0.tgz}
+    resolution: {integrity: sha512-mMnPK3euCrg/Kb50VofLpZVpi9cdAeBAHW26a1wHh0fhtJlgb4mLYWqLWxn3brw8+aV96QJAJGiI5a4LBgw/5g==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-harness-0.0.0.tgz}
     version: 0.0.0
     peerDependencies:
       effect: ^4.0.2
 
   '@yourtechbudstudio/fluidcast-presets@file:.fluidcast-packs/yourtechbudstudio-fluidcast-presets-0.0.0.tgz':
-    resolution: {integrity: sha512-F+VQAQ3QG+OgwWO91ITugaEpeCRHLsqhZAF9VrFykggpKv38CcG4M5mDHOzole49LwP+Yfb2lkLeMzln9qfl7g==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-presets-0.0.0.tgz}
+    resolution: {integrity: sha512-kyquu2HBvmmDym5476geBZLkGSFNOaBVPBGk9CUR3Ln4ZcQj7xDmsFEy4q4voUkaTQwOU70MaXHdoubNXA5ENA==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-presets-0.0.0.tgz}
     version: 0.0.0
     peerDependencies:
       '@yourtechbudstudio/fluidcast-core': 0.0.0
@@ -2006,7 +2006,7 @@ packages:
       effect: ^4.0.2
 
   '@yourtechbudstudio/fluidcast-react@file:.fluidcast-packs/yourtechbudstudio-fluidcast-react-0.0.0.tgz':
-    resolution: {integrity: sha512-3k1PkwN6SGnuAnG2+gkhyG16SNHJNLL00+m0B7Ht2IE712SiUrrjtGFA2nQJ+uwSLb6wfGq7dfq+q3GHHt8xYQ==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-react-0.0.0.tgz}
+    resolution: {integrity: sha512-PYgwKKh7hsOhPup88Ayf3kKRaMRfEfJXJhLqedD6fZzdBI5dEtXzvMi758nBaIYKqLVgTNBX3Rkap9U4vIJdMw==, tarball: file:.fluidcast-packs/yourtechbudstudio-fluidcast-react-0.0.0.tgz}
     version: 0.0.0
     peerDependencies:
       '@effect/atom-react': ^4.0.2

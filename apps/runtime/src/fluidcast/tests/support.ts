@@ -217,6 +217,7 @@ export const emptySessionState = {
   pendingProgress: [],
   replay: null,
   start: null,
+  started: null,
   paused: false,
   speakers: [{ id: 'host', name: 'Host' }],
   speech: { mimeType: 'audio/ogg' },
