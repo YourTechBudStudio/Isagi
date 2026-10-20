@@ -17,10 +17,14 @@ import { EntityLock } from '../../platform/locks/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import type { PtyAttachment } from '../../pty-processes/testing.js';
 import { fakeTerminateMany } from '../../pty-processes/testing.js';
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/service.js';
+import {
+  AgentSessionError,
+  AgentSessionService,
+  notInTerminalMode,
+} from '../agent-sessions/service.js';
 import { TerminalSessionService } from '../terminal-sessions/service.js';
 import { agentSessionRowForTest } from '../testing.js';
-import { registerPtyApi } from './attach-route.js';
+import { registerPtyApi, websocketError } from './attach-route.js';
 import { SessionLifecycle, type AttachTokenRecord } from './lifecycle.js';
 import type { AgentSessionRow } from './types.js';
 
@@ -208,7 +212,7 @@ test('PTY websocket API joins only the incarnation an automatic re-attach token 
       `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
     );
     const message = await receiveJson(ws);
-    assert.deepEqual(ensured, [{ expectedIncarnation: 'pty:20' }]);
+    assert.deepEqual(ensured, [{ expectedIncarnation: 'pty:20', controllerGeneration: undefined }]);
     assert.deepEqual(message, {
       type: 'error',
       code: 'process_incarnation_stale',
@@ -242,6 +246,8 @@ test('PTY websocket API lets a pending explicit attach land after an automatic r
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     // A Reconnect has claimed; before its socket arrives, a background rejoin claims and attaches.
+    // The rejoin's stale-process check runs under the admission lock: re-acquiring it there would
+    // hang this test at the preamble wait.
     const explicit = await issueAgentAttachToken(runtime, 10);
     const rejoin = await runtime.runPromise(
       Effect.gen(function* () {
@@ -754,6 +760,249 @@ test('input sent before replay ends is applied after replay, in order', async ()
   }
 });
 
+test('PTY websocket API refuses a token issued before the agent changed controllers', async () => {
+  const fastify = Fastify({ logger: false });
+  const controller = fakeAgentController();
+  let attachStarted = false;
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, controller.service),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          onAttachStarted: () => {
+            attachStarted = true;
+          },
+          attachPromise: async () => fakeAttachment(),
+        }),
+      ),
+      sessionLifecycleLayer,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10, {
+      controllerGeneration: 0,
+    });
+    // Terminal → Fluidcast → terminal before the socket arrives: the mode matches again, the controller does not.
+    controller.state = { mode: 'terminal', generation: 2 };
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    assert.deepEqual(await receiveJson(ws), {
+      type: 'error',
+      code: 'process_incarnation_stale',
+      message: 'Agent session 10 changed controllers after this request was made.',
+    });
+    assert.equal(attachStarted, false);
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('PTY websocket API refuses at final admission an attach whose controller changed while it replayed', async () => {
+  const fastify = Fastify({ logger: false });
+  const controller = fakeAgentController();
+  let attachStarted = false;
+  let holderMoved = 0;
+  const replayGate = Effect.runSync(Deferred.make<void>());
+  const replayStarted = Effect.runSync(Deferred.make<void>());
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, controller.service),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          onAttachStarted: () => {
+            attachStarted = true;
+          },
+          attachPromise: async () => fakeAttachment(),
+          replay: () =>
+            Deferred.succeed(replayStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(replayGate)),
+            ),
+        }),
+      ),
+      sessionLifecycleLayer,
+    ),
+  );
+  const agentKey = { kind: 'agent_session', sessionId: 10 } as const;
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    // An earlier viewer holds the session; the refused attach must leave it be.
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const lifecycle = yield* SessionLifecycle;
+        yield* lifecycle.registerActiveAttachment({
+          key: agentKey,
+          incarnation: 'pty:20',
+          handle: {
+            moved: Effect.sync(() => {
+              holderMoved++;
+            }),
+          },
+        });
+      }),
+    );
+    const token = await issueAgentAttachToken(runtime, 10, {
+      controllerGeneration: 0,
+    });
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    const messages = collectJsonMessages(ws);
+    // The token is consumed and the process resolved; the switch lands while the socket replays.
+    await runtime.runPromise(Deferred.await(replayStarted));
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const lifecycle = yield* SessionLifecycle;
+        yield* lifecycle.withRestoreLock(
+          agentKey,
+          Effect.sync(() => {
+            controller.state = { mode: 'fluidcast', generation: 1 };
+          }),
+        );
+      }),
+    );
+    await runtime.runPromise(Deferred.succeed(replayGate, undefined));
+
+    await messages.waitForType('error', 'final admission refusal');
+    assert.deepEqual(messages.items.at(-1), {
+      type: 'error',
+      code: 'process_incarnation_stale',
+      message: notInTerminalMode(10, 'fluidcast').message,
+    });
+    assert.equal(attachStarted, false);
+    assert.equal(holderMoved, 0);
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('PTY websocket API runs a switch queued behind final admission after registration, and its termination ends the attachment', async () => {
+  const fastify = Fastify({ logger: false });
+  const controller = fakeAgentController();
+  const events: string[] = [];
+  const attachGate = Effect.runSync(Deferred.make<void>());
+  const attachStarted = Effect.runSync(Deferred.make<void>());
+  let current: ReturnType<typeof fakeAttachment> | null = null;
+  const pty = fakePtyService({
+    onAttachStarted: () => {
+      Effect.runSync(Deferred.succeed(attachStarted, undefined));
+    },
+    attachPromise: async () => {
+      await Effect.runPromise(Deferred.await(attachGate));
+      current = fakeAttachment(() => events.push('attachment released'));
+      return current;
+    },
+  });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, controller.service),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      // Like `PtyService.terminate`, terminating the process first detaches its active attachment.
+      Layer.succeed(PtyService, {
+        ...pty,
+        terminate: () =>
+          Effect.suspend(() => current?.detach ?? Effect.void).pipe(
+            Effect.as('terminated_live' as const),
+          ),
+      }),
+      sessionLifecycleLayer,
+    ),
+  );
+  const agentKey = { kind: 'agent_session', sessionId: 10 } as const;
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10, {
+      controllerGeneration: 0,
+    });
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    collectJsonMessages(ws);
+    // Final admission holds the agent's lock while the PTY attach is pending.
+    await runtime.runPromise(Deferred.await(attachStarted));
+    const switched = runtime.runPromise(
+      Effect.gen(function* () {
+        const lifecycle = yield* SessionLifecycle;
+        const ptyService = yield* PtyService;
+        yield* lifecycle.withRestoreLock(
+          agentKey,
+          Effect.gen(function* () {
+            events.push(
+              (yield* lifecycle.hasActiveAttachment(agentKey))
+                ? 'switch after registration'
+                : 'switch before registration',
+            );
+            controller.state = { mode: 'fluidcast', generation: 1 };
+            yield* ptyService.terminate({ ptyProcessId: 20 } as never);
+          }),
+        );
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(events, [], 'the switch waits for final admission');
+
+    await runtime.runPromise(Deferred.succeed(attachGate, undefined));
+    await switched;
+    assert.deepEqual(events, ['switch after registration', 'attachment released']);
+  } finally {
+    // Never leave the attach pending, so a failed assertion fails instead of hanging the close.
+    await runtime.runPromise(Deferred.succeed(attachGate, undefined));
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+/**
+ * An agent service whose terminal gates follow a mutable interaction state, as the real service's
+ * do: `ensureActivePtyProcess` and `requireTerminalMode` refuse outside terminal mode or at another
+ * generation than the caller's.
+ */
+function fakeAgentController() {
+  const controller = {
+    state: { mode: 'terminal', generation: 0 } as {
+      mode: 'terminal' | 'fluidcast';
+      generation: number;
+    },
+    service: undefined as unknown as AgentSessionService['Service'],
+  };
+  const requireTerminalMode = (agentSessionId: number, expectedGeneration?: number) =>
+    Effect.suspend(() => {
+      const { mode, generation } = controller.state;
+      if (mode !== 'terminal') return Effect.fail(notInTerminalMode(agentSessionId, mode));
+      if (expectedGeneration !== undefined && expectedGeneration !== generation)
+        return Effect.fail(
+          new AgentSessionError(
+            'interaction_changed',
+            `Agent session ${agentSessionId} changed controllers after this request was made.`,
+          ),
+        );
+      return Effect.succeed(generation);
+    });
+  controller.service = fakeAgentSessionService({
+    requireTerminalMode,
+    ensureActivePtyProcess: (agentSessionId, options) =>
+      requireTerminalMode(agentSessionId, options?.controllerGeneration).pipe(Effect.as(20)),
+  });
+  return controller;
+}
+
 function fakeAgentSessionService(
   overrides: Partial<AgentSessionService['Service']> = {},
 ): AgentSessionService['Service'] {
@@ -761,7 +1010,9 @@ function fakeAgentSessionService(
     startFresh: () => Effect.die('startFresh is not used'),
     get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.succeed(20),
-    activePtyProcessId: () => Effect.succeed(20),
+    requireTerminalMode: () => Effect.succeed(0),
+    withRunningTerminal: (_agentSessionId, _generation, use) => use(20),
+    isControllerLive: () => Effect.succeed(true),
     stopUnlessPlaced: () => Effect.die('stopUnlessPlaced is not used'),
     setInteractionMode: () => Effect.die('agent setInteractionMode is not used'),
     releaseControllers: () => Effect.void,
@@ -840,11 +1091,12 @@ function issueAgentAttachToken(
     ) => Promise<AttachTokenRecord>;
   },
   sessionId: number,
+  options?: { readonly controllerGeneration?: number | undefined },
 ) {
   return runtime.runPromise(
     Effect.gen(function* () {
       const lifecycle = yield* SessionLifecycle;
-      return yield* lifecycle.issueAttachToken({ kind: 'agent_session', sessionId });
+      return yield* lifecycle.issueAttachToken({ kind: 'agent_session', sessionId }, options);
     }),
   );
 }
@@ -976,3 +1228,13 @@ function liveAgentRow(ptyProcessId: number): AgentSessionRow {
     activePtyProcess: { ...fakeRunningProcess(), id: ptyProcessId } as never,
   };
 }
+
+test('an attach refused because the agent left terminal mode, or its controller changed, is a stale incarnation', () => {
+  for (const code of ['not_in_terminal_mode', 'interaction_changed'] as const) {
+    const error = new AgentSessionError(code, `refused: ${code}`);
+    assert.deepEqual(websocketError(error), {
+      code: 'process_incarnation_stale',
+      message: `refused: ${code}`,
+    });
+  }
+});

@@ -1,6 +1,8 @@
 import { useCallback, useMemo } from 'react';
 
+import { isHandoffFailure } from '../../lib/fluidcast/commits.js';
 import {
+  handleDispatchedCommandError,
   useCommandDispatcher,
   useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
@@ -35,7 +37,11 @@ export interface PaneChromeActions {
   readonly focusPane: () => void;
   readonly onSplitRight: () => void;
   readonly onSplitDown: () => void;
-  /** An agent pane's terminal/Fluidcast toggle; a failure toasts, as the cluster's delete does. */
+  /**
+   * An agent pane's terminal/Fluidcast toggle. A refusal before the switch began toasts, as the
+   * cluster's delete does; a handoff failure does not, because the pane re-renders as its failure
+   * panel and that is the feedback.
+   */
   readonly onToggleInteraction: () => void;
   readonly onDelete: (origin: DeleteOrigin) => void;
   /** A delete owning this pane or its surface is running; everything goes inert. */
@@ -76,9 +82,12 @@ export function usePaneChromeActions(input: {
   );
 
   const dispatchPaneCommand = useCallback(
-    (commandId: 'split-pane-right' | 'split-pane-down' | 'toggle-pane-interaction') => {
+    (
+      commandId: 'split-pane-right' | 'split-pane-down' | 'toggle-pane-interaction',
+      onError: (error: unknown) => void = onDispatchError,
+    ) => {
       focusPane();
-      void dispatchCommand(commandId, paneValues).catch(onDispatchError);
+      void dispatchCommand(commandId, paneValues).catch(onError);
     },
     [dispatchCommand, focusPane, onDispatchError, paneValues],
   );
@@ -92,8 +101,12 @@ export function usePaneChromeActions(input: {
   }, [dispatchPaneCommand]);
 
   const onToggleInteraction = useCallback(() => {
-    dispatchPaneCommand('toggle-pane-interaction');
-  }, [dispatchPaneCommand]);
+    dispatchPaneCommand('toggle-pane-interaction', (error) =>
+      isHandoffFailure(error)
+        ? handleDispatchedCommandError(registry, error, { toast: false })
+        : onDispatchError(error),
+    );
+  }, [dispatchPaneCommand, onDispatchError, registry]);
 
   const onDelete = useCallback(
     (origin: DeleteOrigin) => {

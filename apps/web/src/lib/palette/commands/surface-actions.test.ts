@@ -354,12 +354,33 @@ test('toggle-pane-interaction explains a non-agent active pane in the palette in
   assert.equal(formatRuntimeError(error), fluidcastCopy.notAnAgentPane);
 });
 
-for (const [interaction, target] of [
-  [{ mode: 'terminal', fluidcast: 'available' }, 'fluidcast'],
-  [{ mode: 'terminal', fluidcast: 'unavailable' }, 'fluidcast'],
-  [{ mode: 'fluidcast', fluidcastSessionId: 'fc-1' }, 'terminal'],
+for (const [interaction, target, from] of [
+  [
+    { mode: 'terminal', generation: 0, fluidcast: 'available' },
+    'fluidcast',
+    { generation: 0, fluidcastSessionId: null, processIncarnation: 'pty:801' },
+  ],
+  [
+    { mode: 'terminal', generation: 2, fluidcast: 'unavailable' },
+    'fluidcast',
+    { generation: 2, fluidcastSessionId: null, processIncarnation: 'pty:801' },
+  ],
+  [
+    { mode: 'fluidcast', generation: 3, fluidcastSessionId: 'fc-1' },
+    'terminal',
+    { generation: 3, fluidcastSessionId: 'fc-1', processIncarnation: null },
+  ],
+  [
+    {
+      mode: 'fluidcast_failed',
+      generation: 4,
+      failure: { code: 'fluidcast_start_failed', reason: 'executable_not_found' },
+    },
+    'terminal',
+    { generation: 4, fluidcastSessionId: null, processIncarnation: null },
+  ],
 ] as const) {
-  test(`toggle-pane-interaction runs ${interaction.mode}${'fluidcast' in interaction ? `/${interaction.fluidcast}` : ''} -> ${target}`, async (t) => {
+  test(`toggle-pane-interaction runs ${interaction.mode}${'fluidcast' in interaction ? `/${interaction.fluidcast}` : ''} -> ${target} from the read it decided on`, async (t) => {
     const session = surfaceSession(t, agentSurface(interaction));
 
     const preflight = await togglePaneInteractionCommand.preflight?.(
@@ -376,7 +397,57 @@ for (const [interaction, target] of [
         agentSessionId: '701',
         mode: target,
       },
+      payloads: { from },
     });
+  });
+}
+
+const toggleValues = {
+  surfaceId: '501',
+  worktreeId: '10',
+  paneId: '601',
+  agentSessionId: '701',
+  mode: 'fluidcast',
+};
+const terminalOrigin = { generation: 0, fluidcastSessionId: null, processIncarnation: 'pty:801' };
+
+test('toggle-pane-interaction sends the preflight origin as the switch `from`', async (t) => {
+  const calls: unknown[] = [];
+  const registry = makeTestRegistry({
+    api: {
+      setAgentInteractionMode: (agentSessionId, input) =>
+        Effect.sync(() => {
+          calls.push([agentSessionId, input]);
+          return { mode: input.mode, fluidcastSessionId: 'fc-1' };
+        }),
+    },
+  });
+  t.after(() => registry.dispose());
+  const session = paletteTestSession(registry);
+
+  await togglePaneInteractionCommand.run(toggleValues, toggleContext(session, ['agent_session']), {
+    from: terminalOrigin,
+  });
+
+  assert.deepEqual(calls, [[701, { mode: 'fluidcast', from: terminalOrigin }]]);
+});
+
+for (const [label, payloads] of [
+  ['no payloads', undefined],
+  ['no origin', {}],
+  ['a malformed origin', { from: { generation: -1, fluidcastSessionId: null } }],
+] as const) {
+  test(`toggle-pane-interaction does nothing with ${label}`, async (t) => {
+    const registry = makeTestRegistry({ api: {} });
+    t.after(() => registry.dispose());
+    const session = paletteTestSession(registry);
+
+    // The fake API dies on any call, so reaching the runtime would reject.
+    await togglePaneInteractionCommand.run(
+      toggleValues,
+      toggleContext(session, ['agent_session']),
+      payloads,
+    );
   });
 }
 
@@ -395,9 +466,9 @@ for (const reason of ['disabled', 'invalid_config', 'harness_unsupported'] as co
     const calls: Array<readonly [number, string]> = [];
     const registry = makeTestRegistry({
       api: {
-        setAgentInteractionMode: (agentSessionId, mode) =>
+        setAgentInteractionMode: (agentSessionId, input) =>
           Effect.suspend(() => {
-            calls.push([agentSessionId, mode]);
+            calls.push([agentSessionId, input.mode]);
             return Effect.fail(refusal);
           }),
       },
@@ -415,6 +486,7 @@ for (const reason of ['disabled', 'invalid_config', 'harness_unsupported'] as co
           mode: 'fluidcast',
         },
         toggleContext(session, ['agent_session']),
+        { from: terminalOrigin },
       ),
     ).then(
       () => null,

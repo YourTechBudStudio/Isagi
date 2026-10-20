@@ -262,6 +262,10 @@ test('every interaction-mode refusal has its own copy, refined by reason where i
     copyFor('fluidcast_session_unreadable', 422, { reason: 'SessionUnreadable' }),
     copyFor('fluidcast_start_failed', 500, { reason: 'executable_not_found' }),
     copyFor('fluidcast_start_failed', 500, { reason: 'session_build_failed' }),
+    copyFor('fluidcast_start_failed', 500, { reason: 'instrumentation_failed' }),
+    copyFor('agent_terminal_stop_failed', 500),
+    copyFor('agent_interaction_changed', 409),
+    copyFor('surface_rejected', 409, { reason: 'process_incarnation_stale' }),
   ];
 
   for (const line of lines) assert.notEqual(line, generic);

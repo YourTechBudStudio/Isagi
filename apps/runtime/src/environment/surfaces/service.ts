@@ -1,6 +1,7 @@
 import { Cause, Context, Effect, Layer } from 'effect';
 
 import type {
+  AgentSessionInteraction as AgentSessionInteractionProjection,
   CreateSurfaceOutput,
   DeletePaneOutput,
   DeleteSurfaceOutput,
@@ -625,6 +626,8 @@ const claimPaneSession = Effect.fnUntraced(function* (
     paneId: target.pane.id,
     session,
     expectedIncarnation: claim.expectedProcessIncarnation,
+    expectedInteractionGeneration:
+      claim.action === 'claim_agent_session' ? claim.expectedInteractionGeneration : undefined,
   });
   yield* publishReplacedPaneSessionChange(deps.eventBus, target.pane, session);
   return output;
@@ -680,6 +683,11 @@ const assignPaneSession = Effect.fnUntraced(function* (
      * a process.
      */
     readonly expectedIncarnation?: string | undefined;
+    /**
+     * Set by an agent claim: the interaction generation it was made under. The claim is refused,
+     * before it binds, displaces or issues anything, once the agent's controller has changed.
+     */
+    readonly expectedInteractionGeneration?: number | undefined;
   },
 ) {
   const { repository, lifecycle, eventBus } = deps;
@@ -688,10 +696,25 @@ const assignPaneSession = Effect.fnUntraced(function* (
   // `stopUnlessPlaced`: whoever decides a session is unplaced decides it
   // before or after this binding, never across it. An automatic re-attach's
   // preconditions are checked under it too, so a process that exits or a
-  // session that moves while the claim waits is seen, not overwritten.
-  const { claimed, rejoined } = yield* lifecycle.withRestoreLock(
+  // session that moves while the claim waits is seen, not overwritten. So is
+  // the agent's controller: displacement and the token it stamps are decided
+  // under the same lock a mode switch takes.
+  const { claimed, rejoined, attachToken } = yield* lifecycle.withRestoreLock(
     key,
     Effect.gen(function* () {
+      // First, so a claim made under an earlier controller has no side effect.
+      const generation =
+        input.session.kind === 'agent_session'
+          ? deps.control(input.session.sessionId).generation
+          : null;
+      if (
+        input.expectedInteractionGeneration !== undefined &&
+        input.expectedInteractionGeneration !== generation
+      )
+        return yield* staleClaim(
+          input,
+          `Agent session ${input.session.sessionId} changed controllers after this claim was made.`,
+        );
       const rejoin =
         input.expectedIncarnation === undefined
           ? null
@@ -701,7 +724,14 @@ const assignPaneSession = Effect.fnUntraced(function* (
         sessionKind: input.session.kind,
         sessionId: input.session.sessionId,
       });
-      return { claimed: outcome, rejoined: rejoin };
+      if (outcome !== 'claimed') return { claimed: outcome, rejoined: rejoin, attachToken: null };
+      // A rejoin superseded only a lingering attachment; it never takes the holder's.
+      if (rejoin === null) yield* lifecycle.supersedeAttachment(key);
+      const token = yield* lifecycle.issueAttachToken(key, {
+        expectedIncarnation: rejoin ?? undefined,
+        controllerGeneration: generation ?? undefined,
+      });
+      return { claimed: 'claimed' as const, rejoined: rejoin, attachToken: token };
     }),
   );
   if (claimed !== 'claimed')
@@ -716,11 +746,6 @@ const assignPaneSession = Effect.fnUntraced(function* (
       paneId: input.paneId,
       sessionId: input.session.sessionId,
     });
-  // A rejoin superseded only a lingering attachment under the lock; it never takes the holder's.
-  if (rejoined === null) yield* lifecycle.supersedeAttachment(key);
-  const attachToken = yield* lifecycle.issueAttachToken(key, {
-    expectedIncarnation: rejoined ?? undefined,
-  });
   // Nobody chose this pane when a rejoin happens on its own, so the saved focus stays the user's.
   if (rejoined === null)
     yield* repository.setEnvironmentFocus({
@@ -825,6 +850,19 @@ const ensureTerminalSessionInWorktree = Effect.fnUntraced(
     ),
 );
 
+/** A claim whose expectation (a live process, or the agent's controller) no longer holds. */
+const staleClaim = (
+  input: { readonly worktreeId: number; readonly paneId: number; readonly session: PlacedSession },
+  message: string,
+) =>
+  new SurfaceError({
+    code: 'process_incarnation_stale',
+    message,
+    worktreeId: input.worktreeId,
+    paneId: input.paneId,
+    sessionId: input.session.sessionId,
+  });
+
 /**
  * An automatic re-attach's preconditions, checked under the session's lock: the session is still
  * placed in this pane (a rejoin never relocates it), it still runs `expected` live, and no other
@@ -842,17 +880,10 @@ const expectAutomaticRejoin = Effect.fnUntraced(
     expected: string,
   ) {
     const { session } = input;
-    const stale = (message: string) =>
-      new SurfaceError({
-        code: 'process_incarnation_stale',
-        message,
-        worktreeId: input.worktreeId,
-        paneId: input.paneId,
-        sessionId: session.sessionId,
-      });
     const pane = yield* deps.repository.findPane(input.paneId);
     if (pane?.sessionKind !== session.kind || pane.sessionId !== session.sessionId)
-      return yield* stale(
+      return yield* staleClaim(
+        input,
         `Session ${session.sessionId} is no longer placed in pane ${input.paneId}.`,
       );
     const live =
@@ -863,7 +894,10 @@ const expectAutomaticRejoin = Effect.fnUntraced(
           )
         : sessionProcessIncarnation(yield* deps.terminals.get(session.sessionId));
     if (live === null || live !== expected)
-      return yield* stale(`Session ${session.sessionId} is no longer running ${expected}.`);
+      return yield* staleClaim(
+        input,
+        `Session ${session.sessionId} is no longer running ${expected}.`,
+      );
     yield* deps.lifecycle.displaceObsoleteAttachment(
       { kind: session.kind, sessionId: session.sessionId },
       live,
@@ -1228,6 +1262,29 @@ function publishSessionChanged(
   }
 }
 
+/** The agent's controller as panes show it, each mode with the record's generation. */
+function projectInteraction(
+  control: AgentControl,
+  fluidcastAvailability: () => 'available' | 'unavailable',
+): AgentSessionInteractionProjection {
+  switch (control.mode) {
+    case 'terminal':
+      return {
+        mode: 'terminal',
+        generation: control.generation,
+        fluidcast: fluidcastAvailability(),
+      };
+    case 'fluidcast':
+      return {
+        mode: 'fluidcast',
+        generation: control.generation,
+        fluidcastSessionId: control.fluidcastSessionId,
+      };
+    case 'fluidcast_failed':
+      return { mode: 'fluidcast_failed', generation: control.generation, failure: control.failure };
+  }
+}
+
 function sessionForPane(
   sources: {
     readonly agentSessions: readonly AgentSessionRow[];
@@ -1258,13 +1315,9 @@ function sessionForPane(
         statusReason: state.statusReason,
         recoveryAction: state.recoveryAction,
         processIncarnation: sessionProcessIncarnation(agent, control),
-        interaction:
-          control.mode === 'fluidcast'
-            ? { mode: 'fluidcast', fluidcastSessionId: control.fluidcastSessionId }
-            : {
-                mode: 'terminal',
-                fluidcast: sources.fluidcastAvailable(agent.harness) ? 'available' : 'unavailable',
-              },
+        interaction: projectInteraction(control, () =>
+          sources.fluidcastAvailable(agent.harness) ? 'available' : 'unavailable',
+        ),
         diagnosticCode: state.diagnosticCode,
         diagnosticDetail: state.diagnosticDetail,
         createdAt: agent.createdAt,

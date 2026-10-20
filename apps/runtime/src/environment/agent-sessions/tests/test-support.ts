@@ -317,7 +317,7 @@ export const seedFluidcastMode = Effect.fnUntraced(function* (
   const interaction = yield* AgentSessionInteraction;
   const bus = yield* InternalEvents;
   const started = yield* fluidcast.service.start({ ...input, cwd: '/repo/isagi' });
-  interaction.set(input.agentSessionId, started);
+  interaction.setFluidcast(input.agentSessionId, started);
   yield* bus.publish({
     type: 'agent_session_execution_changed',
     agentSessionId: input.agentSessionId,

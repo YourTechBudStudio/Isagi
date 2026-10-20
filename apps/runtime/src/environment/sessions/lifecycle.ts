@@ -25,6 +25,11 @@ export interface AttachTokenRecord {
    * process, never launch one; `null` admits the ordinary attach, which may.
    */
   readonly expectedIncarnation: Incarnation | null;
+  /**
+   * The agent interaction generation of the claim that issued this token; `null` for terminal
+   * sessions. The attach it admits is refused once the agent's controller has changed.
+   */
+  readonly controllerGeneration: number | null;
 }
 
 export class SessionLifecycleError extends Data.TaggedError('SessionLifecycleError')<{
@@ -92,6 +97,7 @@ const make = Effect.gen(function* () {
           issuedAt: now,
           expiresAt: now + attachTokenTtlMs,
           expectedIncarnation: options?.expectedIncarnation ?? null,
+          controllerGeneration: options?.controllerGeneration ?? null,
         } satisfies AttachTokenRecord;
         tokens.set(record.token, record);
         sessionTokens.add(record.token);
@@ -186,7 +192,10 @@ export class SessionLifecycle extends Context.Service<
     ) => Effect.Effect<A, E, R>;
     readonly issueAttachToken: (
       key: SessionLifecycleKey,
-      options?: { readonly expectedIncarnation?: Incarnation | undefined },
+      options?: {
+        readonly expectedIncarnation?: Incarnation | undefined;
+        readonly controllerGeneration?: number | undefined;
+      },
     ) => Effect.Effect<AttachTokenRecord>;
     readonly consumeAttachToken: (input: {
       readonly key: SessionLifecycleKey;

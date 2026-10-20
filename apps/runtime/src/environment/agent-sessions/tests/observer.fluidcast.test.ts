@@ -134,7 +134,7 @@ test('an open SDK turn dies on the switch back to terminal, and a late SDK recor
         yield* changes.take;
 
         // Back to terminal, as the switch does it: the session ends, then a new PTY launches.
-        interaction.delete(10);
+        interaction.setTerminal(10);
         yield* fluidcast.service.stop(started.fluidcastSessionId);
         const since = new Date(origin + 5_000).toISOString();
         yield* database.use('test_relaunch_pty', (db) => {
@@ -334,6 +334,96 @@ test('Codex under Fluidcast control promotes its thread from the SDK incarnation
       readFileSync(join(root, 'sessions', 'agent-sessions', '10', 'harness.json'), 'utf8'),
     ) as { readonly harnessSessionId: string | null };
     assert.equal(metadata.harnessSessionId, 'sdk-thread');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('after a stop failure and Back to terminal, the reused PTY keeps its Codex turns attributed', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-stop-failed-codex-'));
+  try {
+    // PTY 20 is the terminal whose stop failed: still running, its interval never closed.
+    await seedActiveAgentSession(root, 'codex');
+    const rollout = join(root, 'rollout.jsonl');
+    const ledger = prepareAgent(root, 'pty-thread');
+    const edges = await Effect.runPromise(
+      Effect.gen(function* () {
+        const observer = yield* HarnessLedgerObserver;
+        const interaction = yield* AgentSessionInteraction;
+        const bus = yield* InternalEvents;
+        const changes = yield* tapInternalEvents(['agent_session_changed']);
+        const origin = Date.now() + 1_000;
+        appendFileSync(
+          ledger,
+          hookRecord(
+            'codex',
+            'pty-thread',
+            'SessionStart',
+            0,
+            ptyMark(20),
+            { session_id: 'pty-thread', transcript_path: rollout },
+            10,
+            origin,
+          ),
+        );
+        writeFileSync(
+          rollout,
+          rolloutLines(
+            [
+              ['session_meta', 0.5, { id: 'pty-thread' }],
+              ['event_msg', 1, { type: 'task_started', turn_id: 'turn-1' }],
+            ],
+            origin,
+          ),
+        );
+        // The switch records the stop failure the way the service does (R1): a new record and
+        // `agent_session_changed`, but no interval.
+        interaction.setFailed(10, { code: 'terminal_stop_failed', diagnostic: 'PTY kill error' });
+        yield* bus.publish({ type: 'agent_session_changed', agentSessionId: 10 });
+        yield* changes.take;
+        yield* pollHarnessLedgerObserverForTest(10);
+        // Back to terminal keeps the running PTY: again no interval.
+        interaction.setTerminal(10);
+        yield* bus.publish({ type: 'agent_session_changed', agentSessionId: 10 });
+        yield* changes.take;
+        appendFileSync(
+          rollout,
+          rolloutLines(
+            [
+              ['event_msg', 2, { type: 'task_complete', turn_id: 'turn-1' }],
+              ['event_msg', 3, { type: 'task_started', turn_id: 'turn-2' }],
+            ],
+            origin,
+          ),
+        );
+        yield* pollHarnessLedgerObserverForTest(10);
+        // The reused PTY ends later: its open turn is attributed to it, so it dies with it.
+        yield* (yield* RuntimeDatabase).use('test_stop_reused_pty', (db) =>
+          db
+            .update(ptyProcesses)
+            .set({ status: 'killed', statusReason: 'user_requested' })
+            .where(eq(ptyProcesses.id, 20))
+            .run(),
+        );
+        yield* bus.publish({
+          type: 'agent_session_execution_changed',
+          agentSessionId: 10,
+          change: {
+            _tag: 'switched',
+            interval: { incarnation: null, since: new Date(origin + 4_000).toISOString() },
+          },
+        });
+        yield* changes.take;
+        yield* pollHarnessLedgerObserverForTest(10);
+        return yield* observer.getTurnEdges(10);
+      }).pipe(Effect.scoped, Effect.provide(testLayer(root))),
+    );
+    assert.deepEqual(edgeSummary(edges), [
+      ['turn_started', 1, null],
+      ['turn_ended', 1, null],
+      ['turn_started', 3, null],
+      ['turn_failed', 3, 'session_died'],
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

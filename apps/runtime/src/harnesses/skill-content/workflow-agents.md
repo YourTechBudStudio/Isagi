@@ -16,6 +16,8 @@ Read [Workflow authoring](workflows.md) for graph structure and package checks. 
 
 Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success.
 
+`sendAgentPrompt` types into the agent's terminal, so it fails as an ordinary operation failure while the agent's pane is in Fluidcast mode or its switch to Fluidcast failed; once the pane is switched back to the terminal, Retry sends again (see [Retry](workflow-recovery.md#retry)). A prompt whose turn had not started when the pane switched away keeps waiting; cancel the run to get out.
+
 Every spawn, send, headless launch and pane close is recorded with its full request. When an agent turn is delivered, Isagi records the agent's last reply on the operation that sent the prompt, so the run's dialogue can be read later without author code. A reply that cannot be read is recorded as unavailable and the run continues.
 
 ## Which turn answers a wait

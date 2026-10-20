@@ -147,14 +147,15 @@ export function deriveAgentSessionState(
 /**
  * The session's live terminal process incarnation, the opaque token clients bind a terminal
  * presentation to (ADR 0006). `null` whenever no terminal process is live: none launched yet, the
- * last one stopped, or (passing the agent's `control`) the agent is under Fluidcast, whose worker
- * streams no terminal.
+ * last one stopped, or (passing the agent's `control`) the agent is not in terminal mode. Under
+ * Fluidcast the worker streams no terminal; after a failed switch no terminal is offered, even
+ * one whose stop failed and that is still running.
  */
 export function sessionProcessIncarnation(
   session: AgentSessionRow | TerminalSessionRow,
   control?: AgentControl,
 ): Incarnation | null {
-  if (control?.mode === 'fluidcast') return null;
+  if (control !== undefined && control.mode !== 'terminal') return null;
   const process = session.activePtyProcess;
   if (session.activePtyProcessId === null || process === null) return null;
   return process.status === 'starting' || process.status === 'running'

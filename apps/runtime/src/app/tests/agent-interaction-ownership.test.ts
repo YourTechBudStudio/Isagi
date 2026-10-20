@@ -14,6 +14,7 @@ import {
   HarnessObservationTargetsLayer,
   SurfaceService,
 } from '../../environment/index.js';
+import { sessionProcessIncarnation } from '../../environment/sessions/status.js';
 import {
   insertAgentSessionForWorktree,
   insertWorktree,
@@ -115,8 +116,22 @@ const placedAgent = (worktreeId: number) =>
     };
   });
 
+/** A switch made from the agent's current state, built by the client's rule for `from`. */
 const switchTo = (agentSessionId: number, mode: 'terminal' | 'fluidcast') =>
-  AgentSessionService.use((agents) => agents.setInteractionMode({ agentSessionId, mode }));
+  Effect.gen(function* () {
+    const agents = yield* AgentSessionService;
+    const control = (yield* AgentSessionInteraction).control(agentSessionId);
+    const row = yield* agents.get(agentSessionId).pipe(Effect.orDie);
+    return yield* agents.setInteractionMode({
+      agentSessionId,
+      mode,
+      from: {
+        generation: control.generation,
+        fluidcastSessionId: control.mode === 'fluidcast' ? control.fluidcastSessionId : null,
+        processIncarnation: sessionProcessIncarnation(row, control),
+      },
+    });
+  });
 
 function assertRefused(error: unknown, code: string) {
   assert.ok(error instanceof AgentSessionError, `expected an AgentSessionError, got ${error}`);
@@ -323,6 +338,7 @@ test(
             action: 'claim_agent_session',
             paneId: target.paneId,
             agentSessionId: agent.agentSessionId,
+            expectedInteractionGeneration: 0,
           },
         });
         return { whileRetained, switched: yield* switchTo(agent.agentSessionId, 'fluidcast') };
@@ -441,7 +457,7 @@ test('every production consumer shares the one AgentSessionInteraction instance'
             });
             const interaction = Context.get(context, AgentSessionInteraction);
             const fluidcastSessionId = 'fc-not-started' as FluidcastSessionId;
-            interaction.set(agentSessionId, {
+            interaction.setFluidcast(agentSessionId, {
               fluidcastSessionId,
               since: new Date().toISOString(),
             });
@@ -469,6 +485,7 @@ test('every production consumer shares the one AgentSessionInteraction instance'
     // Surfaces sees Fluidcast control; no session runs, so the worker reads as ended.
     assert.deepEqual(result.pane?.interaction, {
       mode: 'fluidcast',
+      generation: 1,
       fluidcastSessionId: result.fluidcastSessionId,
     });
     assert.equal(result.pane?.status, 'failed');

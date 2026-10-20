@@ -219,6 +219,8 @@ export function sessionCreationLayerFor(world: ReturnType<typeof sessionWorldLay
     world.artifacts,
     world.surfaceRepository,
     world.agentService,
+    // The same interaction the agent service and surfaces read, so a test can read its state.
+    world.interaction,
     world.terminalService,
     surfaceService,
   );

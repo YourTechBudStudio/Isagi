@@ -228,7 +228,13 @@ export function claimInputForSession(
 ): PaneSessionClaimInput {
   const expected = expectedProcessIncarnation === undefined ? {} : { expectedProcessIncarnation };
   return session.kind === 'agent_session'
-    ? { action: 'claim_agent_session', paneId, agentSessionId: session.id, ...expected }
+    ? {
+        action: 'claim_agent_session',
+        paneId,
+        agentSessionId: session.id,
+        expectedInteractionGeneration: session.interaction.generation,
+        ...expected,
+      }
     : { action: 'claim_terminal_session', paneId, terminalSessionId: session.id, ...expected };
 }
 
