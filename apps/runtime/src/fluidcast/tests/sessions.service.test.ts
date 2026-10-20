@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Context, Effect, Exit, Fiber, Layer, Scope } from 'effect';
+import { Context, Effect, Exit, Fiber, Layer, Redacted, Scope } from 'effect';
 
 import { makeLogCapture } from '../../../test/test-support.js';
 import {
@@ -11,7 +11,7 @@ import {
   FluidcastUnavailable,
 } from '../errors.js';
 import type { FluidcastSessionId } from '../ids.js';
-import { FluidcastSessions } from '../sessions.service.js';
+import { FluidcastSessions, type FluidcastSessionBuilder } from '../sessions.service.js';
 import { fakeBuiltSession, fakeSessionsLayer, fluidcastConfig } from './support.js';
 
 const startInput = {
@@ -222,6 +222,59 @@ test('a disabled or invalid section refuses to start', async () => {
   await withSessions(
     { fakes: [], state: { status: 'ready', config: fluidcastConfig() } },
     ({ sessions }) => Effect.sync(() => assert.equal(sessions.availability, 'ready')),
+  );
+});
+
+test('env keys resolve against the launch environment before any session builds', async () => {
+  const sentinel = 'sk-isagi-SENTINEL-env-4b1d';
+  const config = fluidcastConfig({ apiKey: Redacted.make('env.FLUIDCAST_LM_KEY') });
+  const speech = { ...config.speech, apiKey: Redacted.make('literal-speech-key') };
+  const keys: Array<{ languageModel?: string; speech: string }> = [];
+  const builder: FluidcastSessionBuilder = (_input, dependencies) =>
+    Effect.gen(function* () {
+      const key = dependencies.config.languageModel.apiKey;
+      keys.push({
+        ...(key === undefined ? {} : { languageModel: Redacted.value(key) }),
+        speech: Redacted.value(dependencies.config.speech.apiKey),
+      });
+      return yield* Effect.die('built enough');
+    });
+  await withSessions(
+    {
+      fakes: [],
+      builder,
+      state: { status: 'ready', config: { ...config, speech } },
+      environment: { FLUIDCAST_LM_KEY: sentinel },
+    },
+    ({ sessions }) =>
+      Effect.gen(function* () {
+        assert.equal(sessions.availability, 'ready');
+        yield* Effect.exit(sessions.start(startInput));
+      }),
+  );
+  assert.deepEqual(keys, [{ languageModel: sentinel, speech: 'literal-speech-key' }]);
+});
+
+test('an unset env key variable makes the section invalid and is logged by name only', async () => {
+  const config = fluidcastConfig();
+  const speech = { ...config.speech, apiKey: Redacted.make('env.FLUIDCAST_SPEECH_KEY') };
+  await withSessions(
+    {
+      fakes: [fakeBuiltSession()],
+      state: { status: 'ready', config: { ...config, speech } },
+      environment: { FLUIDCAST_SPEECH_KEY: '' },
+    },
+    ({ sessions, fixture, logs }) =>
+      Effect.gen(function* () {
+        assert.equal(sessions.availability, 'invalid');
+        const error = yield* Effect.flip(sessions.start(startInput));
+        assert.ok(error instanceof FluidcastUnavailable);
+        assert.equal(error.reason, 'invalid_config');
+        assert.equal(fixture.built.length, 0);
+        const warning = logs.find((line) => line.message.includes('fluidcast key variables unset'));
+        assert.ok(warning);
+        assert.match(JSON.stringify(warning), /fluidcast\.speech\.apiKey: FLUIDCAST_SPEECH_KEY/);
+      }),
   );
 });
 

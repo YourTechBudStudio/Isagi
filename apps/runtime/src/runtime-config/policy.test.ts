@@ -296,3 +296,67 @@ test('an invalid enabled fluidcast section is invalid with issue paths and never
   }).fluidcast;
   assert.equal(missingKey.status, 'invalid');
 });
+
+test('fluidcast accepts the anthropic provider with its own effort, temperature and options', () => {
+  const anthropic = { provider: 'anthropic', apiKey: 'sk-ant-test', model: 'claude-test' };
+  const state = parseRuntimeConfig({
+    fluidcast: {
+      ...fluidcast,
+      languageModel: {
+        ...anthropic,
+        reasoningEffort: 'max',
+        temperature: 1,
+        maxOutputTokens: 4000,
+        structuredOutput: true,
+        fast: true,
+      },
+    },
+  }).fluidcast;
+  assert.ok(state.status === 'ready');
+  assert.ok(state.config.languageModel.provider === 'anthropic');
+  assert.equal(state.config.languageModel.reasoningEffort, 'max');
+  assert.equal(state.config.languageModel.structuredOutput, true);
+  assert.equal(state.config.languageModel.fast, true);
+
+  const defaults = parseRuntimeConfig({
+    fluidcast: { ...fluidcast, languageModel: anthropic },
+  }).fluidcast;
+  assert.ok(defaults.status === 'ready');
+  assert.ok(defaults.config.languageModel.provider === 'anthropic');
+  assert.equal(defaults.config.languageModel.structuredOutput, undefined);
+  assert.equal(defaults.config.languageModel.fast, undefined);
+
+  for (const languageModel of [
+    { ...anthropic, reasoningEffort: 'minimal' },
+    { ...anthropic, temperature: 1.5 },
+    { provider: 'anthropic', model: 'claude-test' },
+  ]) {
+    assert.equal(
+      parseRuntimeConfig({ fluidcast: { ...fluidcast, languageModel } }).fluidcast.status,
+      'invalid',
+    );
+  }
+});
+
+test('fluidcast keys may name an environment variable, which parsing leaves unresolved', () => {
+  const state = parseRuntimeConfig({
+    fluidcast: {
+      ...fluidcast,
+      languageModel: { ...fluidcast.languageModel, apiKey: 'env.OPENAI_API_KEY' },
+      speech: { ...fluidcast.speech, apiKey: 'ENV.NOT_A_REFERENCE' },
+    },
+  }).fluidcast;
+  assert.ok(state.status === 'ready');
+  assert.equal(Redacted.value(state.config.languageModel.apiKey!), 'env.OPENAI_API_KEY');
+  // Only the lowercase prefix is a reference; anything else is the key as written.
+  assert.equal(Redacted.value(state.config.speech.apiKey), 'ENV.NOT_A_REFERENCE');
+
+  for (const apiKey of ['env.', 'env.1KEY', 'env.MY-KEY', 'env.A B']) {
+    assert.deepEqual(
+      parseRuntimeConfig({ fluidcast: { ...fluidcast, speech: { ...fluidcast.speech, apiKey } } })
+        .fluidcast,
+      { status: 'invalid', issuePaths: ['fluidcast.speech.apiKey'] },
+      apiKey,
+    );
+  }
+});

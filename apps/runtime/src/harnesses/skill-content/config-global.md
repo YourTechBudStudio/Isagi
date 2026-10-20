@@ -115,6 +115,7 @@ The language model, which writes the voice's replies, and the speech connection 
 
 - `languageModel.provider: openai` uses the OpenAI Responses API and requires `apiKey`.
 - `languageModel.provider: openai-compatible` uses any OpenAI-compatible Chat Completions API, such as a local model server at `baseUrl`; `apiKey` is optional. Set `structuredOutput: true` when a local model drifts from the reply format: Isagi then asks the server to constrain every reply to Fluidcast's output JSON Schema.
+- `languageModel.provider: anthropic` uses Anthropic's Messages API and requires `apiKey`. Its `reasoningEffort` is `low`, `medium`, `high`, `xhigh` or `max`, and its `temperature` runs from 0 through 1; newer Claude models reject any temperature, so leave it unset for them. `structuredOutput: true` asks the API to constrain every reply to Fluidcast's output JSON Schema; it is off by default. `fast: true` requests fast mode, which generates faster at a higher price and only some models accept; it is off by default.
 - `languageModel` also accepts `reasoningEffort`, `temperature` and `maxOutputTokens`; missing values use the API's defaults.
 - `speech` targets an OpenAI-compatible `/audio/speech` API. `format` is `opus` (the default), `mp3` or `wav`.
 - `preset` picks the Guided Walkthrough profile, `detailed` (the default) or `compact`, and the voice: `voice.name` as the speech API knows it, plus optional delivery `instructions`.
@@ -138,6 +139,23 @@ fluidcast:
       name: af_sky
       instructions: Calm and unhurried.
 ```
+
+```yaml
+fluidcast:
+  enabled: true
+  languageModel:
+    provider: anthropic
+    apiKey: env.ANTHROPIC_API_KEY
+    model: claude-sonnet-5-5
+  speech:
+    apiKey: env.OPENAI_API_KEY
+    model: gpt-4o-mini-tts
+  preset:
+    voice:
+      name: alloy
+```
+
+Any `apiKey` may be written as `env.NAME` to read the key from the `NAME` environment variable instead of writing it into the file. Isagi reads the variable from your login shell's environment, the same one agent terminals get, when it starts. Only the lowercase `env.` prefix is a reference, and `NAME` must be a valid variable name. If the variable is unset or empty, voice mode is unavailable and the runtime log names the field and the variable, never a value.
 
 Keys written inline stay in the runtime: Isagi never sends them to the app, and its errors and logs never print config text. Isagi reads this section at startup, so changes take effect only after Isagi restarts. An invalid enabled section never stops Isagi from starting; voice mode is unavailable until it is fixed, and the runtime log names the invalid fields.
 

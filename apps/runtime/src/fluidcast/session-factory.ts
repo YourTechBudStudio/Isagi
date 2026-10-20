@@ -36,6 +36,7 @@ import {
 import { resolveExecutableOnPath } from '../platform/process/index.js';
 import { LaunchEnvironment } from '../pty-processes/index.js';
 import type { FluidcastConfig } from '../runtime-config/index.js';
+import { withAnthropicStructuredOutput } from './anthropic-structured-output.js';
 import { continueStart, lastAnswer } from './continuation.js';
 import { FluidcastSessionUnreadable, FluidcastStartFailed } from './errors.js';
 import type { FluidcastSessionId } from './ids.js';
@@ -143,12 +144,14 @@ export const buildFluidcastSession = (
     };
 
     // The schema is built once per session, from the same speakers and tools as the prompt.
-    const voice = models.structuredOutput
-      ? withStructuredOutput(
-          models.languageModel,
-          outputJsonSchema({ speakers: sessionConfig.speakers, tools: sessionConfig.tools }),
-        )
-      : models.languageModel;
+    const outputSchema = () =>
+      outputJsonSchema({ speakers: sessionConfig.speakers, tools: sessionConfig.tools });
+    const voice =
+      models.structuredOutput === 'openai-compatible'
+        ? withStructuredOutput(models.languageModel, outputSchema())
+        : models.structuredOutput === 'anthropic'
+          ? withAnthropicStructuredOutput(models.languageModel, outputSchema())
+          : models.languageModel;
     // Built fresh per session: layers are memoized by identity.
     const context = yield* Layer.build(
       harnessLayer(sessionConfig).pipe(

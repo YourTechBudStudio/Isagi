@@ -72,7 +72,12 @@ export const runtimeTerminalSettingsSchema = Schema.Struct({
     'Global terminal presentation history and cache retention settings. Missing fields use defaults. Changes require restarting Isagi.',
 });
 
-const fluidcastSecret = Schema.RedactedFromValue(Schema.String);
+// A value starting with `env.` names an environment variable; anything else is the key itself.
+const fluidcastSecret = Schema.RedactedFromValue(
+  Schema.String.check(Schema.isPattern(/^(?!env\.)|^env\.[A-Za-z_][A-Za-z0-9_]*$/)),
+);
+const fluidcastSecretDescription =
+  'It stays in the runtime. Write env.NAME, for example env.OPENAI_API_KEY, to read it from the NAME environment variable of your login shell instead.';
 
 const fluidcastLanguageModelCommon = {
   model: Schema.NonEmptyString.annotate({
@@ -103,7 +108,7 @@ export const runtimeFluidcastLanguageModelSchema = Schema.Union([
       description: 'The OpenAI Responses API.',
     }),
     apiKey: fluidcastSecret.annotate({
-      description: 'API key for the language-model API. It stays in the runtime.',
+      description: `API key for the language-model API. ${fluidcastSecretDescription}`,
     }),
     ...fluidcastLanguageModelCommon,
   }),
@@ -112,13 +117,45 @@ export const runtimeFluidcastLanguageModelSchema = Schema.Union([
       description: 'Any OpenAI-compatible Chat Completions API, such as a local model server.',
     }),
     apiKey: Schema.optional(fluidcastSecret).annotate({
-      description: 'API key, if the server needs one. It stays in the runtime.',
+      description: `API key, if the server needs one. ${fluidcastSecretDescription}`,
     }),
     structuredOutput: Schema.optional(Schema.Boolean).annotate({
       description:
         "Whether to ask the server to constrain each reply to Fluidcast's output JSON Schema. Turn it on for local models that drift from the expected format. Missing defaults to false.",
     }),
     ...fluidcastLanguageModelCommon,
+  }),
+  Schema.Struct({
+    provider: Schema.Literal('anthropic').annotate({
+      description: "Anthropic's Messages API.",
+    }),
+    apiKey: fluidcastSecret.annotate({
+      description: `Anthropic API key. ${fluidcastSecretDescription}`,
+    }),
+    ...fluidcastLanguageModelCommon,
+    model: Schema.NonEmptyString.annotate({
+      description: 'Model ID sent to the Messages API, for example claude-sonnet-5-5.',
+    }),
+    reasoningEffort: Schema.optional(
+      Schema.Literals(['low', 'medium', 'high', 'xhigh', 'max']),
+    ).annotate({
+      description:
+        'Effort for the voice: low, medium, high, xhigh or max. Missing uses the model default.',
+    }),
+    temperature: Schema.optional(
+      Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+    ).annotate({
+      description:
+        'Sampling temperature from 0 through 1. Missing uses the API default; newer models reject any other value.',
+    }),
+    structuredOutput: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Whether to ask the API to constrain each reply to Fluidcast's output JSON Schema. Missing defaults to false.",
+    }),
+    fast: Schema.optional(Schema.Boolean).annotate({
+      description:
+        'Whether to request fast mode, which generates faster at a higher price. Only models that offer fast mode accept it. Missing defaults to false.',
+    }),
   }),
 ]).annotate({
   description: "The language model that writes the voice's replies.",
@@ -135,7 +172,7 @@ export const runtimeFluidcastSchema = Schema.Struct({
       description: 'Text-to-speech model ID, for example gpt-4o-mini-tts.',
     }),
     apiKey: fluidcastSecret.annotate({
-      description: 'API key for the speech API. It stays in the runtime.',
+      description: `API key for the speech API. ${fluidcastSecretDescription}`,
     }),
     baseUrl: Schema.optional(Schema.String).annotate({
       description:

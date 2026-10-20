@@ -371,12 +371,15 @@ test('the global config reference documents Fluidcast voice mode', () => {
     'preset',
     'openai',
     'openai-compatible',
+    'anthropic',
     'structuredOutput',
+    'fast',
     'baseUrl',
     'apiKey',
   ]) {
     assert.match(prose, new RegExp(`\\b${key}\\b`), `Fluidcast prose never names ${key}`);
   }
+  assert.match(prose, /apiKey: env\.[A-Z_]+/, 'prose never shows an env. key reference');
   assert.match(prose, /restart/i, 'prose never states a restart is required');
   assert.match(prose, /Claude Code and Codex/, 'prose never names the supported harnesses');
   assert.match(prose, /memory only/i, 'prose never states hidden sessions are in memory only');

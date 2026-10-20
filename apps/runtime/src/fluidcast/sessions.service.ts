@@ -24,7 +24,12 @@ import { FetchHttpClient } from 'effect/http';
 import { AgentSessionArtifacts, HarnessAdapterRegistry } from '../harnesses/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { LaunchEnvironment } from '../pty-processes/index.js';
-import { RuntimeConfig, type FluidcastConfig } from '../runtime-config/index.js';
+import {
+  resolveFluidcastKeys,
+  RuntimeConfig,
+  type FluidcastConfig,
+  type FluidcastConfigState,
+} from '../runtime-config/index.js';
 import {
   FluidcastSessionNotFound,
   FluidcastSessionUnreadable,
@@ -104,13 +109,37 @@ export const fluidcastBuildTimeout: Duration.Input = '60 seconds';
  * persisted. There is no service-level lock: callers sequence one agent's lifecycle with their own
  * per-agent lock.
  */
+/**
+ * Resolves a ready section's `env.NAME` keys against the environment Isagi gives the processes it
+ * launches, which carries the login shell's variables. A variable that is unset leaves voice mode
+ * unavailable, as an invalid section does; the log names the variable, never a value.
+ */
+const resolveKeys = (state: FluidcastConfigState) =>
+  Effect.gen(function* () {
+    if (state.status !== 'ready') return state;
+    const resolved = resolveFluidcastKeys(state.config, yield* (yield* LaunchEnvironment).base);
+    if (resolved.status === 'resolved') return { ...state, config: resolved.config };
+    yield* Effect.logWarning('fluidcast key variables unset').pipe(
+      Effect.annotateLogs({
+        variables: resolved.unset
+          .map(({ issuePath, variable }) => `${issuePath}: ${variable}`)
+          .join(', '),
+      }),
+    );
+    return {
+      status: 'invalid',
+      issuePaths: resolved.unset.map(({ issuePath }) => issuePath),
+    } satisfies FluidcastConfigState;
+  });
+
 export const makeFluidcastSessions = (
   build: FluidcastSessionBuilder,
   options: { readonly buildTimeout: Duration.Input } = { buildTimeout: fluidcastBuildTimeout },
 ) =>
   Effect.gen(function* () {
-    // Read once: changes to the section take effect after a restart.
-    const state = (yield* (yield* RuntimeConfig).get).fluidcast;
+    // Read once: changes to the section, and to the variables its keys name, take effect after a
+    // restart.
+    const state = yield* resolveKeys((yield* (yield* RuntimeConfig).get).fluidcast);
     const artifacts = yield* AgentSessionArtifacts;
     const events = yield* InternalEvents;
     const buildContext = yield* Effect.context<HarnessAdapterRegistry | LaunchEnvironment>();

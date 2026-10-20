@@ -2,6 +2,7 @@ packages:
   - 'apps/*'
   - 'packages/*'
 catalog:
+  '@effect/ai-anthropic': 4.0.2
   '@effect/ai-openai': 4.0.2
   '@effect/ai-openai-compat': 4.0.2
   '@effect/atom-react': ~4.0.2

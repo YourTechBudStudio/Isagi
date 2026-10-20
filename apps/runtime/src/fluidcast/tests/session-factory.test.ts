@@ -260,7 +260,7 @@ test('the shared model, which progress uses, stays unconstrained with structured
     Effect.scoped(
       Effect.gen(function* () {
         const models = yield* buildFluidcastModels(config);
-        assert.equal(models.structuredOutput, true);
+        assert.equal(models.structuredOutput, 'openai-compatible');
         yield* models.languageModel
           .streamText({ prompt: 'progress' })
           .pipe(Stream.runDrain, Effect.ignore);

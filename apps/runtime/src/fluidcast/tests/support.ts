@@ -310,6 +310,8 @@ export function fakeSessionsLayer(options: {
   readonly builder?: FluidcastSessionBuilder;
   readonly state?: FluidcastConfigState;
   readonly writeFails?: boolean;
+  /** The launch environment that `env.NAME` keys resolve against; empty by default. */
+  readonly environment?: NodeJS.ProcessEnv;
   /** Replaces the 60 s build bound, so a hung build can time out within a test. */
   readonly buildTimeout?: Duration.Input;
 }) {
@@ -363,7 +365,10 @@ export function fakeSessionsLayer(options: {
       }),
       events.layer,
       stubRegistry(),
-      Layer.succeed(LaunchEnvironment, LaunchEnvironment.of({ base: Effect.succeed({}) })),
+      Layer.succeed(
+        LaunchEnvironment,
+        LaunchEnvironment.of({ base: Effect.succeed(options.environment ?? {}) }),
+      ),
     ]),
   );
   return { layer, events: events.events, writes, built };
