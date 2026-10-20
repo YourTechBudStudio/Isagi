@@ -11,6 +11,7 @@ import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
 import { workflowPresentationStatus } from '../../lib/workspace/workflow/derive.js';
 import { useAttachedWorkflowRun } from '../../lib/workspace/workflow/queries.js';
 import { EditorPaneContainer } from './EditorPaneContainer.js';
+import { FluidcastFailurePane, type FluidcastFailedAgentSession } from './FluidcastFailurePane.js';
 import { FluidcastPane, type FluidcastAgentSession } from './FluidcastPane.js';
 import { PtyPane } from './PtyPane.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
@@ -44,8 +45,9 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
       <SurfaceLayout
         detail={detail.value}
         // The kind dispatch happens here, before `PtyPane`, so an editor pane
-        // never reaches PTY attach or terminal-presentation code at all, and a
-        // Fluidcast-mode agent pane never mounts a terminal.
+        // never reaches PTY attach or terminal-presentation code at all, and an
+        // agent pane mounts a terminal only in terminal mode: neither Fluidcast
+        // nor a failed switch to it can have a terminal auto-attach behind it.
         renderPane={({ pane, focused, onFocus }) => {
           if (pane.session?.kind === 'editor_context') {
             return (
@@ -71,6 +73,17 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
               />
             );
           }
+          if (agentSession && isFluidcastFailed(agentSession)) {
+            return (
+              <FluidcastFailurePane
+                pane={pane}
+                surface={detail.value}
+                agentSession={agentSession}
+                focused={focused}
+                onFocus={onFocus}
+              />
+            );
+          }
           return <PtyPane pane={pane} surface={detail.value} focused={focused} onFocus={onFocus} />;
         }}
       />
@@ -87,4 +100,10 @@ function isFluidcastMode(
   agentSession: AgentSessionMetadata,
 ): agentSession is FluidcastAgentSession {
   return agentSession.interaction.mode === 'fluidcast';
+}
+
+function isFluidcastFailed(
+  agentSession: AgentSessionMetadata,
+): agentSession is FluidcastFailedAgentSession {
+  return agentSession.interaction.mode === 'fluidcast_failed';
 }

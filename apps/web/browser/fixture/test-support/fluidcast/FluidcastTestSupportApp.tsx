@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 
 import { useFluidcastPresentation } from '../../../../src/lib/fluidcast/presentation.js';
 import { AppStateProvider } from '../../../../src/lib/state/AppStateProvider.js';
+import { ToastProvider } from '../../../../src/lib/toast/index.js';
 import { activateSurface } from '../../../../src/lib/workspace/activation.js';
 import { surfaceDetailAtom } from '../../../../src/lib/workspace/queries.js';
 import {
@@ -21,6 +22,7 @@ import { Surface } from '../../../../src/routes/workspace/Surface.js';
 import { useZenEscape } from '../../../../src/routes/workspace/useZenEscape.js';
 import { createFixtureRegistry } from '../registry.js';
 import {
+  FAILED_SURFACE_ID,
   FLUIDCAST_SURFACE_ID,
   OTHER_SURFACE_ID,
   WORKTREE_ID,
@@ -69,7 +71,10 @@ export function FluidcastTestSupportApp({
           cache: { idleTtlMinutes: 180, maxHiddenSessions: 8, maxEstimatedBufferMiB: 64 },
         }}
       >
-        <Harness />
+        {/* The production toaster, so a test can tell which failures toast and which do not. */}
+        <ToastProvider>
+          <Harness />
+        </ToastProvider>
       </TerminalPresentationProvider>
     </AppStateProvider>
   );
@@ -111,6 +116,13 @@ function Harness() {
         >
           shell surface
         </button>
+        <button
+          type="button"
+          data-show-surface={FAILED_SURFACE_ID}
+          onClick={() => show(FAILED_SURFACE_ID)}
+        >
+          failed surface
+        </button>
         <button type="button" data-zen-on onClick={() => setZen(fixtureRegistry, true)}>
           zen
         </button>
@@ -133,7 +145,7 @@ function ActiveSurface({ surfaceId }: { readonly surfaceId: number }) {
       surface={{
         id: surfaceId,
         title: detail.title,
-        paneKinds: surfaceId === FLUIDCAST_SURFACE_ID ? ['agent_session'] : [],
+        paneKinds: surfaceId === OTHER_SURFACE_ID ? [] : ['agent_session'],
         attention: 'idle',
       }}
     />

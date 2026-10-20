@@ -289,6 +289,183 @@ for (const [frame, width] of [
   });
 }
 
+// Failed switches to Fluidcast (surface 43). The pane shows the failure where the user acted, never
+// a terminal behind it, and its two buttons send the projection they were shown as `from`.
+
+const FAILED_SURFACE = 43;
+const failedFrom = { generation: 2, fluidcastSessionId: null, processIncarnation: null };
+
+interface RecordedSwitch {
+  readonly agentSessionId: number;
+  readonly body: unknown;
+}
+
+const switches = (page: Page) =>
+  page.evaluate(() => window.fluidcastTestSupport!.switches()) as Promise<RecordedSwitch[]>;
+const claims = (page: Page) => page.evaluate(() => window.fluidcastTestSupport!.claims());
+const scriptSwitches = (page: Page, outcomes: unknown[]) =>
+  page.evaluate(
+    (scripted) => window.fluidcastTestSupport!.scriptSwitches(scripted as never),
+    outcomes,
+  );
+const toasts = (page: Page) => page.getByRole('button', { name: 'Dismiss notification' });
+
+/** Opens the failed surface, recording every WebSocket the page opens (a terminal attach is one). */
+async function openFailed(page: Page) {
+  const sockets: string[] = [];
+  page.on('websocket', (socket) => sockets.push(socket.url()));
+  await open(page);
+  await showSurface(page, FAILED_SURFACE);
+  await expect(pane(page, 'claude · stop failed')).toBeVisible();
+  return sockets;
+}
+
+const panel = (scope: Locator) => ({
+  retry: scope.getByRole('button', { name: 'Retry', exact: true }),
+  back: scope.getByRole('button', { name: 'Back to terminal', exact: true }),
+});
+
+for (const [title, agentSessionId, heading, diagnostic] of [
+  [
+    'claude · stop failed',
+    174,
+    "Couldn't stop the terminal",
+    'terminal_stop_failed · PTY kill error (ptyProcess=30): Error',
+  ],
+  [
+    'claude · unreadable',
+    175,
+    "Fluidcast couldn't read this conversation",
+    'fluidcast_session_unreadable · SessionUnreadable',
+  ],
+  [
+    'claude · start failed',
+    176,
+    "Fluidcast didn't start",
+    'fluidcast_start_failed · executable_not_found',
+  ],
+  [
+    'claude · preparation failed',
+    177,
+    "Couldn't finish the switch",
+    'fluidcast_preparation_failed · Error',
+  ],
+] as const) {
+  test(`a ${diagnostic.split(' ')[0]} pane shows its failure, attaches nothing, and Retry and Back send what it shows`, async ({
+    page,
+  }) => {
+    const sockets = await openFailed(page);
+    const scope = pane(page, title);
+
+    await expect(scope.getByText(heading, { exact: true })).toBeVisible();
+    await expect(scope.getByText(diagnostic, { exact: true })).toBeVisible();
+    await expect(scope).toContainText('switch failed');
+    await expect(player(scope)).toHaveCount(0);
+
+    // Retry fails again, as a new handoff failure: the panel re-reads and shows it, no inline error.
+    await scriptSwitches(page, [
+      {
+        kind: 'handoff_failure',
+        failure: { code: 'fluidcast_start_failed', reason: 'session_build_failed' },
+      },
+    ]);
+    await panel(scope).retry.click();
+    await expect(scope.getByText('fluidcast_start_failed · session_build_failed')).toBeVisible();
+    await expect(scope.locator('.text-error', { hasText: /\S/ })).toHaveCount(0);
+    expect(await toasts(page).count()).toBe(0);
+
+    // Back to terminal is made against the failure now shown, one generation on.
+    await panel(scope).back.click();
+    await expect(panel(scope).back).toHaveCount(0);
+
+    expect(await switches(page)).toEqual([
+      { agentSessionId, body: { mode: 'fluidcast', from: failedFrom } },
+      {
+        agentSessionId,
+        body: { mode: 'terminal', from: { ...failedFrom, generation: 3 } },
+      },
+    ]);
+    expect(await claims(page)).toEqual([]);
+    expect(sockets).toEqual([]);
+  });
+}
+
+test('a failure pane offers split and delete, and no toggle', async ({ page }) => {
+  await openFailed(page);
+  const scope = pane(page, 'claude · start failed');
+  await scope.hover();
+
+  const cluster = scope.locator('[data-pane-action-cluster]');
+  await expect(cluster).toHaveCSS('opacity', '1');
+  const labels = await cluster
+    .locator('button')
+    .evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')));
+  expect(labels).toEqual(['Split pane right', 'Split pane down', 'Delete pane']);
+});
+
+test('a refusal before the switch began shows inline in the panel, not as a toast', async ({
+  page,
+}) => {
+  await openFailed(page);
+  const scope = pane(page, 'claude · unreadable');
+  await scriptSwitches(page, [{ kind: 'refusal', status: 409, code: 'agent_session_deleting' }]);
+
+  await panel(scope).retry.click();
+
+  await expect(
+    scope.getByText("That agent's worktree is being deleted, so it can't switch now."),
+  ).toBeVisible();
+  await expect(panel(scope).retry).toBeEnabled();
+  expect(await toasts(page).count()).toBe(0);
+});
+
+test("the toggle's handoff failure shows the panel and no toast; an admission refusal still toasts", async ({
+  page,
+}) => {
+  await openFailed(page);
+  const scope = pane(page, 'claude · terminal');
+  const toggle = scope.getByRole('button', { name: 'Switch to Fluidcast' });
+
+  // Refused before cleanup began: nothing changed in the pane, so the toast is the feedback.
+  await scriptSwitches(page, [
+    { kind: 'refusal', status: 409, code: 'fluidcast_unavailable', data: { reason: 'disabled' } },
+  ]);
+  await scope.hover();
+  await toggle.click();
+  await expect(toasts(page)).toHaveCount(1);
+  await toasts(page).click();
+  await expect(toasts(page)).toHaveCount(0);
+
+  await scriptSwitches(page, [
+    {
+      kind: 'handoff_failure',
+      failure: { code: 'fluidcast_start_failed', reason: 'executable_not_found' },
+    },
+  ]);
+  await scope.hover();
+  await toggle.click();
+
+  await expect(scope.getByText("Fluidcast didn't start", { exact: true })).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await toasts(page).count()).toBe(0);
+  expect(await switches(page)).toEqual([
+    {
+      agentSessionId: 178,
+      body: {
+        mode: 'fluidcast',
+        from: { generation: 0, fluidcastSessionId: null, processIncarnation: null },
+      },
+    },
+    {
+      agentSessionId: 178,
+      body: {
+        mode: 'fluidcast',
+        from: { generation: 0, fluidcastSessionId: null, processIncarnation: null },
+      },
+    },
+  ]);
+});
+
 /** The player's own controls whose boxes intersect the cluster's. */
 async function controlsUnder(scope: Locator, cluster: Locator): Promise<string[]> {
   const clusterBox = await cluster.boundingBox();

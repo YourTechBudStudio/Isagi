@@ -191,7 +191,7 @@ function surfaceDetail(input: {
                   processIncarnation: 'pty:901',
                   statusReason: null,
                   recoveryAction: 'resume_existing',
-                  interaction: { mode: 'terminal', fluidcast: 'unavailable' },
+                  interaction: { mode: 'terminal', generation: 0, fluidcast: 'unavailable' },
                   diagnosticCode: null,
                   diagnosticDetail: null,
                   createdAt: '2026-06-18T00:00:00.000Z',
