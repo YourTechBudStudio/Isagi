@@ -3,13 +3,16 @@ import { createHash } from 'node:crypto';
 import { Cause, Schema } from 'effect';
 
 import {
+  appearanceSettingsDefaults,
   terminalSettingsDefaults,
   type AgentHarness,
+  type AppearanceSettings,
   type TerminalSettings,
 } from '@isagi/contracts';
 
 import { normalizeAbsoluteHomePath } from '../platform/fs/index.js';
 import {
+  runtimeAppearanceSettingsSchema,
   runtimeConfigPtyBackendSchema,
   runtimeFluidcastSchema,
   runtimeHarnessPolicySchema,
@@ -46,6 +49,7 @@ export interface RuntimeConfigShape {
   readonly harnesses: RuntimeHarnessPolicyState;
   readonly workflows: { readonly additionalDirectories: readonly string[] };
   readonly terminal: TerminalSettings;
+  readonly appearance: AppearanceSettings;
   readonly fluidcast: FluidcastConfigState;
 }
 
@@ -72,6 +76,7 @@ export const defaultRuntimeConfig: RuntimeConfigShape = {
   harnesses: policyState('missing', disabledHarnessPolicy),
   workflows: { additionalDirectories: [] },
   terminal: terminalSettingsDefaults,
+  appearance: appearanceSettingsDefaults,
   fluidcast: { status: 'disabled' },
 };
 
@@ -80,6 +85,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
   const pty = parsePty(value);
   const workflows = parseWorkflows(value);
   const terminal = parseTerminal(value);
+  const appearance = parseAppearance(value);
   const fluidcast = parseFluidcast(value);
   if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'harnesses'))
     return {
@@ -87,6 +93,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
       harnesses: policyState('missing', disabledHarnessPolicy),
       workflows,
       terminal,
+      appearance,
       fluidcast,
     };
   const decoded = Schema.decodeUnknownExit(runtimeHarnessPolicySchema)(value.harnesses);
@@ -99,7 +106,14 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
         return [id, { enabled, installIsagiDocs: enabled && entry?.installIsagiDocs === true }];
       }),
     ) as unknown as RuntimeHarnessPolicy;
-    return { pty, harnesses: policyState('valid', policy), workflows, terminal, fluidcast };
+    return {
+      pty,
+      harnesses: policyState('valid', policy),
+      workflows,
+      terminal,
+      appearance,
+      fluidcast,
+    };
   }
   return {
     pty,
@@ -109,6 +123,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
     },
     workflows,
     terminal,
+    appearance,
     fluidcast,
   };
 }
@@ -152,6 +167,14 @@ function parseTerminal(value: unknown): TerminalSettings {
         terminalSettingsDefaults.cache.maxEstimatedBufferMiB,
     },
   };
+}
+
+function parseAppearance(value: unknown): AppearanceSettings {
+  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'appearance')) {
+    return appearanceSettingsDefaults;
+  }
+  const decoded = decodeSection(runtimeAppearanceSettingsSchema, value.appearance, ['appearance']);
+  return { theme: decoded.theme ?? appearanceSettingsDefaults.theme };
 }
 
 function parseWorkflows(value: unknown): RuntimeConfigShape['workflows'] {

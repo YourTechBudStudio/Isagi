@@ -66,7 +66,7 @@ export function WorkflowCheckpointFiles({
         <button
           type="button"
           onClick={refreshDetail}
-          className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
+          className="mt-1.5 rounded-md bg-tint/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-tint/10"
         >
           {inspectorCopy.checkpointFilesRetry}
         </button>

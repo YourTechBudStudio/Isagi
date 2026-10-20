@@ -70,6 +70,7 @@ const clientSettings = {
       maxEstimatedBufferMiB: 64,
     },
   },
+  appearance: { theme: 'light' },
 } satisfies ClientSettingsOutput;
 
 test.afterEach(() => {

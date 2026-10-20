@@ -6,12 +6,18 @@ import test from 'node:test';
 import { Redacted, Schema } from 'effect';
 
 import {
+  appearanceSettingsDefaults,
   clientSettingsOutputSchema,
   terminalSettingsBounds,
   terminalSettingsDefaults,
 } from '@isagi/contracts';
 
-import { defaultRuntimeConfig, disabledHarnessPolicy, parseRuntimeConfig } from './policy.js';
+import {
+  defaultRuntimeConfig,
+  disabledHarnessPolicy,
+  parseRuntimeConfig,
+  RuntimeConfigIssues,
+} from './policy.js';
 
 test('harness policy distinguishes missing onboarding from an explicitly empty policy', () => {
   const missing = parseRuntimeConfig({ pty: { backend: 'node-pty' } }).harnesses;
@@ -177,10 +183,13 @@ test('terminal settings reject malformed values at the user-input boundary', () 
 
 test('client settings wire schema requires normalized fields and enforces canonical bounds', () => {
   const decode = Schema.decodeUnknownSync(clientSettingsOutputSchema);
-  assert.deepEqual(decode({ terminal: terminalSettingsDefaults }), {
-    terminal: terminalSettingsDefaults,
-  });
-  assert.throws(() => decode({ terminal: {} }));
+  assert.deepEqual(
+    decode({ terminal: terminalSettingsDefaults, appearance: appearanceSettingsDefaults }),
+    { terminal: terminalSettingsDefaults, appearance: appearanceSettingsDefaults },
+  );
+  assert.throws(() => decode({ terminal: {}, appearance: appearanceSettingsDefaults }));
+  assert.throws(() => decode({ terminal: terminalSettingsDefaults }));
+  assert.throws(() => decode({ terminal: terminalSettingsDefaults, appearance: {} }));
   const cases = [
     {
       key: 'scrollbackLines',
@@ -216,17 +225,46 @@ test('client settings wire schema requires normalized fields and enforces canoni
     },
   ];
   for (const entry of cases) {
-    assert.doesNotThrow(() => decode({ terminal: entry.withValue(0) }), `${entry.key} zero`);
     assert.doesNotThrow(
-      () => decode({ terminal: entry.withValue(entry.maximum) }),
+      () => decode({ terminal: entry.withValue(0), appearance: appearanceSettingsDefaults }),
+      `${entry.key} zero`,
+    );
+    assert.doesNotThrow(
+      () =>
+        decode({
+          terminal: entry.withValue(entry.maximum),
+          appearance: appearanceSettingsDefaults,
+        }),
       `${entry.key} upper bound`,
     );
     for (const invalid of [-1, entry.maximum + 1, 1.5, '1', null]) {
       assert.throws(
-        () => decode({ terminal: entry.withValue(invalid) }),
+        () =>
+          decode({ terminal: entry.withValue(invalid), appearance: appearanceSettingsDefaults }),
         `${entry.key} accepted ${JSON.stringify(invalid)}`,
       );
     }
+  }
+});
+
+test('appearance theme defaults to dark and accepts only dark or light', () => {
+  assert.deepEqual(defaultRuntimeConfig.appearance, { theme: 'dark' });
+  assert.deepEqual(parseRuntimeConfig({}).appearance, { theme: 'dark' });
+  assert.deepEqual(parseRuntimeConfig({ appearance: {} }).appearance, { theme: 'dark' });
+  assert.deepEqual(parseRuntimeConfig({ appearance: { theme: 'light' } }).appearance, {
+    theme: 'light',
+  });
+  assert.deepEqual(parseRuntimeConfig({ appearance: { theme: 'dark' } }).appearance, {
+    theme: 'dark',
+  });
+  for (const appearance of [null, 'light', { theme: 'Light' }, { theme: 'system' }, { theme: 1 }]) {
+    assert.throws(
+      () => parseRuntimeConfig({ appearance }),
+      (error: unknown) =>
+        error instanceof RuntimeConfigIssues &&
+        error.issuePaths.every((path) => path.startsWith('appearance')),
+      JSON.stringify(appearance),
+    );
   }
 });
 

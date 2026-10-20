@@ -24,6 +24,7 @@ export function registerRuntimeConfigRoutes(
               maxEstimatedBufferMiB: config.terminal.cache.maxEstimatedBufferMiB,
             },
           },
+          appearance: { theme: config.appearance.theme },
         }),
       ),
     ),

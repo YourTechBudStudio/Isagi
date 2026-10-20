@@ -164,7 +164,7 @@ export function WorkbenchDrawer() {
                 type="button"
                 onClick={() => setExpanded((value) => !value)}
                 title={expanded ? 'Restore width' : 'Expand to full width'}
-                className="grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
+                className="grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-tint/6 hover:text-fg"
               >
                 {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
               </button>
@@ -172,7 +172,7 @@ export function WorkbenchDrawer() {
                 type="button"
                 onClick={closeDrawerAndRestoreFocus}
                 title="Close commands drawer"
-                className="grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
+                className="grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-tint/6 hover:text-fg"
               >
                 <X size={14} />
               </button>

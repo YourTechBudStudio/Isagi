@@ -45,10 +45,22 @@ export const terminalSettingsSchema = Schema.Struct({
   cache: terminalCacheSettingsSchema,
 });
 
+/** The Catppuccin flavor the client paints with: Macchiato for `dark`, Latte for `light`. */
+export const appearanceThemeSchema = Schema.Literals(['dark', 'light']);
+
+export const appearanceSettingsDefaults = { theme: 'dark' } as const;
+
+export const appearanceSettingsSchema = Schema.Struct({
+  theme: appearanceThemeSchema,
+});
+
 export const clientSettingsOutputSchema = Schema.Struct({
   terminal: terminalSettingsSchema,
+  appearance: appearanceSettingsSchema,
 });
 
 export type TerminalCacheSettings = typeof terminalCacheSettingsSchema.Type;
 export type TerminalSettings = typeof terminalSettingsSchema.Type;
+export type AppearanceTheme = typeof appearanceThemeSchema.Type;
+export type AppearanceSettings = typeof appearanceSettingsSchema.Type;
 export type ClientSettingsOutput = typeof clientSettingsOutputSchema.Type;

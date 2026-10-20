@@ -236,7 +236,7 @@ function DiagnosticChip({
   const styles =
     tone === 'error'
       ? 'border-error/24 bg-error/8 text-error'
-      : 'border-line/40 bg-white/4 text-fg-muted';
+      : 'border-line/40 bg-tint/4 text-fg-muted';
   return (
     <p
       data-slot="diagnostic-chip"

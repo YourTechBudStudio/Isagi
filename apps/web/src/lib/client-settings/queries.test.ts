@@ -4,7 +4,11 @@ import test, { mock } from 'node:test';
 import { Effect } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import { terminalSettingsDefaults } from '@isagi/contracts';
+import {
+  appearanceSettingsDefaults,
+  terminalSettingsDefaults,
+  type ClientSettingsOutput,
+} from '@isagi/contracts';
 
 import { revalidationSignalAtom } from '../state/policy.js';
 import { advance, controllable, flush, makeTestRegistry } from '../state/testing.js';
@@ -17,7 +21,12 @@ test('the client settings atom is read once and kept for the app session', async
   const registry = makeTestRegistry({
     api: {
       fetchClientSettings: () =>
-        Effect.sync(() => (reads++, { terminal: terminalSettingsDefaults })),
+        Effect.sync(
+          () => (
+            reads++,
+            { terminal: terminalSettingsDefaults, appearance: appearanceSettingsDefaults }
+          ),
+        ),
     },
   });
   t.after(() => registry.dispose());
@@ -32,12 +41,13 @@ test('the client settings atom is read once and kept for the app session', async
   assert.equal(reads, 1, 'never stale, never collected');
   assert.deepEqual(AsyncResult.getOrThrow(registry.get(clientSettingsAtom)), {
     terminal: terminalSettingsDefaults,
+    appearance: appearanceSettingsDefaults,
   });
   unmount();
 });
 
 test('a refreshed client settings read cancels the one in flight', async (t) => {
-  const reads = controllable<{ readonly terminal: typeof terminalSettingsDefaults }>();
+  const reads = controllable<ClientSettingsOutput>();
   const registry = makeTestRegistry({ api: { fetchClientSettings: () => reads.effect } });
   t.after(() => registry.dispose());
   const unmount = registry.mount(clientSettingsAtom);

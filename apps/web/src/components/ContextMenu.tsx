@@ -96,7 +96,7 @@ export function ContextMenu({
                   className={`relative flex cursor-default items-center gap-2.5 overflow-hidden rounded-sm px-2.5 py-1.75 text-[12.5px] outline-none transition-opacity duration-ui ease-expo select-none ${
                     item.danger
                       ? 'text-error data-highlighted:bg-error/12'
-                      : 'text-fg-muted data-highlighted:bg-white/8 data-highlighted:text-fg'
+                      : 'text-fg-muted data-highlighted:bg-tint/8 data-highlighted:text-fg'
                   } ${inert && !item.pending ? 'opacity-40' : ''}`}
                 >
                   {Icon && <Icon size={14} className="shrink-0" />}

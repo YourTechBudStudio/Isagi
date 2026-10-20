@@ -165,7 +165,7 @@ export function ActionBar() {
             type="button"
             onClick={() => setZen(registry, true)}
             aria-label="Focus mode"
-            className="grid size-8 place-items-center rounded-lg text-fg-muted transition-colors duration-micro ease-expo hover:bg-white/8 hover:text-fg"
+            className="grid size-8 place-items-center rounded-lg text-fg-muted transition-colors duration-micro ease-expo hover:bg-tint/8 hover:text-fg"
           >
             <Maximize2 size={15} />
           </button>
@@ -191,7 +191,7 @@ function ActionButton({ action, onRun }: { action: WorktreeAction; onRun: () => 
         type="button"
         onClick={onRun}
         aria-label={action.label}
-        className={`grid size-8 place-items-center rounded-lg transition-colors duration-micro ease-expo hover:bg-white/8 ${
+        className={`grid size-8 place-items-center rounded-lg transition-colors duration-micro ease-expo hover:bg-tint/8 ${
           action.accent ? 'text-violet hover:text-violet' : 'text-fg-muted hover:text-fg'
         }`}
       >

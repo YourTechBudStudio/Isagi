@@ -10,7 +10,7 @@ const VARIANT: Record<ButtonVariant, string> = {
   primary: 'border border-blue/32 bg-blue/15 text-fg hover:bg-blue/22',
   secondary:
     'border border-line/40 bg-transparent text-fg-muted hover:border-line/60 hover:text-fg',
-  ghost: 'border border-transparent bg-transparent text-fg-subtle hover:bg-white/6 hover:text-fg',
+  ghost: 'border border-transparent bg-transparent text-fg-subtle hover:bg-tint/6 hover:text-fg',
   danger: 'border border-error/38 bg-error/12 text-fg hover:border-error/55 hover:bg-error/18',
 };
 

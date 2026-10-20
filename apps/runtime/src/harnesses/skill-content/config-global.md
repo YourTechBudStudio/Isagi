@@ -92,6 +92,17 @@ Zero for any cache limit makes hidden heavy terminal entries immediately ineligi
 
 Omitting `terminal`, `cache`, or any nested field applies the documented default. A malformed value prevents Isagi from starting. Configure these settings only in `{{DATA_ROOT}}/config.yaml`; `.isagi/config.yaml` is project configuration and does not own terminal history or cache retention.
 
+## Theme
+
+The top-level `appearance` section picks the color theme for the Isagi app. `dark` is Catppuccin Macchiato and `light` is Catppuccin Latte; terminals follow the app theme.
+
+```yaml
+appearance:
+  theme: light
+```
+
+`theme` defaults to `dark` and accepts only `dark` or `light`. Any other value prevents Isagi from starting. The theme is read when Isagi starts, so a change takes effect after a restart. Embedded editors keep their own theme; change it inside the editor. Configure the theme only in `{{DATA_ROOT}}/config.yaml`; it is not a project setting.
+
 ## Fluidcast voice mode
 
 The top-level `fluidcast` section lets a Claude Code or Codex agent pane switch from its terminal to Fluidcast, a voice-and-visual player that talks through the same native agent conversation. It is off unless `enabled: true`; while it is off, Isagi does not validate the rest of the section.

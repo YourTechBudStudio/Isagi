@@ -188,7 +188,7 @@ function TextBody({ screen }: { readonly screen: Extract<InputFlowScreen, { kind
           (screen.value ? paletteCopy.textStep.useValue : paletteCopy.textStep.typeThenUse)}
       </p>
       {screen.value && (
-        <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
+        <p className="mt-2 rounded-sm border border-line/22 bg-tint/6 px-3 py-2 font-mono text-[13px] text-fg">
           {screen.value}
         </p>
       )}
@@ -300,7 +300,7 @@ function ConfirmScreen({
         aria-pressed={screen.value}
         onClick={onToggle}
         className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo disabled:cursor-not-allowed disabled:opacity-55 ${
-          screen.value ? 'bg-white/8' : 'hover:bg-white/4'
+          screen.value ? 'bg-tint/8' : 'hover:bg-tint/4'
         }`}
       >
         <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
@@ -382,7 +382,7 @@ function PathBody({
                       ? 'border-transparent opacity-55'
                       : selected
                         ? 'border-blue bg-blue/10'
-                        : 'border-transparent hover:bg-white/4'
+                        : 'border-transparent hover:bg-tint/4'
                   }`}
                 >
                   <span
@@ -434,7 +434,7 @@ function ReviewScreen({
       <p className="text-[13.5px] font-medium text-fg">{screen.content.title}</p>
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">{screen.content.body}</p>
       {screen.content.items.length > 0 && (
-        <div className="mt-3 space-y-1.5 rounded-md border border-line/20 bg-white/5 p-2">
+        <div className="mt-3 space-y-1.5 rounded-md border border-line/20 bg-tint/5 p-2">
           {screen.content.items.map((item, index) => (
             <div key={`${item.label}-${index}`} className="rounded-sm px-2 py-1.5">
               <p className="font-mono text-[11.5px] text-fg">
@@ -528,7 +528,7 @@ function OptionRows({
             disabled={disabled}
             onClick={() => onPick?.(index)}
             className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo disabled:cursor-not-allowed disabled:opacity-55 ${
-              selected || index === selectedIndex ? 'bg-white/8' : 'hover:bg-white/4'
+              selected || index === selectedIndex ? 'bg-tint/8' : 'hover:bg-tint/4'
             }`}
           >
             <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
@@ -578,13 +578,13 @@ function reviewChoiceTone(intent: InputFlowReviewChoice['intent'], selected: boo
   }
   if (intent === 'cancel') {
     return {
-      row: selected ? 'bg-white/8' : 'hover:bg-white/4',
+      row: selected ? 'bg-tint/8' : 'hover:bg-tint/4',
       glyph: 'text-fg-subtle',
       label: 'text-fg-muted',
     };
   }
   return {
-    row: selected ? 'bg-white/8' : 'hover:bg-white/4',
+    row: selected ? 'bg-tint/8' : 'hover:bg-tint/4',
     glyph: 'text-fg-subtle',
     label: 'text-fg',
   };

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 
 import { App } from './App.js';
+import { applyThemeHint } from './lib/appearance/theme.js';
 import { AppStateProvider } from './lib/state/AppStateProvider.js';
 import { connectBrowserRevalidation } from './lib/state/policy.js';
 import { makeAppRegistry } from './lib/state/registry.js';
@@ -16,6 +17,8 @@ const rootElement = document.querySelector('#root');
 if (!rootElement) {
   throw new Error('Root element not found');
 }
+
+applyThemeHint();
 
 // One app session per page: every atom, query cache and app service lives in this registry.
 const registry = makeAppRegistry();

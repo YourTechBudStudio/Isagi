@@ -91,7 +91,7 @@ function stampClass(action: DocsHarnessResult['action']): string {
 }
 
 const LINE_CLASS =
-  'flex w-full items-baseline gap-2.5 rounded-sm px-1 py-1 text-left font-mono text-[12.5px] transition duration-micro ease-expo outline-none hover:bg-white/4 focus-visible:bg-white/6 disabled:opacity-60';
+  'flex w-full items-baseline gap-2.5 rounded-sm px-1 py-1 text-left font-mono text-[12.5px] transition duration-micro ease-expo outline-none hover:bg-tint/4 focus-visible:bg-tint/6 disabled:opacity-60';
 
 export function PolicyForm({
   snapshot,

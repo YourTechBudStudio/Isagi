@@ -245,7 +245,7 @@ function SurfaceRow({
         onClick={deleting ? undefined : onSelect}
         aria-current={active ? 'true' : undefined}
         className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-micro ease-expo ${
-          active ? 'text-fg' : 'text-fg-muted hover:bg-white/5 hover:text-fg'
+          active ? 'text-fg' : 'text-fg-muted hover:bg-tint/5 hover:text-fg'
         }`}
       >
         {/* the neutral lift slides between rows via shared layout */}
@@ -253,7 +253,7 @@ function SurfaceRow({
           <motion.span
             layoutId={pillId}
             transition={{ ...uiTransition, ease: EASE_EXPO }}
-            className="absolute inset-0 rounded-lg bg-white/8"
+            className="absolute inset-0 rounded-lg bg-tint/8"
           />
         )}
         <SurfaceRowContent surface={surface} active={active} />

@@ -23,6 +23,8 @@ test('client settings endpoint projects normalized runtime settings at the versi
       '    idleTtlMinutes: 45',
       '    maxHiddenSessions: 8',
       '    maxEstimatedBufferMiB: 256',
+      'appearance:',
+      '  theme: light',
       '',
     ].join('\n'),
     'utf8',
@@ -43,6 +45,7 @@ test('client settings endpoint projects normalized runtime settings at the versi
         scrollbackLines: 12_000,
         cache: { idleTtlMinutes: 45, maxHiddenSessions: 8, maxEstimatedBufferMiB: 256 },
       },
+      appearance: { theme: 'light' },
     });
     assert.equal('harnesses' in (payload.data ?? {}), false);
     assert.equal(typeof payload.meta?.requestId, 'string');

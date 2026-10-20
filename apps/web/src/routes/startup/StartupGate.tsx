@@ -2,8 +2,10 @@ import { useAtom, useAtomValue } from '@effect/atom-react';
 import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { motion } from 'motion/react';
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
 
+import { applyDocumentTheme } from '../../lib/appearance/theme.js';
+import { clientSettingsAtom } from '../../lib/client-settings/queries.js';
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
 import { controlPlaneAtom } from '../../lib/control-plane/queries.js';
 import { makeRetryEditorProvisioningAtom } from '../../lib/editor/queries.js';
@@ -47,6 +49,15 @@ export function StartupGate() {
   const controlPlane = useAtomValue(
     hostRuntimeAllowsQueries(host.decision) ? controlPlaneAtom : disabledQuery,
   );
+  const clientSettings = useAtomValue(
+    hostRuntimeAllowsQueries(host.decision) ? clientSettingsAtom : disabledQuery,
+  );
+  const theme = Option.getOrUndefined(AsyncResult.value(clientSettings))?.appearance.theme;
+  // Painted here, ahead of every boot, onboarding, and workspace surface. Terminals transcribe the
+  // tokens once at construction, which waits on font readiness, so this always lands first.
+  useLayoutEffect(() => {
+    if (theme) applyDocumentTheme(theme);
+  }, [theme]);
   const retryProvisioningAtom = useMemo(makeRetryEditorProvisioningAtom, []);
   const [retryProvisioning, runRetryProvisioning] = useAtom(retryProvisioningAtom);
   const [onboardingHeld, setOnboardingHeld] = useState(false);

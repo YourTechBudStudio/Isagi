@@ -307,7 +307,7 @@ export function WorkflowInspector({
                       <button
                         type="button"
                         onClick={() => registry.refresh(structureAtom)}
-                        className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
+                        className="mt-1.5 rounded-md bg-tint/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-tint/10"
                       >
                         {inspectorCopy.structureRetry}
                       </button>
@@ -527,7 +527,7 @@ function RetryButton({ onClick }: { readonly onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="mt-1.5 rounded-md bg-white/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10"
+      className="mt-1.5 rounded-md bg-tint/6 px-2.5 py-1 font-mono text-[11px] text-fg-muted transition duration-micro ease-expo hover:bg-tint/10"
     >
       {inspectorCopy.readRetry}
     </button>

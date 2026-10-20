@@ -4,7 +4,7 @@ export type ChipTone = 'command' | 'crumb';
 
 const TONE: Record<ChipTone, string> = {
   command: 'border-blue/30 bg-blue/10 text-blue',
-  crumb: 'border-line/22 bg-white/6 text-fg-muted',
+  crumb: 'border-line/22 bg-tint/6 text-fg-muted',
 };
 
 /**

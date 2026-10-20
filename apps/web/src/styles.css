@@ -18,9 +18,12 @@
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Isagi design tokens — Catppuccin Macchiato.
+   Isagi design tokens — Catppuccin Macchiato (dark) and Latte (light).
    These are the single source of truth for color, type, motion, and depth.
-   See apps/web/AGENTS.md → "Styling conventions" before adding new ones.
+   The values below are the dark theme; `:root[data-theme='light']` further
+   down re-points every color token at Latte using the same Catppuccin roles,
+   so utilities never name a theme. See apps/web/AGENTS.md → "Styling
+   conventions" before adding new ones.
    ────────────────────────────────────────────────────────────────────────── */
 @theme {
   /* Type families */
@@ -34,14 +37,19 @@
     'Fira Code Variable', ui-monospace, SFMono-Regular, 'Symbols Nerd Font',
     'Symbols Nerd Font Mono', monospace;
 
-  /* Surfaces — the deep canvas and its elevations */
-  --color-canvas: #24273a;
-  --color-subtle: #2e3244;
-  --color-elevated: #363a4f;
-  --color-terminal-surface: #2d3145;
-  --color-overlay: #3a3f57;
-  --color-line: #5b6078;
-  --color-scrim: #141622;
+  /* Surfaces — the deep canvas and its elevations. Each is a Catppuccin role
+     or a fixed blend of two (noted alongside), so the light theme can apply
+     the same derivation to Latte. */
+  --color-canvas: #24273a; /* base */
+  --color-subtle: #2e3244; /* base → surface0, 55% */
+  --color-elevated: #363a4f; /* surface0 */
+  --color-terminal-surface: #2d3145; /* base → surface0, 50% */
+  --color-overlay: #3a3f57; /* surface0 → surface1, 25% */
+  --color-line: #5b6078; /* surface2 */
+  --color-scrim: #141622; /* beyond crust: recessed wells, backdrops */
+  /* The film hover and selection washes are mixed from (`bg-tint/6`): the end
+     of the ramp farthest from the canvas, so a wash always reads as lift. */
+  --color-tint: #ffffff;
 
   /* Foreground / text steps */
   --color-fg: #cad3f5; /* primary   */
@@ -76,9 +84,11 @@
   --radius-lg: 20px;
   --radius-xl: 28px;
 
-  /* Depth — soft, layered, never a crisp drop shadow */
-  --shadow-soft: 0 16px 48px rgb(0 0 0 / 0.4);
-  --shadow-lift: 0 24px 64px rgb(0 0 0 / 0.45);
+  /* Depth — soft, layered, never a crisp drop shadow. Tailwind inlines a
+     shadow's literal color into the utility, so the color is a variable that
+     each theme sets (see the `:root` blocks below). */
+  --shadow-soft: 0 16px 48px var(--shadow-soft-color);
+  --shadow-lift: 0 24px 64px var(--shadow-lift-color);
 
   /* Ambient attention motion — calm, never frantic.
      working: a slow breathe; waiting: a soft outward glow; ray: a light streak
@@ -202,8 +212,76 @@
   }
 }
 
+/* Theme values that are not Tailwind namespaces: native-control scheme, the
+   shadow colors, the atmospheric halos, and the terminal's ANSI neutrals. */
 :root {
   color-scheme: dark;
+  --shadow-soft-color: rgb(0 0 0 / 0.4);
+  --shadow-lift-color: rgb(0 0 0 / 0.45);
+  --halo-blue: color-mix(in srgb, var(--color-blue) 14%, transparent);
+  --halo-violet: color-mix(in srgb, var(--color-violet) 12%, transparent);
+  --halo-cyan: color-mix(in srgb, var(--color-cyan) 10%, transparent);
+  /* xterm's black/white slots name absolute darkness, not foreground and
+     background, so they cannot be derived from the surface tokens in both
+     themes. Read by terminal-appearance.ts; hex only, xterm cannot parse
+     color-mix(). */
+  --terminal-ansi-black: #2d3145;
+  --terminal-ansi-white: #cad3f5;
+  --terminal-ansi-bright-black: #6e738d;
+  --terminal-ansi-bright-white: #cad3f5;
+}
+
+/* Catppuccin Latte, mapped onto the same roles as the Macchiato tokens above. */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* Elevation climbs toward the light end of the ramp, mirroring Macchiato's
+     climb from base toward surface0: Latte's surfaces sit darker than its
+     base, so mapping them literally would sink every popover into a grey
+     slab. The canvas steps down to mantle so base is free to be the lift,
+     and the terminal, as the work surface, is the brightest thing on screen. */
+  --color-canvas: #e6e9ef; /* mantle */
+  --color-subtle: #ebedf2; /* mantle → base, 50% */
+  --color-elevated: #eff1f5; /* base */
+  --color-terminal-surface: #eff1f5; /* base */
+  --color-overlay: #eff1f5; /* base: nothing in Latte sits above it */
+  --color-line: #acb0be; /* surface2 */
+  --color-scrim: #dce0e8; /* crust */
+  --color-tint: #4c4f69; /* text */
+
+  --color-fg: #4c4f69; /* text */
+  --color-fg-muted: #6c6f85; /* subtext0 */
+  --color-fg-subtle: #7c7f93; /* overlay2: overlay0 is too faint on Latte's base */
+
+  --color-blue: #1e66f5;
+  --color-violet: #8839ef; /* mauve */
+  --color-amber: #fe640b; /* peach */
+  --color-green: #40a02b;
+  --color-red: #d20f39;
+  --color-cyan: #04a5e5; /* sky */
+
+  --shadow-soft-color: rgb(76 79 105 / 0.16);
+  --shadow-lift-color: rgb(76 79 105 / 0.2);
+  --halo-blue: color-mix(in srgb, var(--color-blue) 9%, transparent);
+  --halo-violet: color-mix(in srgb, var(--color-violet) 7%, transparent);
+  --halo-cyan: color-mix(in srgb, var(--color-cyan) 7%, transparent);
+  /* Catppuccin Latte's own terminal neutrals. */
+  --terminal-ansi-black: #5c5f77; /* subtext1 */
+  --terminal-ansi-white: #acb0be; /* surface2 */
+  --terminal-ansi-bright-black: #6c6f85; /* subtext0 */
+  --terminal-ansi-bright-white: #bcc0cc; /* surface1 */
+}
+
+/* The Fluidcast player stays Macchiato in the light theme. It scopes its own
+   palette on its root, but some of its surfaces (the narrow Show sheet, the
+   animated dock, Markdown code blocks) paint fixed Macchiato colors, so
+   re-pointing its tokens at Latte would put dark text on those dark surfaces.
+   Its root is transparent, so it paints its own canvas here: `--color-canvas`
+   resolves to the player's scoped Macchiato value, not Isagi's. Drop this
+   once the player takes every color from its tokens. */
+:root[data-theme='light'] .fluidcast-player {
+  color-scheme: dark;
+  background-color: var(--color-canvas);
 }
 
 html,
@@ -228,9 +306,9 @@ body::before {
   pointer-events: none;
   content: '';
   background:
-    radial-gradient(circle at 16% 16%, rgb(138 173 244 / 14%), transparent 34rem),
-    radial-gradient(circle at 84% 10%, rgb(198 160 246 / 12%), transparent 36rem),
-    radial-gradient(circle at 50% 96%, rgb(145 215 227 / 10%), transparent 32rem);
+    radial-gradient(circle at 16% 16%, var(--halo-blue), transparent 34rem),
+    radial-gradient(circle at 84% 10%, var(--halo-violet), transparent 36rem),
+    radial-gradient(circle at 50% 96%, var(--halo-cyan), transparent 32rem);
 }
 
 /* Faint grain to take the digital sheen off. */
@@ -249,9 +327,9 @@ body::after {
 .canvas-atmosphere {
   background-color: var(--color-canvas);
   background-image:
-    radial-gradient(circle at 16% 16%, rgb(138 173 244 / 14%), transparent 34rem),
-    radial-gradient(circle at 84% 10%, rgb(198 160 246 / 12%), transparent 36rem),
-    radial-gradient(circle at 50% 96%, rgb(145 215 227 / 10%), transparent 32rem);
+    radial-gradient(circle at 16% 16%, var(--halo-blue), transparent 34rem),
+    radial-gradient(circle at 84% 10%, var(--halo-violet), transparent 36rem),
+    radial-gradient(circle at 50% 96%, var(--halo-cyan), transparent 32rem);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────

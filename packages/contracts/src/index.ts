@@ -84,6 +84,9 @@ export type {
 
 export { clientSettingsEndpoint } from './client-settings/api.js';
 export {
+  appearanceSettingsDefaults,
+  appearanceSettingsSchema,
+  appearanceThemeSchema,
   clientSettingsOutputSchema,
   terminalCacheSettingsSchema,
   terminalSettingsBounds,
@@ -91,6 +94,8 @@ export {
   terminalSettingsSchema,
 } from './client-settings/types.js';
 export type {
+  AppearanceSettings,
+  AppearanceTheme,
   ClientSettingsOutput,
   TerminalCacheSettings,
   TerminalSettings,

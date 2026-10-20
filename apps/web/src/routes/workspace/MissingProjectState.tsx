@@ -26,7 +26,7 @@ export function MissingProjectState({ project }: { project: MissingProject }) {
       body={
         <>
           {missingProjectCopy.bodyPrefix}{' '}
-          <span className="rounded-md bg-black/25 px-1.5 py-0.5 font-mono text-[13px] text-fg">
+          <span className="rounded-md bg-scrim/25 px-1.5 py-0.5 font-mono text-[13px] text-fg">
             {project.rootPath}
           </span>{' '}
           {missingProjectCopy.bodySuffix(project)}

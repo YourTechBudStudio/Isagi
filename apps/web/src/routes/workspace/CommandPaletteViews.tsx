@@ -91,9 +91,9 @@ function outcomeActionClass(action: CommandOutcomeAction) {
     return 'bg-blue/16 text-blue hover:bg-blue/22';
   }
   if (action.intent === 'cancel') {
-    return 'bg-white/5 text-fg-muted hover:bg-white/8';
+    return 'bg-tint/5 text-fg-muted hover:bg-tint/8';
   }
-  return 'bg-white/8 text-fg hover:bg-white/12';
+  return 'bg-tint/8 text-fg hover:bg-tint/12';
 }
 
 export function EntryList({
@@ -131,7 +131,7 @@ export function EntryList({
                 if (!disabled) onPick(index);
               }}
               className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo disabled:cursor-not-allowed ${
-                disabled ? 'opacity-45' : index === sel ? 'bg-white/8' : 'hover:bg-white/4'
+                disabled ? 'opacity-45' : index === sel ? 'bg-tint/8' : 'hover:bg-tint/4'
               }`}
             >
               {/* Tone wins over selection because it reports state the row is
@@ -183,7 +183,7 @@ export function TextStep({
         {value ? paletteCopy.textStep.useValue : (placeholder ?? paletteCopy.textStep.typeThenUse)}
       </p>
       {value && (
-        <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
+        <p className="mt-2 rounded-sm border border-line/22 bg-tint/6 px-3 py-2 font-mono text-[13px] text-fg">
           {value}
         </p>
       )}
@@ -206,13 +206,13 @@ function reviewChoiceTone(intent: ReviewChoice['intent'], selected: boolean) {
   }
   if (intent === 'cancel') {
     return {
-      row: selected ? 'bg-white/8' : 'hover:bg-white/4',
+      row: selected ? 'bg-tint/8' : 'hover:bg-tint/4',
       glyph: 'text-fg-subtle',
       label: 'text-fg-muted',
     };
   }
   return {
-    row: selected ? 'bg-white/8' : 'hover:bg-white/4',
+    row: selected ? 'bg-tint/8' : 'hover:bg-tint/4',
     glyph: 'text-fg-subtle',
     label: 'text-fg',
   };
@@ -247,7 +247,7 @@ export function ReviewStep({
       <p className="text-[13.5px] font-medium text-fg">{content.title}</p>
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">{content.body}</p>
       {content.items.length > 0 && (
-        <div className="mt-3 space-y-1.5 rounded-md border border-line/20 bg-white/5 p-2">
+        <div className="mt-3 space-y-1.5 rounded-md border border-line/20 bg-tint/5 p-2">
           {content.items.map((item, index) => (
             <div key={`${item.label}-${index}`} className="rounded-sm px-2 py-1.5">
               <p className="font-mono text-[11.5px] text-fg">
@@ -347,7 +347,7 @@ export function WizardOptions({
             key={option.value}
             onClick={() => onPick(index)}
             className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${
-              index === sel ? 'bg-white/8' : 'hover:bg-white/4'
+              index === sel ? 'bg-tint/8' : 'hover:bg-tint/4'
             }`}
           >
             <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">

@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Deferred, Effect, Fiber, Layer, Ref, Tracer } from 'effect';
 
-import { terminalSettingsDefaults } from '@isagi/contracts';
+import { appearanceSettingsDefaults, terminalSettingsDefaults } from '@isagi/contracts';
 
 import type { EditorProvisioning } from '../../editor/index.js';
 import {
@@ -139,6 +139,7 @@ test('start does not complete until initial host inventory is ready', async () =
             harnesses: policyState('valid', enabledPolicy()),
             workflows: { additionalDirectories: [] },
             terminal: terminalSettingsDefaults,
+            appearance: appearanceSettingsDefaults,
             fluidcast: { status: 'disabled' },
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
@@ -331,6 +332,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
       harnesses: policyState('missing', disabledPolicy),
       workflows: { additionalDirectories: [] },
       terminal: terminalSettingsDefaults,
+      appearance: appearanceSettingsDefaults,
       fluidcast: { status: 'disabled' },
     }),
     acceptHarnessPolicy: () => {
@@ -428,6 +430,7 @@ function controlPlaneLayer(
       harnesses: state,
       workflows: { additionalDirectories: [] },
       terminal: terminalSettingsDefaults,
+      appearance: appearanceSettingsDefaults,
       fluidcast: { status: 'disabled' },
     }),
     acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),

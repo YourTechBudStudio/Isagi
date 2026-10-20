@@ -9,6 +9,11 @@ import type { ITerminalInitOnlyOptions, ITerminalOptions, ITheme } from '@xterm/
  * cannot inherit CSS, so the design tokens have to be read out of the document
  * and handed to it explicitly; `--font-terminal` and the color tokens in
  * `styles.css` stay authoritative and this module only transcribes them.
+ *
+ * The transcription happens once, at construction, against whichever theme the
+ * document carries. That is enough because the theme is fixed for an app
+ * session: it is applied as soon as client settings arrive, before the
+ * workspace can mount a terminal (see `lib/appearance/theme.ts`).
  */
 
 export const TERMINAL_FONT_SIZE = 12;
@@ -96,6 +101,10 @@ export function terminalThemeFromTokens(): ITheme {
   const terminalSurface = token('--color-terminal-surface') || blendHex(elevated, canvas, 0.5);
   const fg = token('--color-fg');
   const fgSubtle = token('--color-fg-subtle');
+  const ansiBlack = token('--terminal-ansi-black') || terminalSurface;
+  const ansiWhite = token('--terminal-ansi-white') || fg;
+  const ansiBrightBlack = token('--terminal-ansi-bright-black') || fgSubtle;
+  const ansiBrightWhite = token('--terminal-ansi-bright-white') || fg;
   const line = token('--color-line');
   const blue = token('--color-blue');
   const violet = token('--color-violet');
@@ -112,22 +121,22 @@ export function terminalThemeFromTokens(): ITheme {
     scrollbarSliderBackground: alphaHex(line, '57'),
     scrollbarSliderHoverBackground: alphaHex(line, '8f'),
     scrollbarSliderActiveBackground: alphaHex(line, 'a8'),
-    black: terminalSurface,
+    black: ansiBlack,
     red,
     green,
     yellow: amber,
     blue,
     magenta: violet,
     cyan,
-    white: fg,
-    brightBlack: fgSubtle,
+    white: ansiWhite,
+    brightBlack: ansiBrightBlack,
     brightRed: red,
     brightGreen: green,
     brightYellow: amber,
     brightBlue: blue,
     brightMagenta: violet,
     brightCyan: cyan,
-    brightWhite: fg,
+    brightWhite: ansiBrightWhite,
   };
 }
 

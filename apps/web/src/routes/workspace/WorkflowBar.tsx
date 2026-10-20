@@ -379,8 +379,8 @@ function WorkflowBarControl({
           accent
             ? 'text-blue hover:bg-blue/12'
             : active
-              ? 'bg-white/8 text-fg'
-              : 'text-fg-muted hover:bg-white/6 hover:text-fg'
+              ? 'bg-tint/8 text-fg'
+              : 'text-fg-muted hover:bg-tint/6 hover:text-fg'
         }`}
       >
         <Icon size={14} aria-hidden />
@@ -419,7 +419,7 @@ function CancelConfirm({
           type="button"
           onClick={onBack}
           disabled={busy}
-          className="rounded-md bg-white/6 px-3 py-1.5 font-mono text-[11.5px] text-fg-muted transition duration-micro ease-expo hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-55"
+          className="rounded-md bg-tint/6 px-3 py-1.5 font-mono text-[11.5px] text-fg-muted transition duration-micro ease-expo hover:bg-tint/10 disabled:cursor-not-allowed disabled:opacity-55"
         >
           {workflowCopy.cancelConfirmBack}
         </button>

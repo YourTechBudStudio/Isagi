@@ -72,6 +72,16 @@ export const runtimeTerminalSettingsSchema = Schema.Struct({
     'Global terminal presentation history and cache retention settings. Missing fields use defaults. Changes require restarting Isagi.',
 });
 
+export const runtimeAppearanceSettingsSchema = Schema.Struct({
+  theme: Schema.optional(Schema.Literals(['dark', 'light'])).annotate({
+    description:
+      'Color theme for the Isagi app: dark (Catppuccin Macchiato) or light (Catppuccin Latte). Missing defaults to dark. Embedded editors keep their own theme. Changing it requires restarting Isagi.',
+  }),
+}).annotate({
+  description:
+    'How the Isagi app looks. Missing fields use defaults. Changes require restarting Isagi.',
+});
+
 // A value starting with `env.` names an environment variable; anything else is the key itself.
 const fluidcastSecret = Schema.RedactedFromValue(
   Schema.String.check(Schema.isPattern(/^(?!env\.)|^env\.[A-Za-z_][A-Za-z0-9_]*$/)),
@@ -215,6 +225,7 @@ export const runtimeConfigSchema = Schema.Struct({
   }),
   workflows: Schema.optional(runtimeWorkflowSettingsSchema),
   terminal: Schema.optional(runtimeTerminalSettingsSchema),
+  appearance: Schema.optional(runtimeAppearanceSettingsSchema),
   fluidcast: Schema.optional(runtimeFluidcastSchema),
 }).annotate({ description: 'Runtime Isagi config from <dataRoot>/config.yaml.' });
 

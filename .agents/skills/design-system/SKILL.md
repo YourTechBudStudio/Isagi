@@ -33,6 +33,8 @@ Pastel accents on a deep canvas. Character comes from atmospheric depth, not fro
 
 - **Reserve red.** Red is for genuine destruction or genuine error. Form-validation noise, "unsaved changes" hints, and minor warnings use amber or text-tertiary instead. *Anchor: a "Delete session" confirmation uses red; "Unsaved" uses amber; a missing field nudges in text-tertiary.*
 
+- **Light is Latte, by role.** The light theme is Catppuccin Latte mapped onto the same roles as Macchiato, never a hand-picked light palette. Tokens keep their names; only `styles.css` knows the values. *Anchor: elevation climbs toward the light end, so the canvas is Latte mantle `#e6e9ef` and popovers and the terminal sit on base `#eff1f5`; text `#4c4f69`, blue `#1e66f5`; a hover wash is `bg-tint/6`, which is white over Macchiato and Latte text over Latte.*
+
 ## Typography
 
 Distinctive display + humanist body + monospace for code and asides.

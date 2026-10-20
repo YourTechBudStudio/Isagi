@@ -78,7 +78,7 @@ describe('drag preview bodies', () => {
 
     assert.match(markup, /plan review/);
     assert.doesNotMatch(markup, /<button/);
-    assert.doesNotMatch(markup, /bg-white\/8/);
+    assert.doesNotMatch(markup, /bg-tint\/8/);
   });
 
   it('carries a project header with no action unless one is given', () => {

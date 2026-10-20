@@ -279,7 +279,7 @@ function CommandListRow({
   return (
     <div
       className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 transition-colors ${
-        selected ? 'bg-white/8' : 'hover:bg-white/4'
+        selected ? 'bg-tint/8' : 'hover:bg-tint/4'
       }`}
     >
       {rowAction ? (
@@ -378,7 +378,7 @@ function CommandDetail({
               onClick={onRefreshCatalog}
               title={workbenchCopy.refreshCommands}
               aria-label={workbenchCopy.refreshCommands}
-              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-tint/6 hover:text-fg"
             >
               <RefreshCw size={12} />
             </button>
@@ -389,7 +389,7 @@ function CommandDetail({
               onClick={() => restartCommand.start(command.name)}
               disabled={restartCommand.result.waiting}
               title={`Restart ${command.name}`}
-              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-tint/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
             >
               <RotateCcw size={12} />
             </button>
@@ -406,7 +406,7 @@ function CommandDetail({
               disabled={runCommand.result.waiting || stopCommand.result.waiting}
               title={`Run ${command.name}`}
               aria-label={`Run ${command.name}`}
-              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-tint/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
             >
               <Play size={12} />
             </button>
@@ -418,7 +418,7 @@ function CommandDetail({
               disabled={runCommand.result.waiting || stopCommand.result.waiting}
               title={`Stop ${command.name}`}
               aria-label={`Stop ${command.name}`}
-              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-tint/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
             >
               <Square size={12} />
             </button>
@@ -530,7 +530,7 @@ function noticeTone(tone: CommandNoticeTone): string {
     case 'warning':
       return 'border-amber/18 bg-amber/8';
     case 'neutral':
-      return 'border-line/16 bg-white/4';
+      return 'border-line/16 bg-tint/4';
   }
 }
 
@@ -548,7 +548,7 @@ function CommandRunMetadataState({
   readonly hasPtyProcess: boolean;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded-md border border-line/14 bg-black/12 px-3.5 py-3">
+    <div className="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded-md border border-line/14 bg-scrim/12 px-3.5 py-3">
       <div className="flex items-center gap-2">
         <AttentionDot state={commandAttentionState(status)} />
         <p className="font-mono text-[11.5px] text-fg-muted">
@@ -591,7 +591,7 @@ function CommandDiagnosticState({
       </div>
       <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-fg-muted">{body}</p>
       {diagnostic && (
-        <pre className="mt-4 max-h-56 overflow-auto rounded-md border border-line/18 bg-black/15 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-subtle">
+        <pre className="mt-4 max-h-56 overflow-auto rounded-md border border-line/18 bg-scrim/15 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-subtle">
           {diagnostic}
         </pre>
       )}
