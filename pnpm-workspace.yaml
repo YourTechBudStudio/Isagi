@@ -12,17 +12,6 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
-# The Fluidcast libraries install from tarballs packed from the local checkout behind `.fluidcast`
-# (`pnpm fluidcast:pack`), never from a registry or a link, so their peers resolve from this graph
-# and the runtime and web run one physical copy of `effect` and React. Apps declare `0.0.0`; these
-# entries are the only place the source is set. After any Fluidcast change: `pnpm fluidcast:pack`,
-# then `pnpm install`.
-overrides:
-  '@yourtechbudstudio/fluidcast-core': file:.fluidcast-packs/yourtechbudstudio-fluidcast-core-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-harness': file:.fluidcast-packs/yourtechbudstudio-fluidcast-harness-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-presets': file:.fluidcast-packs/yourtechbudstudio-fluidcast-presets-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-tool-agent': file:.fluidcast-packs/yourtechbudstudio-fluidcast-tool-agent-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-tool-ask': file:.fluidcast-packs/yourtechbudstudio-fluidcast-tool-ask-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-tool-show': file:.fluidcast-packs/yourtechbudstudio-fluidcast-tool-show-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-client': file:.fluidcast-packs/yourtechbudstudio-fluidcast-client-0.0.0.tgz
-  '@yourtechbudstudio/fluidcast-react': file:.fluidcast-packs/yourtechbudstudio-fluidcast-react-0.0.0.tgz
+# Fluidcast is our own lockstep release; it installs as soon as it is published.
+minimumReleaseAgeExclude:
+  - '@yourtechbudstudio/fluidcast-*'

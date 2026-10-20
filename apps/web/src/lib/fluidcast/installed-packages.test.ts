@@ -1,7 +1,6 @@
 // Guards the single physical copy of the Fluidcast player's shared peers. The packages install from
-// packed tarballs (`pnpm fluidcast:pack`, then the `overrides` in pnpm-workspace.yaml), so pnpm
-// resolves their peers from Isagi's graph; a link to the checkout, or a stale install, would bring a
-// second React or `effect` into the web bundle and its tests.
+// the npm registry, so pnpm resolves their peers from Isagi's graph; a link to a Fluidcast checkout,
+// or a stale install, would bring a second React or `effect` into the web bundle and its tests.
 import assert from 'node:assert/strict';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -22,7 +21,7 @@ describe('installed Fluidcast player', () => {
         theirs,
         realFrom(import.meta.url, name),
         `@yourtechbudstudio/fluidcast-react resolves a second copy of ${name} (${theirs}). Install ` +
-          `the Fluidcast packages from their tarballs: pnpm fluidcast:pack, then pnpm install.`,
+          `the Fluidcast packages from the registry, then run pnpm install.`,
       );
     });
   }

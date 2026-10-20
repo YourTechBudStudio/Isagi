@@ -1,8 +1,8 @@
 // Guards the single physical copy of the Fluidcast packages' shared peers. Two copies of `effect`
 // do not interoperate: Isagi's `Schema` rejects SDK schemas that carry a check (an `Int` cursor in
-// every Snapshot). The packages therefore install from packed tarballs (`pnpm fluidcast:pack`, then
-// the `overrides` in pnpm-workspace.yaml), so pnpm resolves their peers from Isagi's graph. A link to
-// the checkout, or a stale install, would bring Fluidcast's own copies back.
+// every Snapshot). The packages therefore install from the npm registry, so pnpm resolves their peers
+// from Isagi's graph. A link to a Fluidcast checkout, or a stale install, would bring Fluidcast's own
+// copies back.
 import assert from 'node:assert/strict';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -36,7 +36,7 @@ describe('installed Fluidcast packages', () => {
         theirs,
         ours,
         `${fluidcast} resolves a second copy of ${name} (${theirs}). Install the Fluidcast packages ` +
-          `from their tarballs: pnpm fluidcast:pack, then pnpm install.`,
+          `from the registry, then run pnpm install.`,
       );
     });
   }
