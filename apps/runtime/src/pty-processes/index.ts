@@ -24,6 +24,9 @@ export type {
 // The affirmative-vs-absent kill outcome, exported so a caller that must not
 // clear ownership on an unconfirmed termination can name what it requires.
 export type { PtyTerminateOutcome } from './service/termination.js';
+// The one definition of "the runtime ended this", shared by every domain that
+// brings an interrupted incarnation back.
+export { interruptedByRuntime } from './types.js';
 export {
   PtyKillError,
   PtyResizeError,

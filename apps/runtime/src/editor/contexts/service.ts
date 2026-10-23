@@ -13,7 +13,11 @@ import {
 import { LoopbackPortProbe } from '../../platform/net/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
-import { PtyService, type PtyTerminateOutcome } from '../../pty-processes/index.js';
+import {
+  interruptedByRuntime,
+  PtyService,
+  type PtyTerminateOutcome,
+} from '../../pty-processes/index.js';
 import { type ResolvedEditorInstallation } from '../provisioning/install.js';
 import { EditorProvisioning, type EditorUnavailable } from '../provisioning/service.js';
 import { EditorDiagnosticsUnavailable, EditorError, EditorLaunchFailed } from './errors.js';
@@ -460,12 +464,27 @@ const make = Effect.gen(function* () {
     }),
   });
 
-  // Construction step 1 — boot convergence. Every `in_progress` row belongs to
+  // Construction step 1a — boot convergence. Every `in_progress` row belongs to
   // an attempt this runtime cannot possibly still be making, and the invariant
   // that a pointer never coexists with `in_progress` is what makes that
   // unambiguous rather than a guess.
   const interrupted = yield* repository.failInterruptedAttempts;
   yield* Effect.forEach(interrupted, publishChanged, { discard: true });
+
+  // Construction step 1b — release incarnations the runtime itself ended. A
+  // Code Server that a shutdown or crash took down is not an outcome to show:
+  // the context returns to idle, so the next open of its pane launches a fresh
+  // incarnation through the ordinary `reuse` path, exactly as a first open
+  // does. Nothing launches here — an editor starts only when its pane asks.
+  // Every other ending (an exit, a kill, a failed launch) keeps its pointer and
+  // stays visible with Retry. The process is terminal, so clearing ownership
+  // here cannot orphan a live one.
+  const holding = yield* repository.listHoldingIncarnation();
+  for (const row of holding) {
+    if (row.activePtyProcess === null || !interruptedByRuntime(row.activePtyProcess)) continue;
+    const cleared = yield* repository.clearIncarnation(row.id);
+    if (cleared === 'applied') yield* publishChanged(row.id);
+  }
 
   // Construction step 2 — the single interpreter of editor PTY events. The
   // subscription is taken here, before the fork, so no event published after

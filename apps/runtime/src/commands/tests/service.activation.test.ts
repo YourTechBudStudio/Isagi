@@ -27,9 +27,11 @@ import {
  * Leaving suspends what the user configured Isagi to stop, plus anything still
  * running that the config no longer names — but never a documented keep-alive
  * command, and never anything at all when the config cannot be read. Arriving
- * resumes exactly the commands the previous switch suspended, and first-starts
- * opt-ins that have never run. Every entry re-checks both the durable state and
- * the config inside the command's lock, so newer intent always beats the plan.
+ * resumes every suspended command, and first-starts opt-ins that have never
+ * run. A runtime restart counts as arriving, and also brings back interrupted
+ * keep-alive commands in every other worktree. Every entry re-checks both the
+ * durable state and the config inside the command's lock, so newer intent
+ * always beats the plan.
  */
 
 const configuredCommands = `
@@ -61,11 +63,15 @@ async function switchWorktrees(
     readonly states?: CommandStateRow[] | undefined;
   } & Pick<
     CommandRepositoryOptions,
-    'runs' | 'pty' | 'ptyProcess' | 'afterListStates' | 'portProbe'
-  >,
+    'runs' | 'pty' | 'ptyProcess' | 'afterListStates' | 'beforeFindState' | 'portProbe'
+  > & {
+      // Receives the fixture's worktree root, so a hook can rewrite its config.
+      readonly onFixture?: ((rootPath: string) => void) | undefined;
+    },
 ) {
   const fixture = createFixture();
   writeConfig(fixture.rootPath, input.config);
+  input.onFixture?.(fixture.rootPath);
   const previousWorktreeId =
     input.previousWorktreeId === undefined ? null : input.previousWorktreeId;
   const nextWorktreeId = input.nextWorktreeId === undefined ? 10 : input.nextWorktreeId;
@@ -82,9 +88,11 @@ async function switchWorktrees(
           });
           yield* waitForLog(
             progress,
-            nextWorktreeId === null
-              ? 'Command deactivation pass completed'
-              : 'Command activation pass completed',
+            input.cause === 'startup_restored'
+              ? 'Command keep-alive resume pass completed'
+              : nextWorktreeId === null
+                ? 'Command deactivation pass completed'
+                : 'Command activation pass completed',
           );
         }),
       {
@@ -93,6 +101,7 @@ async function switchWorktrees(
         ptyProcess: input.ptyProcess ?? fakePtyProcessRow(),
         ...(input.pty ? { pty: input.pty } : {}),
         ...(input.afterListStates ? { afterListStates: input.afterListStates } : {}),
+        ...(input.beforeFindState ? { beforeFindState: input.beforeFindState } : {}),
         ...(input.portProbe ? { portProbe: input.portProbe } : {}),
       },
     );
@@ -202,18 +211,69 @@ test('a user-driven return resumes only suspended commands', async () => {
   );
 });
 
-test('a runtime restart never resumes a suspended command', async () => {
+test('a runtime restart resumes a suspended command in the active worktree', async () => {
   const { recorder } = await switchWorktrees({
     config: configuredCommands,
     cause: 'startup_restored',
     states: [commandState({ commandName: 'dev', status: 'suspended' })],
   });
 
-  assert.deepEqual(recorder.launched, []);
-  assert.deepEqual(recorder.transitions, []);
+  // Once: the keep-alive pass that follows skips the active worktree.
+  assert.deepEqual(recorder.launched, ['pnpm dev']);
   assert.ok(
     recorder.logs.some(
-      (line) => line.includes('Command activation pass completed') && line.includes('resumed=0 '),
+      (line) => line.includes('Command activation pass completed') && line.includes('resumed=1 '),
+    ),
+  );
+});
+
+test('a runtime restart resumes keep-alive commands outside the active worktree only', async () => {
+  const { recorder } = await switchWorktrees({
+    config: configuredCommands,
+    cause: 'startup_restored',
+    // Worktree 10 is not the active one: a suspended `dev` waits for its
+    // worktree's activation, while the keep-alive `db` comes back now.
+    nextWorktreeId: null,
+    states: [
+      commandState({ commandName: 'dev', status: 'suspended' }),
+      commandState({ id: 2, commandName: 'db', status: 'suspended' }),
+    ],
+  });
+
+  assert.deepEqual(recorder.launched, ['docker compose up']);
+  assert.ok(
+    recorder.logs.some(
+      (line) =>
+        line.includes('Command keep-alive resume pass completed') && line.includes('resumed=1 '),
+    ),
+  );
+});
+
+test('a keep-alive command whose config turned deactivate.stop on stays suspended', async () => {
+  // The pass selects `db` as keep-alive, then the config changes before its
+  // executor takes the lock. The newer config wins: `db` now waits for its
+  // worktree's activation like any other suspended command.
+  let rootPath = '';
+  let flipped = false;
+  const { recorder } = await switchWorktrees({
+    config: configuredCommands,
+    cause: 'startup_restored',
+    nextWorktreeId: null,
+    states: [commandState({ id: 2, commandName: 'db', status: 'suspended' })],
+    onFixture: (path) => {
+      rootPath = path;
+    },
+    beforeFindState: () => {
+      if (flipped) return;
+      flipped = true;
+      writeConfig(rootPath, configuredCommands.replace('stop: false', 'stop: true'));
+    },
+  });
+
+  assert.deepEqual(recorder.launched, []);
+  assert.ok(
+    recorder.logs.some((line) =>
+      line.includes('Command activation entry discarded commandName=db reason=keep_alive'),
     ),
   );
 });
@@ -569,14 +629,15 @@ function configuredCommand(input: {
   };
 }
 
-test('the activation plan resumes suspended commands only on a user-driven return', () => {
+test('the activation plan resumes suspended commands on every activation', () => {
   const commands = [configuredCommand({ name: 'dev' })];
   const states = [commandState({ commandName: 'dev', status: 'suspended' })];
 
-  assert.deepEqual(buildActivationPlan({ commands, states, cause: 'active_context_changed' }), [
-    { commandName: 'dev', reason: 'resume' },
-  ]);
-  assert.deepEqual(buildActivationPlan({ commands, states, cause: 'startup_restored' }), []);
+  for (const cause of ['active_context_changed', 'startup_restored'] as const) {
+    assert.deepEqual(buildActivationPlan({ commands, states, cause }), [
+      { commandName: 'dev', reason: 'resume' },
+    ]);
+  }
 });
 
 test('the activation plan first-starts an opt-in only with no prior outcome', () => {

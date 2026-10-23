@@ -78,7 +78,7 @@ const unavailable = (ptyProcessId: number) =>
     ptyProcessId,
   });
 
-test('an ordinary crash leaves the command failed with the interruption diagnostic', async () => {
+test('an ordinary crash suspends the command and fails its run with the interruption diagnostic', async () => {
   // The common case: the state still says running, and the incarnation's row is
   // already terminal because the PTY layer's own startup reconciliation got to
   // it first. Nothing survives, so there is nothing to clean up.
@@ -95,14 +95,92 @@ test('an ordinary crash leaves the command failed with the interruption diagnost
   assert.deepEqual(result.recorder.cleaned, [], 'a terminal row is not a boot candidate');
   assert.equal(result.runs[0]?.status, 'failed');
   assert.equal(result.runs[0]?.diagnosticReason, 'runtime_stopped');
-  assert.equal(
-    result.runs[0]?.diagnosticDetail,
-    'Runtime stopped while this command was running. Not restarted.',
-  );
+  assert.equal(result.runs[0]?.diagnosticDetail, 'Runtime stopped while this command was running.');
+  // The run records the failure; the command keeps the intent to come back,
+  // for the startup activation pass to resume.
+  assert.deepEqual(result.recorder.transitions, [
+    { commandName: 'dev', status: 'suspended', activePtyProcessId: null },
+  ]);
+  assert.ok(result.recorder.published.some((event) => event.status === 'suspended'));
+});
+
+test('an open run whose process exited on its own records the exit and is not resumed', async () => {
+  // The PTY row recorded a clean exit, but the runtime stopped before the
+  // command subscriber closed the run. The exit is the command's own outcome.
+  const result = await boot({
+    states: [
+      commandState({
+        commandName: 'dev',
+        status: 'running',
+        activePtyProcessId: 123,
+      }),
+    ],
+    runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })],
+    ptyProcess: fakePtyProcessRow({ id: 123, status: 'exited', exitCode: 0 }),
+  });
+
+  assert.equal(result.runs[0]?.status, 'exited');
+  assert.equal(result.runs[0]?.diagnosticReason, null);
+  assert.deepEqual(result.recorder.transitions, [
+    { commandName: 'dev', status: 'exited', activePtyProcessId: null },
+  ]);
+});
+
+test('an open run whose backend lost its process records a failure and is not resumed', async () => {
+  // A missing tmux session is not the runtime stopping, so it is not suspended.
+  const result = await boot({
+    states: [
+      commandState({
+        commandName: 'dev',
+        status: 'running',
+        activePtyProcessId: 501,
+      }),
+    ],
+    runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
+    ptyProcess: fakePtyProcessRow({
+      id: 501,
+      backend: 'tmux',
+      status: 'failed',
+      statusReason: 'backend_process_missing',
+    }),
+  });
+
+  assert.equal(result.runs[0]?.status, 'failed');
+  assert.notEqual(result.runs[0]?.diagnosticReason, 'runtime_stopped');
   assert.deepEqual(result.recorder.transitions, [
     { commandName: 'dev', status: 'failed', activePtyProcessId: null },
   ]);
-  assert.ok(result.recorder.published.some((event) => event.status === 'failed'));
+});
+
+test('a running state over a run the runtime interrupted is repaired to suspended', async () => {
+  // The shutdown event already closed the run, but the state never caught up.
+  // The repair reads the run's own record, so it lands where the live path would.
+  const result = await boot({
+    states: [
+      commandState({
+        commandName: 'dev',
+        status: 'running',
+        activePtyProcessId: 123,
+      }),
+    ],
+    runs: [
+      commandRun({
+        commandName: 'dev',
+        status: 'failed',
+        ptyProcessId: 123,
+        diagnosticReason: 'runtime_stopped',
+      }),
+    ],
+    ptyProcess: fakePtyProcessRow({
+      id: 123,
+      status: 'killed',
+      statusReason: 'runtime_shutdown',
+    }),
+  });
+
+  assert.deepEqual(result.recorder.transitions, [
+    { commandName: 'dev', status: 'suspended', activePtyProcessId: null },
+  ]);
 });
 
 test('a running state over an already-terminal run is repaired to that run’s own outcome', async () => {
@@ -138,7 +216,7 @@ test('a surviving incarnation is cleaned up through the shutdown reason', async 
   assert.equal(result.runs[0]?.status, 'failed');
   assert.equal(result.runs[0]?.diagnosticReason, 'runtime_stopped');
   assert.deepEqual(result.recorder.transitions, [
-    { commandName: 'dev', status: 'failed', activePtyProcessId: null },
+    { commandName: 'dev', status: 'suspended', activePtyProcessId: null },
   ]);
 });
 

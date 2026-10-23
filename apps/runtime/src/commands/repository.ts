@@ -158,6 +158,15 @@ const make = Effect.gen(function* () {
           .all(),
       )
       .pipe(Effect.flatMap(toStateRows)),
+    listSuspendedStates: database
+      .use('list_suspended_worktree_command_states', (db) =>
+        db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(eq(worktreeCommandStates.status, 'suspended'))
+          .all(),
+      )
+      .pipe(Effect.flatMap(toStateRows)),
     listRunningStatesForWorktree: Effect.fn('CommandRepository.listRunningStatesForWorktree')(
       function* (worktreeId) {
         const records = yield* database.use(
@@ -530,6 +539,8 @@ interface CommandRepositoryShape {
     readonly commandName: string;
   }) => Effect.Effect<CommandStateRow | null, DatabaseError>;
   readonly listRunningStates: Effect.Effect<CommandStateRow[], DatabaseError>;
+  // Every suspended command across worktrees, for the startup keep-alive pass.
+  readonly listSuspendedStates: Effect.Effect<CommandStateRow[], DatabaseError>;
   readonly listRunningStatesForWorktree: (
     worktreeId: number,
   ) => Effect.Effect<CommandStateRow[], DatabaseError>;

@@ -21,9 +21,8 @@ export type CommandPresentation = 'configured' | 'removed' | 'managed';
  *
  * `suspended` is uniformly `waiting`. These surfaces render only the *active*
  * worktree, so a suspended command visible here is by construction one that has
- * not self-resolved: the runtime restarted and nothing auto-starts, the resume
- * was skipped or failed, or the launch is still queued. It is waiting on the
- * user in every case that is actually on screen.
+ * not self-resolved: the resume was skipped or failed, or the launch is still
+ * queued. It is waiting on the user in every case that is actually on screen.
  */
 export function commandAttentionState(status: CommandStatus): AttentionState {
   switch (status) {

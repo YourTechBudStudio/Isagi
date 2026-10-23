@@ -174,8 +174,12 @@ commands:
   }
 });
 
-test('a shutdown kill is recorded as an interruption, not a plain failure', async () => {
+test('a shutdown kill is recorded as an interruption and suspends the command', async () => {
   const fixture = createFixture();
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+  }> = [];
   const runs = [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
   try {
     writeConfig(
@@ -204,16 +208,18 @@ commands:
       {
         states: [commandState({ commandName: 'dev', status: 'running' })],
         runs,
+        onTransition: (input) => transitioned.push(input),
       },
     );
 
     assert.equal(runs[0]?.status, 'failed');
-    // The same bytes boot reconciliation writes, so both teardown orderings are
-    // indistinguishable to the user.
+    // The same outcome boot reconciliation writes, so both teardown orderings
+    // are indistinguishable to the user.
     assert.equal(runs[0]?.diagnosticReason, 'runtime_stopped');
-    assert.equal(
-      runs[0]?.diagnosticDetail,
-      'Runtime stopped while this command was running. Not restarted.',
+    assert.equal(runs[0]?.diagnosticDetail, 'Runtime stopped while this command was running.');
+    assert.deepEqual(
+      transitioned.map(({ commandName, status }) => ({ commandName, status })),
+      [{ commandName: 'dev', status: 'suspended' }],
     );
   } finally {
     fixture.cleanup();

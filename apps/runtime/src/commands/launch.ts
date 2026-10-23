@@ -163,12 +163,13 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         worktreeId,
         commandName,
         runStatus: outcome.runStatus,
-        stateStatus: outcome.runStatus,
+        stateStatus: outcome.stateStatus,
         runDiagnostic: outcome.diagnostic,
       });
 
     const launchFailure = (detail: string): TerminalCommandOutcome => ({
       runStatus: 'failed',
+      stateStatus: 'failed',
       diagnostic: { reason: 'pty_launch_failed', detail },
     });
 
@@ -360,7 +361,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
           if (terminal) {
             const outcome = terminalCommandOutcomeForPtyRow(terminal, 'launch');
             yield* converge(outcome);
-            return actionOutput(target.command, outcome.runStatus, worktreeId, null);
+            return actionOutput(target.command, outcome.stateStatus, worktreeId, null);
           }
 
           // `running`, or still `starting` because a post-launch persistence

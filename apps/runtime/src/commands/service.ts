@@ -213,7 +213,10 @@ const make = Effect.gen(function* () {
   // `suspended`; `converged` records the incarnation's own terminal fact; and
   // only a genuine dead end — no run, no link, or no such row — becomes
   // `failed`, which is a manufactured status and is reported as such.
-  const resolvePointerlessRunningState = Effect.fnUntraced(function* (state: CommandStateRow) {
+  const resolvePointerlessRunningState = Effect.fnUntraced(function* (
+    state: CommandStateRow,
+    cause: CommandStopCause,
+  ) {
     const run = yield* commandRepository.findLatestRun(state);
     const unassociated = Effect.fnUntraced(function* (runId: number | null) {
       const detail = 'No process could be associated with this command; it was marked failed.';
@@ -251,15 +254,21 @@ const make = Effect.gen(function* () {
     const terminal = terminalPtyFactsForRow(row);
     if (terminal) {
       const outcome = terminalCommandOutcomeForPtyRow(terminal, 'event');
+      // A runtime interruption leaves resume intent, but only a deactivation
+      // may keep it: any other stop is the user ending the command.
+      const stateStatus =
+        outcome.stateStatus === 'suspended' && cause !== 'deactivation'
+          ? outcome.runStatus
+          : outcome.stateStatus;
       yield* finalizeCommandRunByRun({
         runId: run.id,
         worktreeId: state.worktreeId,
         commandName: state.commandName,
         runStatus: outcome.runStatus,
-        stateStatus: outcome.runStatus,
+        stateStatus,
         runDiagnostic: outcome.diagnostic,
       });
-      return { resolution: 'converged', status: outcome.runStatus } as const;
+      return { resolution: 'converged', status: stateStatus } as const;
     }
 
     // Nonterminal: re-adopt the incarnation the run itself names. This is
@@ -324,7 +333,7 @@ const make = Effect.gen(function* () {
 
     let ptyProcessId = state.activePtyProcessId;
     if (ptyProcessId === null) {
-      const resolved = yield* resolvePointerlessRunningState(state);
+      const resolved = yield* resolvePointerlessRunningState(state, options.cause);
       if (resolved.resolution === 'converged') {
         return { status: resolved.status, resolution: 'converged' } as const;
       }
@@ -484,7 +493,7 @@ const make = Effect.gen(function* () {
         commandName: run.commandName,
         ptyProcessId: event.ptyProcessId,
         runStatus: outcome.runStatus,
-        stateStatus: outcome.runStatus,
+        stateStatus: outcome.stateStatus,
         runDiagnostic: outcome.diagnostic,
       }),
     );

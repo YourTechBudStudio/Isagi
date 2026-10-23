@@ -1,5 +1,7 @@
 import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
+import { interruptedByRuntime } from '../pty-processes/index.js';
+
 // How a terminal PTY incarnation becomes a terminal command run. Both the launch
 // handshake and the PTY event reconciler read this module, so a verdict reached
 // at launch time and the same verdict reached later cannot drift.
@@ -17,8 +19,7 @@ export interface CommandRunDiagnosticInput {
 // constant, because the two orderings of the same teardown must be
 // indistinguishable to the user: whichever path records the interruption, the
 // diagnostic text is the same bytes.
-export const runtimeStoppedDiagnosticDetail =
-  'Runtime stopped while this command was running. Not restarted.';
+export const runtimeStoppedDiagnosticDetail = 'Runtime stopped while this command was running.';
 
 // The terminal facts of a PTY incarnation, however they were observed: read off
 // the persisted row during the launch handshake, or carried by a published
@@ -31,7 +32,36 @@ export interface TerminalPtyFacts {
 
 export interface TerminalCommandOutcome {
   readonly runStatus: TerminalRunStatus;
+  // What the command itself becomes. Equal to `runStatus` except for a runtime
+  // interruption, where the run records the failure honestly and the command
+  // keeps the intent to come back as `suspended`.
+  readonly stateStatus: CommandStatus;
   readonly diagnostic: CommandRunDiagnosticInput | null;
+}
+
+const runtimeStoppedDiagnostic: CommandRunDiagnosticInput = {
+  reason: 'runtime_stopped',
+  detail: runtimeStoppedDiagnosticDetail,
+};
+
+// The outcome of a run the runtime cut short, whichever path observed it: the
+// shutdown kill's event, the PTY row read at launch or later, or boot finding
+// a run still open. A runtime stop is not the command's outcome, so the
+// command is suspended and resumes through the ordinary activation path.
+export const runtimeInterruptedCommandOutcome: TerminalCommandOutcome = {
+  runStatus: 'failed',
+  stateStatus: 'suspended',
+  diagnostic: runtimeStoppedDiagnostic,
+};
+
+// What a command's state becomes for a run that already finished, read back
+// from the run's own record. Boot uses this when the run is terminal but the
+// state never caught up, so the repair lands where the live path would have.
+export function commandStateForCompletedRun(run: {
+  readonly status: TerminalRunStatus;
+  readonly diagnosticReason: CommandRunDiagnosticReason | null;
+}): CommandStatus {
+  return run.diagnosticReason === 'runtime_stopped' ? 'suspended' : run.status;
 }
 
 // The one mapping from a terminal PTY fact to what it means for the command,
@@ -39,31 +69,32 @@ export interface TerminalCommandOutcome {
 // at launch time and the same verdict reached later cannot drift.
 //
 // Context changes only the diagnostic, never the status. During a launch, any
-// `failed` row is a failed launch from the caller's perspective — whatever
-// classified it — so it carries `pty_launch_failed`; the same row observed later
-// through a generic `pty_process_failed` event is just a failure, with no launch
-// claim attached. A shutdown kill carries its diagnostic in both contexts.
+// other `failed` row is a failed launch from the caller's perspective —
+// whatever classified it — so it carries `pty_launch_failed`; the same row
+// observed later through a generic `pty_process_failed` event is just a
+// failure, with no launch claim attached. A runtime interruption carries its
+// diagnostic, and its suspension, in both contexts.
 export function terminalCommandOutcomeForPtyRow(
   row: TerminalPtyFacts,
   context: 'launch' | 'event',
 ): TerminalCommandOutcome {
   if (row.status === 'exited') {
-    return { runStatus: row.exitCode === 0 ? 'exited' : 'failed', diagnostic: null };
+    const runStatus = row.exitCode === 0 ? 'exited' : 'failed';
+    return { runStatus, stateStatus: runStatus, diagnostic: null };
   }
+  // The runtime ending the process is an interruption in every context.
+  if (interruptedByRuntime(row)) return runtimeInterruptedCommandOutcome;
   // A kill nobody in the command domain initiated is only `stopped` when it was
-  // user-requested; every other cause (runtime shutdown, cleanup) is a failure.
+  // user-requested; every other cause (such as cleanup) is a failure.
   if (row.status === 'killed') {
-    if (row.statusReason === 'user_requested') return { runStatus: 'stopped', diagnostic: null };
-    if (row.statusReason === 'runtime_shutdown') {
-      return {
-        runStatus: 'failed',
-        diagnostic: { reason: 'runtime_stopped', detail: runtimeStoppedDiagnosticDetail },
-      };
+    if (row.statusReason === 'user_requested') {
+      return { runStatus: 'stopped', stateStatus: 'stopped', diagnostic: null };
     }
-    return { runStatus: 'failed', diagnostic: null };
+    return { runStatus: 'failed', stateStatus: 'failed', diagnostic: null };
   }
   return {
     runStatus: 'failed',
+    stateStatus: 'failed',
     diagnostic:
       context === 'launch'
         ? { reason: 'pty_launch_failed', detail: row.statusReason ?? null }
