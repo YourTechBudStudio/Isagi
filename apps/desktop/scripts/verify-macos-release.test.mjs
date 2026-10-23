@@ -17,11 +17,13 @@ import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 
 import {
   classifyCommandFailure,
+  MacReleaseVerificationFailure,
   parseCodesignDetails,
   parseEntitlements,
   verifyBundleVersions,
   verifyMachOArchitecture,
   verifyMacIconAsset,
+  validateStapledTicket,
   verifyMacRelease,
   withMountedDmg,
 } from './verify-macos-release.mjs';
@@ -88,6 +90,42 @@ test('command failure classification retains the failed check without environmen
     }),
     'codesign --verify /tmp/Isagi.app failed with exit 1: invalid signature',
   );
+});
+
+test('stapler validation retries CloudKit network drops until the ticket validates', async () => {
+  const stapler = createStaplerRunner([cloudKitNetworkLost(), cloudKitNetworkLost(), success()]);
+  const result = await Effect.runPromise(
+    validateStapledTicket('/tmp/Isagi.app', stapler.run, { baseDelay: '1 millis' }),
+  );
+  assert.equal(result.code, 0);
+  assert.equal(stapler.calls(), 3);
+});
+
+test('stapler validation stops retrying CloudKit network drops after the retry budget', async () => {
+  const stapler = createStaplerRunner(Array.from({ length: 5 }, cloudKitNetworkLost));
+  const exit = await Effect.runPromiseExit(
+    validateStapledTicket('/tmp/Isagi.app', stapler.run, { baseDelay: '1 millis', retries: 2 }),
+  );
+  assert.equal(Exit.isFailure(exit), true);
+  assert.match(causeErrors(exit)[0].message, /The network connection was lost/);
+  assert.equal(stapler.calls(), 3);
+});
+
+test('stapler validation fails an invalid ticket without retrying', async () => {
+  const stapler = createStaplerRunner([
+    {
+      code: 65,
+      signal: null,
+      stderr: '',
+      stdout: 'Isagi.app does not have a ticket stapled to it.',
+    },
+    success(),
+  ]);
+  const exit = await Effect.runPromiseExit(
+    validateStapledTicket('/tmp/Isagi.app', stapler.run, { baseDelay: '1 millis' }),
+  );
+  assert.match(causeErrors(exit)[0].message, /does not have a ticket stapled/);
+  assert.equal(stapler.calls(), 1);
 });
 
 test('bundle versions must both equal the canonical release version', () => {
@@ -437,6 +475,36 @@ function causeErrors(exit) {
     ...exit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error),
     ...exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect),
   ];
+}
+
+// Mirrors the real runner: a non-zero exit fails with the raw result attached.
+function createStaplerRunner(results) {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    run: (command, args) =>
+      Effect.suspend(() => {
+        const result = results[calls++];
+        return result.code === 0
+          ? Effect.succeed(result)
+          : Effect.fail(
+              new MacReleaseVerificationFailure({
+                reason: classifyCommandFailure(command, args, result),
+                result,
+              }),
+            );
+      }),
+  };
+}
+
+function cloudKitNetworkLost() {
+  return {
+    code: 68,
+    signal: null,
+    stderr: '',
+    stdout:
+      'error is Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."\nCloudKit\'s response is inconsistent with expections: (null)\nThe validate action failed! Error 68.',
+  };
 }
 
 function success(stdout = '', stderr = '') {

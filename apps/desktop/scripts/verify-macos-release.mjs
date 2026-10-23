@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import process from 'node:process';
 
-import { Data, Effect } from 'effect';
+import { Data, Effect, Schedule } from 'effect';
 
 import { verifyDesktopLicenseBundle } from './desktop-license-bundle.mjs';
 import { macReleaseContract } from './macos-release-contract.mjs';
@@ -238,7 +238,7 @@ function verifyApp(appPath, options, run, verifyLicenseBundle, label) {
       const signature = parseCodesignDetails(`${display.stdout}\n${display.stderr}`);
       verifySigningIdentity(signature, options.expectedTeamId, label);
     });
-    yield* run('xcrun', ['stapler', 'validate', appPath]);
+    yield* validateStapledTicket(appPath, run);
     yield* run('spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath]);
 
     const mainExecutable = resolve(appPath, 'Contents/MacOS', info.CFBundleExecutable);
@@ -333,6 +333,33 @@ export function classifyCommandFailure(command, args, result) {
   const detail = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
   const status = result.code === null ? (result.signal ?? 'unknown signal') : `exit ${result.code}`;
   return `${command} ${args.join(' ')} failed with ${status}${detail ? `: ${detail}` : ''}`;
+}
+
+// `stapler validate` looks the ticket up on Apple's CloudKit service, and GitHub's
+// Intel macOS runners intermittently drop that connection after notarization has
+// already succeeded. Only that network failure is retried; an invalid or missing
+// ticket still fails on the first attempt.
+/**
+ * @param {string} appPath
+ * @param {MacCommandRunner} run
+ * @param {{ baseDelay?: import('effect').Duration.Input; retries?: number }} [options]
+ */
+export function validateStapledTicket(appPath, run, options = {}) {
+  return run('xcrun', ['stapler', 'validate', appPath]).pipe(
+    Effect.retry({
+      schedule: Schedule.exponential(options.baseDelay ?? '10 seconds'),
+      times: options.retries ?? 3,
+      while: isTransientStaplerFailure,
+    }),
+  );
+}
+
+/** @param {unknown} failure */
+export function isTransientStaplerFailure(failure) {
+  if (!(failure instanceof MacReleaseVerificationFailure) || failure.result?.code !== 68) {
+    return false;
+  }
+  return /NSURLErrorDomain|CloudKit/.test(`${failure.result.stderr}\n${failure.result.stdout}`);
 }
 
 /** @param {MacCommandRunner} run */
@@ -580,6 +607,7 @@ function runCommand(command, args) {
           Effect.fail(
             new MacReleaseVerificationFailure({
               reason: classifyCommandFailure(command, args, result),
+              result,
             }),
           ),
         );
