@@ -52,13 +52,11 @@ export const HarnessObservationTargetsLayerNoDeps = Layer.effect(
               : input.mode === 'one' && input.id !== undefined
                 ? base.where(eq(agentSessions.id, input.id)).all()
                 : base.all();
-          return rows.map(
-            (row): HarnessObservationTarget => ({
-              agentSessionId: row.agentSessionId,
-              harness: row.harness,
-              activeExecution: activeExecution(row, interaction.control(row.agentSessionId)),
-            }),
-          );
+          return rows.map((row): HarnessObservationTarget => ({
+            agentSessionId: row.agentSessionId,
+            harness: row.harness,
+            activeExecution: activeExecution(row, interaction.control(row.agentSessionId)),
+          }));
         }),
     });
   }),

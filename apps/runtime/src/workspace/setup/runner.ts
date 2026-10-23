@@ -120,14 +120,12 @@ const runHook = Effect.fnUntraced(function* (input: {
   const startedAt = timestamp();
   const step = { hookIndex: input.hookIndex, hookType: input.hook.type, startedAt };
   return yield* runHookOperation(input).pipe(
-    Effect.map(
-      (outcome): SetupStep => ({
-        ...step,
-        status: outcome.status,
-        completedAt: timestamp(),
-        ...outcome.details,
-      }),
-    ),
+    Effect.map((outcome): SetupStep => ({
+      ...step,
+      status: outcome.status,
+      completedAt: timestamp(),
+      ...outcome.details,
+    })),
     Effect.catchTag('WorktreeSetupRunError', (error) =>
       Effect.succeed<SetupStep>({
         ...step,

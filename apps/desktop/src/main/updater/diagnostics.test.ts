@@ -100,17 +100,14 @@ test('diagnostics serialize writes, redact before truncation, and rotate by UTF-
   const subject = trail(directory);
   const secret =
     'https://user:password@example.test/release?token=hidden&X-Amz-Signature=signaturevalue ghp_0123456789abcdefghijklmnopqrstuvwxyz {"api_key":"jsonsecret"}';
-  const records = Array.from(
-    { length: 80 },
-    (_, index): UpdaterDiagnosticRecord => ({
-      operation: 'download',
-      platform: 'darwin',
-      installedVersion: '1.2.3',
-      targetVersion: '2.0.0',
-      code: `failure_${index}`,
-      summary: `${secret} ${'界'.repeat(2_000)}`,
-    }),
-  );
+  const records = Array.from({ length: 80 }, (_, index): UpdaterDiagnosticRecord => ({
+    operation: 'download',
+    platform: 'darwin',
+    installedVersion: '1.2.3',
+    targetVersion: '2.0.0',
+    code: `failure_${index}`,
+    summary: `${secret} ${'界'.repeat(2_000)}`,
+  }));
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

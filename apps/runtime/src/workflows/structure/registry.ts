@@ -191,14 +191,12 @@ function workflowDiscoverySources(
 ): readonly WorkflowDiscoverySource[] {
   const sources: WorkflowDiscoverySource[] = [
     { kind: 'core', rootPath: normalize(workflowsPath), explicitlyConfigured: false },
-    ...additionalDirectories.map(
-      (rootPath, configuredIndex): WorkflowDiscoverySource => ({
-        kind: 'additional',
-        rootPath: normalize(rootPath),
-        configuredIndex,
-        explicitlyConfigured: true,
-      }),
-    ),
+    ...additionalDirectories.map((rootPath, configuredIndex): WorkflowDiscoverySource => ({
+      kind: 'additional',
+      rootPath: normalize(rootPath),
+      configuredIndex,
+      explicitlyConfigured: true,
+    })),
   ];
   const projectRoot = projectWorkflowsPath(context);
   if (projectRoot) {

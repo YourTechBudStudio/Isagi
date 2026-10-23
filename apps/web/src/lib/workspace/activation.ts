@@ -72,16 +72,14 @@ interface WorkbenchFocus {
   drawerFocusTarget: (() => void) | null;
 }
 
-export const workbenchFocusAtom = sessionObject(
-  (): WorkbenchFocus => ({
-    focusRevisionByWorktreeId: new Map(),
-    focusTargetsByPaneKey: new Map(),
-    pendingFocusKey: null,
-    scheduledFocusRevision: 0,
-    scheduledFocusFrames: [],
-    drawerFocusTarget: null,
-  }),
-);
+export const workbenchFocusAtom = sessionObject((): WorkbenchFocus => ({
+  focusRevisionByWorktreeId: new Map(),
+  focusTargetsByPaneKey: new Map(),
+  pendingFocusKey: null,
+  scheduledFocusRevision: 0,
+  scheduledFocusFrames: [],
+  drawerFocusTarget: null,
+}));
 
 const focusOf = (registry: Registry): WorkbenchFocus => registry.get(workbenchFocusAtom);
 

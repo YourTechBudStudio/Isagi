@@ -61,9 +61,9 @@ export const activeContext = Effect.gen(function* () {
 
   return {
     getActiveContext: stateFile.read.pipe(
-      Effect.map(
-        (state): ActiveContextOutput => ({ activeContext: activeContextFromState(state) }),
-      ),
+      Effect.map((state): ActiveContextOutput => ({
+        activeContext: activeContextFromState(state),
+      })),
       Effect.withSpan('WorkspaceService.getActiveContext'),
     ),
     setActiveContext: Effect.fn('WorkspaceService.setActiveContext')(function* (

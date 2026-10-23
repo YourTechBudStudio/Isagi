@@ -33,11 +33,11 @@
     "@electron/asar": "3.4.1",
     "@electron/rebuild": "^4.2.0",
     "@types/node": "^24.10.1",
-    "electron": "^43.2.0",
+    "electron": "^43.8.3",
     "electron-builder": "^26.15.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
-    "vite": "^8.0.14"
+    "vite": "^8.3.5"
   },
   "desktopName": "studio.yourtechbud.isagi.desktop"
 }

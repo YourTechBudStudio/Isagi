@@ -116,8 +116,8 @@ describe('commandDetailNotice', () => {
   });
 
   it('explains a suspension in every presentation, with the facts that presentation has', () => {
-    const notices = ALL_PRESENTATIONS.map(
-      (presentation) => commandDetailNotice({ status: 'suspended', presentation })!,
+    const notices = ALL_PRESENTATIONS.map((presentation) =>
+      commandDetailNotice({ status: 'suspended', presentation })!,
     );
 
     for (const notice of notices) {

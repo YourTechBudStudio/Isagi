@@ -52,12 +52,10 @@ export const workspaceReadAtom = query(
   (get) => {
     const startedAt = get.once(railOrderAtom).clock;
     return fetchWorkspace().pipe(
-      Effect.map(
-        (snapshot): WorkspaceRead => ({
-          data: workspaceDataFromSnapshot(snapshot),
-          startedAt,
-        }),
-      ),
+      Effect.map((snapshot): WorkspaceRead => ({
+        data: workspaceDataFromSnapshot(snapshot),
+        startedAt,
+      })),
     );
   },
   { keys: [keys.workspace] },

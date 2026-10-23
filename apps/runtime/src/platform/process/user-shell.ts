@@ -138,15 +138,13 @@ export const runUserShellCommand = Effect.fnUntraced(function* (
       return yield* group.exit;
     }),
   ).pipe(
-    Effect.map(
-      (exit): UserShellCommandResult => ({
-        exitCode: exit.exitCode,
-        signal: exit.signal,
-        ...output.text(),
-        timedOut,
-        outputTruncated: output.truncated(),
-      }),
-    ),
+    Effect.map((exit): UserShellCommandResult => ({
+      exitCode: exit.exitCode,
+      signal: exit.signal,
+      ...output.text(),
+      timedOut,
+      outputTruncated: output.truncated(),
+    })),
     Effect.catchTag('ProcessSpawnFailed', (error) =>
       Effect.succeed<UserShellCommandResult>({
         exitCode: null,

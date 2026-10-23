@@ -383,9 +383,9 @@ type OptionValue<Option> = Option extends BooleanOptionSpec
 /** The validated, converted arguments of one command, typed from its table entry. */
 export interface CommandArguments<Id extends CommandId> {
   readonly positionals: {
-    readonly [Positional in SpecOf<Id>['positionals'][number] as Positional['name']]: ConvertedValue<
-      Positional['value']
-    >;
+    readonly [
+      Positional in SpecOf<Id>['positionals'][number] as Positional['name']
+    ]: ConvertedValue<Positional['value']>;
   };
   readonly options: {
     readonly [Name in keyof SpecOf<Id>['options']]: OptionValue<SpecOf<Id>['options'][Name]>;

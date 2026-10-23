@@ -14,19 +14,17 @@ export function registerRuntimeConfigRoutes(
   // Reading the live config cannot fail: the service decoded `config.yaml` when it was built.
   registerApiEndpoint(fastify, runtime, apiEndpoints.clientSettings, () =>
     RuntimeConfig.use((runtimeConfig) => runtimeConfig.get).pipe(
-      Effect.map(
-        (config): ClientSettingsOutput => ({
-          terminal: {
-            scrollbackLines: config.terminal.scrollbackLines,
-            cache: {
-              idleTtlMinutes: config.terminal.cache.idleTtlMinutes,
-              maxHiddenSessions: config.terminal.cache.maxHiddenSessions,
-              maxEstimatedBufferMiB: config.terminal.cache.maxEstimatedBufferMiB,
-            },
+      Effect.map((config): ClientSettingsOutput => ({
+        terminal: {
+          scrollbackLines: config.terminal.scrollbackLines,
+          cache: {
+            idleTtlMinutes: config.terminal.cache.idleTtlMinutes,
+            maxHiddenSessions: config.terminal.cache.maxHiddenSessions,
+            maxEstimatedBufferMiB: config.terminal.cache.maxEstimatedBufferMiB,
           },
-          appearance: { theme: config.appearance.theme },
-        }),
-      ),
+        },
+        appearance: { theme: config.appearance.theme },
+      })),
     ),
   );
 }

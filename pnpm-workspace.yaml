@@ -16,3 +16,30 @@ allowBuilds:
 # Fluidcast is our own lockstep release; it installs as soon as it is published.
 minimumReleaseAgeExclude:
   - '@yourtechbudstudio/fluidcast-*'
+# Security floors for transitive dependencies whose parents still pin vulnerable versions.
+# Each stays within its parent's major; drop an entry once `pnpm why` shows the parent has caught up.
+overrides:
+  # electron-builder, @electron/rebuild (node-gyp)
+  'tar@^7': ^7.5.22
+  # @electron/rebuild (node-gyp), electron (@electron/get)
+  'undici@^6': ^6.29.1
+  'undici@^7': ^7.30.1
+  # minimatch via @electron/asar, @electron/universal, electron-builder
+  'brace-expansion@^1': ^1.1.21
+  'brace-expansion@^2': ^2.1.7
+  'brace-expansion@^5': ^5.0.12
+  # electron-builder (electron-publish)
+  'form-data@^4': ^4.0.6
+  # ajv via fastify, @modelcontextprotocol/sdk, electron-builder
+  'fast-uri@^3': ^3.1.9
+  # electron-updater, electron-builder
+  'js-yaml@^4': ^4.3.2
+  # plist via electron-builder, @electron/osx-sign, @electron/universal
+  '@xmldom/xmldom@~0.8': ~0.8.15
+  '@xmldom/xmldom@~0.9': ~0.9.12
+  # got (cacheable-request) via electron-builder
+  'http-cache-semantics@^4': ^4.3.0
+  # postcss, @tailwindcss/node
+  'source-map-js@^1': ^1.2.2
+  # tsx, vite
+  'esbuild@~0.28': ~0.28.2

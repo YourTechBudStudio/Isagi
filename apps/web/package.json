@@ -25,7 +25,7 @@
     "@yourtechbudstudio/fluidcast-client": "0.0.1",
     "@yourtechbudstudio/fluidcast-core": "0.0.1",
     "@yourtechbudstudio/fluidcast-harness": "0.0.1",
-    "@yourtechbudstudio/fluidcast-react": "0.0.2",
+    "@yourtechbudstudio/fluidcast-react": "0.0.3",
     "@yourtechbudstudio/fluidcast-tool-agent": "0.0.1",
     "@yourtechbudstudio/fluidcast-tool-ask": "0.0.1",
     "@yourtechbudstudio/fluidcast-tool-show": "0.0.1",
@@ -35,7 +35,7 @@
     "motion": "^12.40.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-router": "^7.18.0"
+    "react-router": "^7.18.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
@@ -47,6 +47,6 @@
     "tailwindcss": "^4.3.0",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
-    "vite": "^8.0.14"
+    "vite": "^8.3.5"
   }
 }

@@ -109,9 +109,10 @@ export interface SelectionSyncState {
   readonly reconciledProjectIds: Set<number>;
 }
 
-export const selectionSyncAtom = sessionObject(
-  (): SelectionSyncState => ({ suppressedPersistence: null, reconciledProjectIds: new Set() }),
-);
+export const selectionSyncAtom = sessionObject((): SelectionSyncState => ({
+  suppressedPersistence: null,
+  reconciledProjectIds: new Set(),
+}));
 
 export function selectionEquals(left: WorkspaceSelection, right: WorkspaceSelection) {
   if (left.kind !== right.kind) {

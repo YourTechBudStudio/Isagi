@@ -63,17 +63,15 @@ export function makePlacementContext(
           Effect.map((rows) =>
             rows
               .filter((row) => row.projectId === input.project.id)
-              .map(
-                (row): WorkflowWorktreeSummary => ({
-                  id: row.id,
-                  path: row.path,
-                  branch: row.branch,
-                  head: row.head,
-                  // The same rule `workspace.snapshot.ts` applies: the root worktree is the one
-                  // checked out at the project root, not a flag on the row.
-                  isRoot: row.path === input.project.rootPath,
-                }),
-              ),
+              .map((row): WorkflowWorktreeSummary => ({
+                id: row.id,
+                path: row.path,
+                branch: row.branch,
+                head: row.head,
+                // The same rule `workspace.snapshot.ts` applies: the root worktree is the one
+                // checked out at the project root, not a flag on the row.
+                isRoot: row.path === input.project.rootPath,
+              })),
           ),
         ),
       ),
@@ -89,13 +87,11 @@ export function makePlacementContext(
           const surfaces = yield* deps.surfaceReads.listWorkspaceSurfaceMetadata;
           return surfaces
             .filter((row) => row.worktreeId === worktreeId)
-            .map(
-              (row): WorkflowSurfaceSummary => ({
-                id: row.id,
-                worktreeId: row.worktreeId,
-                title: row.title,
-              }),
-            );
+            .map((row): WorkflowSurfaceSummary => ({
+              id: row.id,
+              worktreeId: row.worktreeId,
+              title: row.title,
+            }));
         }),
       ),
   };

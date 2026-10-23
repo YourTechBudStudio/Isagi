@@ -20,9 +20,8 @@ function session(t: TestContext, read: (n: number) => Effect.Effect<WorkflowRunS
       getWorkflowRun: () =>
         Effect.suspend(() => {
           reads += 1;
-          return Effect.map(
-            read(reads),
-            (run): GetWorkflowRunOutput => workflowRunDetailFixture({ run }),
+          return Effect.map(read(reads), (run): GetWorkflowRunOutput =>
+            workflowRunDetailFixture({ run }),
           );
         }) as never,
     },

@@ -171,9 +171,8 @@ function resolveLookup<A>(
   context: { readonly lookup: string; readonly entityId: number },
 ): Effect.Effect<LookupOutcome<A>> {
   return lookup.pipe(
-    Effect.map(
-      (value): LookupOutcome<A> =>
-        value === null ? { outcome: 'absent' } : { outcome: 'found', value },
+    Effect.map((value): LookupOutcome<A> =>
+      value === null ? { outcome: 'absent' } : { outcome: 'found', value },
     ),
     Effect.catchTag('DatabaseError', (error) =>
       Effect.logWarning('Runtime event projection lookup failed').pipe(

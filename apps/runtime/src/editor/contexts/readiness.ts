@@ -155,29 +155,25 @@ export function probeWorkbench(input: {
   return poll.pipe(
     // The deadline wraps the initial delay, the schedule, both stages, and any
     // request in flight.
-    Effect.map(
-      (): EditorReadinessSettlement => ({
-        state: 'ready',
-        detail: null,
-      }),
-    ),
+    Effect.map((): EditorReadinessSettlement => ({
+      state: 'ready',
+      detail: null,
+    })),
     Effect.timeoutOrElse({
       duration: Duration.millis(timing.deadlineMs),
       // Evaluated only when the deadline fires, so it reads the furthest stage
       // and last outcome reached at that moment.
       orElse: () =>
-        Effect.sync(
-          (): EditorReadinessSettlement => ({
-            state: 'unreachable',
-            detail: describeUnreachable({
-              host: input.host,
-              port: input.port,
-              stage,
-              outcome: lastOutcome,
-              deadlineMs: timing.deadlineMs,
-            }),
+        Effect.sync((): EditorReadinessSettlement => ({
+          state: 'unreachable',
+          detail: describeUnreachable({
+            host: input.host,
+            port: input.port,
+            stage,
+            outcome: lastOutcome,
+            deadlineMs: timing.deadlineMs,
           }),
-        ),
+        })),
     }),
     Effect.flatMap(input.onSettled),
   );
