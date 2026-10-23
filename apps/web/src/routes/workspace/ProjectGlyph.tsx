@@ -23,6 +23,6 @@ export function ProjectGlyph(
   const variant =
     'disconnected' in props
       ? 'border border-dashed border-error/55 text-error'
-      : `text-canvas ${ACCENT_BG[props.accent]}`;
+      : `text-on-accent ${ACCENT_BG[props.accent]}`;
   return <span className={`${BASE} ${variant}`}>{props.glyph}</span>;
 }

@@ -21,10 +21,6 @@ files:
     to: dist-electron
     filter:
       - '**/*'
-  - from: static
-    to: static
-    filter:
-      - '**/*'
   - package.json
 
 extraResources:

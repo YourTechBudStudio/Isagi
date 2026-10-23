@@ -1,4 +1,4 @@
-import type { AppearanceTheme } from '@isagi/contracts';
+import { type AppearanceTheme, appearanceSettingsDefaults } from '@isagi/contracts';
 
 /**
  * The document's color theme.
@@ -9,8 +9,9 @@ import type { AppearanceTheme } from '@isagi/contracts';
  * branches on the theme.
  *
  * The runtime answers only once it is reachable, so the last applied theme is
- * also kept in local storage as a first-paint hint. It is never a source of
- * truth: the runtime's value replaces it as soon as client settings arrive.
+ * also kept in local storage as a first-paint hint, and the first launch paints
+ * the default theme. Neither is a source of truth: the runtime's value replaces
+ * them as soon as client settings arrive.
  */
 
 const HINT_KEY = 'isagi.appearance.theme';
@@ -20,14 +21,14 @@ export function applyDocumentTheme(theme: AppearanceTheme): void {
   try {
     window.localStorage.setItem(HINT_KEY, theme);
   } catch {
-    // Storage can be unavailable; the next launch paints dark until settings arrive.
+    // Storage can be unavailable; the next launch paints the default until settings arrive.
   }
 }
 
-/** Paints the remembered theme before the first frame. Call once, before rendering. */
+/** Paints the remembered theme, or the default, before the first frame. Call once, before rendering. */
 export function applyThemeHint(): void {
-  const hint = readThemeHint(() => window.localStorage.getItem(HINT_KEY));
-  if (hint) document.documentElement.dataset.theme = hint;
+  document.documentElement.dataset.theme =
+    readThemeHint(() => window.localStorage.getItem(HINT_KEY)) ?? appearanceSettingsDefaults.theme;
 }
 
 export function readThemeHint(read: () => string | null): AppearanceTheme | null {

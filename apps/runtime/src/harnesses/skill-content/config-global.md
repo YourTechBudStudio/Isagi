@@ -94,14 +94,14 @@ Omitting `terminal`, `cache`, or any nested field applies the documented default
 
 ## Theme
 
-The top-level `appearance` section picks the color theme for the Isagi app. `dark` is Catppuccin Macchiato and `light` is Catppuccin Latte; terminals follow the app theme.
+The top-level `appearance` section picks the color theme for the Isagi app. `dark` is Catppuccin Macchiato and `light` is Catppuccin Latte; terminals and Fluidcast voice mode follow the app theme.
 
 ```yaml
 appearance:
   theme: light
 ```
 
-`theme` defaults to `dark` and accepts only `dark` or `light`. Any other value prevents Isagi from starting. The theme is read when Isagi starts, so a change takes effect after a restart. Embedded editors keep their own theme; change it inside the editor. Configure the theme only in `{{DATA_ROOT}}/config.yaml`; it is not a project setting.
+`theme` defaults to `light` and accepts only `dark` or `light`. Any other value prevents Isagi from starting. The theme is read when Isagi starts, so a change takes effect after a restart. Embedded editors keep their own theme; change it inside the editor. Configure the theme only in `{{DATA_ROOT}}/config.yaml`; it is not a project setting.
 
 ## Fluidcast voice mode
 

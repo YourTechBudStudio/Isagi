@@ -451,7 +451,7 @@ function TabButton({
       tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={`rounded-md px-3.5 py-1 text-[12.5px] transition duration-micro ease-expo ${
-        active ? 'bg-blue font-semibold text-scrim' : 'text-fg-subtle hover:text-fg'
+        active ? 'bg-blue font-semibold text-on-accent' : 'text-fg-subtle hover:text-fg'
       }`}
     >
       {children}

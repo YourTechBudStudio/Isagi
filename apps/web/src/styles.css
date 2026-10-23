@@ -22,7 +22,9 @@
    These are the single source of truth for color, type, motion, and depth.
    The values below are the dark theme; `:root[data-theme='light']` further
    down re-points every color token at Latte using the same Catppuccin roles,
-   so utilities never name a theme. See apps/web/AGENTS.md → "Styling
+   so utilities never name a theme. The Fluidcast player follows the same
+   `data-theme` with its own copy of both palettes, kept equal to these by
+   lib/fluidcast/theme-tokens.test.ts. See apps/web/AGENTS.md → "Styling
    conventions" before adding new ones.
    ────────────────────────────────────────────────────────────────────────── */
 @theme {
@@ -50,6 +52,9 @@
   /* The film hover and selection washes are mixed from (`bg-tint/6`): the end
      of the ramp farthest from the canvas, so a wash always reads as lift. */
   --color-tint: #ffffff;
+  /* Text and glyphs on a solid accent fill (`bg-blue text-on-accent`): the
+     ink farthest from the accents, never a surface token. */
+  --color-on-accent: #141622;
 
   /* Foreground / text steps */
   --color-fg: #cad3f5; /* primary   */
@@ -248,6 +253,7 @@
   --color-line: #acb0be; /* surface2 */
   --color-scrim: #dce0e8; /* crust */
   --color-tint: #4c4f69; /* text */
+  --color-on-accent: #ffffff; /* past base: Latte's base is 4.3:1 on blue, white 4.9:1 */
 
   --color-fg: #4c4f69; /* text */
   --color-fg-muted: #6c6f85; /* subtext0 */
@@ -270,18 +276,6 @@
   --terminal-ansi-white: #acb0be; /* surface2 */
   --terminal-ansi-bright-black: #6c6f85; /* subtext0 */
   --terminal-ansi-bright-white: #bcc0cc; /* surface1 */
-}
-
-/* The Fluidcast player stays Macchiato in the light theme. It scopes its own
-   palette on its root, but some of its surfaces (the narrow Show sheet, the
-   animated dock, Markdown code blocks) paint fixed Macchiato colors, so
-   re-pointing its tokens at Latte would put dark text on those dark surfaces.
-   Its root is transparent, so it paints its own canvas here: `--color-canvas`
-   resolves to the player's scoped Macchiato value, not Isagi's. Drop this
-   once the player takes every color from its tokens. */
-:root[data-theme='light'] .fluidcast-player {
-  color-scheme: dark;
-  background-color: var(--color-canvas);
 }
 
 html,

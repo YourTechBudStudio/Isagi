@@ -75,7 +75,7 @@ export const runtimeTerminalSettingsSchema = Schema.Struct({
 export const runtimeAppearanceSettingsSchema = Schema.Struct({
   theme: Schema.optional(Schema.Literals(['dark', 'light'])).annotate({
     description:
-      'Color theme for the Isagi app: dark (Catppuccin Macchiato) or light (Catppuccin Latte). Missing defaults to dark. Embedded editors keep their own theme. Changing it requires restarting Isagi.',
+      'Color theme for the Isagi app: dark (Catppuccin Macchiato) or light (Catppuccin Latte). Missing defaults to light. Embedded editors keep their own theme. Changing it requires restarting Isagi.',
   }),
 }).annotate({
   description:

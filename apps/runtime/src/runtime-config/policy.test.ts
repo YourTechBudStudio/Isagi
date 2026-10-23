@@ -247,10 +247,10 @@ test('client settings wire schema requires normalized fields and enforces canoni
   }
 });
 
-test('appearance theme defaults to dark and accepts only dark or light', () => {
-  assert.deepEqual(defaultRuntimeConfig.appearance, { theme: 'dark' });
-  assert.deepEqual(parseRuntimeConfig({}).appearance, { theme: 'dark' });
-  assert.deepEqual(parseRuntimeConfig({ appearance: {} }).appearance, { theme: 'dark' });
+test('appearance theme defaults to light and accepts only dark or light', () => {
+  assert.deepEqual(defaultRuntimeConfig.appearance, { theme: 'light' });
+  assert.deepEqual(parseRuntimeConfig({}).appearance, { theme: 'light' });
+  assert.deepEqual(parseRuntimeConfig({ appearance: {} }).appearance, { theme: 'light' });
   assert.deepEqual(parseRuntimeConfig({ appearance: { theme: 'light' } }).appearance, {
     theme: 'light',
   });
