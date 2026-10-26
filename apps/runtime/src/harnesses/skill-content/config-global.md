@@ -166,6 +166,33 @@ fluidcast:
       name: alloy
 ```
 
+`summaryModel` is an optional second language model, usually a cheaper and faster one, that writes the progress sentences the voice reads while the agent works and the history summaries described below. It takes the same fields as `languageModel` (`provider`, `apiKey`, `model`, `baseUrl`, `reasoningEffort`, `temperature`, `maxOutputTokens`, and Anthropic's `fast`) except `structuredOutput`: its replies are plain text, so `structuredOutput` there, even `false`, makes the section invalid. Its `apiKey` may be an `env.` reference like any other. Without `summaryModel`, the voice's own model writes them, unconstrained even when its `structuredOutput` is on.
+
+`history.compaction` keeps the voice's view of a long conversation short. It is off unless `enabled: true`. Once the generation that forwards your words to the agent read more than `aboveInputTokens` input tokens, everything before that forward is summarized in the background into one rolling summary, which the voice reads in place of the earlier conversation from its next reply on. Only the voice's view changes: you, the transcript and the agent still get the full conversation. The count is the provider's total input, cache reads included. `aboveInputTokens` defaults to 56000, which keeps the input within a 64K-token context window; set it to suit your model. A provider that reports no count compacts after every forward. The summary model writes the summaries, else the voice's model. On paid APIs with cheap cache reads, such as Anthropic, compaction costs more than it saves unless a cheap model writes the summaries or the threshold is high.
+
+```yaml
+fluidcast:
+  enabled: true
+  languageModel:
+    provider: anthropic
+    apiKey: env.ANTHROPIC_API_KEY
+    model: claude-sonnet-5-5
+  summaryModel:
+    provider: anthropic
+    apiKey: env.ANTHROPIC_API_KEY
+    model: claude-haiku-5-5
+  history:
+    compaction:
+      enabled: true
+      aboveInputTokens: 120000
+  speech:
+    apiKey: env.OPENAI_API_KEY
+    model: gpt-4o-mini-tts
+  preset:
+    voice:
+      name: alloy
+```
+
 Any `apiKey` may be written as `env.NAME` to read the key from the `NAME` environment variable instead of writing it into the file. Isagi reads the variable from your login shell's environment, the same one agent terminals get, when it starts. Only the lowercase `env.` prefix is a reference, and `NAME` must be a valid variable name. If the variable is unset or empty, voice mode is unavailable and the runtime log names the field and the variable, never a value.
 
 Keys written inline stay in the runtime: Isagi never sends them to the app, and its errors and logs never print config text. Isagi reads this section at startup, so changes take effect only after Isagi restarts. An invalid enabled section never stops Isagi from starting; voice mode is unavailable until it is fixed, and the runtime log names the invalid fields.

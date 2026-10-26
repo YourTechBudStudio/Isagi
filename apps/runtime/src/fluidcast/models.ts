@@ -6,51 +6,85 @@ import * as OpenAiClient from '@effect/ai-openai/OpenAiClient';
 import * as OpenAiLanguageModel from '@effect/ai-openai/OpenAiLanguageModel';
 import { SpeechSynthesizer } from '@yourtechbudstudio/fluidcast-core/speech';
 import * as OpenAiSpeech from '@yourtechbudstudio/fluidcast-core/speech/openai';
-import { Context, Effect, Layer, type Scope } from 'effect';
+import { Context, Effect, type JsonSchema, Layer, type Scope } from 'effect';
 import { LanguageModel } from 'effect/ai';
 import { HttpClient, HttpClientRequest } from 'effect/http';
 
-import type { FluidcastConfig } from '../runtime-config/index.js';
+import type { FluidcastConfig, FluidcastConnection } from '../runtime-config/index.js';
+import { withAnthropicStructuredOutput } from './anthropic-structured-output.js';
+import { withStructuredOutput } from './structured-output.js';
 
-/** The configured models, built once and shared by every session: they are stateless clients. */
+/**
+ * The configured models by role, built once and shared by every session: they are stateless
+ * clients. The voice is the only model ever constrained to Fluidcast's output schema; every other
+ * role gets plain text, as the SDK's `SummaryModel` contract requires.
+ */
 export interface FluidcastModels {
-  /** The configured model, unwrapped. Progress uses it as is; the session factory derives the voice's model from it. */
-  readonly languageModel: LanguageModel.LanguageModel;
   /**
-   * The provider whose request shape constrains the voice to Fluidcast's output schema, or `null`
-   * when replies are unconstrained: set only when the config's `structuredOutput` is true.
+   * The voice's model for a session whose output schema is `outputSchema`: constrained to it when
+   * the config's `structuredOutput` is true, else `base` itself.
    */
-  readonly structuredOutput: 'openai-compatible' | 'anthropic' | null;
+  readonly voice: (outputSchema: JsonSchema.JsonSchema) => LanguageModel.LanguageModel;
+  /** The voice's model, unwrapped. */
+  readonly base: LanguageModel.LanguageModel;
+  /** Writes progress sentences and history summaries: the `summaryModel`, else `base`. */
+  readonly summary: LanguageModel.LanguageModel;
   readonly speech: SpeechSynthesizer['Service'];
 }
 
 /**
- * Builds the language model and speech clients from config in the caller's scope, over the given
- * `HttpClient`. Neither makes a request until a session generates or speaks. Keys stay `Redacted`
+ * Builds the language-model and speech clients from config in the caller's scope, over the given
+ * `HttpClient`. None makes a request until a session generates or speaks. Keys stay `Redacted`
  * until the client layers.
  */
 export const buildFluidcastModels = (
   config: FluidcastConfig,
 ): Effect.Effect<FluidcastModels, never, Scope.Scope | HttpClient.HttpClient> =>
   Effect.gen(function* () {
-    const context = yield* Layer.build(
-      Layer.mergeAll(languageModelLayer(config.languageModel), speechLayer(config.speech)),
-    );
+    const voiceModel = config.languageModel;
+    const structuredOutput =
+      voiceModel.provider !== 'openai' && voiceModel.structuredOutput === true
+        ? voiceModel.provider
+        : null;
+    // Each connection in its own build: merged, one `LanguageModel` layer would replace the other.
+    const base = yield* buildLanguageModel(voiceModel, {
+      structuredOutput: structuredOutput !== null,
+    });
+    const summary =
+      config.summaryModel === undefined
+        ? base
+        : yield* buildLanguageModel(config.summaryModel, { structuredOutput: false });
+    const speech = Context.get(yield* Layer.build(speechLayer(config.speech)), SpeechSynthesizer);
     return {
-      languageModel: Context.get(context, LanguageModel.LanguageModel),
-      structuredOutput:
-        config.languageModel.provider !== 'openai' && config.languageModel.structuredOutput === true
-          ? config.languageModel.provider
-          : null,
-      speech: Context.get(context, SpeechSynthesizer),
+      voice: (outputSchema) =>
+        structuredOutput === 'openai-compatible'
+          ? withStructuredOutput(base, outputSchema)
+          : structuredOutput === 'anthropic'
+            ? withAnthropicStructuredOutput(base, outputSchema)
+            : base,
+      base,
+      summary,
+      speech,
     };
   });
 
+const buildLanguageModel = (
+  connection: FluidcastConnection,
+  options: { readonly structuredOutput: boolean },
+) =>
+  Effect.map(Layer.build(languageModelLayer(connection, options)), (context) =>
+    Context.get(context, LanguageModel.LanguageModel),
+  );
+
 /**
  * OpenAI's Responses API, Chat Completions for a compatible server, or Anthropic's Messages API; no
- * ChatGPT or Claude sign-in.
+ * ChatGPT or Claude sign-in. `structuredOutput` is the voice's setting, false for any other role:
+ * on Anthropic it turns on the beta the voice's schema needs.
  */
-function languageModelLayer(config: FluidcastConfig['languageModel']) {
+function languageModelLayer(
+  config: FluidcastConnection,
+  { structuredOutput }: { readonly structuredOutput: boolean },
+) {
   const sampling = {
     ...(config.temperature === undefined ? {} : { temperature: config.temperature }),
     // Both adapters take the Responses name; the compat one sends it as Chat Completions' `max_tokens`.
@@ -79,7 +113,7 @@ function languageModelLayer(config: FluidcastConfig['languageModel']) {
       );
     case 'anthropic': {
       const betas = [
-        ...(config.structuredOutput === true ? [structuredOutputsBeta] : []),
+        ...(structuredOutput ? [structuredOutputsBeta] : []),
         ...(config.fast === true ? [fastModeBeta] : []),
       ];
       return AnthropicLanguageModel.layer({
@@ -94,7 +128,7 @@ function languageModelLayer(config: FluidcastConfig['languageModel']) {
           ...(config.fast === true ? { speed: 'fast' as const } : {}),
           // Explicit: for a model ID it does not know, the adapter assumes structured outputs and
           // turns on strict tools and their beta. The voice asks for its schema per generation.
-          structuredOutputs: config.structuredOutput === true,
+          structuredOutputs: structuredOutput,
         },
       }).pipe(
         Layer.provide(

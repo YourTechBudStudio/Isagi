@@ -89,7 +89,8 @@ const fluidcastSecret = Schema.RedactedFromValue(
 const fluidcastSecretDescription =
   'It stays in the runtime. Write env.NAME, for example env.OPENAI_API_KEY, to read it from the NAME environment variable of your login shell instead.';
 
-const fluidcastLanguageModelCommon = {
+// One language-model connection per provider, shared by `languageModel` and `summaryModel`.
+const fluidcastConnectionCommon = {
   model: Schema.NonEmptyString.annotate({
     description: 'Model ID sent to the language-model API, for example gpt-5-mini.',
   }),
@@ -100,7 +101,7 @@ const fluidcastLanguageModelCommon = {
   reasoningEffort: Schema.optional(
     Schema.Literals(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
   ).annotate({
-    description: 'Reasoning effort for the voice. Missing uses the API default.',
+    description: 'Reasoning effort. Missing uses the API default.',
   }),
   temperature: Schema.optional(
     Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 2 })),
@@ -112,63 +113,95 @@ const fluidcastLanguageModelCommon = {
   }),
 };
 
-export const runtimeFluidcastLanguageModelSchema = Schema.Union([
-  Schema.Struct({
-    provider: Schema.Literal('openai').annotate({
-      description: 'The OpenAI Responses API.',
-    }),
-    apiKey: fluidcastSecret.annotate({
-      description: `API key for the language-model API. ${fluidcastSecretDescription}`,
-    }),
-    ...fluidcastLanguageModelCommon,
+const fluidcastOpenAiConnection = {
+  provider: Schema.Literal('openai').annotate({
+    description: 'The OpenAI Responses API.',
   }),
+  apiKey: fluidcastSecret.annotate({
+    description: `API key for the language-model API. ${fluidcastSecretDescription}`,
+  }),
+  ...fluidcastConnectionCommon,
+};
+
+const fluidcastOpenAiCompatibleConnection = {
+  provider: Schema.Literal('openai-compatible').annotate({
+    description: 'Any OpenAI-compatible Chat Completions API, such as a local model server.',
+  }),
+  apiKey: Schema.optional(fluidcastSecret).annotate({
+    description: `API key, if the server needs one. ${fluidcastSecretDescription}`,
+  }),
+  ...fluidcastConnectionCommon,
+};
+
+const fluidcastAnthropicConnection = {
+  provider: Schema.Literal('anthropic').annotate({
+    description: "Anthropic's Messages API.",
+  }),
+  apiKey: fluidcastSecret.annotate({
+    description: `Anthropic API key. ${fluidcastSecretDescription}`,
+  }),
+  ...fluidcastConnectionCommon,
+  model: Schema.NonEmptyString.annotate({
+    description: 'Model ID sent to the Messages API, for example claude-sonnet-5-5.',
+  }),
+  reasoningEffort: Schema.optional(
+    Schema.Literals(['low', 'medium', 'high', 'xhigh', 'max']),
+  ).annotate({
+    description: 'Effort: low, medium, high, xhigh or max. Missing uses the model default.',
+  }),
+  temperature: Schema.optional(
+    Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  ).annotate({
+    description:
+      'Sampling temperature from 0 through 1. Missing uses the API default; newer models reject any other value.',
+  }),
+  fast: Schema.optional(Schema.Boolean).annotate({
+    description:
+      'Whether to request fast mode, which generates faster at a higher price. Only models that offer fast mode accept it. Missing defaults to false.',
+  }),
+};
+
+export const runtimeFluidcastLanguageModelSchema = Schema.Union([
+  Schema.Struct(fluidcastOpenAiConnection),
   Schema.Struct({
-    provider: Schema.Literal('openai-compatible').annotate({
-      description: 'Any OpenAI-compatible Chat Completions API, such as a local model server.',
-    }),
-    apiKey: Schema.optional(fluidcastSecret).annotate({
-      description: `API key, if the server needs one. ${fluidcastSecretDescription}`,
-    }),
+    ...fluidcastOpenAiCompatibleConnection,
     structuredOutput: Schema.optional(Schema.Boolean).annotate({
       description:
         "Whether to ask the server to constrain each reply to Fluidcast's output JSON Schema. Turn it on for local models that drift from the expected format. Missing defaults to false.",
     }),
-    ...fluidcastLanguageModelCommon,
   }),
   Schema.Struct({
-    provider: Schema.Literal('anthropic').annotate({
-      description: "Anthropic's Messages API.",
-    }),
-    apiKey: fluidcastSecret.annotate({
-      description: `Anthropic API key. ${fluidcastSecretDescription}`,
-    }),
-    ...fluidcastLanguageModelCommon,
-    model: Schema.NonEmptyString.annotate({
-      description: 'Model ID sent to the Messages API, for example claude-sonnet-5-5.',
-    }),
-    reasoningEffort: Schema.optional(
-      Schema.Literals(['low', 'medium', 'high', 'xhigh', 'max']),
-    ).annotate({
-      description:
-        'Effort for the voice: low, medium, high, xhigh or max. Missing uses the model default.',
-    }),
-    temperature: Schema.optional(
-      Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
-    ).annotate({
-      description:
-        'Sampling temperature from 0 through 1. Missing uses the API default; newer models reject any other value.',
-    }),
+    ...fluidcastAnthropicConnection,
     structuredOutput: Schema.optional(Schema.Boolean).annotate({
       description:
         "Whether to ask the API to constrain each reply to Fluidcast's output JSON Schema. Missing defaults to false.",
     }),
-    fast: Schema.optional(Schema.Boolean).annotate({
-      description:
-        'Whether to request fast mode, which generates faster at a higher price. Only models that offer fast mode accept it. Missing defaults to false.',
-    }),
   }),
 ]).annotate({
   description: "The language model that writes the voice's replies.",
+});
+
+// Never valid: present, even as false, it is an issue at its own path.
+const fluidcastSummaryStructuredOutput = Schema.optional(Schema.Never).annotate({
+  description: 'Not accepted: only `languageModel` can constrain replies to the output schema.',
+});
+
+export const runtimeFluidcastSummaryModelSchema = Schema.Union([
+  Schema.Struct({
+    ...fluidcastOpenAiConnection,
+    structuredOutput: fluidcastSummaryStructuredOutput,
+  }),
+  Schema.Struct({
+    ...fluidcastOpenAiCompatibleConnection,
+    structuredOutput: fluidcastSummaryStructuredOutput,
+  }),
+  Schema.Struct({
+    ...fluidcastAnthropicConnection,
+    structuredOutput: fluidcastSummaryStructuredOutput,
+  }),
+]).annotate({
+  description:
+    "An optional second, usually cheaper, language model that writes the progress sentences read while the agent works and the history summaries. It takes the same fields as languageModel except structuredOutput. Missing: the voice's model writes them.",
 });
 
 export const runtimeFluidcastSchema = Schema.Struct({
@@ -177,6 +210,7 @@ export const runtimeFluidcastSchema = Schema.Struct({
       'Whether agent panes can switch to Fluidcast voice mode. Missing defaults to false; while false, the rest of this section is not validated.',
   }),
   languageModel: runtimeFluidcastLanguageModelSchema,
+  summaryModel: Schema.optional(runtimeFluidcastSummaryModelSchema),
   speech: Schema.Struct({
     model: Schema.NonEmptyString.annotate({
       description: 'Text-to-speech model ID, for example gpt-4o-mini-tts.',
@@ -208,6 +242,24 @@ export const runtimeFluidcastSchema = Schema.Struct({
       }),
     }),
   }).annotate({ description: 'The Guided Walkthrough preset and its voice.' }),
+  history: Schema.optional(
+    Schema.Struct({
+      compaction: Schema.optional(
+        Schema.Struct({
+          enabled: Schema.optional(Schema.Boolean).annotate({
+            description: 'Whether to compact the history. Missing defaults to false.',
+          }),
+          aboveInputTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+            description:
+              "Compact once the generation that forwards your words to the agent read more than this many input tokens: the provider's total, cache reads included. A provider that reports no count compacts after every forward. Missing defaults to 56000, which keeps the input within a 64K-token context window.",
+          }),
+        }),
+      ).annotate({
+        description:
+          "Rolling summaries of the voice's conversation. Once a forward to the agent passes aboveInputTokens, everything before that forward is summarized in the background into one summary, which the voice reads in its place. Only the voice's view changes: you, the transcript and the agent keep the full conversation. The summary model writes it, else the voice's model. On paid APIs with cheap cache reads, such as Anthropic, it costs more than it saves unless a cheap model writes the summaries or the threshold is high. Off unless enabled is true.",
+      }),
+    }),
+  ).annotate({ description: "How the voice's conversation history is kept." }),
 }).annotate({
   description:
     'Fluidcast voice mode for Claude Code and Codex agent panes. Disabled unless enabled is true. An invalid section never stops Isagi from starting; voice mode is then unavailable. Changes require restarting Isagi.',

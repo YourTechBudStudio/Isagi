@@ -35,16 +35,23 @@ export function resolveFluidcastKeys(
     }
     return Redacted.make(value);
   };
-  const languageModelKey = config.languageModel.apiKey;
+  // Every connection has a key; only an openai-compatible model's is optional.
+  const resolveKey = <
+    Connection extends { readonly apiKey?: Redacted.Redacted<string> | undefined },
+  >(
+    connection: Connection,
+    issuePath: string,
+  ): Connection => {
+    const key = connection.apiKey;
+    return key === undefined ? connection : { ...connection, apiKey: resolve(key, issuePath) };
+  };
   const resolved: FluidcastConfig = {
     ...config,
-    languageModel: {
-      ...config.languageModel,
-      ...(languageModelKey === undefined
-        ? {}
-        : { apiKey: resolve(languageModelKey, 'fluidcast.languageModel.apiKey') }),
-    } as FluidcastConfig['languageModel'],
-    speech: { ...config.speech, apiKey: resolve(config.speech.apiKey, 'fluidcast.speech.apiKey') },
+    languageModel: resolveKey(config.languageModel, 'fluidcast.languageModel.apiKey'),
+    ...(config.summaryModel === undefined
+      ? {}
+      : { summaryModel: resolveKey(config.summaryModel, 'fluidcast.summaryModel.apiKey') }),
+    speech: resolveKey(config.speech, 'fluidcast.speech.apiKey'),
   };
   return unset.length === 0 ? { status: 'resolved', config: resolved } : { status: 'unset', unset };
 }

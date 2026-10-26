@@ -2,22 +2,34 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import type { SubscriptionMessage } from '@yourtechbudstudio/fluidcast-harness/protocol';
+import {
+  reduce,
+  type SessionState,
+  type SubscriptionMessage,
+} from '@yourtechbudstudio/fluidcast-harness/protocol';
+import {
+  guidedWalkthroughProgressPrompt,
+  guidedWalkthroughSummaryPrompt,
+} from '@yourtechbudstudio/fluidcast-presets';
 import type { TranscriptEntry } from '@yourtechbudstudio/fluidcast-tool-agent';
 import { Effect, Exit, Layer, Option, Stream } from 'effect';
 
+import type { FluidcastConfig } from '../../runtime-config/index.js';
 import { continueCallLabel, continueMessage } from '../continuation.js';
 import { FluidcastSessionUnreadable, FluidcastStartFailed } from '../errors.js';
 import type { FluidcastSessionId } from '../ids.js';
-import { buildFluidcastModels } from '../models.js';
+import { buildFluidcastModels, type FluidcastModels } from '../models.js';
 import {
   buildFluidcastSession,
   type BuiltFluidcastSession,
   type FluidcastSessionInput,
 } from '../session-factory.js';
 import {
+  fakeLanguageModel,
   fakeWorkerType,
   fluidcastConfig,
+  silentSpeech,
+  type FakeReply,
   recordingHttpClient,
   recordingWorkers,
   stubRegistry,
@@ -306,20 +318,174 @@ test("with structured output only the voice's requests carry the session's JSON 
   assert.equal(plain.exit.value.response_format, undefined);
 });
 
-test('the shared model, which progress uses, stays unconstrained with structured output on', async () => {
-  const http = recordingHttpClient();
-  const config = fluidcastConfig({ structuredOutput: true });
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const models = yield* buildFluidcastModels(config);
-        assert.equal(models.structuredOutput, 'openai-compatible');
-        yield* models.languageModel
-          .streamText({ prompt: 'progress' })
-          .pipe(Stream.runDrain, Effect.ignore);
-      }),
-    ).pipe(Effect.provide(http.layer)),
+interface RoleScenario {
+  readonly history?: FluidcastConfig['history'];
+  readonly worker: FakeWorkerOptions;
+  /** The voice's replies, by call. */
+  readonly voice: (call: number) => FakeReply;
+}
+
+/** Each role's prompts so far, flattened to text. */
+interface RolePrompts {
+  readonly voice: ReadonlyArray<string>;
+  readonly base: ReadonlyArray<string>;
+  readonly summary: ReadonlyArray<string>;
+}
+
+/** A running session, its state as one subscribed client sees it, and each role's prompts. */
+interface RoleSession {
+  readonly built: BuiltFluidcastSession;
+  readonly prompts: RolePrompts;
+  /** Polls the state until `done` holds, or fails after `ms`. */
+  readonly stateWhere: (
+    done: (state: SessionState) => boolean,
+    ms?: number,
+  ) => Effect.Effect<SessionState>;
+}
+
+const summaryText = 'The listener asked about the plan, and the agent read it.';
+
+/**
+ * Builds a new session from role-tagged fake models, so a test can tell which role each generation
+ * reached, and runs `body` on it inside the session's scope with one client subscribed, as the
+ * player is: the session continues after a tool only while a client is subscribed.
+ */
+async function roleScenario<A>(
+  options: RoleScenario,
+  body: (session: RoleSession) => Effect.Effect<A>,
+) {
+  const fake = fakeWorkerType(options.worker);
+  const recording = recordingWorkers(fake.worker);
+  const config: FluidcastConfig = {
+    ...fluidcastConfig(),
+    ...(options.history === undefined ? {} : { history: options.history }),
+  };
+  return withLaunchEnvironment(true, async (launchEnvironment) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const voice = yield* fakeLanguageModel(options.voice);
+          const base = yield* fakeLanguageModel(() => ({ text: 'unexpected' }));
+          const summary = yield* fakeLanguageModel(() => ({ text: summaryText }));
+          const models: FluidcastModels = {
+            voice: () => voice.model,
+            base: base.model,
+            summary: summary.model,
+            speech: silentSpeech,
+          };
+          const built = yield* buildFluidcastSession(
+            { ...baseInput, harnessSessionId: null },
+            { config, models, workers: recording.workers },
+          );
+          let latest: SessionState | undefined;
+          yield* Effect.forkScoped(
+            Stream.runForEach(built.session.subscribe(), (message) =>
+              Effect.sync(() => {
+                if (message._tag === 'Snapshot') latest = message.state;
+                else if (message._tag !== 'Superseded' && latest !== undefined)
+                  latest = reduce(latest, message);
+              }),
+            ),
+          );
+          const stateWhere = (done: (state: SessionState) => boolean, ms = 5_000) =>
+            Effect.gen(function* () {
+              for (let waited = 0; ; waited += 10) {
+                const state = latest;
+                if (state !== undefined && done(state)) return state;
+                if (waited >= ms) {
+                  return yield* Effect.die(new Error('the session never reached the state'));
+                }
+                yield* Effect.sleep('10 millis');
+              }
+            });
+          const prompts = { voice: voice.prompts, base: base.prompts, summary: summary.prompts };
+          return { value: yield* body({ built, prompts, stateWhere }), prompts };
+        }),
+      ).pipe(Effect.provide(Layer.mergeAll(launchEnvironment, stubRegistry()))),
+    ),
   );
-  assert.equal(http.bodies.length, 1);
-  assert.equal(http.bodies[0]!.response_format, undefined);
+}
+
+const forward: FakeReply = { text: '[{"type":"forward_agent"}]', inputTokens: 5_000 };
+const quiet: FakeReply = { text: '[]', inputTokens: 5_000 };
+/** Each message is forwarded, and the forward's result answered with nothing more. */
+const forwardEachMessage = (call: number) => (call % 2 === 0 ? forward : quiet);
+
+/**
+ * Two exchanges, each sent once the previous one has settled, so the second forward has earlier
+ * history to summarize. Returns the state after the last reply.
+ */
+const runTwoExchanges = ({ built, prompts, stateWhere }: RoleSession) =>
+  Effect.gen(function* () {
+    const settled = (calls: number) =>
+      stateWhere(
+        (state) =>
+          prompts.voice.length >= calls &&
+          state.generation === 'idle' &&
+          state.pendingResults.length === 0 &&
+          state.executions.length === 0,
+      );
+    yield* Effect.orDie(built.session.command({ _tag: 'SendMessage', text: 'Explain the plan.' }));
+    yield* settled(2);
+    yield* Effect.orDie(built.session.command({ _tag: 'SendMessage', text: 'And the risks?' }));
+    return yield* settled(4);
+  });
+
+const isSummary = (prompt: string) => prompt.includes(guidedWalkthroughSummaryPrompt);
+const isProgress = (prompt: string) => prompt.includes(guidedWalkthroughProgressPrompt);
+
+test('with compaction enabled, the summary model writes the summary the voice then reads', async () => {
+  const { value: state, prompts } = await roleScenario(
+    {
+      history: { compaction: { enabled: true, aboveInputTokens: 1_000 } },
+      worker: { answer: {} },
+      voice: forwardEachMessage,
+    },
+    runTwoExchanges,
+  );
+  const compaction = state.actions.find((action) => action.type === 'history_compaction');
+  assert.ok(compaction, 'no history_compaction action was appended');
+  assert.equal(compaction.text, summaryText);
+  assert.ok(prompts.summary.some(isSummary));
+  assert.ok(prompts.voice.at(-1)!.includes(summaryText), 'the voice never read the summary');
+  assert.equal(prompts.voice.some(isSummary), false);
+  assert.deepEqual(prompts.base, []);
+});
+
+test('without compaction enabled, no summary is written', async () => {
+  for (const history of [undefined, { compaction: { enabled: false, aboveInputTokens: 1_000 } }]) {
+    const { value: state, prompts } = await roleScenario(
+      {
+        ...(history === undefined ? {} : { history }),
+        worker: { answer: {} },
+        voice: forwardEachMessage,
+      },
+      runTwoExchanges,
+    );
+    assert.equal(
+      state.actions.some((action) => action.type === 'history_compaction'),
+      false,
+    );
+    assert.equal(prompts.summary.some(isSummary), false);
+  }
+});
+
+test("the Forward tool's progress sentences come from the summary model, not the voice's", async () => {
+  // The SDK's first progress tick is at 10 seconds; the worker stays busy past it.
+  const { prompts } = await roleScenario(
+    { worker: { answer: { after: '11 seconds' } }, voice: () => forward },
+    (session) =>
+      Effect.gen(function* () {
+        yield* Effect.orDie(
+          session.built.session.command({ _tag: 'SendMessage', text: 'Explain.' }),
+        );
+        for (let waited = 0; !session.prompts.summary.some(isProgress); waited += 50) {
+          if (waited >= 15_000) return yield* Effect.die(new Error('no progress was written'));
+          yield* Effect.sleep('50 millis');
+        }
+      }),
+  );
+  assert.ok(prompts.summary.some(isProgress));
+  assert.deepEqual(prompts.base, []);
+  assert.equal(prompts.voice.some(isProgress), false);
 });

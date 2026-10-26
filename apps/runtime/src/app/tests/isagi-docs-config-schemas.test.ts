@@ -7,6 +7,7 @@ import {
   workflowSdkVersion,
   workflowVerifierVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+import { Schema } from 'effect';
 import { parse } from 'yaml';
 
 import {
@@ -376,8 +377,21 @@ test('the global config reference documents Fluidcast voice mode', () => {
     'fast',
     'baseUrl',
     'apiKey',
+    'summaryModel',
+    'history',
+    'compaction',
+    'aboveInputTokens',
   ]) {
     assert.match(prose, new RegExp(`\\b${key}\\b`), `Fluidcast prose never names ${key}`);
+  }
+  assert.match(prose, /56000/, 'prose never states the compaction threshold default');
+  assert.match(prose, /cache reads/, 'prose never states that cache reads count');
+  // Every example is a whole config that decodes, so a reader can copy any of them.
+  const examples = [...prose.matchAll(/```yaml\n([\s\S]*?)```/g)].map((match) => match[1]!);
+  assert.ok(examples.some((example) => /summaryModel:/.test(example)));
+  for (const example of examples) {
+    const decoded = Schema.decodeUnknownExit(runtimeConfigSchema)(parse(example));
+    assert.ok(decoded._tag === 'Success', `a Fluidcast example does not decode:\n${example}`);
   }
   assert.match(prose, /apiKey: env\.[A-Z_]+/, 'prose never shows an env. key reference');
   assert.match(prose, /restart/i, 'prose never states a restart is required');

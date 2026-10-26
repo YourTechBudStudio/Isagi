@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Effect, Layer, Redacted, Stream } from 'effect';
+import type { LanguageModel } from 'effect/ai';
 import { HttpClient, HttpClientResponse } from 'effect/http';
 
 import type { FluidcastConfig } from '../../runtime-config/index.js';
-import { withAnthropicStructuredOutput } from '../anthropic-structured-output.js';
-import { buildFluidcastModels } from '../models.js';
+import { buildFluidcastModels, type FluidcastModels } from '../models.js';
 import { fluidcastConfig } from './support.js';
 
 /** Records each Messages API request's body and headers, and answers with an empty stream. */
@@ -44,18 +44,17 @@ function anthropicConfig(options: Partial<Record<string, unknown>> = {}): Fluidc
   } as Partial<FluidcastConfig['languageModel']>);
 }
 
-/** Builds the models from `config` and streams one generation, through `wrap` when given. */
+/** Builds the models from `config` and streams one generation from the role `pick` chooses. */
 async function generate(
   config: FluidcastConfig,
-  wrap?: (model: Parameters<typeof withAnthropicStructuredOutput>[0]) => typeof model,
+  pick: (models: FluidcastModels) => LanguageModel.LanguageModel = (models) => models.base,
 ) {
   const http = recordingAnthropicClient();
   const built = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const models = yield* buildFluidcastModels(config);
-        const model = wrap === undefined ? models.languageModel : wrap(models.languageModel);
-        yield* model.streamText({ prompt: 'hello' }).pipe(Stream.runDrain, Effect.ignore);
+        yield* pick(models).streamText({ prompt: 'hello' }).pipe(Stream.runDrain, Effect.ignore);
         return models;
       }),
     ).pipe(Effect.provide(http.layer)),
@@ -65,10 +64,10 @@ async function generate(
 }
 
 test('anthropic sends its key and sampling, with structured output and fast mode off by default', async () => {
-  const { models, request } = await generate(
+  const { request } = await generate(
     anthropicConfig({ temperature: 0.5, maxOutputTokens: 900, reasoningEffort: 'xhigh' }),
+    (models) => models.voice({ type: 'object' }),
   );
-  assert.equal(models.structuredOutput, null);
   assert.ok(request.url.startsWith('http://127.0.0.1:9/v1/messages'));
   assert.equal(request.headers['x-api-key'], 'sk-ant-test');
   assert.equal(request.body.model, 'claude-test');
@@ -90,13 +89,32 @@ test('fast mode sends the fast speed and its beta', async () => {
 test("structured output constrains the voice's requests to the schema, and only those", async () => {
   const config = anthropicConfig({ structuredOutput: true });
   const schema = { type: 'object', properties: { say: { type: 'string' } } } as const;
-  const voice = await generate(config, (model) => withAnthropicStructuredOutput(model, schema));
-  assert.equal(voice.models.structuredOutput, 'anthropic');
+  const voice = await generate(config, (models) => models.voice(schema));
   assert.deepEqual(voice.request.body.output_format, { type: 'json_schema', schema });
   assert.equal(voice.request.headers['anthropic-beta'], 'structured-outputs-2025-11-13');
 
-  const progress = await generate(config);
-  assert.equal(progress.request.body.output_format, undefined);
+  const base = await generate(config);
+  assert.equal(base.request.body.output_format, undefined);
+});
+
+test("an anthropic summary model is its own plain connection beside a structured voice's", async () => {
+  const config: FluidcastConfig = {
+    ...anthropicConfig({ structuredOutput: true, fast: true }),
+    summaryModel: {
+      provider: 'anthropic',
+      model: 'claude-summary-test',
+      baseUrl: 'http://127.0.0.1:9',
+      apiKey: Redacted.make('sk-ant-summary'),
+      maxOutputTokens: 300,
+    },
+  };
+  const { request } = await generate(config, (models) => models.summary);
+  assert.equal(request.headers['x-api-key'], 'sk-ant-summary');
+  assert.equal(request.body.model, 'claude-summary-test');
+  assert.equal(request.body.max_tokens, 300);
+  assert.equal(request.body.output_format, undefined);
+  assert.equal(request.body.speed, undefined);
+  assert.doesNotMatch(request.headers['anthropic-beta'] ?? '', /fast-mode|structured-outputs/);
 });
 
 test('structured output and fast mode send both betas in one header', async () => {

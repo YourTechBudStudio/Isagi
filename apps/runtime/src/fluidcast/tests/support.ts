@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SpeechError } from '@yourtechbudstudio/fluidcast-core/speech';
+import { SpeechError, SpeechSynthesizer } from '@yourtechbudstudio/fluidcast-core/speech';
 import { ToolFault, type Session } from '@yourtechbudstudio/fluidcast-harness';
 import {
   CommandRejected,
@@ -14,6 +14,7 @@ import {
 import {
   WorkerSetupError,
   type TranscriptEntry,
+  type WorkerEvent,
   type WorkerHandle,
   type WorkerType,
 } from '@yourtechbudstudio/fluidcast-tool-agent';
@@ -36,6 +37,7 @@ import {
   Stream,
   SubscriptionRef,
 } from 'effect';
+import { LanguageModel, type Prompt, type Response as AiResponse } from 'effect/ai';
 import { HttpClient, HttpClientResponse } from 'effect/http';
 
 import { apiBasePath } from '@isagi/contracts';
@@ -87,6 +89,57 @@ export function fluidcastConfig(
   };
 }
 
+/** A generation's reply text, and the input tokens its finish part reports, if any. */
+export interface FakeReply {
+  readonly text: string;
+  readonly inputTokens?: number;
+}
+
+/**
+ * A language model that streams `reply(call)` for its zero-based `call` index and records each
+ * prompt, flattened to its text, so a test can tell which role was asked for what.
+ */
+export const fakeLanguageModel = (reply: (call: number) => FakeReply) =>
+  Effect.gen(function* () {
+    const prompts: string[] = [];
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.die('unused'),
+      streamText: (options) =>
+        Stream.suspend(() => {
+          const { text, inputTokens } = reply(prompts.length);
+          prompts.push(options.prompt.content.map(promptText).join('\n'));
+          const parts: AiResponse.StreamPartEncoded[] = [
+            { type: 'text-delta', id: 't', delta: text },
+          ];
+          if (inputTokens !== undefined) {
+            parts.push({
+              type: 'finish',
+              reason: 'stop',
+              usage: {
+                inputTokens: {
+                  uncached: undefined,
+                  total: inputTokens,
+                  cacheRead: undefined,
+                  cacheWrite: undefined,
+                },
+                outputTokens: { total: 1, text: undefined, reasoning: undefined },
+              },
+            });
+          }
+          return Stream.fromIterable(parts);
+        }),
+    });
+    return { model, prompts };
+  });
+
+const promptText = (message: Prompt.Message) =>
+  typeof message.content === 'string'
+    ? message.content
+    : message.content.map((part) => ('text' in part ? part.text : '')).join('');
+
+/** A synthesizer that never makes a sound. */
+export const silentSpeech = SpeechSynthesizer.of({ synthesize: () => Stream.empty });
+
 /**
  * An `HttpClient` that answers every language-model request with one empty streamed reply and
  * records each request's JSON body, so a test can see what reached the network.
@@ -124,11 +177,16 @@ export interface FakeWorkerOptions {
   readonly attachFails?: 'SessionNotFound' | 'SessionUnreadable';
   /** What listing skills returns, or why it fails; no skills by default. */
   readonly skills?: ReadonlyArray<Skill> | SkillsUnavailable['reason'];
+  /**
+   * Set: a connection answers each message with one line of text, then ends the turn and settles
+   * `after` later. Unset: a connection idles.
+   */
+  readonly answer?: { readonly after?: Duration.Input };
 }
 
 /**
- * A worker type that never starts a process: attach returns `history`, a connection idles, and
- * listing returns `skills`. Each call is recorded, listing by the `cwd` it was given.
+ * A worker type that never starts a process: attach returns `history`, a connection idles or
+ * answers, and listing returns `skills`. Each call is recorded, listing by the `cwd` it was given.
  */
 export function fakeWorkerType(options: FakeWorkerOptions = {}) {
   const calls = { attach: [] as string[], connect: 0, listSkills: [] as string[] };
@@ -142,9 +200,39 @@ export function fakeWorkerType(options: FakeWorkerOptions = {}) {
         ? Effect.succeed({ cwd: '/repo', history: options.history ?? [] })
         : Effect.fail(new WorkerSetupError({ sessionId, reason: options.attachFails }));
     },
-    connect: () => {
+    connect: (connection, input) => {
       calls.connect += 1;
-      return Stream.never;
+      const answer = options.answer;
+      if (answer === undefined) return Stream.never;
+      const started: Stream.Stream<WorkerEvent> =
+        connection.resume === undefined
+          ? Stream.make({ _tag: 'SessionStarted', sessionId: 'native-new' })
+          : Stream.empty;
+      return Stream.concat(
+        started,
+        Stream.flatMap(input, (message) =>
+          Stream.concat(
+            Stream.make<ReadonlyArray<WorkerEvent>>(
+              { _tag: 'Consumed', ids: [message.id] },
+              {
+                _tag: 'Entry',
+                entry: { _tag: 'text', text: 'Read the plan.', parentToolUseId: null },
+              },
+            ),
+            Stream.fromEffectDrain(Effect.sleep(answer.after ?? 0)),
+          ).pipe(
+            Stream.concat(
+              Stream.make<ReadonlyArray<WorkerEvent>>(
+                {
+                  _tag: 'Entry',
+                  entry: { _tag: 'turnEnd', outcome: 'success', parentToolUseId: null },
+                },
+                { _tag: 'Settled' },
+              ),
+            ),
+          ),
+        ),
+      );
     },
     listSkills: (cwd) => {
       calls.listSkills.push(cwd);

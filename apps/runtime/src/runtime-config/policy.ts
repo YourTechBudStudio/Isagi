@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { defaultCompactionThreshold } from '@yourtechbudstudio/fluidcast-presets';
 import { Cause, Schema } from 'effect';
 
 import {
@@ -36,10 +37,18 @@ export interface RuntimeHarnessPolicyState {
 }
 type FluidcastSection = typeof runtimeFluidcastSchema.Type;
 /** The decoded `fluidcast` section with its defaults applied. Keys stay `Redacted`. */
-export type FluidcastConfig = Omit<FluidcastSection, 'speech' | 'preset'> & {
+export type FluidcastConfig = Omit<FluidcastSection, 'speech' | 'preset' | 'history'> & {
   readonly speech: FluidcastSection['speech'] & { readonly format: 'opus' | 'mp3' | 'wav' };
   readonly preset: FluidcastSection['preset'] & { readonly profile: 'compact' | 'detailed' };
+  /** Present only when the config has `history.compaction`. */
+  readonly history?: {
+    readonly compaction: { readonly enabled: boolean; readonly aboveInputTokens: number };
+  };
 };
+/** A language-model connection: the voice's `languageModel` or the `summaryModel`. */
+export type FluidcastConnection =
+  | FluidcastSection['languageModel']
+  | NonNullable<FluidcastSection['summaryModel']>;
 export type FluidcastConfigState =
   | { readonly status: 'disabled' }
   | { readonly status: 'ready'; readonly config: FluidcastConfig }
@@ -139,13 +148,24 @@ export function parseFluidcast(value: unknown): FluidcastConfigState {
   const decoded = Schema.decodeUnknownExit(runtimeFluidcastSchema)(value.fluidcast);
   if (decoded._tag === 'Failure')
     return { status: 'invalid', issuePaths: schemaIssuePaths(decoded.cause, ['fluidcast']) };
-  const section = decoded.value;
+  const { history, ...section } = decoded.value;
+  const compaction = history?.compaction;
   return {
     status: 'ready',
     config: {
       ...section,
       speech: { ...section.speech, format: section.speech.format ?? 'opus' },
       preset: { ...section.preset, profile: section.preset.profile ?? 'detailed' },
+      ...(compaction === undefined
+        ? {}
+        : {
+            history: {
+              compaction: {
+                enabled: compaction.enabled ?? false,
+                aboveInputTokens: compaction.aboveInputTokens ?? defaultCompactionThreshold,
+              },
+            },
+          }),
     },
   };
 }

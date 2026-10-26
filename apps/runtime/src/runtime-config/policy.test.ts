@@ -398,3 +398,86 @@ test('fluidcast keys may name an environment variable, which parsing leaves unre
     );
   }
 });
+
+test('fluidcast summaryModel is optional and takes the connection fields', () => {
+  const absent = parseRuntimeConfig({ fluidcast }).fluidcast;
+  assert.ok(absent.status === 'ready');
+  assert.equal(absent.config.summaryModel, undefined);
+
+  const present = parseRuntimeConfig({
+    fluidcast: {
+      ...fluidcast,
+      summaryModel: {
+        provider: 'anthropic',
+        apiKey: 'env.ANTHROPIC_API_KEY',
+        model: 'claude-haiku-test',
+        reasoningEffort: 'low',
+        fast: true,
+      },
+    },
+  }).fluidcast;
+  assert.ok(present.status === 'ready');
+  const summary = present.config.summaryModel;
+  assert.ok(summary?.provider === 'anthropic');
+  assert.equal(summary.model, 'claude-haiku-test');
+  assert.equal(summary.reasoningEffort, 'low');
+  assert.equal(summary.fast, true);
+  assert.equal(Redacted.value(summary.apiKey), 'env.ANTHROPIC_API_KEY');
+
+  assert.deepEqual(
+    parseRuntimeConfig({
+      fluidcast: { ...fluidcast, summaryModel: { provider: 'openai', model: 'gpt-small' } },
+    }).fluidcast,
+    { status: 'invalid', issuePaths: ['fluidcast.summaryModel.apiKey'] },
+  );
+});
+
+test('fluidcast summaryModel rejects structuredOutput, even false, at its path', () => {
+  for (const summaryModel of [
+    { provider: 'openai-compatible', model: 'local' },
+    { provider: 'anthropic', apiKey: 'sk-ant-test', model: 'claude-haiku-test' },
+    { provider: 'openai', apiKey: 'sk-test', model: 'gpt-small' },
+  ]) {
+    for (const structuredOutput of [true, false]) {
+      assert.deepEqual(
+        parseRuntimeConfig({
+          fluidcast: { ...fluidcast, summaryModel: { ...summaryModel, structuredOutput } },
+        }).fluidcast,
+        { status: 'invalid', issuePaths: ['fluidcast.summaryModel.structuredOutput'] },
+        `${summaryModel.provider} with structuredOutput ${structuredOutput}`,
+      );
+    }
+  }
+});
+
+test('fluidcast history compaction resolves its threshold, and is absent unless configured', () => {
+  const parse = (history: unknown) => {
+    const state = parseRuntimeConfig({ fluidcast: { ...fluidcast, history } }).fluidcast;
+    assert.ok(state.status === 'ready');
+    return state.config.history;
+  };
+  assert.equal(parse(undefined), undefined);
+  assert.equal(parse({}), undefined);
+  assert.deepEqual(parse({ compaction: { enabled: true } }), {
+    compaction: { enabled: true, aboveInputTokens: 56_000 },
+  });
+  assert.deepEqual(parse({ compaction: { enabled: true, aboveInputTokens: 2000 } }), {
+    compaction: { enabled: true, aboveInputTokens: 2000 },
+  });
+  assert.deepEqual(parse({ compaction: { enabled: false } }), {
+    compaction: { enabled: false, aboveInputTokens: 56_000 },
+  });
+  assert.deepEqual(parse({ compaction: {} }), {
+    compaction: { enabled: false, aboveInputTokens: 56_000 },
+  });
+
+  for (const aboveInputTokens of [0, -1, 1.5]) {
+    assert.deepEqual(
+      parseRuntimeConfig({
+        fluidcast: { ...fluidcast, history: { compaction: { enabled: true, aboveInputTokens } } },
+      }).fluidcast,
+      { status: 'invalid', issuePaths: ['fluidcast.history.compaction.aboveInputTokens'] },
+      String(aboveInputTokens),
+    );
+  }
+});

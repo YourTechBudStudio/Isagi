@@ -52,3 +52,32 @@ test('unset and empty variables are reported by path and name, never by value', 
   });
   assert.doesNotMatch(JSON.stringify(resolved), new RegExp(sentinel));
 });
+
+test("the summary model's env key resolves, and its unset variable is reported by its path", () => {
+  const withSummary = (summaryKey: string): FluidcastConfig => ({
+    ...config('sk-literal', 'sk-literal'),
+    summaryModel: { provider: 'anthropic', model: 'haiku', apiKey: Redacted.make(summaryKey) },
+  });
+  const resolved = resolveFluidcastKeys(withSummary('env.SUMMARY_KEY'), { SUMMARY_KEY: sentinel });
+  assert.ok(resolved.status === 'resolved');
+  assert.equal(Redacted.value(resolved.config.summaryModel!.apiKey!), sentinel);
+  assert.equal(Redacted.value(resolved.config.languageModel.apiKey!), 'sk-literal');
+
+  assert.deepEqual(resolveFluidcastKeys(withSummary('env.SUMMARY_KEY'), {}), {
+    status: 'unset',
+    unset: [{ issuePath: 'fluidcast.summaryModel.apiKey', variable: 'SUMMARY_KEY' }],
+  });
+});
+
+test("an openai-compatible summary model's absent key stays absent", () => {
+  const resolved = resolveFluidcastKeys(
+    {
+      ...config(undefined, 'sk-literal'),
+      summaryModel: { provider: 'openai-compatible', model: 'small' },
+    },
+    {},
+  );
+  assert.ok(resolved.status === 'resolved');
+  assert.equal(resolved.config.summaryModel?.apiKey, undefined);
+  assert.equal(resolved.config.summaryModel?.model, 'small');
+});

@@ -4,10 +4,12 @@ import {
   layer as harnessLayer,
   Session,
   type SessionConfig,
+  SummaryModel,
 } from '@yourtechbudstudio/fluidcast-harness';
 import {
   guidedWalkthrough,
   guidedWalkthroughProgressPrompt,
+  guidedWalkthroughSummaryPrompt,
 } from '@yourtechbudstudio/fluidcast-presets';
 import {
   forwardAgentTool,
@@ -36,12 +38,10 @@ import {
 import { resolveExecutableOnPath } from '../platform/process/index.js';
 import { LaunchEnvironment } from '../pty-processes/index.js';
 import type { FluidcastConfig } from '../runtime-config/index.js';
-import { withAnthropicStructuredOutput } from './anthropic-structured-output.js';
 import { continueStart, lastAnswer } from './continuation.js';
 import { FluidcastSessionUnreadable, FluidcastStartFailed } from './errors.js';
 import type { FluidcastSessionId } from './ids.js';
 import type { FluidcastModels } from './models.js';
-import { withStructuredOutput } from './structured-output.js';
 
 export interface FluidcastSessionInput {
   readonly agentSessionId: number;
@@ -85,6 +85,8 @@ export interface FluidcastSessionDependencies {
  * continuation start that waits for a tap, and otherwise on the composer. Without an ID the first
  * forward starts a new native session. No model or effort is passed: the agent keeps its own. Isagi
  * adds no modifier of its own; a skill the listener types as `/name` passes through to the worker.
+ * The voice speaks through `models.voice`, while progress sentences and history summaries come from
+ * `models.summary`; history compaction is on only when the config enables it.
  */
 export const buildFluidcastSession = (
   input: FluidcastSessionInput,
@@ -115,7 +117,9 @@ export const buildFluidcastSession = (
         : { session: { sessionId: input.harnessSessionId } }),
       progress: { prompt: guidedWalkthroughProgressPrompt },
     }).pipe(
-      Effect.provideService(LanguageModel.LanguageModel, models.languageModel),
+      // Progress sentences come from the summary model, read through the SDK's `summaryModel`.
+      Effect.provideService(LanguageModel.LanguageModel, models.base),
+      Effect.provideService(SummaryModel, models.summary),
       Effect.mapError((error) => new FluidcastSessionUnreadable({ reason: error.reason })),
     );
 
@@ -139,22 +143,30 @@ export const buildFluidcastSession = (
       speechFormat: config.speech.format,
       tools: [showTool(), askTool(), tool.tool],
       ...(answer === undefined ? {} : { start: continueStart(answer) }),
+      ...(config.history?.compaction.enabled === true
+        ? {
+            history: {
+              compaction: {
+                enabled: true,
+                aboveInputTokens: config.history.compaction.aboveInputTokens,
+                prompt: guidedWalkthroughSummaryPrompt,
+              },
+            },
+          }
+        : {}),
     };
 
     // The schema is built once per session, from the same speakers and tools as the prompt.
-    const outputSchema = () =>
-      outputJsonSchema({ speakers: sessionConfig.speakers, tools: sessionConfig.tools });
-    const voice =
-      models.structuredOutput === 'openai-compatible'
-        ? withStructuredOutput(models.languageModel, outputSchema())
-        : models.structuredOutput === 'anthropic'
-          ? withAnthropicStructuredOutput(models.languageModel, outputSchema())
-          : models.languageModel;
+    const voice = models.voice(
+      outputJsonSchema({ speakers: sessionConfig.speakers, tools: sessionConfig.tools }),
+    );
     // Built fresh per session: layers are memoized by identity.
     const context = yield* Layer.build(
       harnessLayer(sessionConfig).pipe(
         Layer.provide([
           Layer.succeed(LanguageModel.LanguageModel, voice),
+          // Always provided: the SDK needs a plain summary model beside a possibly wrapped voice.
+          Layer.succeed(SummaryModel, models.summary),
           Layer.succeed(SpeechSynthesizer, models.speech),
         ]),
       ),

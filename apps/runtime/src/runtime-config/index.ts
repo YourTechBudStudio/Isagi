@@ -4,6 +4,7 @@ export { resolveFluidcastKeys } from './fluidcast-keys.js';
 export type {
   FluidcastConfig,
   FluidcastConfigState,
+  FluidcastConnection,
   RuntimeHarnessPolicy,
   RuntimeHarnessPolicyState,
 } from './policy.js';
