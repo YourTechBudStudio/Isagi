@@ -19,11 +19,14 @@ import {
 } from '@yourtechbudstudio/fluidcast-tool-agent';
 import type { ClaudeWorkerOptions } from '@yourtechbudstudio/fluidcast-tool-agent/claude';
 import type { CodexWorkerOptions } from '@yourtechbudstudio/fluidcast-tool-agent/codex';
-import type {
-  TranscriptMessage,
-  WorkerSummary,
+import {
+  SkillsUnavailable,
+  type Skill,
+  type TranscriptMessage,
+  type WorkerSummary,
 } from '@yourtechbudstudio/fluidcast-tool-agent/schema';
 import {
+  Context,
   Deferred,
   type Duration,
   Effect,
@@ -35,6 +38,8 @@ import {
 } from 'effect';
 import { HttpClient, HttpClientResponse } from 'effect/http';
 
+import { apiBasePath } from '@isagi/contracts';
+
 import {
   AgentSessionArtifacts,
   HarnessAdapterError,
@@ -42,6 +47,7 @@ import {
 } from '../../harnesses/index.js';
 import { AgentSessionArtifactError } from '../../harnesses/testing.js';
 import { publishOnlyRecordingEventBus } from '../../platform/events/testing.js';
+import { withListeningServer } from '../../platform/http/testing.js';
 import { LaunchEnvironment } from '../../pty-processes/index.js';
 import {
   RuntimeConfig,
@@ -49,7 +55,9 @@ import {
   type FluidcastConfigState,
 } from '../../runtime-config/index.js';
 import { defaultRuntimeConfig } from '../../runtime-config/testing.js';
+import { registerFluidcastRoutes } from '../api.js';
 import { FluidcastSessionUnreadable } from '../errors.js';
+import type { FluidcastSessionId } from '../ids.js';
 import type {
   BuiltFluidcastSession,
   FluidcastSessionInput,
@@ -114,11 +122,17 @@ export interface FakeWorkerOptions {
   /** The attached session's history; `attach` fails with this reason instead when set. */
   readonly history?: ReadonlyArray<TranscriptEntry>;
   readonly attachFails?: 'SessionNotFound' | 'SessionUnreadable';
+  /** What listing skills returns, or why it fails; no skills by default. */
+  readonly skills?: ReadonlyArray<Skill> | SkillsUnavailable['reason'];
 }
 
-/** A worker type that never starts a process: attach returns `history`, and a connection idles. */
+/**
+ * A worker type that never starts a process: attach returns `history`, a connection idles, and
+ * listing returns `skills`. Each call is recorded, listing by the `cwd` it was given.
+ */
 export function fakeWorkerType(options: FakeWorkerOptions = {}) {
-  const calls = { attach: [] as string[], connect: 0 };
+  const calls = { attach: [] as string[], connect: 0, listSkills: [] as string[] };
+  const skills = options.skills ?? [];
   const worker: WorkerType = {
     cwd: '/repo',
     composeMessage: (prompt) => prompt,
@@ -132,27 +146,39 @@ export function fakeWorkerType(options: FakeWorkerOptions = {}) {
       calls.connect += 1;
       return Stream.never;
     },
+    listSkills: (cwd) => {
+      calls.listSkills.push(cwd);
+      return typeof skills === 'string'
+        ? Effect.fail(new SkillsUnavailable({ reason: skills }))
+        : Effect.succeed(skills);
+    },
   };
   return { worker, calls };
 }
 
-/** Workers that record the options each harness was given and return `worker`. */
+/**
+ * Workers that record the options each harness was given and return `worker`. `listed` records
+ * which made worker served each skill listing, by its index in `given`.
+ */
 export function recordingWorkers(worker: WorkerType) {
   const given: { claude: ClaudeWorkerOptions[]; codex: CodexWorkerOptions[] } = {
     claude: [],
     codex: [],
   };
+  const listed: Array<{ readonly harness: 'claude' | 'codex'; readonly index: number }> = [];
+  const made = (harness: 'claude' | 'codex', index: number): WorkerType => ({
+    ...worker,
+    listSkills: (cwd) =>
+      Effect.suspend(() => {
+        listed.push({ harness, index });
+        return worker.listSkills(cwd);
+      }),
+  });
   const workers: FluidcastWorkers = {
-    claude: (options) => {
-      given.claude.push(options);
-      return worker;
-    },
-    codex: (options) => {
-      given.codex.push(options);
-      return worker;
-    },
+    claude: (options) => made('claude', given.claude.push(options) - 1),
+    codex: (options) => made('codex', given.codex.push(options) - 1),
   };
-  return { workers, given };
+  return { workers, given, listed };
 }
 
 /** Instrumentation as the real adapters shape it, without touching a data root. */
@@ -225,17 +251,39 @@ export const emptySessionState = {
 
 /**
  * A built session whose Harness and worker the test drives: commands are recorded (`Start` and a
- * `ToolCommand` are refused, `Next` runs until interrupted), speech is fixed per action ID, and the worker's status, fault and
- * native ID are set by the test. Closing the session's scope is recorded too.
+ * `ToolCommand` are refused, `Next` runs until interrupted), speech is fixed per action ID, and the
+ * worker's status, transcript, skills, fault and native ID are set by the test. Closing the session's scope is recorded too.
  */
 export function fakeBuiltSession() {
   const commands: Command[] = [];
   const status = Effect.runSync(
-    SubscriptionRef.make<WorkerSummary>({ _tag: 'WorkerSummary', status: 'idle', sessionId: null }),
+    SubscriptionRef.make<WorkerSummary>({
+      _tag: 'WorkerSummary',
+      status: 'idle',
+      sessionId: null,
+      backgroundTasks: 0,
+    }),
   );
+  const transcript = Effect.runSync(
+    SubscriptionRef.make<TranscriptMessage>({ _tag: 'TranscriptSnapshot', entries: [] }),
+  );
+  let skills: Effect.Effect<ReadonlyArray<Skill>, SkillsUnavailable> = Effect.succeed([]);
   const nativeId = Ref.makeUnsafe<string | null>(null);
   const fault = Deferred.makeUnsafe<ToolFault>();
-  const state = { closed: false, commandStarted: false, commandInterrupted: false };
+  const state = {
+    closed: false,
+    commandStarted: false,
+    commandInterrupted: false,
+    /** Subscriptions currently open on the worker's status and transcript. */
+    open: { status: 0, transcript: 0 },
+  };
+  const tracked = <A>(feed: 'status' | 'transcript', stream: Stream.Stream<A>) =>
+    Stream.unwrap(
+      Effect.sync(() => {
+        state.open[feed] += 1;
+        return stream;
+      }),
+    ).pipe(Stream.ensuring(Effect.sync(() => void (state.open[feed] -= 1))));
   const session: Session['Service'] = {
     subscribe: () =>
       Stream.make({ _tag: 'Snapshot', state: emptySessionState } as SubscriptionMessage).pipe(
@@ -272,10 +320,9 @@ export function fakeBuiltSession() {
     },
   };
   const worker: WorkerHandle = {
-    status: SubscriptionRef.changes(status),
-    transcript: Stream.make({ _tag: 'TranscriptSnapshot', entries: [] } as TranscriptMessage).pipe(
-      Stream.concat(Stream.never),
-    ),
+    status: tracked('status', SubscriptionRef.changes(status)),
+    transcript: tracked('transcript', SubscriptionRef.changes(transcript)),
+    skills: Effect.suspend(() => skills),
     fault: Deferred.await(fault),
     sessionId: Ref.get(nativeId),
   };
@@ -288,17 +335,84 @@ export function fakeBuiltSession() {
       Effect.runSync(
         Effect.andThen(
           Ref.set(nativeId, id),
-          SubscriptionRef.set(status, { _tag: 'WorkerSummary', status: 'working', sessionId: id }),
+          SubscriptionRef.set(status, {
+            _tag: 'WorkerSummary',
+            status: 'working',
+            sessionId: id,
+            backgroundTasks: 0,
+          }),
         ),
       ),
     /** Records the ID without publishing it, like a `SessionStarted` whose status update has not run yet. */
     reportNativeIdSilently: (id: string) => Effect.runSync(Ref.set(nativeId, id)),
+    /** Publishes one transcript message, as the worker does on each change. */
+    appendTranscript: (message: TranscriptMessage) =>
+      Effect.runSync(SubscriptionRef.set(transcript, message)),
+    /** Replaces what the worker's skill listing does from now on. */
+    listSkillsWith: (listing: Effect.Effect<ReadonlyArray<Skill>, SkillsUnavailable>) => {
+      skills = listing;
+    },
     faultWith: (reason: string) =>
       Effect.runSync(Deferred.succeed(fault, new ToolFault({ reason }))),
   };
 }
 
 export type FakeBuiltSession = ReturnType<typeof fakeBuiltSession>;
+
+export interface ServedFakeSession {
+  readonly sessions: FluidcastSessions['Service'];
+  readonly fake: FakeBuiltSession;
+  readonly fluidcastSessionId: FluidcastSessionId;
+  /** `<origin>/api/v1/fluidcast-sessions/<id>` for the started session. */
+  readonly base: string;
+}
+
+/** Starts one fake session and serves the Fluidcast routes over a real socket. */
+export function serveFakeSession(run: (served: ServedFakeSession) => Promise<void>) {
+  const fake = fakeBuiltSession();
+  const fixture = fakeSessionsLayer({ fakes: [fake] });
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessions = Context.get(yield* Layer.build(fixture.layer), FluidcastSessions);
+        const { fluidcastSessionId } = yield* sessions.start({
+          agentSessionId: 7,
+          harness: 'codex',
+          cwd: '/repo',
+          harnessSessionId: null,
+        });
+        yield* Effect.promise(() =>
+          withListeningServer(
+            Layer.succeed(FluidcastSessions, sessions),
+            registerFluidcastRoutes,
+            (server) =>
+              run({
+                sessions,
+                fake,
+                fluidcastSessionId,
+                base: `${server.origin}${apiBasePath}/fluidcast-sessions/${fluidcastSessionId}`,
+              }),
+          ),
+        );
+      }),
+    ),
+  );
+}
+
+/** Reads SSE `data:` payloads until `count` arrived, leaving the stream open. */
+export async function readEvents(body: ReadableStream<Uint8Array>, count: number) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  const events = () =>
+    [...text.matchAll(/^data: (.*)$/gm)].map((match) => JSON.parse(match[1]!) as unknown);
+  while (events().length < count) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  return { events: events(), reader };
+}
 
 /**
  * `FluidcastSessions` over a builder that hands out the given fakes in order, with config `state`,

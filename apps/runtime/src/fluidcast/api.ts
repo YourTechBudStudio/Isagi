@@ -5,7 +5,11 @@ import {
   SubscriptionMessage,
   ToolCommandRejected,
 } from '@yourtechbudstudio/fluidcast-harness/protocol';
-import { TranscriptMessage, WorkerSummary } from '@yourtechbudstudio/fluidcast-tool-agent/schema';
+import {
+  Skill,
+  TranscriptMessage,
+  WorkerSummary,
+} from '@yourtechbudstudio/fluidcast-tool-agent/schema';
 import { Effect, Schema, Stream } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
@@ -21,7 +25,7 @@ import {
   registerStreamingContentEndpoint,
   type RouteRuntime,
 } from '../platform/http/index.js';
-import type { FluidcastSessionNotFound } from './errors.js';
+import { FluidcastSessionNotFound } from './errors.js';
 import { FluidcastSessions, type LiveFluidcastSession } from './sessions.service.js';
 
 /**
@@ -57,6 +61,35 @@ export function registerFluidcastRoutes(
       Effect.map(liveSession(request), (live) =>
         sessionStream(live, live.worker.transcript, TranscriptMessage),
       ),
+  );
+
+  // Listed once per session and bounded by the SDK, which also logs why a listing failed.
+  registerApiEndpoint(fastify, runtime, fluidcastEndpoints.workerSkills, (request) =>
+    Effect.gen(function* () {
+      const live = yield* liveSession(request);
+      const skills = yield* live.worker.skills.pipe(
+        // Stopped while the skills were listed.
+        Effect.raceFirst(
+          Effect.andThen(
+            live.ended,
+            Effect.fail(
+              new FluidcastSessionNotFound({ fluidcastSessionId: live.fluidcastSessionId }),
+            ),
+          ),
+        ),
+        Effect.catchTags({
+          SkillsUnavailable: (error) =>
+            request.reject({
+              code: 'fluidcast_skills_unavailable',
+              status: 502,
+              message: "The worker's skills could not be listed.",
+              data: { reason: error.reason },
+            }),
+          FluidcastSessionNotFound: (error) => request.reject(sessionNotFound(error)),
+        }),
+      );
+      return yield* Effect.orDie(Schema.encodeUnknownEffect(Schema.Array(Skill))(skills));
+    }),
   );
 
   registerApiEndpoint(fastify, runtime, fluidcastEndpoints.command, (request) =>

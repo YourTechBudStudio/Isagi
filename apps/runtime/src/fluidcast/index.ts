@@ -1,11 +1,5 @@
 export { FluidcastLayer } from './layer.js';
-export {
-  FluidcastSessions,
-  type FluidcastAvailability,
-  type FluidcastExecution,
-  type FluidcastStartInput,
-  type LiveFluidcastSession,
-} from './sessions.service.js';
+export { FluidcastSessions, type FluidcastAvailability } from './sessions.service.js';
 export { registerFluidcastRoutes } from './api.js';
 export {
   FluidcastSessionNotFound,

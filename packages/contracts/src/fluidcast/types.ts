@@ -3,9 +3,9 @@ import { Schema } from 'effect';
 import { apiInfrastructureErrorSchema } from '../api/responses.js';
 
 /**
- * Fluidcast session payloads (commands, subscription messages, worker summaries and transcripts)
- * are the Fluidcast SDK's own protocol. They stay opaque here and are decoded with the SDK's
- * schemas at either end.
+ * Fluidcast session payloads (commands, subscription messages, worker summaries, transcripts and
+ * skills) are the Fluidcast SDK's own protocol. They stay opaque here and are decoded with the
+ * SDK's schemas at either end.
  */
 
 export const fluidcastSessionRouteParamsSchema = Schema.Struct({
@@ -57,6 +57,14 @@ export const fluidcastSpeechFailedErrorSchema = Schema.Struct({
   data: Schema.Struct({ reason: Schema.String }),
 });
 
+/** The worker's skills could not be listed: the agent failed, or did not answer in time. */
+export const fluidcastSkillsUnavailableErrorSchema = Schema.Struct({
+  code: Schema.Literal('fluidcast_skills_unavailable'),
+  status: Schema.Literal(502),
+  ...errorEnvelopeFields,
+  data: Schema.Struct({ reason: Schema.Literals(['Failed', 'TimedOut']) }),
+});
+
 export const fluidcastStreamApiErrorSchema = Schema.Union([
   apiInfrastructureErrorSchema,
   fluidcastSessionNotFoundErrorSchema,
@@ -74,6 +82,12 @@ export const fluidcastSpeechApiErrorSchema = Schema.Union([
   fluidcastSessionNotFoundErrorSchema,
   fluidcastSpeechNotFoundErrorSchema,
   fluidcastSpeechFailedErrorSchema,
+]);
+
+export const fluidcastSkillsApiErrorSchema = Schema.Union([
+  apiInfrastructureErrorSchema,
+  fluidcastSessionNotFoundErrorSchema,
+  fluidcastSkillsUnavailableErrorSchema,
 ]);
 
 export type FluidcastSessionRouteParams = typeof fluidcastSessionRouteParamsSchema.Type;

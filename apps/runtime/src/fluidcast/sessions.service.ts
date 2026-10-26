@@ -104,12 +104,6 @@ interface Entry {
 export const fluidcastBuildTimeout: Duration.Input = '60 seconds';
 
 /**
- * Live Fluidcast sessions as runtime-owned resources, like PTYs: each runs in its own child scope of
- * this layer, independent of any client, until it is stopped or the runtime shuts down. Nothing is
- * persisted. There is no service-level lock: callers sequence one agent's lifecycle with their own
- * per-agent lock.
- */
-/**
  * Resolves a ready section's `env.NAME` keys against the environment Isagi gives the processes it
  * launches, which carries the login shell's variables. A variable that is unset leaves voice mode
  * unavailable, as an invalid section does; the log names the variable, never a value.
@@ -340,6 +334,12 @@ export const makeFluidcastSessions = (
     });
   });
 
+/**
+ * Live Fluidcast sessions as runtime-owned resources, like PTYs: each runs in its own child scope of
+ * this layer, independent of any client, until it is stopped or the runtime shuts down. Nothing is
+ * persisted. There is no service-level lock: callers sequence one agent's lifecycle with their own
+ * per-agent lock.
+ */
 export class FluidcastSessions extends Context.Service<
   FluidcastSessions,
   {

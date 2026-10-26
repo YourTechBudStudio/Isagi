@@ -1,7 +1,8 @@
 // Copied verbatim from Fluidcast's reference backend (`apps/backend/src/conversation/modes.ts`),
 // which Isagi must not import: the story requires these strings reproduced, and
 // `tests/continuation.test.ts` pins them. The reference's brainstorming hook is deliberately not
-// copied: Isagi adds no skill modifier.
+// copied: Isagi adds no modifier of its own, while a skill the listener types as `/name` passes
+// through to the worker.
 import type { SessionConfig } from '@yourtechbudstudio/fluidcast-harness';
 import type { TranscriptEntry } from '@yourtechbudstudio/fluidcast-tool-agent';
 import {

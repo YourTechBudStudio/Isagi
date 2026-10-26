@@ -176,6 +176,30 @@ catalogs:
     '@effect/atom-react':
       specifier: ~4.0.2
       version: 4.0.2
+    '@yourtechbudstudio/fluidcast-client':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-core':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-harness':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-presets':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-react':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-tool-agent':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-tool-ask':
+      specifier: 0.1.0
+      version: 0.1.0
+    '@yourtechbudstudio/fluidcast-tool-show':
+      specifier: 0.1.0
+      version: 0.1.0
     effect:
       specifier: ~4.0.2
       version: 4.0.2
@@ -305,23 +329,23 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
       '@yourtechbudstudio/fluidcast-core':
-        specifier: 0.0.1
-        version: 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-harness':
-        specifier: 0.0.1
-        version: 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-presets':
-        specifier: 0.0.2
-        version: 0.0.2(56388908f162104f05ac6242381582d9)
+        specifier: 'catalog:'
+        version: 0.1.0(ab17ca4f6326bd5143b1e2720169eb97)
       '@yourtechbudstudio/fluidcast-tool-agent':
-        specifier: 0.0.2
-        version: 0.0.2(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-tool-ask':
-        specifier: 0.0.2
-        version: 0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-tool-show':
-        specifier: 0.0.1
-        version: 0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/isagi-workflow-sdk':
         specifier: workspace:*
         version: link:../../packages/workflow-sdk
@@ -405,26 +429,26 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0
       '@yourtechbudstudio/fluidcast-client':
-        specifier: 0.0.1
-        version: 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-core':
-        specifier: 0.0.1
-        version: 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-harness':
-        specifier: 0.0.1
-        version: 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-react':
-        specifier: 0.0.4
-        version: 0.0.4(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@effect/ai-openai@4.0.2(effect@4.0.2))(@effect/atom-react@4.0.2(effect@4.0.2)(react@19.3.0)(scheduler@0.27.0))(@types/react@19.2.15)(effect@4.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 'catalog:'
+        version: 0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@effect/ai-openai@4.0.2(effect@4.0.2))(@effect/atom-react@4.0.2(effect@4.0.2)(react@19.3.0)(scheduler@0.27.0))(@types/react@19.2.15)(effect@4.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@yourtechbudstudio/fluidcast-tool-agent':
-        specifier: 0.0.2
-        version: 0.0.2(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-tool-ask':
-        specifier: 0.0.2
-        version: 0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       '@yourtechbudstudio/fluidcast-tool-show':
-        specifier: 0.0.1
-        version: 0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+        specifier: 'catalog:'
+        version: 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       effect:
         specifier: 'catalog:'
         version: 4.0.2
@@ -2125,13 +2149,13 @@ packages:
   '@xterm/xterm@6.0.0':
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
 
-  '@yourtechbudstudio/fluidcast-client@0.0.1':
-    resolution: {integrity: sha512-vv8EV6AL1hZKATRkSy3M+3326P84/If4ld53VDjvTH9GBh3kBRhL2l4NOqM/pIIFY9zbAvk/81VnjtYHiLK/Qg==}
+  '@yourtechbudstudio/fluidcast-client@0.1.0':
+    resolution: {integrity: sha512-tGZxaC+mE5VAAy3z4icF7Qy/ZsBsXZT/fFxnmjg6qEIvmmrR9ia7gDAYKT14/Nm92EhZ309mJd3cQSOXcQFCog==}
     peerDependencies:
       effect: ^4.0.2
 
-  '@yourtechbudstudio/fluidcast-core@0.0.1':
-    resolution: {integrity: sha512-ZvD/sCFI0Oor6ABVe3zRi2TyialjSI3Ps6112kNix2kCBtQEn2G0m76VvnAhTu61ZkQMQpKu0aerIU07uZQWxw==}
+  '@yourtechbudstudio/fluidcast-core@0.1.0':
+    resolution: {integrity: sha512-0EV9lZMtz5opioEg5R2f7vgoPshLPU7ZgO8wxvtaJbl5c32aecPT+1pzMBsV0RThn+ztCgI7CtYA4+WXFrEKPw==}
     peerDependencies:
       '@effect/ai-openai': ^4.0.2
       effect: ^4.0.2
@@ -2139,52 +2163,52 @@ packages:
       '@effect/ai-openai':
         optional: true
 
-  '@yourtechbudstudio/fluidcast-harness@0.0.1':
-    resolution: {integrity: sha512-a7gpcy5OODKlurMB2gYgpasvnmym2dL3ZL7jaHCQz01QBaanQAODTKdkt1NKOJ4B4B9pZj87iAV3rPNjO9bcTg==}
+  '@yourtechbudstudio/fluidcast-harness@0.1.0':
+    resolution: {integrity: sha512-PE9ZU3reC1vaSdi7vQcMuHrrfprZN1/3Bgm/PRd+EcEAlTvRWhYo8NrAlc6SvFd7d0uqSweYP010geO9nfaIPQ==}
     peerDependencies:
       effect: ^4.0.2
 
-  '@yourtechbudstudio/fluidcast-presets@0.0.2':
-    resolution: {integrity: sha512-8MbJJzx4K6VyeXksGEGxk8c8IRVYab2bMv1lCAN12KtMQRP0GqAXsE+wha82PLXSI3AiopKHeddSeK9VEOo3CQ==}
+  '@yourtechbudstudio/fluidcast-presets@0.1.0':
+    resolution: {integrity: sha512-3sGiGK/QEEobLHBrEoRiaFwrr2pI49f4BQ6DYBBD2XKOFpAjT7jbrrll8YHwdp4QYOhA6tppUCA8tzkrhYRkYg==}
     peerDependencies:
-      '@yourtechbudstudio/fluidcast-core': 0.0.1
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1
-      '@yourtechbudstudio/fluidcast-tool-agent': 0.0.2
-      '@yourtechbudstudio/fluidcast-tool-ask': 0.0.2
-      '@yourtechbudstudio/fluidcast-tool-show': 0.0.1
+      '@yourtechbudstudio/fluidcast-core': 0.1.0
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0
+      '@yourtechbudstudio/fluidcast-tool-agent': 0.1.0
+      '@yourtechbudstudio/fluidcast-tool-ask': 0.1.0
+      '@yourtechbudstudio/fluidcast-tool-show': 0.1.0
       effect: ^4.0.2
 
-  '@yourtechbudstudio/fluidcast-react@0.0.4':
-    resolution: {integrity: sha512-aEHV0j47CC1mVPB7aGXTgEuZ1QxUccU3PqxpxaU96N6U7TRwBtxU74BLzFDDv79xLD6LEpjyMF2dxicc0+7+1Q==}
+  '@yourtechbudstudio/fluidcast-react@0.1.0':
+    resolution: {integrity: sha512-c636bz9bq5C8SGZxtAbQqa88xn6u9Qr9RGb9nx+KsjulK47Hwt5evBYfEWmLVlLNShw2rBs6GFHpkzJfcqDvGg==}
     peerDependencies:
       '@effect/atom-react': ^4.0.2
       effect: ^4.0.2
       react: ^19.3.0
       react-dom: ^19.3.0
 
-  '@yourtechbudstudio/fluidcast-tool-agent@0.0.2':
-    resolution: {integrity: sha512-86WLkp2FmQt6he3rt4oern7xa9W8P8q6sPUx7qvfmS3TslaZYarc1TFySJc/DwHXOrfd34Qdpuy5J/DJ9VQrfw==}
+  '@yourtechbudstudio/fluidcast-tool-agent@0.1.0':
+    resolution: {integrity: sha512-uEhysBLQUxKsEkdBJpXMyn8sc2rVx2DPlLH1S2Gt9nemhZjgaJfH68La6uMDKLuxOVzooXsmJE70rBI3vz/0lg==}
     peerDependencies:
       '@anthropic-ai/claude-agent-sdk': ^0.3.283
-      '@yourtechbudstudio/fluidcast-core': 0.0.1
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1
-      '@yourtechbudstudio/fluidcast-tool-ask': 0.0.2
-      '@yourtechbudstudio/fluidcast-tool-show': 0.0.1
+      '@yourtechbudstudio/fluidcast-core': 0.1.0
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0
+      '@yourtechbudstudio/fluidcast-tool-ask': 0.1.0
+      '@yourtechbudstudio/fluidcast-tool-show': 0.1.0
       effect: ^4.0.2
     peerDependenciesMeta:
       '@anthropic-ai/claude-agent-sdk':
         optional: true
 
-  '@yourtechbudstudio/fluidcast-tool-ask@0.0.2':
-    resolution: {integrity: sha512-pYw4IZDlLVax1qSnBykm23a+RDFwu8SXDNjVeBsBuBdq7onhDLb9cBIktNRd3queejfoY0YGxSigqA1cPve2+A==}
+  '@yourtechbudstudio/fluidcast-tool-ask@0.1.0':
+    resolution: {integrity: sha512-/lkyzf95FZ3YB6FadGHa6cgniUBuTWjAZCQLdmUFXIVpqmCIK/S31XqB+Lx5kHL3GfAYBX5x7DgjURoLEEp6Bg==}
     peerDependencies:
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0
       effect: ^4.0.2
 
-  '@yourtechbudstudio/fluidcast-tool-show@0.0.1':
-    resolution: {integrity: sha512-etN3Axrgjq+/S4Ibwj1CWtidc29iM3wY//FMFUYY64/EsXHduQkM4tVvMwCJq2LNKxmGbfhIENYhVIivEwM+8Q==}
+  '@yourtechbudstudio/fluidcast-tool-show@0.1.0':
+    resolution: {integrity: sha512-8tCVKfsJ/UO0YsNhXavncTs2jmhOX29zAqdDsn1rI5Rkv9khZcTXLzjo8jp3IAsierT7Ndhz12qF1gDqAbyciA==}
     peerDependencies:
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0
       effect: ^4.0.2
 
   abbrev@4.0.0:
@@ -5593,49 +5617,49 @@ snapshots:
 
   '@xterm/xterm@6.0.0': {}
 
-  '@yourtechbudstudio/fluidcast-client@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)':
+  '@yourtechbudstudio/fluidcast-client@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)':
     dependencies:
-      '@yourtechbudstudio/fluidcast-core': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-core': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
     transitivePeerDependencies:
       - '@effect/ai-openai'
 
-  '@yourtechbudstudio/fluidcast-core@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)':
+  '@yourtechbudstudio/fluidcast-core@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)':
     dependencies:
       effect: 4.0.2
     optionalDependencies:
       '@effect/ai-openai': 4.0.2(effect@4.0.2)
 
-  '@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)':
+  '@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)':
     dependencies:
-      '@yourtechbudstudio/fluidcast-core': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-core': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
     transitivePeerDependencies:
       - '@effect/ai-openai'
 
-  '@yourtechbudstudio/fluidcast-presets@0.0.2(56388908f162104f05ac6242381582d9)':
+  '@yourtechbudstudio/fluidcast-presets@0.1.0(ab17ca4f6326bd5143b1e2720169eb97)':
     dependencies:
-      '@yourtechbudstudio/fluidcast-core': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-agent': 0.0.2(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-ask': 0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-show': 0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-core': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-agent': 0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-ask': 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-show': 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
 
-  '@yourtechbudstudio/fluidcast-react@0.0.4(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@effect/ai-openai@4.0.2(effect@4.0.2))(@effect/atom-react@4.0.2(effect@4.0.2)(react@19.3.0)(scheduler@0.27.0))(@types/react@19.2.15)(effect@4.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@yourtechbudstudio/fluidcast-react@0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@effect/ai-openai@4.0.2(effect@4.0.2))(@effect/atom-react@4.0.2(effect@4.0.2)(react@19.3.0)(scheduler@0.27.0))(@types/react@19.2.15)(effect@4.0.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@base-ui/react': 1.9.0(@types/react@19.2.15)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@effect/atom-react': 4.0.2(effect@4.0.2)(react@19.3.0)(scheduler@0.27.0)
       '@fontsource-variable/fira-code': 5.3.0
       '@fontsource-variable/sora': 5.3.0
       '@fontsource-variable/source-sans-3': 5.3.1
-      '@yourtechbudstudio/fluidcast-client': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-core': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-agent': 0.0.2(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-ask': 0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-show': 0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-client': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-core': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-agent': 0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-ask': 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-show': 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
       highlight.js: 11.12.0
       lucide-react: 1.55.0(@types/react@19.2.15)(react@19.3.0)
@@ -5651,24 +5675,24 @@ snapshots:
       - '@types/react'
       - date-fns
 
-  '@yourtechbudstudio/fluidcast-tool-agent@0.0.2(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)':
+  '@yourtechbudstudio/fluidcast-tool-agent@0.1.0(@anthropic-ai/claude-agent-sdk@0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7))(@yourtechbudstudio/fluidcast-core@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-ask@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(@yourtechbudstudio/fluidcast-tool-show@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)':
     dependencies:
-      '@yourtechbudstudio/fluidcast-core': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-ask': 0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
-      '@yourtechbudstudio/fluidcast-tool-show': 0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-core': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-ask': 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-tool-show': 0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.283(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@7.2.0)(zod@4.6.7))(zod@4.6.7)
 
-  '@yourtechbudstudio/fluidcast-tool-ask@0.0.2(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)':
+  '@yourtechbudstudio/fluidcast-tool-ask@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)':
     dependencies:
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
 
-  '@yourtechbudstudio/fluidcast-tool-show@0.0.1(@yourtechbudstudio/fluidcast-harness@0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)':
+  '@yourtechbudstudio/fluidcast-tool-show@0.1.0(@yourtechbudstudio/fluidcast-harness@0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2))(effect@4.0.2)':
     dependencies:
-      '@yourtechbudstudio/fluidcast-harness': 0.0.1(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
+      '@yourtechbudstudio/fluidcast-harness': 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
       effect: 4.0.2
 
   abbrev@4.0.0: {}

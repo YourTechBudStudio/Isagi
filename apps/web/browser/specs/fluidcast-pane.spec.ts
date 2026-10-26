@@ -12,6 +12,9 @@ import { silentWav } from '../fixture/test-support/fluidcast/silent-wav.js';
  * "Nothing plays" is judged from the player's own paused presentation and from the commands the
  * runtime saw: a `PlaybackFinished` only follows audio that actually played. Speech requests are
  * recorded for diagnostics only, because the player may prefetch.
+ *
+ * Every test fails on a session route the fake runtime does not answer, so a route the player
+ * newly calls cannot quietly degrade to a 404.
  */
 
 const SESSION_A = 'fc-session-a';
@@ -72,6 +75,25 @@ async function startA(page: Page) {
   await expect(paneA(page).getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
 }
 
+test.afterEach(async ({ page }) => {
+  // A test that never opened the page has no fake runtime to ask.
+  const unmatched = await page.evaluate(
+    () => window.fluidcastTestSupport?.unmatchedRequests() ?? [],
+  );
+  expect(unmatched, 'session requests the fake runtime has no route for').toEqual([]);
+});
+
+/** Starts pane A, then interrupts it, so its composer is enabled. */
+async function composeInA(page: Page) {
+  await startA(page);
+  await player(paneA(page)).focus();
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await commandsOf(page, SESSION_A, 'Interrupt')).length).toBe(1);
+  const message = paneA(page).getByRole('combobox', { name: 'Message' });
+  await expect(message).toBeEnabled();
+  return message;
+}
+
 const showSurface = (page: Page, surfaceId: number) =>
   page.locator(`[data-show-surface="${surfaceId}"]`).click();
 
@@ -127,7 +149,7 @@ for (const [name, which, id] of [
     await page.keyboard.press('Escape');
     await expect.poll(async () => (await commandsOf(page, id, 'Interrupt')).length).toBe(1);
 
-    const message = which(page).getByRole('textbox', { name: 'Message' });
+    const message = which(page).getByRole('combobox', { name: 'Message' });
     await expect(message).toBeEnabled();
     await message.click();
     // Longer than the activation's deferred focus (two animation frames).
@@ -488,3 +510,44 @@ async function controlsUnder(scope: Locator, cluster: Locator): Promise<string[]
   }
   return covered;
 }
+
+test("typing / suggests the worker's skills from the runtime", async ({ page }) => {
+  await open(page);
+  const message = await composeInA(page);
+  await message.click();
+  await page.keyboard.type('/');
+
+  const skills = paneA(page).getByRole('listbox', { name: 'Skills' });
+  await expect(skills).toBeVisible();
+  await expect(skills.getByRole('option')).toHaveText([
+    /\/review\s*Review the current diff/,
+    /\/brainstorming\s*Think a change through in phases/,
+  ]);
+});
+
+test('unavailable skills leave the suggestions out, and the player keeps working', async ({
+  page,
+}) => {
+  await open(page, '?skills=unavailable');
+  // The player reads skills once; its suggestions can only be judged absent after that read failed.
+  await expect
+    .poll(() => page.evaluate(() => window.fluidcastTestSupport!.servedRequests()))
+    .toContain(`GET /fluidcast-sessions/${SESSION_A}/worker/skills → 502`);
+  const message = await composeInA(page);
+  await message.click();
+  await page.keyboard.type('/review the diff');
+  await expect(paneA(page).getByRole('listbox', { name: 'Skills' })).toHaveCount(0);
+
+  // A message still sends, with the typed skill as its text.
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await commandsOf(page, SESSION_A, 'SendMessage')).length).toBe(1);
+
+  // The worker's status and transcript still stream into the Worker layer.
+  await player(paneA(page)).focus();
+  await page.keyboard.press('w');
+  const worker = paneA(page).locator('section[aria-label="Worker"]');
+  await expect(
+    worker.getByRole('button', { name: 'Copy session ID native-session' }),
+  ).toBeVisible();
+  await expect(worker).toContainText('The plan has three steps.');
+});

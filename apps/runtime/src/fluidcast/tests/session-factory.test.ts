@@ -82,7 +82,14 @@ function scenario<A>(
         ),
       ),
     );
-    return { exit, calls: fake.calls, given: recording.given, http, bin };
+    return {
+      exit,
+      calls: fake.calls,
+      given: recording.given,
+      listed: recording.listed,
+      http,
+      bin,
+    };
   });
 }
 
@@ -190,6 +197,52 @@ test('Codex keeps the bare executable and takes the instrumentation args and thr
   assert.equal(options.model, undefined);
   assert.equal(options.effort, undefined);
   assert.equal(options.environment?.ISAGI_SDK_EXECUTION_ID, 'fluidcast-1');
+});
+
+/** Isagi's per-invocation instrumentation in a worker's options: none of it may reach the probe. */
+const isagiVariables = (environment: Readonly<Record<string, string | undefined>> | undefined) =>
+  Object.keys(environment ?? {}).filter((name) => name.startsWith('ISAGI_'));
+
+const skills = [{ name: 'review', description: 'Review the diff' }];
+
+test("Claude's skills are listed by an uninstrumented probe beside the instrumented worker", async () => {
+  const result = await scenario(
+    { input: { harnessSessionId: null }, worker: { skills } },
+    (built) => Effect.orDie(built.worker.skills),
+  );
+  assert.ok(Exit.isSuccess(result.exit));
+  assert.deepEqual(result.exit.value, skills);
+  const [conversation, probe] = result.given.claude;
+  assert.ok(conversation && probe);
+  assert.deepEqual(isagiVariables(conversation.environment), [
+    'ISAGI_AGENT_SESSION_ID',
+    'ISAGI_SDK_EXECUTION_ID',
+  ]);
+  assert.equal(conversation.settings, '/data/claude/settings.json');
+  // The probe: same directory and executable, the launch base alone, no hook settings.
+  assert.deepEqual(probe, {
+    cwd: '/repo',
+    executable: join(result.bin, 'claude'),
+    environment: { HOME: '/home/dev', PATH: result.bin },
+  });
+  assert.deepEqual(result.listed, [{ harness: 'claude', index: 1 }]);
+  assert.deepEqual(result.calls.listSkills, ['/repo']);
+});
+
+test("Codex's skills are listed by an uninstrumented probe beside the instrumented worker", async () => {
+  const result = await scenario(
+    { input: { harness: 'codex', harnessSessionId: null }, withClaude: false, worker: { skills } },
+    (built) => Effect.orDie(built.worker.skills),
+  );
+  assert.ok(Exit.isSuccess(result.exit));
+  assert.deepEqual(result.exit.value, skills);
+  const [conversation, probe] = result.given.codex;
+  assert.ok(conversation && probe);
+  assert.ok(conversation.args && conversation.thread);
+  assert.equal(isagiVariables(conversation.environment).length, 2);
+  // The probe: same directory, the launch base alone, no hook args or thread.
+  assert.deepEqual(probe, { cwd: '/repo', environment: { HOME: '/home/dev', PATH: result.bin } });
+  assert.deepEqual(result.listed, [{ harness: 'codex', index: 1 }]);
 });
 
 test('an unreadable native session fails with its reason and builds nothing', async () => {

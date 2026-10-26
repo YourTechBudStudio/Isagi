@@ -9,6 +9,7 @@ import type {
 import {
   fluidcastCommandApiErrorSchema,
   fluidcastSessionRouteParamsSchema,
+  fluidcastSkillsApiErrorSchema,
   fluidcastSpeechApiErrorSchema,
   fluidcastSpeechRouteParamsSchema,
   fluidcastStreamApiErrorSchema,
@@ -30,6 +31,15 @@ export const fluidcastEndpoints = {
     body: Schema.Unknown,
     output: Schema.Null,
     errors: fluidcastCommandApiErrorSchema,
+  },
+  /** The worker's skills (the SDK's `Skill` array), listed once per session by the SDK. */
+  workerSkills: {
+    id: 'fluidcast.workerSkills',
+    method: 'GET',
+    path: '/fluidcast-sessions/:fluidcastSessionId/worker/skills',
+    params: fluidcastSessionRouteParamsSchema,
+    output: Schema.Unknown,
+    errors: fluidcastSkillsApiErrorSchema,
   },
 } as const satisfies Record<string, ApiEndpoint<WireSchema, WireSchema, WireSchema, WireSchema>>;
 

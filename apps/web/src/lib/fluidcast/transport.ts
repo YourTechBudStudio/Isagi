@@ -7,7 +7,12 @@ import {
   SubscriptionMessage,
   ToolCommandRejected,
 } from '@yourtechbudstudio/fluidcast-harness/protocol';
-import { TranscriptMessage, WorkerSummary } from '@yourtechbudstudio/fluidcast-tool-agent/schema';
+import type { WorkerFeed } from '@yourtechbudstudio/fluidcast-react';
+import {
+  Skill,
+  TranscriptMessage,
+  WorkerSummary,
+} from '@yourtechbudstudio/fluidcast-tool-agent/schema';
 import { Effect, Schema, Stream } from 'effect';
 
 import {
@@ -23,19 +28,13 @@ import {
   RuntimeTransportError,
 } from '@isagi/runtime-client';
 
-// The Fluidcast SDK's `Transport` and worker feed over one session's runtime routes. Never imports
-// the React package, so it runs under plain `tsx` tests.
+// The Fluidcast SDK's `Transport` and worker feed over one session's runtime routes. Imports only
+// types from the React package, so it runs under plain `tsx` tests.
 
 export interface FluidcastTransportInput {
   readonly fluidcastSessionId: string;
   /** Runs before every subscription opens: the session's pending hide pauses, bounded. */
   readonly beforeSubscribe: Effect.Effect<void>;
-}
-
-/** The `WorkerFeed` service shape, spelled out so this module stays free of the React package. */
-export interface FluidcastWorkerStreams {
-  readonly status: () => Stream.Stream<WorkerSummary, TransportError>;
-  readonly transcript: () => Stream.Stream<TranscriptMessage, TransportError>;
 }
 
 type RuntimeFailure = RuntimeApiError | RuntimeTransportError | RuntimeDecodeError;
@@ -63,6 +62,7 @@ const decodeRejection = Schema.decodeUnknownEffect(
 const decodeSubscriptionMessage = Schema.decodeUnknownEffect(SubscriptionMessage);
 const decodeWorkerSummary = Schema.decodeUnknownEffect(WorkerSummary);
 const decodeTranscriptMessage = Schema.decodeUnknownEffect(TranscriptMessage);
+const decodeSkills = Schema.decodeUnknownEffect(Schema.Array(Skill));
 const encodeCommand = Schema.encodeUnknownEffect(Command);
 
 const sessionStream = <A>(
@@ -150,7 +150,7 @@ export const fluidcastTransport = (
 
 export const fluidcastWorkerStreams = (
   input: Pick<FluidcastTransportInput, 'fluidcastSessionId'>,
-): Effect.Effect<FluidcastWorkerStreams, never, RuntimeClient> =>
+): Effect.Effect<WorkerFeed['Service'], never, RuntimeClient> =>
   Effect.gen(function* () {
     const client = yield* RuntimeClient;
     return {
@@ -168,5 +168,12 @@ export const fluidcastWorkerStreams = (
           input.fluidcastSessionId,
           decodeTranscriptMessage,
         ),
-    };
+      // Every failure is a `TransportError`: the player then leaves the suggestions out.
+      skills: () =>
+        client
+          .request(fluidcastEndpoints.workerSkills, {
+            fluidcastSessionId: input.fluidcastSessionId,
+          })
+          .pipe(Effect.flatMap(decodeSkills), Effect.mapError(toTransportError)),
+    } satisfies WorkerFeed['Service'];
   });

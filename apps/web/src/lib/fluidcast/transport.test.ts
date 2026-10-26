@@ -8,16 +8,13 @@ import {
   SpeechNotFound,
   ToolCommandRejected,
 } from '@yourtechbudstudio/fluidcast-harness/protocol';
+import type { WorkerFeed } from '@yourtechbudstudio/fluidcast-react';
 import { Deferred, Effect, Layer, Stream } from 'effect';
 import { FetchHttpClient } from 'effect/http';
 
 import { RuntimeClient } from '@isagi/runtime-client';
 
-import {
-  fluidcastTransport,
-  fluidcastWorkerStreams,
-  type FluidcastWorkerStreams,
-} from './transport.js';
+import { fluidcastTransport, fluidcastWorkerStreams } from './transport.js';
 
 const runtimeUrl = 'http://runtime.test';
 const fluidcastSessionId = 'fc-1';
@@ -49,7 +46,7 @@ function fakeRuntime(answer: (seen: Seen) => Response | Promise<Response>) {
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),
   );
   const run = <A, E>(
-    use: (transport: Transport['Service'], worker: FluidcastWorkerStreams) => Effect.Effect<A, E>,
+    use: (transport: Transport['Service'], worker: WorkerFeed['Service']) => Effect.Effect<A, E>,
     beforeSubscribe: Effect.Effect<void> = Effect.void,
   ) =>
     Effect.runPromise(
@@ -274,7 +271,7 @@ test('a speech service failure is SpeechError with its reason', async () => {
 test('worker status and transcript decode their own streams', async () => {
   const runtime = fakeRuntime((seen) =>
     seen.url.endsWith('/worker/status')
-      ? sse({ _tag: 'WorkerSummary', status: 'idle', sessionId: null })
+      ? sse({ _tag: 'WorkerSummary', status: 'idle', sessionId: null, backgroundTasks: 0 })
       : sse({ _tag: 'TranscriptSnapshot', entries: [] }),
   );
 
@@ -282,7 +279,10 @@ test('worker status and transcript decode their own streams', async () => {
     Effect.all([Stream.runCollect(worker.status()), Stream.runCollect(worker.transcript())]),
   );
 
-  assert.deepEqual([...status], [{ _tag: 'WorkerSummary', status: 'idle', sessionId: null }]);
+  assert.deepEqual(
+    [...status],
+    [{ _tag: 'WorkerSummary', status: 'idle', sessionId: null, backgroundTasks: 0 }],
+  );
   assert.deepEqual([...transcript], [{ _tag: 'TranscriptSnapshot', entries: [] }]);
 });
 
@@ -295,4 +295,35 @@ test('a worker message that does not decode is TransportError Malformed', async 
 
   assert.ok(error instanceof TransportError);
   assert.equal(error.reason, 'Malformed');
+});
+
+const ok = (data: unknown) =>
+  new Response(JSON.stringify({ data, meta: { requestId: 'r' } }), { status: 200 });
+
+test("skills are read from the session's skills route and decoded", async () => {
+  const skills = [
+    { name: 'review', description: 'Review the diff', argumentHint: '[level]' },
+    { name: 'plan', description: 'Plan the change' },
+  ];
+  const runtime = fakeRuntime(() => ok(skills));
+
+  const listed = await runtime.run((_transport, worker) => worker.skills());
+
+  assert.deepEqual(listed, skills);
+  assert.equal(runtime.seen[0]?.method, 'GET');
+  assert.equal(runtime.seen[0]?.url, `${runtimeUrl}/api/v1/fluidcast-sessions/fc-1/worker/skills`);
+});
+
+test('a skills failure is the TransportError its status or body calls for', async () => {
+  const cases = [
+    [envelope('fluidcast_skills_unavailable', 502, { reason: 'TimedOut' }), 'ServerError'],
+    [envelope('fluidcast_session_not_found', 404, { fluidcastSessionId }), 'BadRequest'],
+    [ok([{ name: 'review' }]), 'Malformed'],
+  ] as const;
+  for (const [response, reason] of cases) {
+    const runtime = fakeRuntime(() => response);
+    const error = await runtime.run((_transport, worker) => worker.skills().pipe(Effect.flip));
+    assert.ok(error instanceof TransportError);
+    assert.equal(error.reason, reason);
+  }
 });

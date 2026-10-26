@@ -6,6 +6,14 @@ catalog:
   '@effect/ai-openai': 4.0.2
   '@effect/ai-openai-compat': 4.0.2
   '@effect/atom-react': ~4.0.2
+  '@yourtechbudstudio/fluidcast-client': 0.1.0
+  '@yourtechbudstudio/fluidcast-core': 0.1.0
+  '@yourtechbudstudio/fluidcast-harness': 0.1.0
+  '@yourtechbudstudio/fluidcast-presets': 0.1.0
+  '@yourtechbudstudio/fluidcast-react': 0.1.0
+  '@yourtechbudstudio/fluidcast-tool-agent': 0.1.0
+  '@yourtechbudstudio/fluidcast-tool-ask': 0.1.0
+  '@yourtechbudstudio/fluidcast-tool-show': 0.1.0
   effect: ~4.0.2
 allowBuilds:
   better-sqlite3: true

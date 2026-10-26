@@ -5,8 +5,18 @@ import {
   SubscriptionMessage,
   ToolCommandRejected,
 } from '@yourtechbudstudio/fluidcast-harness/protocol';
+import {
+  Skill,
+  TranscriptMessage,
+  WorkerSummary,
+} from '@yourtechbudstudio/fluidcast-tool-agent/schema';
 import { Effect, Fiber, Schema, Stream } from 'effect';
 
+import {
+  fluidcastContentEndpoints,
+  fluidcastEndpoints,
+  fluidcastEventStreamEndpoints,
+} from '@isagi/contracts';
 import type {
   AgentSessionInteraction,
   AgentSessionMetadata,
@@ -35,6 +45,12 @@ import { buildHarnessSession } from './harness-sessions.js';
  * a success flips the mode, and a handoff failure records `fluidcast_failed` at the next
  * generation. A terminal-mode agent is projected stopped and needing a replacement, so its
  * `PtyPane` mounts without claiming or attaching; every claim is recorded so a test can say so.
+ *
+ * Fluidcast session routes are matched on the contracts' own endpoint paths, and their worker
+ * payloads are encoded with the SDK's schemas, so a changed route or SDK shape fails here. Every
+ * worker lists `fixtureSkills`, unless the page's `?skills=unavailable` makes listing fail. Every
+ * `/fluidcast-sessions/*` request is recorded: one a route answered with its status, and one no
+ * route answers for the spec to fail on.
  */
 
 export const RUNTIME_ORIGIN = 'http://fluidcast-test-support.invalid';
@@ -100,11 +116,34 @@ export interface FluidcastRuntimeControls {
   readonly switches: () => readonly RecordedSwitch[];
   /** Pane-session claims, the request that precedes every terminal attach. */
   readonly claims: () => readonly unknown[];
+  /** `/fluidcast-sessions/*` requests no route answered, as `METHOD path`. */
+  readonly unmatchedRequests: () => readonly string[];
+  /** `/fluidcast-sessions/*` requests a route answered, as `METHOD path → status`. */
+  readonly servedRequests: () => readonly string[];
 }
+
+/** The skills every fake worker lists. */
+const fixtureSkills: ReadonlyArray<Skill> = [
+  { name: 'review', description: 'Review the current diff', argumentHint: '[level]' },
+  { name: 'brainstorming', description: 'Think a change through in phases' },
+];
 
 const encodeMessage = Schema.encodeSync(SubscriptionMessage);
 const decodeCommand = Schema.decodeUnknownSync(Command);
 const encodeRejection = Schema.encodeSync(Schema.Union([CommandRejected, ToolCommandRejected]));
+const encodeWorkerSummary = Schema.encodeSync(WorkerSummary);
+const encodeTranscriptMessage = Schema.encodeSync(TranscriptMessage);
+const encodeSkills = Schema.encodeSync(Schema.Array(Skill));
+
+/** The Fluidcast session routes the fake answers, as the contracts declare them. */
+const fluidcastRoutes = [
+  fluidcastEndpoints.command,
+  fluidcastEndpoints.workerSkills,
+  fluidcastEventStreamEndpoints.events,
+  fluidcastEventStreamEndpoints.workerStatus,
+  fluidcastEventStreamEndpoints.workerTranscript,
+  fluidcastContentEndpoints.speech,
+] as const;
 
 export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
   const sessions = new Map<string, Session['Service']>([
@@ -119,6 +158,10 @@ export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
   const scripted: SwitchOutcome[] = [];
   const switches: RecordedSwitch[] = [];
   const claims: unknown[] = [];
+  const unmatched: string[] = [];
+  const served: string[] = [];
+  const skillsUnavailable =
+    new URLSearchParams(window.location.search).get('skills') === 'unavailable';
   const interactions = new Map<number, AgentSessionInteraction>(seededInteractions());
   let nextSessionNumber = 1;
   // The fake's own view of each session's paused flag, folded from the events it streamed.
@@ -142,9 +185,140 @@ export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
     },
     switches: () => [...switches],
     claims: () => [...claims],
+    unmatchedRequests: () => [...unmatched],
+    servedRequests: () => [...served],
   };
 
   const project = (paneId: number) => agentProjection(paneId, interactions.get(agentIdOf(paneId))!);
+
+  /** Answers a request a Fluidcast session route matched, with the route's `:name` params. */
+  const answerSessionRoute = async (
+    endpoint: (typeof fluidcastRoutes)[number],
+    params: Record<string, string>,
+    init: RequestInit | undefined,
+  ): Promise<Response> => {
+    const fluidcastSessionId = params.fluidcastSessionId!;
+    const session = sessions.get(fluidcastSessionId);
+    if (!session) {
+      return failure(404, 'fluidcast_session_not_found', 'No such session.', {
+        fluidcastSessionId,
+      });
+    }
+
+    switch (endpoint.id) {
+      case 'fluidcast.command': {
+        const command = decodeCommand(JSON.parse(requestBodyText(init?.body) ?? 'null'));
+        const record: RecordedCommand = {
+          fluidcastSessionId,
+          tag: command._tag,
+          at: performance.now(),
+        };
+        commands.push(record);
+        const settle = (outcome: RecordedCommand['outcome']) => {
+          Object.assign(record, { outcome, settledAt: performance.now() });
+        };
+        if (command._tag === 'Pause') {
+          if (pauseDelay > 0) await delay(pauseDelay);
+          if (pauseFails) {
+            settle('failed');
+            return failure(500, 'api_unhandled_error', 'The fixture runtime failed this pause.');
+          }
+        }
+        const exit = await Effect.runPromiseExit(session.command(command));
+        if (exit._tag === 'Success') {
+          settle('applied');
+          return success(null);
+        }
+        const rejection = exit.cause.reasons.find((reason) => reason._tag === 'Fail');
+        settle('rejected');
+        return failure(409, 'fluidcast_command_rejected', 'The session refused the command.', {
+          rejection: encodeRejection(
+            (rejection as { readonly error: CommandRejected | ToolCommandRejected }).error,
+          ),
+        });
+      }
+
+      case 'fluidcast.workerSkills':
+        return skillsUnavailable
+          ? failure(502, 'fluidcast_skills_unavailable', 'The skills could not be listed.', {
+              reason: 'Failed',
+            })
+          : success(encodeSkills(fixtureSkills));
+
+      case 'fluidcast.events':
+        subscriptions.push({ fluidcastSessionId, at: performance.now() });
+        return eventStream(
+          session.subscribe().pipe(
+            Stream.tap((message) =>
+              Effect.sync(() => {
+                if (message._tag === 'Snapshot') {
+                  pausedById.set(fluidcastSessionId, message.state.paused);
+                }
+                if (message._tag === 'PauseChanged') {
+                  pausedById.set(fluidcastSessionId, message.paused);
+                }
+              }),
+            ),
+            Stream.map((message) => encodeMessage(message)),
+          ),
+          init?.signal,
+        );
+
+      case 'fluidcast.workerStatus':
+        return eventStream(
+          Stream.concat(
+            Stream.make(
+              encodeWorkerSummary({
+                _tag: 'WorkerSummary',
+                status: 'idle',
+                sessionId: 'native-session',
+                backgroundTasks: 0,
+              }),
+            ),
+            Stream.never,
+          ),
+          init?.signal,
+        );
+
+      case 'fluidcast.workerTranscript':
+        return eventStream(
+          Stream.concat(
+            Stream.make(
+              encodeTranscriptMessage({
+                _tag: 'TranscriptSnapshot',
+                entries: [
+                  {
+                    _tag: 'prompt',
+                    source: 'earlier',
+                    text: 'Explain the plan.',
+                    parentToolUseId: null,
+                  },
+                  { _tag: 'text', text: 'The plan has three steps.', parentToolUseId: null },
+                ],
+              }),
+            ),
+            Stream.never,
+          ),
+          init?.signal,
+        );
+
+      case 'fluidcast.speech': {
+        const actionId = params.actionId!;
+        speechRequests.push(`${fluidcastSessionId}/${actionId}`);
+        const chunks = await Effect.runPromise(
+          Stream.runCollect(session.speech(actionId)).pipe(
+            Effect.map((collected) => [...collected]),
+            Effect.orElseSucceed(() => null),
+          ),
+        );
+        if (chunks === null) return failure(404, 'fluidcast_speech_not_found', 'No such line.');
+        return new Response(new Blob(chunks as BlobPart[], { type: 'audio/wav' }), {
+          status: 200,
+          headers: { 'content-type': 'audio/wav' },
+        });
+      }
+    }
+  };
 
   const realFetch = window.fetch.bind(window);
 
@@ -230,99 +404,21 @@ export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
       return success({ mode: 'fluidcast', fluidcastSessionId });
     }
 
-    const route = /^\/fluidcast-sessions\/([^/]+)\/(.+)$/.exec(path);
-    const session = route ? sessions.get(decodeURIComponent(route[1]!)) : undefined;
-    if (route && !session) {
-      return failure(404, 'fluidcast_session_not_found', 'No such session.', {
-        fluidcastSessionId: decodeURIComponent(route[1]!),
-      });
-    }
-    if (route && session) {
-      const fluidcastSessionId = decodeURIComponent(route[1]!);
-      const rest = route[2]!;
-
-      if (method === 'POST' && rest === 'commands') {
-        const command = decodeCommand(JSON.parse(requestBodyText(init?.body) ?? 'null'));
-        const record: RecordedCommand = {
-          fluidcastSessionId,
-          tag: command._tag,
-          at: performance.now(),
-        };
-        commands.push(record);
-        const settle = (outcome: RecordedCommand['outcome']) => {
-          Object.assign(record, { outcome, settledAt: performance.now() });
-        };
-        if (command._tag === 'Pause') {
-          if (pauseDelay > 0) await delay(pauseDelay);
-          if (pauseFails) {
-            settle('failed');
-            return failure(500, 'api_unhandled_error', 'The fixture runtime failed this pause.');
-          }
-        }
-        const exit = await Effect.runPromiseExit(session.command(command));
-        if (exit._tag === 'Success') {
-          settle('applied');
-          return success(null);
-        }
-        const rejection = exit.cause.reasons.find((reason) => reason._tag === 'Fail');
-        settle('rejected');
-        return failure(409, 'fluidcast_command_rejected', 'The session refused the command.', {
-          rejection: encodeRejection(
-            (rejection as { readonly error: CommandRejected | ToolCommandRejected }).error,
-          ),
-        });
+    if (path.startsWith('/fluidcast-sessions/')) {
+      const matched = fluidcastRoutes
+        .map((endpoint) => ({
+          endpoint,
+          params: method === endpoint.method ? matchPath(endpoint.path, path) : null,
+        }))
+        .find(({ params }) => params !== null);
+      if (!matched) {
+        unmatched.push(`${method} ${path}`);
+        console.error('[fluidcast test support] no route for', method, path);
+        return failure(404, 'api_route_not_found', `No fixture route for ${method} ${path}`);
       }
-
-      if (method === 'GET' && rest === 'events') {
-        subscriptions.push({ fluidcastSessionId, at: performance.now() });
-        return eventStream(
-          session.subscribe().pipe(
-            Stream.tap((message) =>
-              Effect.sync(() => {
-                if (message._tag === 'Snapshot') {
-                  pausedById.set(fluidcastSessionId, message.state.paused);
-                }
-                if (message._tag === 'PauseChanged') {
-                  pausedById.set(fluidcastSessionId, message.paused);
-                }
-              }),
-            ),
-            Stream.map((message) => encodeMessage(message)),
-          ),
-          init?.signal,
-        );
-      }
-      if (method === 'GET' && rest === 'worker/status') {
-        return eventStream(
-          Stream.concat(
-            Stream.make({ _tag: 'WorkerSummary', status: 'idle', sessionId: 'native-session' }),
-            Stream.never,
-          ),
-          init?.signal,
-        );
-      }
-      if (method === 'GET' && rest === 'worker/transcript') {
-        return eventStream(
-          Stream.concat(Stream.make({ _tag: 'TranscriptSnapshot', entries: [] }), Stream.never),
-          init?.signal,
-        );
-      }
-
-      const speech = /^speech\/(.+)$/.exec(rest);
-      if (method === 'GET' && speech) {
-        speechRequests.push(`${fluidcastSessionId}/${decodeURIComponent(speech[1]!)}`);
-        const chunks = await Effect.runPromise(
-          Stream.runCollect(session.speech(decodeURIComponent(speech[1]!))).pipe(
-            Effect.map((collected) => [...collected]),
-            Effect.orElseSucceed(() => null),
-          ),
-        );
-        if (chunks === null) return failure(404, 'fluidcast_speech_not_found', 'No such line.');
-        return new Response(new Blob(chunks as BlobPart[], { type: 'audio/wav' }), {
-          status: 200,
-          headers: { 'content-type': 'audio/wav' },
-        });
-      }
+      const response = await answerSessionRoute(matched.endpoint, matched.params!, init);
+      served.push(`${method} ${path} → ${response.status}`);
+      return response;
     }
 
     console.error('[fluidcast test support] no route for', method, path);
@@ -330,6 +426,19 @@ export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
   };
 
   return controls;
+}
+
+/** The `:name` params of `path` when it matches an endpoint's path template, else `null`. */
+function matchPath(template: string, path: string): Record<string, string> | null {
+  const expected = template.split('/');
+  const actual = path.split('/');
+  if (expected.length !== actual.length) return null;
+  const params: Record<string, string> = {};
+  for (const [index, part] of expected.entries()) {
+    if (part.startsWith(':')) params[part.slice(1)] = decodeURIComponent(actual[index]!);
+    else if (part !== actual[index]) return null;
+  }
+  return params;
 }
 
 /** A server-sent event stream fed by `stream`, ended when the client aborts. */

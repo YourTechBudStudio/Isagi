@@ -1,5 +1,6 @@
 import { useAtomValue } from '@effect/atom-react';
-import { Effect } from 'effect';
+import { Command } from '@yourtechbudstudio/fluidcast-harness/protocol';
+import { Effect, Schema } from 'effect';
 import { AsyncResult, Atom } from 'effect/reactivity';
 import { useEffect, useRef } from 'react';
 
@@ -55,7 +56,8 @@ export const nextPresented = (
 export const leftPresentation = (previous: Presented, next: Presented): ReadonlyArray<string> =>
   [...previous.ids].filter((id) => !next.ids.has(id));
 
-const pauseCommand = { _tag: 'Pause' } as const;
+/** The SDK's encoded `Pause`, as the transport sends every command. */
+const pauseCommand = Schema.encodeSync(Command)({ _tag: 'Pause' });
 
 /**
  * The hide `Pause` for one session, tracked so a returning player waits for it. A session that is

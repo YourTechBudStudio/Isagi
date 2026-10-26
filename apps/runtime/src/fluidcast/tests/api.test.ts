@@ -1,70 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Context, Effect, Layer } from 'effect';
+import { SkillsUnavailable } from '@yourtechbudstudio/fluidcast-tool-agent/schema';
+import { Effect } from 'effect';
 
-import { apiBasePath } from '@isagi/contracts';
-
-import { withListeningServer } from '../../platform/http/testing.js';
-import { registerFluidcastRoutes } from '../api.js';
-import type { FluidcastSessionId } from '../ids.js';
-import { FluidcastSessions } from '../sessions.service.js';
-import { fakeBuiltSession, fakeSessionsLayer, type FakeBuiltSession } from './support.js';
-
-interface Served {
-  readonly sessions: FluidcastSessions['Service'];
-  readonly fake: FakeBuiltSession;
-  readonly fluidcastSessionId: FluidcastSessionId;
-  /** `<origin>/api/v1/fluidcast-sessions/<id>` for the started session. */
-  readonly base: string;
-}
-
-/** Starts one fake session and serves the Fluidcast routes over a real socket. */
-function serve(run: (served: Served) => Promise<void>) {
-  const fake = fakeBuiltSession();
-  const fixture = fakeSessionsLayer({ fakes: [fake] });
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const sessions = Context.get(yield* Layer.build(fixture.layer), FluidcastSessions);
-        const { fluidcastSessionId } = yield* sessions.start({
-          agentSessionId: 7,
-          harness: 'codex',
-          cwd: '/repo',
-          harnessSessionId: null,
-        });
-        yield* Effect.promise(() =>
-          withListeningServer(
-            Layer.succeed(FluidcastSessions, sessions),
-            registerFluidcastRoutes,
-            (server) =>
-              run({
-                sessions,
-                fake,
-                fluidcastSessionId,
-                base: `${server.origin}${apiBasePath}/fluidcast-sessions/${fluidcastSessionId}`,
-              }),
-          ),
-        );
-      }),
-    ),
-  );
-}
-
-/** Reads SSE `data:` payloads until `count` arrived, leaving the stream open. */
-async function readEvents(body: ReadableStream<Uint8Array>, count: number) {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  const events = () =>
-    [...text.matchAll(/^data: (.*)$/gm)].map((match) => JSON.parse(match[1]!) as unknown);
-  while (events().length < count) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-  }
-  return { events: events(), reader };
-}
+import { readEvents, serveFakeSession } from './support.js';
 
 const postCommand = (base: string, command: unknown) =>
   fetch(`${base}/commands`, {
@@ -77,7 +17,7 @@ const errorOf = async (response: Response) =>
   ((await response.json()) as { error: { code: string; data?: unknown } }).error;
 
 test('the session, worker status and transcript streams carry SDK-encoded messages', () =>
-  serve(async ({ base }) => {
+  serveFakeSession(async ({ base }) => {
     const events = await readEvents((await fetch(`${base}/events`)).body!, 1);
     assert.deepEqual((events.events[0] as { _tag: string })._tag, 'Snapshot');
     await events.reader.cancel();
@@ -87,6 +27,7 @@ test('the session, worker status and transcript streams carry SDK-encoded messag
       _tag: 'WorkerSummary',
       status: 'idle',
       sessionId: null,
+      backgroundTasks: 0,
     });
     await status.reader.cancel();
 
@@ -96,7 +37,7 @@ test('the session, worker status and transcript streams carry SDK-encoded messag
   }));
 
 test('stopping a session ends its open streams, and its routes then answer 404', () =>
-  serve(async ({ base, sessions, fluidcastSessionId }) => {
+  serveFakeSession(async ({ base, sessions, fluidcastSessionId }) => {
     const open = await readEvents((await fetch(`${base}/events`)).body!, 1);
     await Effect.runPromise(sessions.stop(fluidcastSessionId));
     // The stream ends normally once the session stops.
@@ -108,7 +49,13 @@ test('stopping a session ends its open streams, and its routes then answer 404',
     const error = await errorOf(pause);
     assert.equal(error.code, 'fluidcast_session_not_found');
     assert.deepEqual(error.data, { fluidcastSessionId });
-    for (const path of ['/events', '/worker/status', '/worker/transcript', '/speech/a1']) {
+    for (const path of [
+      '/events',
+      '/worker/status',
+      '/worker/transcript',
+      '/worker/skills',
+      '/speech/a1',
+    ]) {
       const response = await fetch(`${base}${path}`);
       assert.equal(response.status, 404, path);
       assert.equal((await errorOf(response)).code, 'fluidcast_session_not_found', path);
@@ -116,7 +63,7 @@ test('stopping a session ends its open streams, and its routes then answer 404',
   }));
 
 test('commands are decoded, applied, or refused with the SDK rejection', () =>
-  serve(async ({ base, fake }) => {
+  serveFakeSession(async ({ base, fake }) => {
     const applied = await postCommand(base, { _tag: 'Pause' });
     assert.equal(applied.status, 200);
     assert.deepEqual(((await applied.json()) as { data: unknown }).data, null);
@@ -147,7 +94,7 @@ test('commands are decoded, applied, or refused with the SDK rejection', () =>
   }));
 
 test('speech streams audio, or answers 404 and 502 before the first byte', () =>
-  serve(async ({ base }) => {
+  serveFakeSession(async ({ base }) => {
     const audio = await fetch(`${base}/speech/a1`);
     assert.equal(audio.status, 200);
     assert.equal(audio.headers.get('content-type'), 'audio/ogg');
@@ -163,5 +110,54 @@ test('speech streams audio, or answers 404 and 502 before the first byte', () =>
     assert.deepEqual(await errorOf(broken).then((error) => [error.code, error.data]), [
       'fluidcast_speech_failed',
       { reason: 'RequestError' },
+    ]);
+  }));
+
+test('worker skills are served SDK-encoded, or refused with why they are unavailable', () =>
+  serveFakeSession(async ({ base, fake }) => {
+    fake.listSkillsWith(
+      Effect.succeed([
+        { name: 'review', description: 'Review the diff', argumentHint: '[level]' },
+        { name: 'plan', description: 'Plan the change' },
+      ]),
+    );
+    const listed = await fetch(`${base}/worker/skills`);
+    assert.equal(listed.status, 200);
+    assert.deepEqual(((await listed.json()) as { data: unknown }).data, [
+      { name: 'review', description: 'Review the diff', argumentHint: '[level]' },
+      { name: 'plan', description: 'Plan the change' },
+    ]);
+
+    for (const reason of ['Failed', 'TimedOut'] as const) {
+      fake.listSkillsWith(Effect.fail(new SkillsUnavailable({ reason })));
+      const unavailable = await fetch(`${base}/worker/skills`);
+      assert.equal(unavailable.status, 502, reason);
+      assert.deepEqual(await errorOf(unavailable).then((error) => [error.code, error.data]), [
+        'fluidcast_skills_unavailable',
+        { reason },
+      ]);
+    }
+  }));
+
+test('worker skills answer 404 for an unknown session and for one stopped mid-listing', () =>
+  serveFakeSession(async ({ base, fake, sessions, fluidcastSessionId }) => {
+    const unknown = await fetch(`${base.replace(fluidcastSessionId, 'fc-unknown')}/worker/skills`);
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(await errorOf(unknown).then((error) => [error.code, error.data]), [
+      'fluidcast_session_not_found',
+      { fluidcastSessionId: 'fc-unknown' },
+    ]);
+
+    let markListing: () => void = () => {};
+    const listing = new Promise<void>((resolve) => (markListing = resolve));
+    fake.listSkillsWith(Effect.andThen(Effect.sync(markListing), Effect.never));
+    const pending = fetch(`${base}/worker/skills`);
+    await listing;
+    await Effect.runPromise(sessions.stop(fluidcastSessionId));
+    const stopped = await pending;
+    assert.equal(stopped.status, 404);
+    assert.deepEqual(await errorOf(stopped).then((error) => [error.code, error.data]), [
+      'fluidcast_session_not_found',
+      { fluidcastSessionId },
     ]);
   }));

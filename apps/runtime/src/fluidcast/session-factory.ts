@@ -83,8 +83,8 @@ export interface FluidcastSessionDependencies {
  * (ADR 0007), in the environment Isagi gives every launched process. With a native session ID the
  * worker attaches to that conversation; if the conversation has an answer, the session opens on a
  * continuation start that waits for a tap, and otherwise on the composer. Without an ID the first
- * forward starts a new native session. No model, effort or skill modifier is passed: the agent keeps
- * its own.
+ * forward starts a new native session. No model or effort is passed: the agent keeps its own. Isagi
+ * adds no modifier of its own; a skill the listener types as `/name` passes through to the worker.
  */
 export const buildFluidcastSession = (
   input: FluidcastSessionInput,
@@ -104,11 +104,9 @@ export const buildFluidcastSession = (
         executionId: input.fluidcastSessionId,
       })
       .pipe(Effect.mapError(() => new FluidcastStartFailed({ reason: 'instrumentation_failed' })));
-    const environment = {
-      ...(yield* (yield* LaunchEnvironment).base),
-      ...instrumentation.environment,
-    };
-    const worker = yield* workerType(input, instrumentation, environment, workers);
+    const base = yield* (yield* LaunchEnvironment).base;
+    const environment = { ...base, ...instrumentation.environment };
+    const worker = yield* workerType(input, instrumentation, { base, environment }, workers);
 
     const tool = yield* forwardAgentTool({
       worker,
@@ -169,36 +167,48 @@ export const buildFluidcastSession = (
     return { session: Context.get(context, Session), worker: tool.worker };
   });
 
+/**
+ * The harness's worker, instrumented per invocation, with its skill listing served by an
+ * uninstrumented probe of the same kind. Listing skills starts a short-lived query or app-server
+ * that is a probe, not a conversation (ADR 0007): built from the base environment with no hook
+ * settings, args or thread, it cannot write to the agent session's hook ledger or disturb native
+ * session ID capture. Skills, `isagi-docs` included, live in the harness's user directory, so the
+ * probe still sees them.
+ */
 function workerType(
   input: FluidcastSessionInput,
   instrumentation: SdkInstrumentation,
-  environment: NodeJS.ProcessEnv,
+  environments: { readonly base: NodeJS.ProcessEnv; readonly environment: NodeJS.ProcessEnv },
   workers: FluidcastWorkers,
 ): Effect.Effect<WorkerType, FluidcastStartFailed> {
+  const { base, environment } = environments;
   switch (instrumentation.harness) {
     case 'claude':
       // The SDK needs an absolute path, and must never fall back to its bundled Claude Code.
       return resolveExecutableOnPath(harnessDefinition('claude').executable, environment.PATH).pipe(
         Effect.mapError(() => new FluidcastStartFailed({ reason: 'executable_not_found' })),
-        Effect.map((executable) =>
-          workers.claude({
+        Effect.map((executable) => ({
+          ...workers.claude({
             cwd: input.cwd,
             executable,
             permissionMode: 'auto',
             environment,
             settings: instrumentation.settingsPath,
           }),
-        ),
+          listSkills: workers.claude({ cwd: input.cwd, executable, environment: base }).listSkills,
+        })),
       );
     case 'codex':
-      // A bare name: the worker resolves it on the environment's PATH when it launches.
-      return Effect.succeed(
-        workers.codex({
+      // A bare name: the worker resolves it on the environment's PATH when it launches. The probe
+      // reads the user's plain Codex config, where their skills live; it needs no hook trust.
+      return Effect.succeed({
+        ...workers.codex({
           cwd: input.cwd,
           environment,
           args: instrumentation.args,
           thread: instrumentation.thread,
         }),
-      );
+        listSkills: workers.codex({ cwd: input.cwd, environment: base }).listSkills,
+      });
   }
 }

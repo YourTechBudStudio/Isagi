@@ -65,6 +65,15 @@ test('the last answer is the top-level text after the last top-level prompt', ()
   assert.equal(lastAnswer(entries), 'part one\n\npart two');
 });
 
+test('the last answer leaves out the worker thinking between the prompt and the answer', () => {
+  const entries: ReadonlyArray<TranscriptEntry> = [
+    prompt('the question'),
+    { _tag: 'thinking', summary: 'Weighing the options', parentToolUseId: null },
+    text('the answer'),
+  ];
+  assert.equal(lastAnswer(entries), 'the answer');
+});
+
 test('there is no last answer without top-level text after the last prompt', () => {
   assert.equal(lastAnswer([]), undefined);
   assert.equal(lastAnswer([text('an answer'), prompt('unanswered')]), undefined);
