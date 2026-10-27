@@ -1,161 +1,42 @@
-# Agent work in workflows
+# Agents in workflows
 
-Read [Workflow authoring](workflows.md) for graph structure and package checks. Use the installed `operations.d.ts` and `launch.d.ts` for exact capability, result, prompt, and conversation types.
+Exact capability, result and prompt types are in the installed `operations.d.ts` and `launch.d.ts`. Worked shapes are in [Recipes](workflow-recipes.md).
 
-## Choose a capability
+## Visible sessions do the work
 
-| Capability on `ctx`      | Returns / use                                                                                  |
-| ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `spawnAgentSession`      | Interactive session handle with pane ID and turn target                                        |
-| `sendAgentPrompt`        | Turn target for an existing session                                                            |
-| `runHeadlessAgent`       | Operation handle, not its completed output                                                     |
-| `getConversationHistory` | Role-tagged messages of the session's latest conversation                                      |
-| `closePane`              | Closes a pane owned by the workflow when no longer needed                                      |
-| `setUiFeedback`          | Meaningful phase/message for the user                                                          |
-| `log`                    | Durable diagnostic context                                                                     |
+Use interactive agent sessions (`spawnAgentSession`, `sendAgentPrompt`, then `wait.agentTurn`) for all real work: writing, implementing, reviewing, fixing, committing. They run in panes the person can watch, and when a turn goes wrong the person can step in and finish it by hand.
 
-Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success.
+Use `runHeadlessAgent` only for classification: a short, unattended judgment over text the workflow hands it, such as routing a reply as `approved`, `revise` or `needs-human`. A headless agent should not change files or run tools with external effects. When a check can be deterministic (a file exists, a schema validates), check it in an operation instead of asking a model.
 
-`sendAgentPrompt` types into the agent's terminal, so it fails as an ordinary operation failure while the agent's pane is in Fluidcast mode or its switch to Fluidcast failed; once the pane is switched back to the terminal, Retry sends again (see [Retry](workflow-recovery.md#retry)). A prompt whose turn had not started when the pane switched away keeps waiting; cancel the run to get out.
+## Sessions
 
-Every spawn, send, headless launch and pane close is recorded with its full request. When an agent turn is delivered, Isagi records the agent's last reply on the operation that sent the prompt, so the run's dialogue can be read later without author code. A reply that cannot be read is recorded as unavailable and the run continues.
+| Need | Do |
+| --- | --- |
+| A new agent | `spawnAgentSession` with a harness, an optional model and effort, and the first prompt. Persist the returned `agentSessionId` and `paneId`. |
+| Further turns in the same context | `sendAgentPrompt` to the stored `agentSessionId`. Reuse a session across loop rounds so each role keeps its context and the person sees one pane per role. |
+| Clean context per item | Spawn a fresh session per item and close its pane once its result checks out. |
+| The agent the workflow was launched from | Read `origin.agentSessionId` in `parse`. The workflow does not own its pane; never close it. |
+| A step the person drives | Spawn the session, then `wait.userContinue` while the person works with it. |
+
+Close panes the workflow created once their work is accepted ([check, then close](workflow-recipes.md#smaller-shapes)); leave a pane open when its step fails so the person can look. Persist Isagi handles, never provider-native session IDs.
 
 ## Which turn answers a wait
 
-The latest turn wins. Among the session's turns that started at or after the prompt was sent, Isagi takes the latest: while it runs the wait keeps waiting, an ended turn delivers `ended`, and a failed turn delivers `failed`. A newer turn always replaces an older one, so if the person continues an agent by hand after a failure, that newer turn is what answers the wait, on Resume and Retry too. A session that dies is delivered as `interrupted` with `session_died`. The comparison uses the runtime's clock for the prompt and the harness's clock for the turn, so a turn started within clock skew of the prompt may be misread; this is a known limitation.
+Send one prompt per controlled turn and let it settle before the next prompt or a harness conversation reset or switch. The latest turn that started at or after the prompt answers the wait: while it runs the wait keeps waiting, an ended turn delivers `ended`, a failed one `failed`, and a dead session `interrupted` with `session_died`. A newer turn replaces an older one, so if the person finishes the agent by hand after a failure, re-arming `wait.agentTurn` on the same target picks up their turn, also on Resume and Retry. Re-arming without a new turn finds the same failed turn again. The prompt time comes from the runtime's clock and the turn time from the harness's, so a turn within clock skew of the prompt can be misread.
 
-## Interactive turn and observation
+`sendAgentPrompt` types into the agent's terminal, so it fails while the pane is in Fluidcast mode; switch the pane back to the terminal and Retry. A prompt sent before the pane switched away keeps waiting; cancel the run to get out.
 
-This reusable graph sends one prompt, handles every turn outcome, and reads the response in a separate operation. It returns conversation data for its caller to interpret; successful transport does not establish that the task succeeded. Its caller owns the existing session and its cleanup.
+Isagi records every spawn, prompt, headless launch and pane close with its full request, plus the agent's last reply when its turn is delivered, so a run's dialogue is readable later without author code.
 
-```ts
-import {
-  complete,
-  createGraph,
-  edge,
-  operation,
-  outcome,
-  reduce,
-  suspend,
-  wait,
-  type WorkflowConversationMessage,
-} from '@yourtechbudstudio/isagi-workflow-sdk';
+## Prompts
 
-type Parameters = { readonly agentSessionId: number; readonly prompt: string };
-type State = Parameters & {
-  readonly messages: readonly WorkflowConversationMessage[];
-  readonly failure: string | null;
-};
-type Output = Pick<State, 'messages' | 'failure'>;
+Give each agent a goal, its inputs (paths, prior review), constraints, acceptance criteria and a closing signal you can classify, such as an exact final line. Tell unattended or long-running agents to finish and state any blocking question in their reply rather than asking mid-turn; put the human decision in a graph wait. Keep authorization boundaries explicit when work can have external effects.
 
-export const AgentTurn = createGraph<State, {}, Parameters, Output>({
-  key: 'AgentTurn',
-  title: 'Ask agent and collect response',
-  init: (_destination, parameters) => ({ ...parameters, messages: [], failure: null }),
-  state: {
-    agentSessionId: reduce.replace<number>(),
-    prompt: reduce.replace<string>(),
-    messages: reduce.replace<readonly WorkflowConversationMessage[]>(),
-    failure: reduce.replace<string | null>(),
-  },
-  entry: 'send',
-  nodes: {
-    send: operation(async (ctx, state) => {
-      const target = await ctx.sendAgentPrompt({
-        agentSessionId: state.agentSessionId,
-        prompt: state.prompt,
-      });
-      return suspend({ wait: wait.agentTurn(target) });
-    }),
-    read: operation(async (ctx, state) =>
-      complete({
-        update: { messages: await ctx.getConversationHistory(state.agentSessionId) },
-      }),
-    ),
-  },
-  edges: {
-    afterSend: edge({
-      from: 'send',
-      to: ['read', 'turnFailed'],
-      choose: (_state, event) => {
-        if (event.kind !== 'agent_turn') throw new Error('Expected agent turn');
-        return event.outcome === 'ended'
-          ? { to: 'read' }
-          : { to: 'turnFailed', update: { failure: event.reason } };
-      },
-    }),
-    afterRead: edge({ from: 'read', to: ['collected'], choose: () => ({ to: 'collected' }) }),
-  },
-  outcomes: {
-    collected: outcome({
-      kind: 'success',
-      output: (state) => ({ messages: state.messages, failure: null }),
-    }),
-    turnFailed: outcome({
-      kind: 'failure',
-      output: (state) => ({ messages: state.messages, failure: state.failure }),
-    }),
-  },
-});
-```
-
-Register this with `subgraph`: map the parent's session ID and prompt through `parameters`, then map `result.output` through `onResult`. In the parent edge, inspect `result.outcomeKind` from the `subgraph` event and choose interpretation, a bounded recovery route, or human input. Keep those business choices outside the reusable turn graph.
-
-For a new session, use `spawnAgentSession` in an operation and persist its `agentSessionId` and `paneId` before later work needs them. Close panes created by the workflow when finished with them; preserve the user's launch pane.
-
-## Headless work
-
-Launch a headless operation, suspend on its handle, and inspect its delivered result. This fragment stores the output for a later decision and routes failed/interrupted work to an explicit recovery node; the containing graph defines that recovery policy and budget.
-
-```ts
-import {
-  edge,
-  eventGuards,
-  operation,
-  suspend,
-  wait,
-  type HeadlessOperationResult,
-} from '@yourtechbudstudio/isagi-workflow-sdk';
-
-type State = {
-  readonly operationId: string | null;
-  readonly output: string | null;
-  readonly result: HeadlessOperationResult | null;
-};
-export const judge = operation<State, State>(async (ctx) => {
-  const handle = await ctx.runHeadlessAgent({
-    harness: 'codex',
-    prompt: 'Review the current diff. Report findings.',
-  });
-  return suspend({ update: { operationId: handle.operationId }, wait: wait.headlessAgent(handle) });
-});
-export const afterJudge = edge<State, State>({
-  from: 'judge',
-  to: ['interpret', 'recover'],
-  choose: (state, event) => {
-    if (state.operationId === null) throw new Error('Missing headless operation');
-    const result = eventGuards.requireHeadless(event, state.operationId);
-    if (result.status !== 'completed') return { to: 'recover', update: { output: null, result } };
-    return { to: 'interpret', update: { output: result.output ?? '', result } };
-  },
-});
-```
-
-The containing graph initializes `result` to `null` and registers a replacement reducer for it. The recovery operation can inspect `state.result` for status, error, exit code, and interruption details, including partial output and stop information, before choosing follow-up work.
-
-For several headless tasks, launch them and pass their handles to `wait.headlessAgent(handles)`. Results arrive in declared input order; inspect each status, matching by operation ID where clearer. Partial output from an interrupted operation is not a completed judgment. A job that was running when the app restarted is delivered as `interrupted` with `{ reason: 'runtime_restarted' }`. Read [Workflow recovery](workflow-recovery.md) before adding retry handling or replacing interrupted work.
-
-## Prompts and judgments
-
-Give unattended agents a goal, relevant inputs, constraints, acceptance criteria, and stop conditions. Give them a path for uncertainty that does not depend on someone answering mid-turn; place required human decisions in graph waits. Keep authorization boundaries explicit when the requested work can have external effects.
-
-Read the latest complete assistant turn across its messages and parts. In a node that judges a reply, read it as preparation and then launch the judgment as that node's one side effect; the judged text is in the judgment's recorded request. Validate the structured output needed for the next route. A separate judgment agent is useful when a semantic decision is needed, but is not required for every workflow. When using structured judgments, keep the prompt, parser, and result type coherent; cover each meaningful outcome, including work completed beyond the requested phase when that changes what follows. Test invalid responses and consequential routes. Log parse failures with enough context to diagnose them.
-
-Change feedback when the business-facing phase changes rather than at every internal transition. Before intentional failure or human escalation, explain the problem and next action through feedback and log the relevant details from an operation. Pure routing cannot call these capabilities.
+A classification prompt states that it is an unattended routing judgment, includes the text to judge, lists the routes in precedence order, and asks for an exact JSON shape. Classify what the reply says rather than the stage you expect: agents skip ahead, repeat work or raise a decision early, so every route stays valid on every call. Use one classifier with one route set for a role wherever its replies are judged, and route every outcome from every point; don't build a narrower classifier for an early stage. Parse it strictly (exact keys and allowed values), log parse failures with context, and treat an unparseable or failed judgment as a routable result. Read the text to judge in an earlier node with [`latestAssistantTurn`](workflow-recipes.md#read-a-reply); no reply is a failure, not success.
 
 ## Prompt modifiers
 
-All three agent-input capabilities accept optional `prompt` and `modifiers`. Provide plain names such as `{ kind: 'skill', name: 'review' }`, without leading `/` or `$`, whitespace, or Unicode control/format characters. Isagi renders native tokens. Skills stack in caller order; a command must be the only modifier. At least a modifier or non-whitespace prompt is required.
+`spawnAgentSession`, `sendAgentPrompt` and `runHeadlessAgent` accept `modifiers` next to `prompt`; at least one non-blank prompt or modifier is required. Use plain names without a leading `/` or `$`, whitespace or control characters; Isagi renders the native token. Skills stack in order; a command must be the only modifier and must start an agent turn, so UI-only commands like `/help` or `/model` never satisfy a turn wait. Isagi does not check that the skill or command exists. Headless OpenCode may treat slash-looking text as plain prompt text.
 
 ```ts
 import type { WorkflowPromptInput } from '@yourtechbudstudio/isagi-workflow-sdk';
@@ -166,4 +47,4 @@ export const reviewInput = {
 } satisfies WorkflowPromptInput;
 ```
 
-Rendering does not check that a skill or command exists or that a harness applies stacked skills. Use command modifiers for native templates that start an agent turn; UI-only commands such as `/help`, `/settings`, or `/model` cannot satisfy a turn wait. Headless OpenCode may treat slash-looking text as ordinary prompt text.
+Use `setUiFeedback` when the business-facing phase changes, not at every internal step. Before failing deliberately or asking the person, explain the problem and the next action in feedback and `log` the details; edges cannot call either.

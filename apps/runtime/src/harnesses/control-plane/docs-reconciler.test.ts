@@ -119,7 +119,7 @@ test('Pi installs and replaces a complete native skill while retiring the reserv
     assert.equal(result.results.find((entry) => entry.harness === 'pi')?.action, 'installed');
     assert.equal(existsSync(legacy), false);
     assert.match(readFileSync(join(current, 'SKILL.md'), 'utf8'), /name: isagi-docs/);
-    assert.equal(existsSync(join(current, 'references', 'config-global.md')), true);
+    assert.equal(existsSync(join(current, 'references', 'config-fluidcast.md')), true);
 
     writeFileSync(join(current, 'SKILL.md'), 'previous skill');
     result = await Effect.runPromise(reconcileDocs(input));
@@ -156,7 +156,7 @@ test('OpenCode installs a complete native skill while retiring the reserved lega
     assert.equal(result.results.find((entry) => entry.harness === 'opencode')?.action, 'installed');
     assert.equal(existsSync(legacy), false);
     assert.match(readFileSync(join(current, 'SKILL.md'), 'utf8'), /name: isagi-docs/);
-    assert.equal(existsSync(join(current, 'references', 'workflows.md')), true);
+    assert.equal(existsSync(join(current, 'references', 'workflow-package.md')), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -351,9 +351,9 @@ const canonicalDocs = isagiDocsPackageFiles(renderDataRoot);
 
 test('the canonical publication is a self-contained, implicitly invokable skill package', () => {
   assert.ok(canonicalDocs.has('SKILL.md'));
-  assert.ok(canonicalDocs.has('references/config-global.md'));
-  assert.ok(canonicalDocs.has('references/config-project.md'));
-  assert.ok(canonicalDocs.has('references/workflows.md'));
+  assert.ok(canonicalDocs.has('references/config-fluidcast.md'));
+  assert.ok(canonicalDocs.has('references/config-commands.md'));
+  assert.ok(canonicalDocs.has('references/workflow-package.md'));
   const skill = canonicalDocs.get('SKILL.md') ?? '';
   assert.doesNotMatch(skill, /^disable-model-invocation:/m);
   assert.doesNotMatch(skill, /allow_implicit_invocation/);

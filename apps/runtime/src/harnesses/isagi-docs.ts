@@ -16,18 +16,9 @@ export const configSchemaReferenceSources = {
   'project-config.schema.ts': readTextAsset('config-schemas/project-config.schema.ts'),
 } as const;
 
-export const isagiDocsContentSources = {
-  'SKILL.md': readTextAsset('isagi-docs/SKILL.md'),
-  'config-global.md': readTextAsset('isagi-docs/config-global.md'),
-  'config-project.md': readTextAsset('isagi-docs/config-project.md'),
-  'workflows.md': readTextAsset('isagi-docs/workflows.md'),
-  'workflow-environments.md': readTextAsset('isagi-docs/workflow-environments.md'),
-  'workflow-agents.md': readTextAsset('isagi-docs/workflow-agents.md'),
-  'workflow-recovery.md': readTextAsset('isagi-docs/workflow-recovery.md'),
-  'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
-  'cli-investigate-runs.md': readTextAsset('isagi-docs/cli-investigate-runs.md'),
-  'cli-reconstruct-and-launch.md': readTextAsset('isagi-docs/cli-reconstruct-and-launch.md'),
-} as const;
+/** Skill Markdown keyed by file name: `SKILL.md` plus every reference. */
+export const isagiDocsContentSources: ReadonlyMap<string, string> =
+  readTextAssetTree('isagi-docs').files;
 
 /**
  * The canonical workflow scaffold, copied verbatim from the verifier fixture at build time and
@@ -60,22 +51,12 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   ]);
 
   const files = new Map<string, string>();
-  files.set('SKILL.md', render('SKILL.md', substitutions));
-  files.set('references/config-global.md', render('config-global.md', substitutions));
-  files.set('references/config-project.md', render('config-project.md', substitutions));
-  files.set('references/workflows.md', render('workflows.md', substitutions));
-  files.set(
-    'references/workflow-environments.md',
-    render('workflow-environments.md', substitutions),
-  );
-  files.set('references/workflow-agents.md', render('workflow-agents.md', substitutions));
-  files.set('references/workflow-recovery.md', render('workflow-recovery.md', substitutions));
-  files.set('references/workflow-checkpoints.md', render('workflow-checkpoints.md', substitutions));
-  files.set('references/cli-investigate-runs.md', render('cli-investigate-runs.md', substitutions));
-  files.set(
-    'references/cli-reconstruct-and-launch.md',
-    render('cli-reconstruct-and-launch.md', substitutions),
-  );
+  for (const [name, source] of isagiDocsContentSources) {
+    files.set(
+      name === 'SKILL.md' ? name : `references/${name}`,
+      render(name, source, substitutions),
+    );
+  }
   files.set(
     'references/config-global.schema.ts',
     configSchemaReferenceSources['runtime-config.schema.ts'],
@@ -94,11 +75,8 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   return files;
 }
 
-function render(
-  name: keyof typeof isagiDocsContentSources,
-  substitutions: ReadonlyMap<string, string>,
-) {
-  const rendered = isagiDocsContentSources[name].replaceAll(
+function render(name: string, source: string, substitutions: ReadonlyMap<string, string>) {
+  const rendered = source.replaceAll(
     /\{\{(\w+)\}\}/g,
     (match, token: string) => substitutions.get(token) ?? match,
   );

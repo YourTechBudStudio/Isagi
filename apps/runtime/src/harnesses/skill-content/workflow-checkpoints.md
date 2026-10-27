@@ -1,14 +1,6 @@
-# Place workflow checkpoints
+# Checkpoints
 
-A checkpoint records two things: the Git `HEAD` commit of the run's checkout at that moment, and an exact copy of the files and folders its plan names. That is all it is. Nothing is inherited from earlier checkpoints, and graph state, execution position, agent sessions, terminals and processes are not part of it. Export rebuilds the files in a new folder; see [CLI reconstruction](cli-reconstruct-and-launch.md).
-
-## Choose the boundary
-
-Place checkpoints after meaningful completion or approval, before useful files are overwritten or deleted, and at the end of a run. Finish every writer before the checkpoint node: wait for agent turns, headless work and commands touching the scopes. Capture is not an atomic filesystem snapshot, so a file changing while it is copied may be saved half-written.
-
-Phase directories make handoffs easy to capture, for example `work/research` and `work/design`. Exclude secrets, dependencies, caches and generated bulk. Ignored files inside a scope are captured too. There is no byte or file-count cap.
-
-## Declare the node
+A `checkpoint` node records the checkout's Git `HEAD` commit plus an exact copy of the files and folders its plan names, and nothing else: no graph state, sessions, terminals, processes, or anything from earlier checkpoints. Field rules and limits are in the installed `checkpoints.d.ts` and `nodes.d.ts`. [Export](cli-reconstruct-and-launch.md) rebuilds a checkpoint in a new folder.
 
 ```ts
 import { checkpoint } from '@yourtechbudstudio/isagi-workflow-sdk';
@@ -27,25 +19,23 @@ export const savePlan = checkpoint<State>({
 });
 ```
 
-Register one outgoing edge, as for an operation; the checkpoint leaves graph state unchanged. `plan(state)` is pure and synchronous and runs only when the node is visited. Consult the installed SDK's `checkpoints.d.ts` and `nodes.d.ts` for fields and limits.
+## Placing one
 
-Paths are relative to the run's checkout root and use `/`; absolute paths, `..` and `.git` paths are refused. Directory scopes accept scope-relative `exclude` paths, without globs. Scopes in one plan cannot overlap. An empty `capture` list records only the commit.
+- After meaningful completion or approval, before useful files are overwritten or deleted, and at the end of a run.
+- After every writer touching the scopes has finished (agent turns and commands). Capture is not atomic, so a file changing mid-copy may be saved half-written.
+- Capture everything a rebuild needs in each checkpoint you plan to export. Phase directories such as `work/research` and `work/design` make that easy.
+- Reuse a `scope` name for the same thing across visits (`plan` every round) so `isagi checkpoints list --run <id> --scope plan` lists every version.
+- Exclude secrets, dependencies, caches and generated bulk; ignored files inside a scope are captured and there is no size cap.
 
-## What a checkpoint holds
+Paths are relative to the checkout root with `/`; absolute paths, `..` and `.git` are refused. A checkpoint node has one outgoing edge and leaves graph state unchanged.
 
-- **Exactly what it names.** A scope the plan leaves out is simply not in this checkpoint. Capture everything a rebuild needs in every checkpoint you intend to export.
-- **Regular files only.** Symlinks, special files and nested `.git` entries inside a directory scope are skipped. A scope path that passes through a symlink fails the capture rather than copying something outside the checkout.
-- **Missing paths are recorded as missing.** If a scope's path does not exist, the checkpoint says so, and export makes that path absent.
-- **The owner-execute bit** is kept; other modes are not.
-- **The commit is recorded, not kept.** There is no Git ref. If the commit is later squashed, rebased away or discarded, export of that checkpoint fails (`workflow_checkpoint_commit_unavailable`); its metadata and saved files stay readable. Folder projects and repositories with no commits record no commit and export into a plain folder.
-- **Committed state comes from the commit.** Uncommitted changes, untracked and ignored files are only in the checkpoint when a scope covers them.
+## What it holds
 
-`scope` is a stable name for listing and comparing. Reuse it for the same thing across visits, for example `plan` in every round, so `isagi checkpoints list --run <id> --scope plan` shows every version of the plan. See [CLI investigation](cli-investigate-runs.md#compare-plan-versions).
+- Regular files only, with the owner-execute bit. Symlinks, special files and nested `.git` inside a scope are skipped; a scope path through a symlink fails the capture.
+- A scope path that does not exist is recorded as missing.
+- Committed state comes from the commit. Uncommitted, untracked and ignored files are present only when a scope covers them.
+- The commit is recorded but no Git ref keeps it. If it is later squashed, rebased away or discarded, export fails while the metadata and files stay readable. Folder projects and repositories with no commits record no commit.
 
-## Failures and Retry
+## Failures
 
-A plan that breaks a rule fails the execution with stage `checkpoint_plan`; a filesystem or Git problem while copying fails it with stage `checkpoint_capture`. Either way nothing is saved. Read the message, fix the plan or the checkout, then Retry: the capture runs again.
-
-Once a checkpoint is saved it is part of the execution's result. A Retry of a later failure (the edge after it, for example) reuses that checkpoint and never captures again, even if the files have changed since.
-
-Saved checkpoints are kept when a run is cancelled, dismissed or its worktree removed.
+A plan that breaks a rule fails at stage `checkpoint_plan`; a filesystem or Git problem fails at `checkpoint_capture`. Nothing is saved either way: fix the plan or the checkout and Retry. Once saved, a checkpoint is part of its execution's result, so a Retry of a later failure reuses it and never captures again. Checkpoints survive cancelling or dismissing the run and removing its worktree.

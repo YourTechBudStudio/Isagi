@@ -10,7 +10,7 @@ function optionalBoundedInteger(maximum: number, description: string) {
 
 export const runtimeConfigPtyBackendSchema = Schema.Literals(['node-pty', 'tmux']).annotate({
   description:
-    'PTY backend used for new runtime-managed processes. Missing or null defaults to node-pty. Changing this setting requires restarting Isagi.',
+    'PTY backend used for new runtime-managed processes. Missing or null defaults to node-pty. Any other value prevents Isagi from starting. Changing this setting requires restarting Isagi. node-pty needs no external process; tmux is only a transport for the processes Isagi launches, not a restoration mechanism (Isagi restores sessions from its own state either way), so choose it only for a specific reason and when tmux is installed.',
 });
 
 export const runtimeHarnessPolicyEntrySchema = Schema.Struct({
@@ -20,7 +20,7 @@ export const runtimeHarnessPolicyEntrySchema = Schema.Struct({
   }),
   installIsagiDocs: Schema.optional(Schema.Boolean).annotate({
     description:
-      'Whether Isagi maintains the reserved global isagi-docs skill in this harness native skill directory. Missing defaults to false and the value is ignored unless enabled is true. Disabling does not uninstall prior content.',
+      'Whether Isagi maintains the reserved global isagi-docs skill in this harness native skill directory. Missing defaults to false and the value is ignored unless enabled is true. Isagi replaces the whole isagi-docs folder when it reconciles, so local edits to it are lost; each harness gets a complete copy. Disabling does not uninstall prior content.',
   }),
 });
 
@@ -37,7 +37,7 @@ export const runtimeHarnessPolicySchema = Schema.Struct({
 export const runtimeWorkflowSettingsSchema = Schema.Struct({
   additionalDirectories: Schema.optional(Schema.Array(Schema.String)).annotate({
     description:
-      'Additional machine-global workflow collection directories, ordered from lower to higher priority. Entries must be absolute paths or use ~ for the current user home directory. Changes require restarting Isagi.',
+      'Additional machine-global workflow collection directories, ordered from lower to higher priority. Each entry is a collection root containing <key>/ package directories, not a single package. Entries must be absolute paths or use ~ for the current user home directory; quote a bare "~", because an unquoted ~ is YAML null. Relative paths, environment variables and ~otheruser are not supported, and a malformed entry prevents Isagi from starting. A missing directory is skipped with a warning; an unreadable one is a discovery error. Changes require restarting Isagi.',
   }),
 }).annotate({
   description:
@@ -64,18 +64,19 @@ export const runtimeTerminalSettingsSchema = Schema.Struct({
         'Estimated parsed-buffer memory budget in MiB. Missing defaults to 64. Accepts integers from 0 through 2048; zero makes hidden heavy entries immediately ineligible. Visible terminals may temporarily exceed this budget. This setting is global and changing it requires restarting Isagi.',
       ),
     }).annotate({
-      description: 'Process-local retention settings for hidden terminal presentations.',
+      description:
+        'Process-local retention settings for hidden terminal presentations. Visible terminals are never evicted.',
     }),
   ),
 }).annotate({
   description:
-    'Global terminal presentation history and cache retention settings. Missing fields use defaults. Changes require restarting Isagi.',
+    'Global terminal presentation history and cache retention settings. Missing fields use defaults; a malformed value prevents Isagi from starting. Changes require restarting Isagi.',
 });
 
 export const runtimeAppearanceSettingsSchema = Schema.Struct({
   theme: Schema.optional(Schema.Literals(['dark', 'light'])).annotate({
     description:
-      'Color theme for the Isagi app: dark (Catppuccin Macchiato) or light (Catppuccin Latte). Missing defaults to light. Embedded editors keep their own theme. Changing it requires restarting Isagi.',
+      'Color theme for the Isagi app: dark (Catppuccin Macchiato) or light (Catppuccin Latte). Missing defaults to light; any other value prevents Isagi from starting. Terminals and Fluidcast follow it; embedded editors keep their own theme. Changing it requires restarting Isagi.',
   }),
 }).annotate({
   description:
@@ -87,7 +88,7 @@ const fluidcastSecret = Schema.RedactedFromValue(
   Schema.String.check(Schema.isPattern(/^(?!env\.)|^env\.[A-Za-z_][A-Za-z0-9_]*$/)),
 );
 const fluidcastSecretDescription =
-  'It stays in the runtime. Write env.NAME, for example env.OPENAI_API_KEY, to read it from the NAME environment variable of your login shell instead.';
+  'It stays in the runtime. Write env.NAME, for example env.OPENAI_API_KEY, to read it from the NAME environment variable of your login shell instead; only the lowercase env. prefix is a reference. An unset or empty variable makes voice mode unavailable, and the runtime log names the field and variable.';
 
 // One language-model connection per provider, shared by `languageModel` and `summaryModel`.
 const fluidcastConnectionCommon = {
@@ -153,7 +154,7 @@ const fluidcastAnthropicConnection = {
     Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
   ).annotate({
     description:
-      'Sampling temperature from 0 through 1. Missing uses the API default; newer models reject any other value.',
+      'Sampling temperature from 0 through 1. Missing uses the API default; newer models reject any temperature, so leave it unset for them.',
   }),
   fast: Schema.optional(Schema.Boolean).annotate({
     description:
@@ -183,7 +184,8 @@ export const runtimeFluidcastLanguageModelSchema = Schema.Union([
 
 // Never valid: present, even as false, it is an issue at its own path.
 const fluidcastSummaryStructuredOutput = Schema.optional(Schema.Never).annotate({
-  description: 'Not accepted: only `languageModel` can constrain replies to the output schema.',
+  description:
+    'Not accepted, even as false: only `languageModel` can constrain replies to the output schema.',
 });
 
 export const runtimeFluidcastSummaryModelSchema = Schema.Union([
@@ -216,7 +218,7 @@ export const runtimeFluidcastSchema = Schema.Struct({
       description: 'Text-to-speech model ID, for example gpt-4o-mini-tts.',
     }),
     apiKey: fluidcastSecret.annotate({
-      description: `API key for the speech API. ${fluidcastSecretDescription}`,
+      description: `API key for the speech API. Required even for a local server that ignores keys; write any placeholder then. ${fluidcastSecretDescription}`,
     }),
     baseUrl: Schema.optional(Schema.String).annotate({
       description:
@@ -231,7 +233,7 @@ export const runtimeFluidcastSchema = Schema.Struct({
   preset: Schema.Struct({
     profile: Schema.optional(Schema.Literals(['compact', 'detailed'])).annotate({
       description:
-        'Guided Walkthrough profile: detailed adds speaking guidance and examples to the prompt; compact leaves them out. Missing defaults to detailed.',
+        'Guided Walkthrough profile: detailed adds speaking guidance and examples to the prompt; compact leaves them out. Missing defaults to detailed. Use detailed when not sure.',
     }),
     voice: Schema.Struct({
       name: Schema.NonEmptyString.annotate({
@@ -273,7 +275,7 @@ export const runtimeConfigSchema = Schema.Struct({
   ),
   harnesses: Schema.optional(runtimeHarnessPolicySchema).annotate({
     description:
-      'Harness policy. A missing section means onboarding is incomplete; use an explicit empty object to complete onboarding with every harness disabled.',
+      'Harness policy. A missing section means onboarding is incomplete; use an explicit empty object to complete onboarding with every harness disabled. Changes made in the app apply live; a manual edit needs a restart.',
   }),
   workflows: Schema.optional(runtimeWorkflowSettingsSchema),
   terminal: Schema.optional(runtimeTerminalSettingsSchema),

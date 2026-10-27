@@ -104,7 +104,8 @@ export const worktreeHooksSchema = Schema.Struct({
       'Hooks run after creating a worktree. Project config is read per operation, so hook edits are picked up without restarting Isagi. Editing hook content changes the hook hash and can trigger a new trust prompt.',
   }),
 }).annotate({
-  description: 'Worktree hook configuration from worktrees.hooks in .isagi/config.yaml.',
+  description:
+    'Worktree hook configuration from worktrees.hooks in the project root .isagi/config.yaml. Git projects only: hooks run in order after a checkout is created, once trusted.',
 });
 
 const commandEnvSchema = Schema.Record(Schema.String, Schema.String).annotate({
@@ -141,7 +142,7 @@ export const commandPortPathSchema = Schema.Struct({
     }),
   ).annotate({
     description:
-      'URL path served on this port, starting with "/". "/" alone is the root. Resolved URLs are http://localhost:<port><path>.',
+      'URL path served on this port, starting with "/". "/" alone is the root. Resolved URLs are http://localhost:<port><path>, shown only when the client and runtime run on the same machine.',
   }),
 }).annotate({
   description: 'One labelled URL path served by this HTTP port.',
@@ -154,7 +155,7 @@ export const commandPortSchema = Schema.Struct({
   }),
   envVar: Schema.optional(envVarNameSchema).annotate({
     description:
-      'Marks this command port as runtime-allocated. Isagi picks an inactive port at each launch, prefers the previous allocation, and injects the value into the process environment under this name. Declare either port or envVar, never both.',
+      'Marks this command port as runtime-allocated. Isagi picks an inactive port at each launch, prefers the previous allocation without reserving it, and injects the value into the process environment under this name, overriding the same key from envFiles. It cannot collide with a key in env. Declare either port or envVar, never both.',
   }),
   paths: Schema.optional(Schema.Array(commandPortPathSchema)).annotate({
     description:
@@ -167,7 +168,8 @@ export const commandPortSchema = Schema.Struct({
 
 const lifecyclePostCreateSchema = Schema.Struct({
   start: Schema.optional(Schema.Boolean).annotate({
-    description: 'Start the command after worktree creation. Defaults to false.',
+    description:
+      'Start the command after Git checkout creation, once setup succeeds or is skipped; never on registration or recovery. Defaults to false.',
   }),
 }).annotate({
   description: 'postCreate lifecycle action. Only the start field is supported.',
@@ -185,7 +187,7 @@ const lifecycleActivateSchema = Schema.Struct({
 const lifecycleDeactivateSchema = Schema.Struct({
   stop: Schema.optional(Schema.Boolean).annotate({
     description:
-      'Stop the current command process when the worktree is deactivated. A command stopped this way is suspended: Isagi records resume intent and starts a new process incarnation when the user returns to the worktree, unless explicit Stop clears that intent. Runtime startup alone does not resume it. Defaults to true.',
+      'Stop the current command process when the worktree is deactivated. A command stopped this way is suspended: Isagi records resume intent and starts a new process incarnation when the user returns to the worktree, unless explicit Stop clears that intent. When Isagi starts, commands that were running are suspended; the active worktree resumes its own, and stop: false commands resume in every worktree. Defaults to true.',
   }),
 }).annotate({
   description: 'deactivate lifecycle action. Only the stop field is supported.',
@@ -193,7 +195,8 @@ const lifecycleDeactivateSchema = Schema.Struct({
 
 const lifecyclePreDeleteSchema = Schema.Struct({
   stop: Schema.optional(Schema.Boolean).annotate({
-    description: 'Stop the command before the worktree is deleted. Defaults to true.',
+    description:
+      'Stop the command before the worktree is deleted. Defaults to true; false does not keep the command running after project removal.',
   }),
 }).annotate({
   description: 'preDelete lifecycle action. Only the stop field is supported.',
@@ -230,7 +233,7 @@ export const worktreeCommandSchema = Schema.Struct({
   }),
   env: Schema.optional(commandEnvSchema).annotate({
     description:
-      'Environment variables added to the command process. Values must be strings; empty keys are rejected when command config is used.',
+      'Environment variables added to the command process. The login-shell environment is the baseline, then envFiles in order, then env, so env wins. PORT, HOST and ISAGI_* are never inherited from the runtime but can be set here. Values must be strings; empty keys are rejected when command config is used.',
   }),
   envFiles: Schema.optional(Schema.Array(nonBlankStringSchema)).annotate({
     description: `${worktreeCommandPathDescription} Each file is read as dotenv-style environment input. Defaults to an empty list.`,
@@ -245,7 +248,7 @@ export const worktreeCommandSchema = Schema.Struct({
   }),
 }).annotate({
   description:
-    'One Isagi command entry from the commands list in .isagi/config.yaml. Project config is re-read per operation, so command edits are hot.',
+    'One Isagi command entry from the commands list in the worktree .isagi/config.yaml. Project config is re-read per operation, so command edits are hot.',
 });
 
 export const worktreeCommandCatalogSchema = Schema.Struct({
@@ -254,7 +257,7 @@ export const worktreeCommandCatalogSchema = Schema.Struct({
       'Commands available for a worktree. Missing commands means an empty catalog. Duplicate names are rejected when command config is used.',
   }),
 }).annotate({
-  description: 'Command catalog configuration from .isagi/config.yaml.',
+  description: 'Command catalog configuration from the worktree .isagi/config.yaml.',
 });
 
 export const projectConfigSchema = Schema.Struct({
@@ -273,7 +276,7 @@ export const projectConfigSchema = Schema.Struct({
   }),
 }).annotate({
   description:
-    'Project-local Isagi config from .isagi/config.yaml. The file is read relative to the worktree and is re-read per operation.',
+    'Project-local Isagi config from .isagi/config.yaml, re-read per operation. worktrees.hooks is read from the project root copy; commands are read from each worktree copy.',
 });
 
 export type WorktreePostCreateHookInput = typeof worktreePostCreateHookSchema.Type;

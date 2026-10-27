@@ -1,25 +1,19 @@
-# Choose a workflow environment
+# Environments
 
-Use the optional `placement(ctx, parameters)` hook to choose the workflow's destination worktree and surface. The origin records where it was launched; its `surfaceId` is null when the worktree had no surface open. Without a caller override or hook, destination is current/current as captured at launch, or the current worktree plus a new surface titled after the command when the origin has no surface; switching the UI does not retarget it. Consult the installed SDK's `launch.d.ts` for types.
+A run's destination is a worktree plus a surface. Types and per-field rules for `placement`, its context and choices are in the installed `launch.d.ts`.
 
-## Placement
+## Who decides
 
-Both axes are required:
+From highest precedence: a placement the caller passes with the launch (it skips the hook), the workflow's optional `placement(ctx, parameters)` hook, then the default (current worktree and surface as captured at launch, or a new surface titled after the command when the origin had none). Switching the UI later never retargets a run. The order is `command → parse → placement → preparation → init`; subgraphs inherit the root destination.
 
 | Axis | Choices |
 | --- | --- |
-| Worktree | `{ kind: 'current' }`, `{ kind: 'existing', worktreeId }`, `{ kind: 'create', branch, fromRef }` |
-| Surface | `{ kind: 'current' }`, `{ kind: 'existing', surfaceId }`, `{ kind: 'create', title }` |
+| Worktree | `current`, `existing` by ID, `create` with a new `branch` and `fromRef` |
+| Surface | `current`, `existing` by ID, `create` with a `title` |
 
-Existing resources must belong to the launch project, and the surface must belong to the selected worktree and be free of an attached run. A `current` surface is refused (`no_current_surface`) when the origin has none. A new worktree requires a new surface. Folder projects support reuse and surface creation, but cannot create Git worktrees.
+Existing resources must belong to the launch project, the surface must belong to the chosen worktree and be free of an attached run, and a new worktree needs a new surface. Folder projects cannot create worktrees. A branch that already exists fails creation rather than implying reuse. Surface titles are labels; duplicates get a numeric suffix.
 
-Creation requires a new branch name and resolvable `fromRef`; the resolved commit is fixed before preparation. A branch collision fails rather than implying reuse. Select existing resources by ID; surface titles are labels and duplicates receive a numeric suffix.
-
-## Selection hook
-
-The context exposes `origin`, `project: { id, name, kind }`, `listWorktrees()`, and `listSurfaces({ worktreeId })`. Await discovery inside the hook, then return a placement. Reads can lag the filesystem and do not reserve resources; preparation validates the selection. Keep the hook to discovery and deterministic computation. Perform agent work in graph operations.
-
-This example assumes `parse` checks that `ticket` is a positive integer string:
+Keep the hook to discovery (`listWorktrees`, `listSurfaces`) and deterministic choice; do agent work in graph operations.
 
 ```ts
 import type {
@@ -27,34 +21,28 @@ import type {
   WorkflowPlacementRequest,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
+// Assumes `parse` checked that `ticket` is a positive integer string.
 export function placement(
   ctx: WorkflowPlacementContext,
   parameters: { readonly ticket: string },
 ): WorkflowPlacementRequest {
-  const title = `Ticket ${parameters.ticket}`;
   return {
     worktree: ctx.project.kind === 'folder'
       ? { kind: 'current' }
       : { kind: 'create', branch: `ticket-${parameters.ticket}`, fromRef: 'HEAD' },
-    surface: { kind: 'create', title },
+    surface: { kind: 'create', title: `Ticket ${parameters.ticket}` },
   };
 }
 ```
 
-A second launch with that ticket requests another creation and can collide. To reuse a worktree, discover it and return `existing` explicitly.
+A second launch for the same ticket would collide on the branch; to reuse a worktree, find it with `listWorktrees` and return `existing`.
 
-## Ordering and overrides
+## Preparation
 
-Precedence is a placement the caller passes with the launch, then the workflow's `placement` hook, then the default (current/current, or current worktree plus a new surface when the origin has no surface). A caller override skips the selector, while input and placement validation still run. The order is `command → parse → placement → preparation → init`. Root `init(destination, parameters)` runs after preparation; a graph invocation that already exists is not initialized again on Retry. Subgraphs inherit the root destination.
+A run starts `preparing`, and each step is saved on the run with an environment event: create the worktree (`worktree_created`), run its [setup hooks](config-worktree-setup.md) (`setup_finished` or `setup_failed`, with output), create the surface (`surface_created`). A failure appends `preparation_failed` and leaves the run `failed` at stage `environment`, so a returned run ID alone does not prove preparation succeeded. The run summary's `placement` records the request, its `source` (`override`, `selector` or `default`), the resolved `baseCommit`, and what has been produced so far.
 
-A run starts `preparing`. Its summary's `placement` holds what was requested (`request`), who decided it (`source`: `override`, `selector` or `default`), and the commit a new worktree's `fromRef` resolved to (`baseCommit`); `worktreeId`, `surfaceId` and `setupDone` hold what preparation has actually produced so far. A returned run ID alone does not prove preparation succeeded: a failure leaves the run `failed` with an error at stage `environment`.
-
-Preparation runs these steps, saving each result on the run and appending an environment event as it finishes: create the worktree (`worktree_created`), run its setup hooks (`setup_finished` or `setup_failed`, with their output), create the surface (`surface_created`). A created surface starts empty; the first agent the run starts becomes its first pane. Closing a surface's last pane leaves the surface empty rather than deleting it, so a run keeps its surface after its agents close. A failure appends `preparation_failed`.
+A created surface starts empty, and the run's first agent becomes its first pane. Closing the last pane leaves the surface in place.
 
 ## Failed preparation
 
-Retry runs preparation again and skips every step whose result is already saved, so it creates the worktree from the recorded base commit even if the ref has moved, and never creates a second one. Editing `placement` does not relocate that run. Created resources remain after failure or cancellation; the run's environment events say exactly what was created. Setup reruns until it succeeds, so hooks must tolerate partial prior execution. A `current` or `existing` surface that was deleted fails preparation again: a run never replaces a surface it did not create. See [Project config](config-project.md) for setup and trust.
-
-Resolve trust, occupancy, or collision failures before Retry. Missing worktrees/surfaces, a surface on the wrong worktree, or a deleted origin may require a fresh launch with valid placement. Pause and Resume are unavailable during preparation; interrupted preparation fails on restart and uses Retry for recovery. Cancel does not roll back resources or stop an in-flight setup hook.
-
-For recovery after graph execution begins, read [Workflow recovery](workflow-recovery.md).
+Retry skips every step already saved: it never creates a second worktree, and it uses the recorded base commit even if the ref has moved. Editing `placement` does not relocate an existing run. Resolve trust, occupancy or branch collisions before Retry. A deleted `current` or `existing` surface fails again, because a run never replaces a surface it did not create; missing resources or a deleted origin may need a fresh launch. Pause and Resume are unavailable while preparing; preparation interrupted by a restart fails and recovers with Retry. Cancel rolls nothing back and does not stop an in-flight setup hook.

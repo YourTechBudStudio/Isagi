@@ -3,6 +3,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -54,19 +55,10 @@ function syncAssets(assetRoot) {
     resolve(assetRoot, 'code-server.manifest.json'),
   );
 
+  // Every Markdown file ships except the directory's own agent instructions.
   const skillContentRoot = resolve(runtimeRoot, 'src', 'harnesses', 'skill-content');
-  for (const name of [
-    'SKILL.md',
-    'config-global.md',
-    'config-project.md',
-    'workflows.md',
-    'workflow-environments.md',
-    'workflow-agents.md',
-    'workflow-recovery.md',
-    'workflow-checkpoints.md',
-    'cli-investigate-runs.md',
-    'cli-reconstruct-and-launch.md',
-  ]) {
+  for (const name of readdirSync(skillContentRoot)) {
+    if (!name.endsWith('.md') || name === 'AGENTS.md' || name === 'CLAUDE.md') continue;
     copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'isagi-docs', name));
   }
 

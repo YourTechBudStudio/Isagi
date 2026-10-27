@@ -32,37 +32,13 @@ const substitutions = {
   BUILDER_VERSION: workflowBuilderVersion,
 } as const;
 
-/** Which template carries which placeholder, and where it is emitted. */
-const templates = {
-  'SKILL.md': { emittedAs: 'SKILL.md', tokens: [] },
-  'config-global.md': {
-    emittedAs: 'references/config-global.md',
-    tokens: ['DATA_ROOT'],
-  },
-  'config-project.md': {
-    emittedAs: 'references/config-project.md',
-    tokens: [],
-  },
-  'workflows.md': {
-    emittedAs: 'references/workflows.md',
-    tokens: ['DATA_ROOT', 'SDK_VERSION', 'VERIFIER_VERSION', 'BUILDER_VERSION'],
-  },
-  'workflow-environments.md': { emittedAs: 'references/workflow-environments.md', tokens: [] },
-  'workflow-agents.md': { emittedAs: 'references/workflow-agents.md', tokens: [] },
-  'workflow-recovery.md': { emittedAs: 'references/workflow-recovery.md', tokens: [] },
-  'workflow-checkpoints.md': { emittedAs: 'references/workflow-checkpoints.md', tokens: [] },
-  'cli-investigate-runs.md': {
-    emittedAs: 'references/cli-investigate-runs.md',
-    tokens: ['DATA_ROOT'],
-  },
-  'cli-reconstruct-and-launch.md': {
-    emittedAs: 'references/cli-reconstruct-and-launch.md',
-    tokens: [],
-  },
-} as const satisfies Record<
-  keyof typeof isagiDocsContentSources,
-  { readonly emittedAs: string; readonly tokens: readonly (keyof typeof substitutions)[] }
->;
+/** Which template carries which placeholder; every other template carries none. */
+const templateTokens: Readonly<Record<string, readonly (keyof typeof substitutions)[]>> = {
+  'SKILL.md': ['DATA_ROOT'],
+  'workflow-package.md': ['DATA_ROOT', 'SDK_VERSION', 'VERIFIER_VERSION', 'BUILDER_VERSION'],
+};
+
+const emittedAs = (name: string) => (name === 'SKILL.md' ? name : `references/${name}`);
 
 test('no placeholder survives into an emitted skill file', () => {
   for (const [path, source] of files) {
@@ -83,8 +59,9 @@ test('no placeholder survives into an emitted skill file', () => {
  * file that frames it.
  */
 test('each content template carries the placeholders it is meant to carry', () => {
-  for (const [name, { tokens }] of Object.entries(templates)) {
-    const template = isagiDocsContentSources[name as keyof typeof templates];
+  for (const [name, tokens] of Object.entries(templateTokens)) {
+    const template = isagiDocsContentSources.get(name);
+    assert.ok(template, `missing skill content ${name}`);
     for (const token of tokens) {
       assert.equal(
         template.includes(`{{${token}}}`),
@@ -98,14 +75,14 @@ test('each content template carries the placeholders it is meant to carry', () =
 test('every substituted value reaches the emitted file that frames it', () => {
   const asserted = new Set<string>();
 
-  for (const [name, { emittedAs, tokens }] of Object.entries(templates)) {
-    const emitted = files.get(emittedAs);
-    assert.ok(emitted, `${name} was not emitted as ${emittedAs}`);
+  for (const [name, tokens] of Object.entries(templateTokens)) {
+    const emitted = files.get(emittedAs(name));
+    assert.ok(emitted, `${name} was not emitted as ${emittedAs(name)}`);
     for (const token of tokens) {
       assert.equal(
         emitted.includes(substitutions[token]),
         true,
-        `${emittedAs} is missing the text substituted for {{${token}}}`,
+        `${emittedAs(name)} is missing the text substituted for {{${token}}}`,
       );
       asserted.add(token);
     }
@@ -120,15 +97,9 @@ test('the skill package holds exactly the indexed references', () => {
     handwritten.map(([path]) => path),
     [
       'SKILL.md',
-      'references/config-global.md',
-      'references/config-project.md',
-      'references/workflows.md',
-      'references/workflow-environments.md',
-      'references/workflow-agents.md',
-      'references/workflow-recovery.md',
-      'references/workflow-checkpoints.md',
-      'references/cli-investigate-runs.md',
-      'references/cli-reconstruct-and-launch.md',
+      ...[...isagiDocsContentSources.keys()]
+        .filter((name) => name !== 'SKILL.md')
+        .map((name) => `references/${name}`),
       'references/config-global.schema.ts',
       'references/config-project.schema.ts',
       'references/minimal-workflow/package.json',
@@ -222,183 +193,45 @@ test('the router names every top-level config key the schemas define', () => {
   }
 });
 
-/**
- * The top-level-key test above passes for `workflows` only incidentally - the word appears inside the
- * default `.../workflows/<key>/` path span. This guard is the one that actually holds the routing row:
- * additional-directory requests must reach the global config reference, or the configurable surface
- * silently regresses into the "Isagi does not configure it today" boundary.
- */
-test('the router routes additional workflow directories to the global config reference', () => {
+test('the router states where global, project and worktree config live', () => {
   const router = files.get('SKILL.md') ?? '';
-  const routed = router
-    .split('\n')
-    .some(
-      (line) =>
-        line.includes('workflows.additionalDirectories') &&
-        line.includes('references/config-global.md'),
-    );
+  assert.ok(router.includes(`${dataRoot}/config.yaml`), 'SKILL.md never names the global config');
   assert.ok(
-    routed,
-    'SKILL.md must route workflows.additionalDirectories to references/config-global.md',
+    router.includes(`${dataRoot}/workflows/<key>/`),
+    'SKILL.md never names global workflows',
   );
-});
-
-test('the router selects global config for terminal history and cache retention', () => {
-  const router = files.get('SKILL.md') ?? '';
-  const routed = router
-    .split('\n')
-    .some(
-      (line) =>
-        line.toLowerCase().includes('terminal history') &&
-        line.includes('`terminal`') &&
-        line.includes('references/config-global.md'),
-    );
-  assert.ok(routed, 'SKILL.md must route terminal history to references/config-global.md');
-});
-
-test('the router selects project config for command ports and HTTP URLs', () => {
-  const router = files.get('SKILL.md') ?? '';
-  const routed = router
-    .split('\n')
-    .some(
-      (line) =>
-        line.includes('fixed ports') &&
-        line.includes('allocated ports') &&
-        line.includes('HTTP URLs') &&
-        line.includes('references/config-project.md'),
-    );
-  assert.ok(routed, 'SKILL.md must route command port and HTTP URL requests to project config');
-});
-
-test('the project config reference documents structured command port behavior', () => {
-  const emitted = files.get('references/config-project.md') ?? '';
-  const heading = '\n### Ports and HTTP URLs\n';
-  const sectionIndex = emitted.indexOf(heading);
-  assert.notEqual(sectionIndex, -1, 'config-project.md lost its command ports section');
-  const sectionStart = sectionIndex + heading.length;
-  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
-  assert.notEqual(nextHeadingIndex, -1, 'command ports must precede another section');
-  const prose = emitted.slice(sectionStart, nextHeadingIndex);
-
-  for (const concept of [
-    /exactly one of `port`.*`envVar`/,
-    /`ports: \[5173\]`.*invalid/,
-    /Optional `paths` entries.*`label`.*`path`/,
-    /Either port variant may omit `paths`/,
-    /allocated pathless port.*injects its value.*no URL/,
-    /`http:\/\/localhost:<port><path>`/,
-    /overrides the same key from `envFiles\[\]`/,
-    /cannot collide with explicit `env`/,
-    /prefers the previous inactive allocation.*does not reserve it/,
-  ]) {
-    assert.match(prose, concept);
-  }
-});
-
-test('the global config reference documents terminal settings durable facts', () => {
-  const emitted = files.get('references/config-global.md') ?? '';
-  const heading = '\n## Terminal history and cache retention\n';
-  const sectionIndex = emitted.indexOf(heading);
-  assert.notEqual(sectionIndex, -1, 'config-global.md lost its terminal settings section');
-  const sectionStart = sectionIndex + heading.length;
-  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
-  assert.notEqual(nextHeadingIndex, -1, 'terminal settings must precede another section');
-  const prose = emitted.slice(sectionStart, nextHeadingIndex);
-
-  for (const key of [
-    'scrollbackLines',
-    'idleTtlMinutes',
-    'maxHiddenSessions',
-    'maxEstimatedBufferMiB',
-  ]) {
-    assert.match(prose, new RegExp(`\\b${key}\\b`), `terminal prose never names ${key}`);
-  }
-  for (const value of ['5000', '100000', '180', '10080', '4', '32', '64', '2048']) {
-    assert.match(prose, new RegExp(`\\b${value}\\b`), `terminal prose never names ${value}`);
-  }
-  assert.match(prose, /zero/i);
-  assert.match(prose, /restart/i);
-  assert.match(prose, new RegExp(`${dataRoot.replaceAll('/', '\\/')}\\/config\\.yaml`));
-  assert.match(prose, /\.isagi\/config\.yaml.*does not own/);
+  assert.match(router, /`<project root>\/\.isagi\/config\.yaml`.*`worktrees\.hooks`/);
+  assert.match(router, /`<worktree>\/\.isagi\/config\.yaml`.*`commands`/);
+  assert.match(
+    router,
+    /ISAGI_DATA_DIR/,
+    'SKILL.md never explains which runtime owns the data root',
+  );
 });
 
 /**
- * Other sections and the embedded schema also mention `~` or restart behavior. Isolate this section so
- * its handwritten explanation must carry each user-facing fact on its own.
+ * Prose defers to the schemas for fields and defaults, so the YAML it shows must be config the
+ * schemas accept: a reader copies these blocks verbatim.
  */
-test('the global config prose documents additional workflow directories without leaning on the schema', () => {
-  const emitted = files.get('references/config-global.md') ?? '';
-  const heading = '\n## Additional workflow directories\n';
-  const sectionIndex = emitted.indexOf(heading);
-  assert.notEqual(
-    sectionIndex,
-    -1,
-    'config-global.md lost its ## Additional workflow directories section',
-  );
-  const sectionStart = sectionIndex + heading.length;
-  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
-  assert.notEqual(
-    nextHeadingIndex,
-    -1,
-    'additional workflow directories must precede another section',
-  );
-  const prose = emitted.slice(sectionStart, nextHeadingIndex);
-
-  assert.match(prose, /additionalDirectories/, 'prose never names additionalDirectories');
-  assert.match(prose, /workflows:/, 'prose never shows the workflows nesting');
-  assert.match(prose, /absolute/i, 'prose never states paths must be absolute');
-  assert.match(prose, /~/, 'prose never mentions current-user ~ expansion');
-  assert.match(prose, /current user/i, 'prose never limits ~ expansion to the current user');
-  assert.match(prose, /priority|order/i, 'prose never states array-order precedence');
-  assert.match(prose, /data[-\s]?root/i, 'prose never names the lower data-root source');
-  assert.match(prose, /\.isagi\/workflows/, 'prose never names the higher project source');
-  assert.match(prose, /restart/i, 'prose never states a restart is required');
-});
-
-test('the global config reference documents Fluidcast voice mode', () => {
-  const emitted = files.get('references/config-global.md') ?? '';
-  const heading = '\n## Fluidcast voice mode\n';
-  const sectionIndex = emitted.indexOf(heading);
-  assert.notEqual(sectionIndex, -1, 'config-global.md lost its Fluidcast voice mode section');
-  const sectionStart = sectionIndex + heading.length;
-  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
-  assert.notEqual(nextHeadingIndex, -1, 'Fluidcast voice mode must precede another section');
-  const prose = emitted.slice(sectionStart, nextHeadingIndex);
-
-  for (const key of [
-    'enabled',
-    'languageModel',
-    'speech',
-    'preset',
-    'openai',
-    'openai-compatible',
-    'anthropic',
-    'structuredOutput',
-    'fast',
-    'baseUrl',
-    'apiKey',
-    'summaryModel',
-    'history',
-    'compaction',
-    'aboveInputTokens',
-  ]) {
-    assert.match(prose, new RegExp(`\\b${key}\\b`), `Fluidcast prose never names ${key}`);
+test('every YAML example in a config reference decodes against its schema', () => {
+  let checked = 0;
+  for (const [path, source] of files) {
+    if (!path.endsWith('.md')) continue;
+    for (const match of source.matchAll(/^```yaml\n([\s\S]*?)^```$/gm)) {
+      const document = parse(match[1]!) as Record<string, unknown>;
+      const schema =
+        'commands' in document || 'worktrees' in document
+          ? projectConfigSchema
+          : runtimeConfigSchema;
+      const decoded = Schema.decodeUnknownExit(schema as Schema.Codec<unknown>)(document);
+      assert.ok(
+        decoded._tag === 'Success',
+        `${path}: a YAML example does not decode:\n${match[1]}`,
+      );
+      checked += 1;
+    }
   }
-  assert.match(prose, /56000/, 'prose never states the compaction threshold default');
-  assert.match(prose, /cache reads/, 'prose never states that cache reads count');
-  // Every example is a whole config that decodes, so a reader can copy any of them.
-  const examples = [...prose.matchAll(/```yaml\n([\s\S]*?)```/g)].map((match) => match[1]!);
-  assert.ok(examples.some((example) => /summaryModel:/.test(example)));
-  for (const example of examples) {
-    const decoded = Schema.decodeUnknownExit(runtimeConfigSchema)(parse(example));
-    assert.ok(decoded._tag === 'Success', `a Fluidcast example does not decode:\n${example}`);
-  }
-  assert.match(prose, /apiKey: env\.[A-Z_]+/, 'prose never shows an env. key reference');
-  assert.match(prose, /restart/i, 'prose never states a restart is required');
-  assert.match(prose, /Claude Code and Codex/, 'prose never names the supported harnesses');
-  assert.match(prose, /memory only/i, 'prose never states hidden sessions are in memory only');
-  assert.match(prose, /CLAUDE_CONFIG_DIR/, 'prose never states the Claude attach limitation');
-  assert.doesNotMatch(prose, /apiKey: sk-(?!your-)/, 'examples must use placeholder keys');
+  assert.ok(checked > 0, 'expected YAML examples in the skill');
 });
 
 test('skill references do not carry generated contents sections', () => {
@@ -455,7 +288,7 @@ test('the emitted scaffold files are byte-identical to the source assets', () =>
 });
 
 test('the rendered workflow reference and shipped scaffold name the recommended pair', () => {
-  const workflows = files.get('references/workflows.md') ?? '';
+  const workflows = files.get('references/workflow-package.md') ?? '';
   assert.ok(
     workflows.includes(`@yourtechbudstudio/isagi-workflow-sdk@${workflowSdkVersion}`),
     'workflow reference states the SDK pin',

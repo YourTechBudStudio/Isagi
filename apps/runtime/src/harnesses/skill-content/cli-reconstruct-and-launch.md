@@ -1,6 +1,6 @@
 # Reconstruct files and launch a fresh run
 
-`checkpoints export` rebuilds a checkpoint's files in a new folder; `runs launch` starts a separate, fresh run. For runtime access and output conventions, see [CLI basics](cli-investigate-runs.md#runtime-and-output). For what a checkpoint holds, see [Workflow checkpoints](workflow-checkpoints.md#what-a-checkpoint-holds).
+`checkpoints export` rebuilds a checkpoint's files in a new folder; `runs launch` starts a separate, fresh run. For runtime access and output conventions, see [CLI basics](cli-investigate-runs.md#runtime-and-output). For what a checkpoint holds, see [Workflow checkpoints](workflow-checkpoints.md#what-it-holds).
 
 ## Worked example: rerun from phase 1
 
@@ -33,7 +33,7 @@ It returns `{ destinationPath, worktreeId }`; `worktreeId` is null for a plain f
 
 ## Launch separately
 
-Prepare and verify the workflow in the origin worktree using [Workflow authoring](workflows.md#completion-and-verification), then confirm discovery and launch:
+Prepare and [verify](workflow-package.md#verify) the workflow in the origin worktree, then confirm discovery and launch:
 
 ```sh
 isagi workflows list --json
