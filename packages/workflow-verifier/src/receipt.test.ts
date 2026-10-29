@@ -40,8 +40,8 @@ test('parses and canonically serializes manifest format 2', () => {
   const manifest = {
     manifestVersion: 2,
     workflowContractVersion: 5,
-    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.1' },
-    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.1' },
+    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.2' },
+    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.2' },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
     structure: {
@@ -63,8 +63,8 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
   const { structure, ...withoutStructure } = {
     manifestVersion: 2,
     workflowContractVersion: 5,
-    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.1' },
-    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.1' },
+    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.2' },
+    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.2' },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
     structure: { descriptorVersion: 2, sha256: 'c'.repeat(64), rootGraphKey: 'M', graphCount: 1 },
@@ -77,8 +77,8 @@ test('the structure block is parsed with exact keys and checked values', () => {
   const base = {
     manifestVersion: 2,
     workflowContractVersion: 5,
-    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.1' },
-    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.1' },
+    sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.2' },
+    verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.2' },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
     structure: { descriptorVersion: 2, sha256: 'c'.repeat(64), rootGraphKey: 'M', graphCount: 1 },

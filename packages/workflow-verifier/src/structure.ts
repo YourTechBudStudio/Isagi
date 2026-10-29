@@ -266,7 +266,7 @@ function propertyOf(value: unknown, name: string): unknown {
 
 /**
  * Checks the manifest a workflow's `command()` returned: a non-empty title, an optional string
- * description, and optional well-formed launch inputs. Returns one message per problem, and none
+ * description, an optional boolean `hidden`, and optional well-formed launch inputs. Returns one message per problem, and none
  * when the manifest is valid. Like `describeWorkflowModule`, it only reads plain data; calling
  * `command()` is the caller's job.
  */
@@ -283,6 +283,11 @@ export function checkCommandManifest(manifest: unknown): readonly string[] {
   if (manifest.description !== undefined && typeof manifest.description !== 'string') {
     problems.push(
       `command() manifest description must be a string when present; found ${describeValue(manifest.description)}.`,
+    );
+  }
+  if (manifest.hidden !== undefined && typeof manifest.hidden !== 'boolean') {
+    problems.push(
+      `command() manifest hidden must be a boolean when present; found ${describeValue(manifest.hidden)}.`,
     );
   }
   if (manifest.inputs !== undefined && !Array.isArray(manifest.inputs)) {

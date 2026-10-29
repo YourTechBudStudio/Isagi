@@ -92,6 +92,8 @@ export interface WorkflowCommandManifest {
   readonly title: string;
   readonly description?: string | undefined;
   readonly inputs?: readonly WorkflowQuestionSpec[] | undefined;
+  /** Leaves the workflow out of the command palette. It still loads and launches through the runtime API and the `isagi` CLI. */
+  readonly hidden?: boolean | undefined;
 }
 
 export type WorkflowUserInputAnswers = Record<string, string | readonly string[] | boolean>;

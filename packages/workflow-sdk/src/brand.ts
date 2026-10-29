@@ -1,6 +1,8 @@
 /**
  * The workflow authoring contract version. A bundle built against a different major contract is
- * rejected by the verifier and the runtime loader rather than being interpreted loosely.
+ * rejected by the verifier and the runtime loader rather than being interpreted loosely. Bump it
+ * only when a workflow would misbehave on a runtime of the other version; additive, optional
+ * changes ship as an SDK patch release and leave it alone.
  */
 export const workflowContractVersion = 5 as const;
 

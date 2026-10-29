@@ -68,6 +68,21 @@ test('workflow descriptors assemble into workflow entries', () => {
   assert.equal(entry?.disabled, undefined);
 });
 
+test('hidden workflow descriptors stay out of the palette', () => {
+  const entries = assembleEntries(
+    ctx({
+      workflowDescriptors: [
+        { ok: true, workflowKey: 'release', manifest: { title: 'Release' } },
+        { ok: true, workflowKey: 'internal', manifest: { title: 'Internal', hidden: true } },
+        { ok: true, workflowKey: 'shown', manifest: { title: 'Shown', hidden: false } },
+      ],
+    }),
+  );
+
+  const ids = entries.filter((entry) => entry.group === 'workflows').map((entry) => entry.id);
+  assert.deepEqual(ids, ['workflow:release', 'workflow:shown']);
+});
+
 test('broken workflow descriptors become selectable error-detail entries', () => {
   const entries = assembleEntries(
     ctx({

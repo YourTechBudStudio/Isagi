@@ -9,6 +9,7 @@ import {
   workflowCheckpointFileQuerySchema,
 } from './checkpoints.js';
 import { workflowErrorSchema, workflowExecutionDetailSchema } from './executions.js';
+import { workflowCommandManifestSchema } from './primitives.js';
 import {
   listWorkflowRunsOutputSchema,
   listWorkflowRunsQuerySchema,
@@ -203,4 +204,14 @@ test('each appended event is pushed as one workflow_run_event', () => {
       }),
     );
   }
+});
+
+test('a command manifest carries hidden to clients, and omits it when the workflow did', () => {
+  const decode = Schema.decodeUnknownSync(workflowCommandManifestSchema);
+  assert.deepEqual(decode({ title: 'Implement story', hidden: true }), {
+    title: 'Implement story',
+    hidden: true,
+  });
+  assert.deepEqual(decode({ title: 'Release' }), { title: 'Release' });
+  assert.throws(() => decode({ title: 'Release', hidden: 'yes' }));
 });

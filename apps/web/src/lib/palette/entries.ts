@@ -77,6 +77,8 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
     } else {
       for (const descriptor of ctx.workflowDescriptors ?? []) {
         if (descriptor.ok) {
+          // Hidden workflows still launch through the runtime API and CLI; only the palette omits them.
+          if (descriptor.manifest.hidden) continue;
           const occupied = ctx.activeSurfaceWorkflowSummary !== undefined;
           entries.push({
             id: `workflow:${descriptor.workflowKey}`,

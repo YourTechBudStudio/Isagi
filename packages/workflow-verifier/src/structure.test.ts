@@ -900,6 +900,7 @@ test('a well-formed command() manifest has no problems', () => {
     checkCommandManifest({
       title: 'Minimal workflow',
       description: 'Does one thing.',
+      hidden: true,
       inputs: [
         { kind: 'text', key: 'goal', label: 'Goal' },
         { kind: 'select', key: 'mode', label: 'Mode', options: [{ value: 'fast' }] },
@@ -925,6 +926,7 @@ test('command() manifest problems name the field and the input by index and key'
     checkCommandManifest({
       title: '',
       description: 3,
+      hidden: 'yes',
       inputs: [
         null,
         { kind: 'slider', key: 'level', label: '' },
@@ -935,6 +937,7 @@ test('command() manifest problems name the field and the input by index and key'
     [
       'command() must return a manifest with a non-empty string title; found string.',
       'command() manifest description must be a string when present; found number.',
+      'command() manifest hidden must be a boolean when present; found string.',
       'command() inputs[0] must be an input object; found null.',
       'command() inputs[1] (key "level") has kind "slider"; expected "text", "select", "multi-select", or "confirm".',
       'command() inputs[1] (key "level") needs a non-empty string label.',

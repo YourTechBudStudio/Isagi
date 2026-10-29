@@ -57,6 +57,7 @@ export const workflowCommandManifestSchema: Schema.Codec<WorkflowCommandManifest
   title: nonEmptyString,
   description: Schema.optional(Schema.String),
   inputs: Schema.optional(Schema.Array(workflowQuestionSpecSchema)),
+  hidden: Schema.optional(Schema.Boolean),
 });
 
 export const workflowUiFeedbackSchema: Schema.Codec<WorkflowUiFeedback> = Schema.Struct({
