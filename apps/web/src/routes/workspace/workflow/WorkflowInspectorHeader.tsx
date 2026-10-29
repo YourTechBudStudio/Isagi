@@ -2,10 +2,11 @@ import { X } from 'lucide-react';
 
 import type { WorkflowRunSummary } from '@isagi/contracts';
 
-import { workflowCopy, workflowErrorStageHeadline } from '../../../copy/index.js';
+import { workflowErrorStageHeadline } from '../../../copy/index.js';
 import {
-  workflowPresentationStatus,
-  workflowReasonLine,
+  workflowRunPresentation,
+  type WorkflowRunPresentation,
+  type WorkflowTone,
 } from '../../../lib/workspace/workflow/derive.js';
 import { inspectorCopy } from './copy.js';
 import { shortHash } from './dock.js';
@@ -32,7 +33,7 @@ export function WorkflowInspectorHeader({
   readonly closeRef: React.Ref<HTMLButtonElement>;
   readonly onClose: () => void;
 }) {
-  const status = workflowPresentationStatus(summary);
+  const presentation = workflowRunPresentation(summary);
   const started = parseInstant(summary.createdAt);
   const ended = parseInstant(summary.endedAt);
   const elapsed = started === null ? null : Math.max(0, (ended ?? now) - started);
@@ -54,13 +55,13 @@ export function WorkflowInspectorHeader({
       <div className="min-w-0">
         <h2 className="font-display text-[15px] font-semibold text-fg">
           {summary.title}
-          <StatusChip status={status} summary={summary} />
+          <StatusChip presentation={presentation} summary={summary} />
         </h2>
         <p className="mt-0.5 truncate font-mono text-[11.5px] text-fg-subtle">
           {facts.join(' · ')}
         </p>
         <PlacementLine summary={summary} />
-        <ReasonLine summary={summary} />
+        <ReasonLine presentation={presentation} />
       </div>
       <button
         ref={closeRef}
@@ -160,14 +161,14 @@ function folderName(path: string): string {
 /**
  * Why the run is where it is, in one sentence.
  *
- * Reuses the bar's own derivation so the two surfaces cannot disagree, and adds only what the
+ * Reads the same run presentation as the bar so the two surfaces cannot disagree, and adds only what the
  * inspector has room to say: the stage that failed, which a Retry would act on.
  */
-function ReasonLine({ summary }: { readonly summary: WorkflowRunSummary }) {
-  const reason = workflowReasonLine(summary);
-  const error = summary.error;
+function ReasonLine({ presentation }: { readonly presentation: WorkflowRunPresentation }) {
+  const { reason, failure } = presentation;
 
-  if (error) {
+  if (failure?.kind === 'error') {
+    const error = failure.error;
     const where = [error.graphKey, error.nodeId].filter(Boolean).join('/');
     return (
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">
@@ -183,16 +184,16 @@ function ReasonLine({ summary }: { readonly summary: WorkflowRunSummary }) {
   if (reason) {
     return (
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">
-        <Tag tone="text-working">{summary.status}</Tag>
+        <Tag tone="text-working">{presentation.status}</Tag>
         {reason}
       </p>
     );
   }
-  if (summary.outcome?.kind === 'failure') {
+  if (failure?.kind === 'outcome') {
     return (
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">
         <Tag tone="text-error">outcome</Tag>
-        {summary.outcome.reason ?? workflowCopy.outcomeFailure}
+        {failure.reason}
       </p>
     );
   }
@@ -207,29 +208,29 @@ function Tag({ tone, children }: { readonly tone: string; readonly children: str
   );
 }
 
+const chipToneClasses: Record<WorkflowTone, string> = {
+  working: 'border-working/32 bg-working/14 text-working',
+  waiting: 'border-waiting/32 bg-waiting/14 text-waiting',
+  idle: 'border-line/35 bg-line/16 text-fg-subtle',
+  error: 'border-error/30 bg-error/14 text-error',
+  success: 'border-green/30 bg-green/14 text-green',
+};
+
 function StatusChip({
-  status,
+  presentation,
   summary,
 }: {
-  readonly status: ReturnType<typeof workflowPresentationStatus>;
+  readonly presentation: WorkflowRunPresentation;
   readonly summary: WorkflowRunSummary;
 }) {
+  const { status } = presentation;
   const label =
     status === 'driving'
       ? summary.status
       : status === 'waiting_user'
         ? 'waiting on you'
         : status.replace('_', ' ');
-  const tone =
-    status === 'done'
-      ? 'border-green/30 bg-green/14 text-green'
-      : status === 'failed'
-        ? 'border-error/30 bg-error/14 text-error'
-        : status === 'waiting_user'
-          ? 'border-waiting/32 bg-waiting/14 text-waiting'
-          : status === 'driving' || status === 'preparing'
-            ? 'border-working/32 bg-working/14 text-working'
-            : 'border-line/35 bg-line/16 text-fg-subtle';
+  const tone = chipToneClasses[presentation.tone];
   return (
     <span
       className={`ml-2.5 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 align-[2px] text-[11.5px] font-semibold ${tone}`}
