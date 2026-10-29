@@ -22,11 +22,11 @@ import { Tooltip } from '../../components/Tooltip.js';
 import { workflowCopy, workflowErrorStageHeadline } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import {
-  canAnswer,
-  userWait,
-  workflowPresentationStatus,
-  workflowReasonLine,
+  workflowRunPresentation,
   type WorkflowPresentationStatus,
+  type WorkflowRunFailure,
+  type WorkflowRunPresentation,
+  type WorkflowTone,
 } from '../../lib/workspace/workflow/derive.js';
 import type { RuntimeConnectionPhase } from '../../lib/workspace/workflow/live.js';
 import type { WorkflowLogLine } from '../../lib/workspace/workflow/log.js';
@@ -69,32 +69,22 @@ export interface WorkflowBarProps {
   readonly onAdvance: (executionId: number, answers?: WorkflowInputAnswers) => void;
 }
 
-const statusMeta: Record<
-  WorkflowPresentationStatus,
-  {
-    readonly icon: LucideIcon;
-    readonly label: string;
-    readonly tone: string;
-    readonly signal: string;
-  }
-> = {
-  preparing: { icon: Activity, label: 'Preparing', tone: 'text-working', signal: 'bg-working' },
-  driving: { icon: Activity, label: 'Driving', tone: 'text-working', signal: 'bg-working' },
-  waiting_user: {
-    icon: MessageCircle,
-    label: 'Waiting',
-    tone: 'text-waiting',
-    signal: 'bg-waiting',
-  },
-  paused: { icon: Pause, label: 'Paused', tone: 'text-fg-subtle', signal: 'bg-idle' },
-  failed: { icon: CircleAlert, label: 'Failed', tone: 'text-error', signal: 'bg-error' },
-  cancelled: {
-    icon: CircleSlash,
-    label: 'Cancelled',
-    tone: 'text-fg-subtle',
-    signal: 'bg-idle',
-  },
-  done: { icon: Check, label: 'Done', tone: 'text-green', signal: 'bg-green' },
+const statusIcon: Record<WorkflowPresentationStatus, LucideIcon> = {
+  preparing: Activity,
+  driving: Activity,
+  waiting_user: MessageCircle,
+  paused: Pause,
+  failed: CircleAlert,
+  cancelled: CircleSlash,
+  done: Check,
+};
+
+const toneClasses: Record<WorkflowTone, { readonly text: string; readonly signal: string }> = {
+  working: { text: 'text-working', signal: 'bg-working' },
+  waiting: { text: 'text-waiting', signal: 'bg-waiting' },
+  idle: { text: 'text-fg-subtle', signal: 'bg-idle' },
+  error: { text: 'text-error', signal: 'bg-error' },
+  success: { text: 'text-green', signal: 'bg-green' },
 };
 
 export function WorkflowBar({
@@ -124,18 +114,18 @@ export function WorkflowBar({
    * during render closes the window; an effect cannot, because it runs a paint too late.
    */
   const [confirmingCancelRunId, setConfirmingCancelRunId] = useState<number | null>(null);
-  const presentationStatus = workflowPresentationStatus(summary);
-  const meta = statusMeta[presentationStatus];
-  const StatusIcon = meta.icon;
+  const presentation = workflowRunPresentation(summary);
+  const presentationStatus = presentation.status;
+  const tone = toneClasses[presentation.tone];
+  const StatusIcon = statusIcon[presentationStatus];
   const heading = summary.uiFeedback?.phase ?? summary.title;
   const body = summary.uiFeedback?.message;
-  const reason = workflowReasonLine(summary);
+  const reason = presentation.reason;
   // A paused run still accepts an answer, and showing the form then is honest as long as it does
   // not imply the graph resumed.
-  const wait = userWait(summary);
   const prompt =
-    canAnswer(summary) && wait !== null && summary.current !== null
-      ? { wait, executionId: summary.current.executionId }
+    presentation.canAnswer && presentation.wait !== null && summary.current !== null
+      ? { wait: presentation.wait, executionId: summary.current.executionId }
       : null;
 
   const confirmingCancel = confirmingCancelRunId === summary.runId;
@@ -157,21 +147,23 @@ export function WorkflowBar({
       className="relative z-10 flex flex-none flex-col overflow-hidden border-t border-line/15 bg-elevated/65 backdrop-blur-md"
       aria-label="Workflow"
     >
-      <span aria-hidden className={`absolute inset-x-0 top-0 h-px ${meta.signal}`} />
+      <span aria-hidden className={`absolute inset-x-0 top-0 h-px ${tone.signal}`} />
       <div className="flex min-h-16 flex-none items-center gap-2.5 px-3.5 py-2">
-        <StatusIcon size={13} className={meta.tone} aria-hidden />
+        <StatusIcon size={13} className={tone.text} aria-hidden />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className={`truncate font-mono text-[11px] ${meta.tone}`}>{heading}</span>
-            <span className="truncate font-mono text-[10.5px] text-fg-subtle">{meta.label}</span>
+            <span className={`truncate font-mono text-[11px] ${tone.text}`}>{heading}</span>
+            <span className="truncate font-mono text-[10.5px] text-fg-subtle">
+              {presentation.label}
+            </span>
           </div>
           {body && <p className="mt-0.5 text-[13.5px] leading-snug text-fg">{body}</p>}
           {reason && <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">{reason}</p>}
-          <WorkflowOutcomeLine summary={summary} />
+          <WorkflowFailureLine failure={presentation.failure} />
         </div>
         <div className="ml-3 flex flex-none items-center gap-0.5">
           <WorkflowBarControls
-            summary={summary}
+            controls={presentation.controls}
             actionsLocked={actionsLocked}
             confirmingCancel={confirmingCancel}
             onPause={onPause}
@@ -225,7 +217,7 @@ export function WorkflowBar({
             key="prompt"
             wait={prompt.wait}
             executionId={prompt.executionId}
-            paused={summary.status === 'paused'}
+            paused={presentationStatus === 'paused'}
             busy={actionsLocked}
             onAdvance={onAdvance}
           />
@@ -240,22 +232,17 @@ export function WorkflowBar({
 }
 
 /**
- * The two different things "failed" can mean, kept apart.
+ * Why the run failed: the workflow's own reason, or the stage that threw.
  *
- * A workflow that declared a failure outcome finished on purpose and has nothing to repair; a
- * step that threw stopped mid-run and is what a Retry would act on. Presenting them the same way
- * would tell a person to retry something that already ran to completion.
+ * Both kinds share the red headline; this line is what tells them apart, and the runtime's
+ * controls (not this line) decide whether a Retry is on offer.
  */
-function WorkflowOutcomeLine({ summary }: { readonly summary: WorkflowRunSummary }) {
-  if (summary.outcome?.kind === 'failure') {
-    return (
-      <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">
-        {summary.outcome.reason ?? workflowCopy.outcomeFailure}
-      </p>
-    );
+function WorkflowFailureLine({ failure }: { readonly failure: WorkflowRunFailure | null }) {
+  if (failure === null) return null;
+  if (failure.kind === 'outcome') {
+    return <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">{failure.reason}</p>;
   }
-  const error = summary.error;
-  if (!error) return null;
+  const error = failure.error;
   const where = [error.graphKey, error.nodeId].filter(Boolean).join('/');
   return (
     <>
@@ -282,7 +269,7 @@ function WorkflowOutcomeLine({ summary }: { readonly summary: WorkflowRunSummary
  * what stops the bar from showing a button the runtime is guaranteed to refuse.
  */
 function WorkflowBarControls({
-  summary,
+  controls,
   actionsLocked,
   confirmingCancel,
   onPause,
@@ -291,7 +278,7 @@ function WorkflowBarControls({
   onDismiss,
   onCancelIntent,
 }: {
-  readonly summary: WorkflowRunSummary;
+  readonly controls: WorkflowRunPresentation['controls'];
   readonly actionsLocked: boolean;
   readonly confirmingCancel: boolean;
   readonly onPause: () => void;
@@ -300,7 +287,6 @@ function WorkflowBarControls({
   readonly onDismiss: () => void;
   readonly onCancelIntent: () => void;
 }) {
-  const controls = summary.controls;
   return (
     <>
       {controls.pause && (
