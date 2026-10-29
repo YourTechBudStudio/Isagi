@@ -8,7 +8,7 @@ import { queryError } from '../../lib/state/result.js';
 import { formatRuntimeError, surfaceDetailAtom } from '../../lib/workspace/queries.js';
 import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
-import { workflowPresentationStatus } from '../../lib/workspace/workflow/derive.js';
+import { workflowRunPresentation } from '../../lib/workspace/workflow/derive.js';
 import { useAttachedWorkflowRun } from '../../lib/workspace/workflow/queries.js';
 import { EditorPaneContainer } from './EditorPaneContainer.js';
 import { FluidcastFailurePane, type FluidcastFailedAgentSession } from './FluidcastFailurePane.js';
@@ -21,7 +21,7 @@ import { WorkflowSurfaceGlow } from './WorkflowSurfaceGlow.js';
 export function Surface({ surface }: { surface: WorkspaceSurface }) {
   const detail = useAtomValue(surfaceDetailAtom(surface.id));
   const workflowSummary = useAttachedWorkflowRun(surface.id);
-  const workflowStatus = workflowSummary ? workflowPresentationStatus(workflowSummary) : null;
+  const workflowTone = workflowSummary ? workflowRunPresentation(workflowSummary).tone : null;
   const Icon = surfaceSummaryIcon(surface.paneKinds);
 
   if (detail._tag === 'Initial') {
@@ -88,9 +88,7 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
         }}
       />
       <AnimatePresence initial={false}>
-        {workflowStatus ? (
-          <WorkflowSurfaceGlow key="workflow-glow" status={workflowStatus} />
-        ) : null}
+        {workflowTone ? <WorkflowSurfaceGlow key="workflow-glow" tone={workflowTone} /> : null}
       </AnimatePresence>
     </div>
   );
