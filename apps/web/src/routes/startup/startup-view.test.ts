@@ -60,7 +60,7 @@ test('runtime unreachable: retrying mirrors whether a re-read is in flight', () 
 
 test('a failed refetch over a held snapshot keeps routing on that snapshot', () => {
   const result = AsyncResult.failWithPrevious<ControlPlaneSnapshot, Error>(new Error('down'), {
-    previous: Option.some(AsyncResult.success(snapshot({ status: 'not_applicable' }))),
+    previous: Option.some(AsyncResult.success(snapshot({ status: 'ready', version: '4.135.0' }))),
   });
   assert.equal(view(result), null, 'ready: the gate opens');
 });

@@ -345,7 +345,6 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     byReason: byReason<EditorRejectionReason>({
       worktree_not_found: worktreeGone,
       editor_context_not_found: "That editor isn't here anymore.",
-      editor_unsupported_runtime: "This runtime doesn't provide an editor.",
       editor_unavailable: "The editor isn't installed yet.",
       editor_provisioning_busy: 'The editor download is already retrying.',
       editor_incarnation_superseded: 'That editor process has already been replaced.',

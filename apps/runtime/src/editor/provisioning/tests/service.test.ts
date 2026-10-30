@@ -17,9 +17,7 @@ import {
   EditorProvisioning,
   EditorProvisioningBusy,
   EditorProvisioningSettings,
-  editorCapabilityFromEnvironment,
   editorProvisioningDeadline,
-  type EditorCapability,
 } from '../service.js';
 import { pinnedVersion, recordingInstallIo, type InstallIoBehaviour } from './test-support.js';
 
@@ -32,17 +30,10 @@ function makeRoots() {
   };
 }
 
-/**
- * Builds the service with an explicit capability.
- *
- * No test in this file reads or writes `process.env`. The runtime suite runs
- * every file in one process, so a capability that had to be installed as a
- * process global would make these assertions depend on every other test's
- * cleanup discipline.
- */
+/** Builds the service with explicit settings: boot provisioning on unless `startAtBoot` says otherwise. */
 function withService<A, E>(
   input: {
-    readonly capability: EditorCapability;
+    readonly startAtBoot?: boolean;
     readonly directory: DataDirectory['Service'];
     readonly io: EditorInstallIo['Service'];
     readonly deadline?: Duration.Input;
@@ -53,7 +44,7 @@ function withService<A, E>(
     Effect.provide(
       EditorProvisioning.layerNoDeps.pipe(
         Layer.provide([
-          settingsLayer(input.capability, input.deadline),
+          settingsLayer(input.startAtBoot ?? true, input.deadline),
           Layer.succeed(DataDirectory, input.directory),
           Layer.succeed(EditorInstallIo, input.io),
         ]),
@@ -62,63 +53,41 @@ function withService<A, E>(
   );
 }
 
-/** The capability as an explicit value, and optionally a short deadline. */
-function settingsLayer(capability: EditorCapability, deadline?: Duration.Input) {
+/** Whether `start` begins the attempt, and optionally a short deadline. */
+function settingsLayer(startAtBoot: boolean, deadline?: Duration.Input) {
   return Layer.succeed(EditorProvisioningSettings, {
-    readCapability: () => capability,
+    startAtBoot,
     deadline:
       deadline === undefined ? editorProvisioningDeadline : Duration.fromInputUnsafe(deadline),
   });
 }
 
-test('the capability reader accepts only the exact declaration', () => {
-  assert.equal(
-    editorCapabilityFromEnvironment({ ISAGI_EDITOR_CAPABILITY: 'code_server' }),
-    'code_server',
-  );
-  assert.equal(editorCapabilityFromEnvironment({}), null);
-  assert.equal(editorCapabilityFromEnvironment({ ISAGI_EDITOR_CAPABILITY: '' }), null);
-  assert.equal(editorCapabilityFromEnvironment({ ISAGI_EDITOR_CAPABILITY: 'Code_Server' }), null);
-  assert.equal(editorCapabilityFromEnvironment({ ISAGI_EDITOR_CAPABILITY: 'vscode' }), null);
-});
-
-test('an undeclared runtime reports not_applicable, performs no IO, and writes no provider content', async () => {
+test('with startAtBoot off, start is a no-op and retry still provisions', async () => {
   const roots = makeRoots();
   try {
     const recorder = recordingInstallIo();
     const result = await Effect.runPromise(
-      withService({ capability: null, directory: roots.directory, io: recorder.io }, (service) =>
+      withService({ startAtBoot: false, directory: roots.directory, io: recorder.io }, (service) =>
         Effect.gen(function* () {
           yield* service.start;
           const afterStart = yield* service.state;
+          const callsAfterStart = recorder.calls.length;
           const retried = yield* service.retry;
-          const guard = yield* Effect.result(service.requireReady);
-          return { afterStart, retried, guard };
+          return { afterStart, callsAfterStart, retried };
         }),
       ),
     );
 
-    assert.deepEqual(result.afterStart, { status: 'not_applicable' });
-    // Retry is a report, not an operation that needs an installation, so
-    // `not_applicable` is its complete successful answer.
-    assert.deepEqual(result.retried, { status: 'not_applicable' });
-    assert.ok(result.guard._tag === 'Failure');
-    assert.equal(
-      result.guard._tag === 'Failure' ? result.guard.failure.reason : null,
-      'editor_unsupported_runtime',
-    );
-
-    assert.deepEqual(recorder.calls, []);
-    // The generic Isagi-owned roots may exist; provider content may not.
-    assert.ok(!existsSync(join(roots.directory.paths.toolsPath, 'code-server')));
-    assert.ok(!existsSync(join(roots.directory.paths.toolsPath, '.staging')));
-    assert.ok(!existsSync(join(roots.directory.paths.editorsPath, 'code-server')));
+    assert.deepEqual(result.afterStart, { status: 'checking', version: pinnedVersion });
+    assert.equal(result.callsAfterStart, 0);
+    assert.deepEqual(result.retried, { status: 'ready', version: pinnedVersion });
+    assert.ok(recorder.calls.length > 0);
   } finally {
     roots.cleanup();
   }
 });
 
-test('a declared runtime walks checking, downloading, verifying, extracting, ready', async () => {
+test('a runtime walks checking, downloading, verifying, extracting, ready', async () => {
   const roots = makeRoots();
   try {
     // Observed from inside the IO seam, so each recorded status is the state the
@@ -136,16 +105,14 @@ test('a declared runtime walks checking, downloading, verifying, extracting, rea
     const recorder = recordingInstallIo(behaviour);
 
     const final = await Effect.runPromise(
-      withService(
-        { capability: 'code_server', directory: roots.directory, io: recorder.io },
-        (service) =>
-          Effect.gen(function* () {
-            observeState = service.state;
-            const initial = yield* service.state;
-            observed.push(initial.status);
-            const settled = yield* service.retry;
-            return settled;
-          }),
+      withService({ directory: roots.directory, io: recorder.io }, (service) =>
+        Effect.gen(function* () {
+          observeState = service.state;
+          const initial = yield* service.state;
+          observed.push(initial.status);
+          const settled = yield* service.retry;
+          return settled;
+        }),
       ),
     );
 
@@ -167,17 +134,15 @@ test('a ready service hands out the resolved installation; every other state ref
   try {
     const recorder = recordingInstallIo();
     const resolved = await Effect.runPromise(
-      withService(
-        { capability: 'code_server', directory: roots.directory, io: recorder.io },
-        (service) =>
-          Effect.gen(function* () {
-            // Before any attempt has run the state is `checking`, which is not
-            // ready and must refuse.
-            const early = yield* Effect.result(service.requireReady);
-            yield* service.retry;
-            const ready = yield* Effect.result(service.requireReady);
-            return { early, ready };
-          }),
+      withService({ directory: roots.directory, io: recorder.io }, (service) =>
+        Effect.gen(function* () {
+          // Before any attempt has run the state is `checking`, which is not
+          // ready and must refuse.
+          const early = yield* Effect.result(service.requireReady);
+          yield* service.retry;
+          const ready = yield* Effect.result(service.requireReady);
+          return { early, ready };
+        }),
       ),
     );
 
@@ -197,20 +162,18 @@ test('a failed attempt is terminal, is never retried on a timer, and refuses req
   try {
     const recorder = recordingInstallIo({ downloadFailure: { status: 500 } });
     const result = await Effect.runPromise(
-      withService(
-        { capability: 'code_server', directory: roots.directory, io: recorder.io },
-        (service) =>
-          Effect.gen(function* () {
-            yield* service.retry;
-            // Nothing re-enters on its own: the attempt settles once and stays
-            // settled until a user asks again. Advancing a test clock well past
-            // any plausible retry interval is what makes "no timer" an assertion
-            // rather than an absence of evidence.
-            yield* TestClock.adjust(Duration.hours(1));
-            const settled = yield* service.state;
-            const guard = yield* Effect.result(service.requireReady);
-            return { settled, guard, downloads: recorder.calls.filter((c) => c === 'downloadTo') };
-          }),
+      withService({ directory: roots.directory, io: recorder.io }, (service) =>
+        Effect.gen(function* () {
+          yield* service.retry;
+          // Nothing re-enters on its own: the attempt settles once and stays
+          // settled until a user asks again. Advancing a test clock well past
+          // any plausible retry interval is what makes "no timer" an assertion
+          // rather than an absence of evidence.
+          yield* TestClock.adjust(Duration.hours(1));
+          const settled = yield* service.state;
+          const guard = yield* Effect.result(service.requireReady);
+          return { settled, guard, downloads: recorder.calls.filter((c) => c === 'downloadTo') };
+        }),
       ).pipe(Effect.provide(TestClock.layer())),
     );
 
@@ -245,7 +208,7 @@ test('retry re-enters a settled failure and can succeed', async () => {
     };
 
     const result = await Effect.runPromise(
-      withService({ capability: 'code_server', directory: roots.directory, io }, (service) =>
+      withService({ directory: roots.directory, io }, (service) =>
         Effect.gen(function* () {
           const first = yield* service.retry;
           failing.value = false;
@@ -279,19 +242,17 @@ test('a retry arriving while one is running is refused rather than queued', asyn
             ),
         };
 
-        return yield* withService(
-          { capability: 'code_server', directory: roots.directory, io },
-          (service) =>
-            Effect.gen(function* () {
-              const first = yield* Effect.forkChild(service.retry);
-              yield* Deferred.await(reached);
-              // The second press must not stack another 200 MB download behind
-              // the first.
-              const second = yield* Effect.result(service.retry);
-              yield* Deferred.succeed(release, undefined);
-              const settled = yield* Fiber.join(first);
-              return { second, settled, downloads: base.calls.filter((c) => c === 'downloadTo') };
-            }),
+        return yield* withService({ directory: roots.directory, io }, (service) =>
+          Effect.gen(function* () {
+            const first = yield* Effect.forkChild(service.retry);
+            yield* Deferred.await(reached);
+            // The second press must not stack another 200 MB download behind
+            // the first.
+            const second = yield* Effect.result(service.retry);
+            yield* Deferred.succeed(release, undefined);
+            const settled = yield* Fiber.join(first);
+            return { second, settled, downloads: base.calls.filter((c) => c === 'downloadTo') };
+          }),
         );
       }),
     );
@@ -312,22 +273,20 @@ test('start is idempotent and runs at most one attempt', async () => {
   try {
     const recorder = recordingInstallIo();
     const downloads = await Effect.runPromise(
-      withService(
-        { capability: 'code_server', directory: roots.directory, io: recorder.io },
-        (service) =>
-          Effect.gen(function* () {
-            yield* service.start;
-            yield* service.start;
-            yield* service.start;
-            // Let the forked attempt settle.
-            yield* Effect.repeat(service.state, {
-              until: (state) => state.status === 'ready' || state.status === 'failed',
-              // Spaced rather than immediate: an unspaced repeat busy-loops the
-              // fiber the forked attempt needs in order to make progress.
-              schedule: Schedule.spaced(Duration.millis(1)),
-            });
-            return recorder.calls.filter((call) => call === 'downloadTo').length;
-          }),
+      withService({ directory: roots.directory, io: recorder.io }, (service) =>
+        Effect.gen(function* () {
+          yield* service.start;
+          yield* service.start;
+          yield* service.start;
+          // Let the forked attempt settle.
+          yield* Effect.repeat(service.state, {
+            until: (state) => state.status === 'ready' || state.status === 'failed',
+            // Spaced rather than immediate: an unspaced repeat busy-loops the
+            // fiber the forked attempt needs in order to make progress.
+            schedule: Schedule.spaced(Duration.millis(1)),
+          });
+          return recorder.calls.filter((call) => call === 'downloadTo').length;
+        }),
       ),
     );
     assert.equal(downloads, 1);
@@ -353,25 +312,23 @@ test('start returns while its attempt is still running', async () => {
             ),
         };
 
-        return yield* withService(
-          { capability: 'code_server', directory: roots.directory, io },
-          (service) =>
-            Effect.gen(function* () {
-              // This is the invariant the host's fatal 15-second readiness
-              // deadline depends on: `start` forks. If it ever awaited the
-              // attempt, a first-run 200 MB download would sit between the
-              // listen call and `ISAGI_RUNTIME_READY`, and the desktop would
-              // kill the runtime.
-              yield* service.start;
-              yield* Deferred.await(reached);
-              const duringAttempt = yield* service.state;
-              yield* Deferred.succeed(release, undefined);
-              yield* Effect.repeat(service.state, {
-                until: (state) => state.status === 'ready' || state.status === 'failed',
-                schedule: Schedule.spaced(Duration.millis(1)),
-              });
-              return duringAttempt;
-            }),
+        return yield* withService({ directory: roots.directory, io }, (service) =>
+          Effect.gen(function* () {
+            // This is the invariant the host's fatal 15-second readiness
+            // deadline depends on: `start` forks. If it ever awaited the
+            // attempt, a first-run 200 MB download would sit between the
+            // listen call and `ISAGI_RUNTIME_READY`, and the desktop would
+            // kill the runtime.
+            yield* service.start;
+            yield* Deferred.await(reached);
+            const duringAttempt = yield* service.state;
+            yield* Deferred.succeed(release, undefined);
+            yield* Effect.repeat(service.state, {
+              until: (state) => state.status === 'ready' || state.status === 'failed',
+              schedule: Schedule.spaced(Duration.millis(1)),
+            });
+            return duringAttempt;
+          }),
         );
       }),
     );
@@ -402,7 +359,6 @@ test('an attempt that outruns its deadline settles as a timeout and leaves no st
 
         return yield* withService(
           {
-            capability: 'code_server',
             directory: roots.directory,
             io,
             deadline: Duration.minutes(10),
@@ -435,7 +391,7 @@ test('a state Ref is not shared between two constructions of the service', async
   try {
     const recorder = recordingInstallIo();
     const layer = EditorProvisioning.layerNoDeps.pipe(
-      Layer.provide(settingsLayer('code_server')),
+      Layer.provide(settingsLayer(true)),
       Layer.provide(Layer.succeed(DataDirectory, roots.directory)),
       Layer.provide(Layer.succeed(EditorInstallIo, recorder.io)),
     );
@@ -476,7 +432,7 @@ test('a failed attempt clears any previously resolved installation', async () =>
           : base.io.prepareEditorState(input),
     };
     const outcome = await Effect.runPromise(
-      withService({ capability: 'code_server', directory: roots.directory, io }, (service) =>
+      withService({ directory: roots.directory, io }, (service) =>
         Effect.gen(function* () {
           const first = yield* service.retry;
           const beforeFailure = yield* Effect.result(service.requireReady);
@@ -515,21 +471,19 @@ test('an interrupted attempt settles as a failure instead of staying transient',
             ),
         };
 
-        return yield* withService(
-          { capability: 'code_server', directory: roots.directory, io },
-          (service) =>
-            Effect.gen(function* () {
-              const fiber = yield* Effect.forkChild(service.retry);
-              yield* Deferred.await(reached);
-              const before = yield* service.state;
-              // This is what an aborted `POST /editor/provisioning/retry`
-              // does: the route runs the attempt under the request's abort
-              // signal, so a client that disconnects interrupts it.
-              yield* Fiber.interrupt(fiber);
-              const after = yield* service.state;
-              const guard = yield* Effect.result(service.requireReady);
-              return { before, after, guard };
-            }),
+        return yield* withService({ directory: roots.directory, io }, (service) =>
+          Effect.gen(function* () {
+            const fiber = yield* Effect.forkChild(service.retry);
+            yield* Deferred.await(reached);
+            const before = yield* service.state;
+            // This is what an aborted `POST /editor/provisioning/retry`
+            // does: the route runs the attempt under the request's abort
+            // signal, so a client that disconnects interrupts it.
+            yield* Fiber.interrupt(fiber);
+            const after = yield* service.state;
+            const guard = yield* Effect.result(service.requireReady);
+            return { before, after, guard };
+          }),
         );
       }),
     );
@@ -577,23 +531,21 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
               : base.io.assertExecutable(path),
         };
 
-        return yield* withService(
-          { capability: 'code_server', directory: roots.directory, io },
-          (service) =>
-            Effect.gen(function* () {
-              const first = yield* service.retry;
-              blocking.value = true;
-              const fiber = yield* Effect.forkChild(service.retry);
-              yield* Deferred.await(blocked);
-              // The projected state and the guard are two views of one fact:
-              // while an attempt is in flight, neither says ready.
-              const during = yield* service.state;
-              const guard = yield* Effect.result(service.requireReady);
-              yield* Deferred.succeed(release, undefined);
-              const settled = yield* Fiber.join(fiber);
-              const after = yield* Effect.result(service.requireReady);
-              return { first, during, guard, settled, after };
-            }),
+        return yield* withService({ directory: roots.directory, io }, (service) =>
+          Effect.gen(function* () {
+            const first = yield* service.retry;
+            blocking.value = true;
+            const fiber = yield* Effect.forkChild(service.retry);
+            yield* Deferred.await(blocked);
+            // The projected state and the guard are two views of one fact:
+            // while an attempt is in flight, neither says ready.
+            const during = yield* service.state;
+            const guard = yield* Effect.result(service.requireReady);
+            yield* Deferred.succeed(release, undefined);
+            const settled = yield* Fiber.join(fiber);
+            const after = yield* Effect.result(service.requireReady);
+            return { first, during, guard, settled, after };
+          }),
         );
       }),
     );
@@ -610,7 +562,7 @@ test('a retry from ready withdraws readiness for as long as it is running', asyn
   }
 });
 
-test('every member of a declared runtime runs under a span named for it', async () => {
+test('every member of the service runs under a span named for it', async () => {
   // `state` and `requireReady` are effect values rather than functions, so nothing names them unless they open their
   // own span; an `editor_unavailable` from `requireReady` must still say which operation refused.
   const roots = makeRoots();
@@ -624,14 +576,12 @@ test('every member of a declared runtime runs under a span named for it', async 
   try {
     const recorder = recordingInstallIo();
     await Effect.runPromise(
-      withService(
-        { capability: 'code_server', directory: roots.directory, io: recorder.io },
-        (service) =>
-          Effect.gen(function* () {
-            yield* service.state;
-            yield* Effect.result(service.requireReady);
-            yield* service.retry;
-          }),
+      withService({ directory: roots.directory, io: recorder.io }, (service) =>
+        Effect.gen(function* () {
+          yield* service.state;
+          yield* Effect.result(service.requireReady);
+          yield* service.retry;
+        }),
       ).pipe(Effect.withTracer(recordingTracer)),
     );
     const members = new Set(

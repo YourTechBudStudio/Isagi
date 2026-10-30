@@ -6,7 +6,7 @@ import { Effect, Layer } from 'effect';
 import { EditorContextService } from '../editor/index.js';
 import {
   EditorContextRepository,
-  NotApplicableEditorProvisioningLayer,
+  UnavailableEditorProvisioningLayer,
   readyEditorProvisioningLayer,
   editorContextServiceLayer,
   testInstallation,
@@ -375,7 +375,7 @@ export function testLayer(
     pty: ptyService,
     provisioning:
       options.editorProvisioning === 'unavailable'
-        ? NotApplicableEditorProvisioningLayer
+        ? UnavailableEditorProvisioningLayer
         : readyEditorProvisioningLayer(testInstallation(dataRoot)),
     portProbe: LoopbackPortProbe.layer,
     entityLock,

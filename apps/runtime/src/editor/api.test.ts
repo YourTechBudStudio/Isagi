@@ -30,10 +30,10 @@ function fakeProvisioning(
 ): EditorProvisioning['Service'] {
   return {
     start: Effect.void,
-    state: Effect.succeed({ status: 'not_applicable' }),
-    retry: Effect.succeed({ status: 'not_applicable' }),
+    state: Effect.succeed({ status: 'checking', version: '4.135.0' }),
+    retry: Effect.succeed({ status: 'checking', version: '4.135.0' }),
     requireReady: Effect.fail(
-      new EditorUnavailable({ reason: 'editor_unsupported_runtime', diagnostic: null }),
+      new EditorUnavailable({ reason: 'editor_unavailable', diagnostic: null }),
     ),
     ...overrides,
   };
@@ -132,22 +132,6 @@ test('the retry route returns the settled provisioning state', async () => {
       assert.deepEqual(payload.data, { provisioning: { status: 'ready', version: '4.135.0' } });
     },
   );
-});
-
-test('retry on a runtime that declares no editor capability succeeds with not_applicable', async () => {
-  // Deliberately not an error. Retry asks the provisioning domain to report or
-  // re-enter its state, and `not_applicable` is the complete answer to that
-  // question; only operations that need an installation refuse.
-  await withEditorApi(fakeProvisioning({}), async (fastify) => {
-    const response = await fastify.inject({
-      method: 'POST',
-      url: '/api/v1/editor/provisioning/retry',
-    });
-    const payload = response.json() as { data?: RetryEditorProvisioningOutput };
-
-    assert.equal(response.statusCode, 200);
-    assert.deepEqual(payload.data, { provisioning: { status: 'not_applicable' } });
-  });
 });
 
 test('a retry arriving while one is running maps to editor_rejected', async () => {

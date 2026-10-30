@@ -1,5 +1,3 @@
-import process from 'node:process';
-
 import { Context, Data, Duration, Effect, Layer, Option, Ref, Semaphore } from 'effect';
 
 import type { EditorProvisioningFailureReason, EditorProvisioningState } from '@isagi/contracts';
@@ -13,9 +11,11 @@ import {
 } from './install.js';
 import { artifactForPlatform, codeServerManifest, hostEditorPlatformKey } from './manifest.js';
 
-// The capability-aware owner of the pinned Code Server installation.
+// The owner of the pinned Code Server installation. Every runtime provisions it:
+// `start` begins the attempt at boot, and only an in-process test that injects
+// `startAtBoot: false` skips that (a user `retry` still provisions there).
 //
-// Three things about its lifecycle are load-bearing and easy to break:
+// Two things about its lifecycle are load-bearing and easy to break:
 //
 //  1. **Layer construction performs no IO and never blocks on readiness.** The
 //     host's runtime-ready deadline is 15 seconds and its expiry is fatal, while
@@ -27,31 +27,13 @@ import { artifactForPlatform, codeServerManifest, hostEditorPlatformKey } from '
 //     outside — an aborted retry request, a scope shutdown — settles as a
 //     failure instead of leaving the projection transient forever. A
 //     user-initiated `retry` is the only way a settled failure is re-attempted.
-//  3. **An undeclared capability is a real answer, not a degraded one.** A
-//     runtime that was never told it manages an editor writes nothing, contacts
-//     nothing, and reports `not_applicable`.
 
 export class EditorUnavailable extends Data.TaggedError('EditorUnavailable')<{
-  readonly reason: 'editor_unsupported_runtime' | 'editor_unavailable';
+  readonly reason: 'editor_unavailable';
   readonly diagnostic: string | null;
 }> {}
 
 export class EditorProvisioningBusy extends Data.TaggedError('EditorProvisioningBusy')<{}> {}
-
-export type EditorCapability = 'code_server' | null;
-
-/**
- * Reads the capability declaration from an environment object.
- *
- * Takes the environment rather than reading `process.env` so it is testable
- * without mutating a process global — which matters more than usual here,
- * because the runtime suite runs every test file in one process.
- */
-export function editorCapabilityFromEnvironment(env: {
-  readonly ISAGI_EDITOR_CAPABILITY?: string | undefined;
-}): EditorCapability {
-  return env.ISAGI_EDITOR_CAPABILITY === 'code_server' ? 'code_server' : null;
-}
 
 /** Long enough for a 235 MB artifact on an ordinary
  *  connection; bounded so the attempt always settles. */
@@ -59,23 +41,16 @@ export const editorProvisioningDeadline = Duration.minutes(10);
 
 /**
  * Provisioning's inputs, read once at layer acquisition. Production uses the defaults; tests provide
- * `Layer.succeed(EditorProvisioningSettings, {...})` with an explicit capability and, for the deadline tests, a short
- * deadline.
- *
- * The capability is a reader rather than a value because the default must consult `process.env` when the layer is
- * built, not when this reference is first resolved (a reference's default is computed once per process).
+ * `Layer.succeed(EditorProvisioningSettings, {...})`, with `startAtBoot: false` for in-process runtime boots and, for
+ * the deadline tests, a short deadline.
  */
 export const EditorProvisioningSettings = Context.Reference<{
-  readonly readCapability: () => EditorCapability;
   readonly deadline: Duration.Duration;
+  /** Whether `start` begins the boot attempt. In-process runtime tests set false so nothing downloads; `retry` still works. */
+  readonly startAtBoot: boolean;
 }>('isagi/runtime/editor/EditorProvisioningSettings', {
-  defaultValue: () => ({
-    readCapability: () => editorCapabilityFromEnvironment(process.env),
-    deadline: editorProvisioningDeadline,
-  }),
+  defaultValue: () => ({ deadline: editorProvisioningDeadline, startAtBoot: true }),
 });
-
-const notApplicable: EditorProvisioningState = { status: 'not_applicable' };
 
 /**
  * The single internal fact this service owns.
@@ -109,18 +84,13 @@ function projectPhase(phase: EditorProvisioningPhase, version: string): EditorPr
   }
 }
 
-/**
- * The scoped implementation. The capability is resolved exactly once, at layer acquisition; everything below takes it
- * as a value.
- */
+/** The scoped implementation. Its settings are read exactly once, at layer acquisition. */
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
   const io = yield* EditorInstallIo;
   const scope = yield* Effect.scope;
   const settings = yield* EditorProvisioningSettings;
   const deadline = settings.deadline;
-
-  if (settings.readCapability() === null) return notApplicableService;
 
   const version = codeServerManifest.version;
   const phase = yield* Ref.make<EditorProvisioningPhase>({
@@ -208,14 +178,17 @@ const make = Effect.gen(function* () {
   );
 
   return EditorProvisioning.of({
-    start: Ref.getAndSet(attemptRequested, true).pipe(
-      Effect.flatMap((alreadyRequested) =>
-        alreadyRequested
-          ? Effect.void
-          : Effect.forkIn(attempt.withPermits(1)(runAttempt), scope).pipe(Effect.asVoid),
-      ),
-      Effect.withSpan('EditorProvisioning.start'),
-    ),
+    // With `startAtBoot` off the state stays at its initial `checking` until a retry.
+    start: (settings.startAtBoot
+      ? Ref.getAndSet(attemptRequested, true).pipe(
+          Effect.flatMap((alreadyRequested) =>
+            alreadyRequested
+              ? Effect.void
+              : Effect.forkIn(attempt.withPermits(1)(runAttempt), scope).pipe(Effect.asVoid),
+          ),
+        )
+      : Effect.void
+    ).pipe(Effect.withSpan('EditorProvisioning.start')),
     state: Effect.map(Ref.get(phase), (current) => projectPhase(current, version)).pipe(
       Effect.withSpan('EditorProvisioning.state'),
     ),
@@ -248,21 +221,6 @@ const make = Effect.gen(function* () {
   });
 });
 
-/**
- * An undeclared runtime. Every method is a complete answer rather than a
- * disabled one: nothing is written under `tools/` or `editors/`, no request is
- * made, and `requireReady` says honestly that this runtime is not the kind that
- * has an editor.
- */
-const notApplicableService: EditorProvisioning['Service'] = {
-  start: Effect.void,
-  state: Effect.succeed(notApplicable),
-  retry: Effect.succeed(notApplicable),
-  requireReady: Effect.fail(
-    new EditorUnavailable({ reason: 'editor_unsupported_runtime', diagnostic: null }),
-  ),
-};
-
 export class EditorProvisioning extends Context.Service<
   EditorProvisioning,
   {
@@ -277,9 +235,9 @@ export class EditorProvisioning extends Context.Service<
     /**
      * The guard every editor *operation* calls first.
      *
-     * `retry` deliberately does not call it: retry asks the domain to report or
-     * re-enter its state, and `not_applicable` is a complete answer to that
-     * question. Operations that need an installation are the ones that must
+     * `retry` deliberately does not call it: retry asks the domain to re-enter
+     * its attempt, which is exactly what a runtime without an installation
+     * needs. Operations that need an installation are the ones that must
      * refuse.
      */
     readonly requireReady: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;

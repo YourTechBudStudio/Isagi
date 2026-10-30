@@ -18,24 +18,15 @@ import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 describe('cli smoke', () => {
   let runtime: BootedRuntime | undefined;
   let dataDir: string | undefined;
-  const savedEnvironment = new Map(
-    (['ISAGI_EDITOR_CAPABILITY'] as const).map((name) => [name, process.env[name]]),
-  );
-
   before(async () => {
     assert.ok(existsSync(cliBundlePath), `Build the CLI first: pnpm -C apps/cli build`);
     dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-cli-smoke-data-')));
-    // Editor provisioning reports `not_applicable` without a capability, so nothing downloads.
-    delete process.env.ISAGI_EDITOR_CAPABILITY;
+    // `bootRuntime` injects `startAtBoot: false`, so nothing downloads.
     runtime = await bootRuntime({ dataDirectory: dataDir });
   });
 
   after(async () => {
     await runtime?.close();
-    for (const [name, value] of savedEnvironment) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
     if (dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
 

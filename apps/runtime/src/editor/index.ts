@@ -10,5 +10,10 @@ export { deriveEditorContextFacts } from './contexts/projection.js';
 export { editorContextRow } from './contexts/row-mapper.js';
 export { EditorContextService, editorLockKey } from './contexts/service.js';
 export type { EditorContextRow, EditorReadinessObservation } from './contexts/types.js';
-export { EditorProvisioning, EditorUnavailable } from './provisioning/service.js';
+export {
+  EditorProvisioning,
+  EditorProvisioningSettings,
+  EditorUnavailable,
+  editorProvisioningDeadline,
+} from './provisioning/service.js';
 export { EditorLayer } from './layer.js';

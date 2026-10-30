@@ -311,7 +311,7 @@ interface SmokeRuntime {
   readonly shutdown: () => Promise<void>;
 }
 
-const smokeEnvironment = ['SHELL', 'ISAGI_EDITOR_CAPABILITY'] as const;
+const smokeEnvironment = ['SHELL'] as const;
 
 async function bootSmokeRuntime(): Promise<SmokeRuntime> {
   const dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-smoke-data-')));
@@ -329,8 +329,7 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
   };
 
   process.env.SHELL = '/bin/sh';
-  // Editor provisioning reports `not_applicable` without a capability, so nothing downloads.
-  delete process.env.ISAGI_EDITOR_CAPABILITY;
+  // `bootRuntime` injects `startAtBoot: false`, so nothing downloads.
 
   try {
     execFileSync('git', ['init', '-q', '-b', 'main', repoDir]);

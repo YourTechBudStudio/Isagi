@@ -3,6 +3,7 @@ import { Effect, Layer } from 'effect';
 import type { EditorProvisioningState } from '@isagi/contracts';
 
 import type { ResolvedEditorInstallation } from '../install.js';
+import { codeServerManifest } from '../manifest.js';
 import { EditorProvisioning, EditorUnavailable } from '../service.js';
 
 /**
@@ -23,9 +24,10 @@ export function editorProvisioningStateLayer(state: EditorProvisioningState) {
   } satisfies EditorProvisioning['Service']);
 }
 
-/** The default for a runtime that declares no editor capability. */
-export const NotApplicableEditorProvisioningLayer = editorProvisioningStateLayer({
-  status: 'not_applicable',
+/** A runtime whose editor is not ready: what a `startAtBoot: false` runtime reports until a retry. */
+export const UnavailableEditorProvisioningLayer = editorProvisioningStateLayer({
+  status: 'checking',
+  version: codeServerManifest.version,
 });
 
 /**

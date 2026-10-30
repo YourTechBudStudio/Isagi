@@ -22,7 +22,6 @@ test('managed runtime environment retains host tooling and removes private orche
     ISAGI_DESKTOP_LOG_MODE: 'supervisor',
     ISAGI_WEB_URL: 'http://127.0.0.1:4173',
     VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid',
-    ISAGI_EDITOR_CAPABILITY: 'code_server',
   });
   assert.deepEqual(sanitized, {
     PATH: '/usr/bin',
@@ -33,15 +32,21 @@ test('managed runtime environment retains host tooling and removes private orche
   });
 });
 
-test('the spawn environment adds only the desktop declarations; serve settings travel as flags', () => {
+test('the spawn environment adds only ELECTRON_RUN_AS_NODE; serve settings travel as flags', () => {
   assert.deepEqual(
     managedRuntimeSpawnEnvironment({
       inherited: { PATH: '/usr/bin', ISAGI_WEB_URL: 'http://127.0.0.1:4173' },
     }),
-    { PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1', ISAGI_EDITOR_CAPABILITY: 'code_server' },
+    { PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1' },
   );
   const environment = managedRuntimeSpawnEnvironment({ inherited: {} });
-  for (const name of ['HOST', 'PORT', 'ISAGI_ALLOWED_ORIGINS', 'ISAGI_DATA_DIR']) {
+  for (const name of [
+    'HOST',
+    'PORT',
+    'ISAGI_EDITOR_CAPABILITY',
+    'ISAGI_ALLOWED_ORIGINS',
+    'ISAGI_DATA_DIR',
+  ]) {
     assert.equal(name in environment, false, name);
   }
 });
@@ -75,30 +80,11 @@ test('serve arguments carry the origins and, when the desktop chose one, the dat
 });
 
 /**
- * The declaration is the desktop's own promise about the runtime it spawned.
- * An operator's inherited value must never be able to make that promise, nor
- * to shadow it with something the runtime would not recognize.
- */
-test('an inherited capability cannot survive or shadow the managed declaration', () => {
-  for (const inheritedCapability of ['code_server', 'vscode', '']) {
-    const environment = managedRuntimeSpawnEnvironment({
-      inherited: { ISAGI_EDITOR_CAPABILITY: inheritedCapability },
-    });
-    assert.equal(environment.ISAGI_EDITOR_CAPABILITY, 'code_server', inheritedCapability);
-  }
-  // Sanitization removes it outright, so the declaration is the only source.
-  assert.equal(
-    'ISAGI_EDITOR_CAPABILITY' in
-      sanitizeManagedRuntimeEnvironment({ ISAGI_EDITOR_CAPABILITY: 'vscode' }),
-    false,
-  );
-});
-
-/**
  * `runtime.ts` cannot be imported here — it requires Electron's `app` — so the
  * boundary is verified structurally. An externally attached runtime is not
- * spawned by the desktop at all, which is what makes "external runtimes are
- * never editor-capable" a property of the wiring rather than of a check.
+ * spawned by the desktop at all, which is what makes "an external runtime
+ * inherits nothing from the desktop" a property of the wiring rather than of a
+ * check.
  */
 test('only the managed target assembles a spawn environment', async () => {
   const source = await readFile(
@@ -118,5 +104,5 @@ test('only the managed target assembles a spawn environment', async () => {
     source.indexOf("{ ownership: 'external'"),
     source.indexOf("{ ownership: 'managed'"),
   );
-  assert.doesNotMatch(externalTarget, /env|prepare|CAPABILITY/u);
+  assert.doesNotMatch(externalTarget, /env|prepare/u);
 });

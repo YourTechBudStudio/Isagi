@@ -46,7 +46,7 @@ function snapshot(overrides: Partial<ControlPlaneSnapshot> = {}): ControlPlaneSn
       lastAppliedFingerprint: null,
       lastResult: null,
     },
-    editorProvisioning: { status: 'not_applicable' },
+    editorProvisioning: { status: 'ready', version: '4.135.0' },
     ...overrides,
   };
 }
@@ -154,7 +154,7 @@ test('every transient provisioning state gates, and carries itself to the surfac
   }
 });
 
-test('a provisioning failure blocks readiness, because a declared capability is a promise', () => {
+test('a provisioning failure blocks readiness, because every runtime provisions its editor', () => {
   const state = {
     status: 'failed',
     version: '4.135.0',
@@ -170,13 +170,7 @@ test('a provisioning failure blocks readiness, because a declared capability is 
   assert.equal(isTransientProvisioning(state), false);
 });
 
-test('an unprovisioned runtime and a provisioned one both reach the workspace', () => {
-  // `not_applicable` is the modelled way to proceed without an editor, so an
-  // external runtime is unaffected by any of this.
-  assert.equal(
-    deriveStartupGate(snapshot({ editorProvisioning: { status: 'not_applicable' } })).kind,
-    'ready',
-  );
+test('a provisioned runtime reaches the workspace', () => {
   assert.equal(
     deriveStartupGate(snapshot({ editorProvisioning: { status: 'ready', version: '4.135.0' } }))
       .kind,
@@ -188,10 +182,6 @@ test('the editor is available only when the runtime says provisioning finished',
   assert.equal(
     editorAvailable(snapshot({ editorProvisioning: { status: 'ready', version: '4.135.0' } })),
     true,
-  );
-  assert.equal(
-    editorAvailable(snapshot({ editorProvisioning: { status: 'not_applicable' } })),
-    false,
   );
   for (const status of TRANSIENT) {
     assert.equal(

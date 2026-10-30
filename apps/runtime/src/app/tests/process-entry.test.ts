@@ -63,14 +63,9 @@ describe(
         HOME: home,
         SHELL: '/bin/sh',
       };
-      // Editor provisioning reports `not_applicable` without a capability, so nothing downloads.
-      for (const key of [
-        'ISAGI_EDITOR_CAPABILITY',
-        'ISAGI_DATA_DIR',
-        'ISAGI_HOST',
-        'ISAGI_PORT',
-        'ISAGI_RUNTIME_DEBUG',
-      ]) {
+      // Every runtime starts provisioning Code Server after readiness; the SIGTERM that ends a case which reached
+      // readiness interrupts that attempt and cleans up its staging directory.
+      for (const key of ['ISAGI_DATA_DIR', 'ISAGI_HOST', 'ISAGI_PORT', 'ISAGI_RUNTIME_DEBUG']) {
         delete childEnv[key];
       }
       Object.assign(childEnv, env);

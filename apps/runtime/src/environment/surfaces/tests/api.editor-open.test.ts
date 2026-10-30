@@ -112,8 +112,8 @@ test('EditorUnavailable maps to a 400 rejection carrying its reason and diagnost
       openEditor: () =>
         Effect.fail(
           new EditorUnavailable({
-            reason: 'editor_unsupported_runtime',
-            diagnostic: 'this runtime declares no editor capability',
+            reason: 'editor_unavailable',
+            diagnostic: 'Code Server is still provisioning.',
           }),
         ),
     },
@@ -121,8 +121,8 @@ test('EditorUnavailable maps to a 400 rejection carrying its reason and diagnost
 
   assert.equal(response.statusCode, 400);
   assert.equal(response.code, 'editor_rejected');
-  assert.equal(response.data.reason, 'editor_unsupported_runtime');
-  assert.equal(response.data.diagnostic, 'this runtime declares no editor capability');
+  assert.equal(response.data.reason, 'editor_unavailable');
+  assert.equal(response.data.diagnostic, 'Code Server is still provisioning.');
 });
 
 test('a surfaces worktree_not_found is translated into the editor rejection vocabulary', async () => {

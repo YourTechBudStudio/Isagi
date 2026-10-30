@@ -244,9 +244,7 @@ function snapshotOf(
             : ({ status: 'blocked', reason: decision.reason } as const),
       };
     }),
-    // Passed through verbatim from the domain that owns the work. On a runtime
-    // that declares no editor capability this is `not_applicable`, which is a
-    // real wire fact rather than a placeholder.
+    // Passed through verbatim from the domain that owns the work.
     editorProvisioning,
     reconciliation: {
       desiredFingerprint: rec.desiredFingerprint,

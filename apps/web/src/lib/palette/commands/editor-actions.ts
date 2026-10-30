@@ -15,8 +15,8 @@ import { emptySurfaceIdFromValues, worktreeIdFromValues } from './worktree-targe
  * is demand-driven rather than started by a palette row.
  *
  * Availability is the runtime's answer, not a re-derivation: `editorAvailable`
- * is true only when the host declared the capability and provisioning finished,
- * and a runtime that says otherwise refuses the operation anyway.
+ * is true only when the runtime's provisioning finished, and a runtime that says
+ * otherwise refuses the operation anyway.
  */
 export const openEditorCommand: PaletteCommand = {
   id: 'open-editor',

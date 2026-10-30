@@ -374,8 +374,8 @@ const make = Effect.gen(function* () {
       editorContextId,
       intent,
     }) {
-      // The capability refusal comes first: an operation on a runtime that
-      // has no editor should not take a lock to find that out.
+      // The availability refusal comes first: an operation on a runtime whose
+      // editor is not ready should not take a lock to find that out.
       const installation = yield* provisioning.requireReady;
       const row = yield* requireRow(editorContextId);
       return yield* entityLock.withLock(editorLockKey(row.worktreeId), () =>
@@ -518,7 +518,7 @@ export class EditorContextService extends Context.Service<
      * The Class C guard both operations call first, and the same one the palette's
      * availability path uses. A façade over provisioning on purpose: the editor
      * domain stays the single door, so no other layer has to learn how
-     * provisioning models capability.
+     * provisioning models readiness.
      */
     readonly requireAvailable: Effect.Effect<ResolvedEditorInstallation, EditorUnavailable>;
     readonly findForWorktree: (

@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { RuntimeLaunch } from '@isagi/cli/serve-launch';
 
+import { EditorProvisioningSettings, editorProvisioningDeadline } from '../../editor/index.js';
 import { MainLayer, RuntimeServer } from '../http-server.js';
 import { launchInputsLayer } from '../launch.js';
 import { RuntimeLogger } from '../logger.js';
@@ -46,7 +47,8 @@ export function testRuntimeLaunch(options: BootRuntimeOptions): RuntimeLaunch {
 
 /**
  * Boots the real runtime (`MainLayer`, as `src/index.ts` launches it) in a test-owned scope, from the launch
- * `testRuntimeLaunch(options)` builds, so nothing is read from `process.env` but `ISAGI_RUNTIME_DEBUG`.
+ * `testRuntimeLaunch(options)` builds, so nothing is read from `process.env` but `ISAGI_RUNTIME_DEBUG`. Editor
+ * provisioning is injected with `startAtBoot: false`, so nothing downloads; its state stays `checking`.
  *
  * Effect's default `ConfigProvider` snapshots the environment at the first config read in the process, so each boot
  * gets a provider over the current environment; otherwise every later boot in a test process would see the first
@@ -56,7 +58,15 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<BootedRu
   const scope = Scope.makeUnsafe();
   const services = await Effect.runPromise(
     Layer.buildWithScope(
-      MainLayer.pipe(Layer.provide(launchInputsLayer(testRuntimeLaunch(options)))),
+      MainLayer.pipe(
+        Layer.provide(launchInputsLayer(testRuntimeLaunch(options))),
+        Layer.provide(
+          Layer.succeed(EditorProvisioningSettings, {
+            deadline: editorProvisioningDeadline,
+            startAtBoot: false,
+          }),
+        ),
+      ),
       scope,
     ).pipe(
       Effect.provide(options.extraLayer ?? RuntimeLogger.layer),
