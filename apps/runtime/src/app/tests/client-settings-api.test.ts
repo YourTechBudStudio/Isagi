@@ -12,8 +12,6 @@ import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 // runtime actually carries RuntimeConfig, which a hand-built single-service runtime cannot prove.
 test('client settings endpoint projects normalized runtime settings at the versioned route', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-client-settings-'));
-  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
-  process.env.ISAGI_DATA_DIR = dataRoot;
   writeFileSync(
     join(dataRoot, 'config.yaml'),
     [
@@ -32,7 +30,7 @@ test('client settings endpoint projects normalized runtime settings at the versi
   let runtime: BootedRuntime | undefined;
 
   try {
-    runtime = await bootRuntime();
+    runtime = await bootRuntime({ dataDirectory: dataRoot });
     const response = await runtime.server.inject({ method: 'GET', url: '/api/v1/client-settings' });
     const payload = response.json() as {
       readonly data?: ClientSettingsOutput & { readonly harnesses?: unknown };
@@ -50,8 +48,6 @@ test('client settings endpoint projects normalized runtime settings at the versi
     assert.equal('harnesses' in (payload.data ?? {}), false);
     assert.equal(typeof payload.meta?.requestId, 'string');
   } finally {
-    if (previousDataDirectory === undefined) delete process.env.ISAGI_DATA_DIR;
-    else process.env.ISAGI_DATA_DIR = previousDataDirectory;
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }

@@ -481,3 +481,36 @@ test('fluidcast history compaction resolves its threshold, and is absent unless 
     );
   }
 });
+
+test('server settings are empty when absent and keep only what is configured', () => {
+  assert.deepEqual(defaultRuntimeConfig.server, {});
+  assert.deepEqual(parseRuntimeConfig({}).server, {});
+  assert.deepEqual(parseRuntimeConfig({ server: {} }).server, {});
+  assert.deepEqual(parseRuntimeConfig({ server: { host: '0.0.0.0' } }).server, { host: '0.0.0.0' });
+  assert.deepEqual(parseRuntimeConfig({ server: { host: '127.0.0.1', port: 11299 } }).server, {
+    host: '127.0.0.1',
+    port: 11_299,
+  });
+  assert.deepEqual(parseRuntimeConfig({ server: { port: 0 } }).server, { port: 0 });
+  assert.deepEqual(parseRuntimeConfig({ server: { port: 65_535 } }).server, { port: 65_535 });
+});
+
+test('an invalid server setting fails startup with its issue path only', () => {
+  for (const [server, path] of [
+    [{ port: 70_000 }, 'server.port'],
+    [{ port: -1 }, 'server.port'],
+    [{ port: 80.5 }, 'server.port'],
+    [{ port: '8080' }, 'server.port'],
+    [{ host: '' }, 'server.host'],
+  ] as const) {
+    assert.throws(
+      () => parseRuntimeConfig({ server }),
+      (error: unknown) =>
+        error instanceof RuntimeConfigIssues &&
+        error.issuePaths.length === 1 &&
+        error.issuePaths[0] === path &&
+        !error.message.includes(JSON.stringify(Object.values(server)[0])),
+      JSON.stringify(server),
+    );
+  }
+});

@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Context, Deferred, Effect, Fiber, Layer, Result } from 'effect';
 
+import { CliEntry } from '../../cli-access/index.js';
 import { AgentSessionAttentionProjection } from '../../environment/agent-sessions/attention.js';
 import { AgentSessionInteraction } from '../../environment/agent-sessions/interaction.js';
 import { AgentSessionError } from '../../environment/agent-sessions/service.js';
@@ -38,6 +39,9 @@ import {
   type LiveWorkspaceOptions,
 } from '../../workspace/testing.js';
 import { ModulesLayer } from '../layer.js';
+
+/** The shim's target; the shim is written but never run here. */
+const testCliEntry = Layer.succeed(CliEntry, { path: '/opt/isagi/isagi.mjs' });
 
 /**
  * The ownership invariant across real modules: a mode switch creates a controller only for an
@@ -437,6 +441,7 @@ test('every production consumer shares the one AgentSessionInteraction instance'
   ).pipe(
     Layer.provide([WorkflowProjectErasure, HarnessObservationTargetsLayer]),
     Layer.provideMerge(platform),
+    Layer.provide(testCliEntry),
   );
   try {
     const result = await Effect.runPromise(

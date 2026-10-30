@@ -14,7 +14,10 @@ import {
 } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForRuntimeHealth } from './boot.js';
 import { resolveDevelopmentRoot } from './development.js';
-import { managedRuntimeSpawnEnvironment } from './managed-runtime-environment.js';
+import {
+  managedRuntimeServeArguments,
+  managedRuntimeSpawnEnvironment,
+} from './managed-runtime-environment.js';
 import { managedRuntimeAllowedOrigins } from './runtime-origin.js';
 import {
   createRuntimeLogSink,
@@ -92,17 +95,13 @@ const prepareManagedRuntime = Effect.gen(function* () {
 
   const specification: RuntimeSpawnSpecification = {
     command: process.execPath,
-    args: [stage.entrypoint],
+    args: [stage.entrypoint, ...managedRuntimeServeArguments({ allowedOrigins, dataDirectory })],
     cwd: stage.root,
     processGroupOwnership:
       !app.isPackaged && process.env[developmentEnvironmentKeys.processOwner] === '1'
         ? 'external'
         : 'self',
-    env: managedRuntimeSpawnEnvironment({
-      inherited: process.env,
-      allowedOrigins,
-      dataDirectory,
-    }),
+    env: managedRuntimeSpawnEnvironment({ inherited: process.env }),
   };
   return specification;
 });

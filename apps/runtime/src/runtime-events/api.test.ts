@@ -10,6 +10,7 @@ import type { RuntimeEvent } from '@isagi/contracts';
 import { makeLogCapture } from '../../test/test-support.js';
 import { AgentSessionAttentionProjection } from '../environment/index.js';
 import { RuntimeEvents } from '../platform/events/index.js';
+import { installAllowedOrigins } from '../platform/http/index.js';
 import { registerRuntimeEventsRoutes } from './api.js';
 
 test('runtime events websocket streams published events through the contract path', async () => {
@@ -100,9 +101,8 @@ test('runtime events websocket answers explicit attention snapshot requests', as
 });
 
 test('runtime events websocket rejects disallowed origins before upgrade', async () => {
-  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
-  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
   const fastify = Fastify({ logger: false });
+  installAllowedOrigins(fastify, ['http://127.0.0.1:43129']);
   const runtime = ManagedRuntime.make(Layer.succeed(RuntimeEvents, fakeEventBus()));
 
   try {
@@ -116,17 +116,14 @@ test('runtime events websocket rejects disallowed origins before upgrade', async
       }),
     );
   } finally {
-    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
-    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
     await fastify.close();
     await runtime.dispose();
   }
 });
 
 test('runtime events websocket accepts the explicitly configured packaged file origin', async () => {
-  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
-  process.env.ISAGI_ALLOWED_ORIGINS = 'file://';
   const fastify = Fastify({ logger: false });
+  installAllowedOrigins(fastify, ['file://']);
   const runtime = ManagedRuntime.make(RuntimeEvents.layer);
 
   try {
@@ -139,8 +136,6 @@ test('runtime events websocket accepts the explicitly configured packaged file o
     });
     ws.terminate();
   } finally {
-    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
-    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
     await fastify.close();
     await runtime.dispose();
   }

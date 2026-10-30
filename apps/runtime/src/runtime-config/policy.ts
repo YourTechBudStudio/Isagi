@@ -17,6 +17,7 @@ import {
   runtimeConfigPtyBackendSchema,
   runtimeFluidcastSchema,
   runtimeHarnessPolicySchema,
+  runtimeServerSettingsSchema,
   runtimeTerminalSettingsSchema,
   runtimeWorkflowSettingsSchema,
   type RuntimeConfigPtyBackend,
@@ -60,6 +61,8 @@ export interface RuntimeConfigShape {
   readonly terminal: TerminalSettings;
   readonly appearance: AppearanceSettings;
   readonly fluidcast: FluidcastConfigState;
+  /** Listen settings; `serve` flags and environment variables outrank them. */
+  readonly server: { readonly host?: string; readonly port?: number };
 }
 
 /**
@@ -87,6 +90,7 @@ export const defaultRuntimeConfig: RuntimeConfigShape = {
   terminal: terminalSettingsDefaults,
   appearance: appearanceSettingsDefaults,
   fluidcast: { status: 'disabled' },
+  server: {},
 };
 
 /** Throws `RuntimeConfigIssues` for a section that must fail; `harnesses` and `fluidcast` never do. */
@@ -96,6 +100,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
   const terminal = parseTerminal(value);
   const appearance = parseAppearance(value);
   const fluidcast = parseFluidcast(value);
+  const server = parseServer(value);
   if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'harnesses'))
     return {
       pty,
@@ -104,6 +109,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
       terminal,
       appearance,
       fluidcast,
+      server,
     };
   const decoded = Schema.decodeUnknownExit(runtimeHarnessPolicySchema)(value.harnesses);
   if (decoded._tag === 'Success') {
@@ -122,6 +128,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
       terminal,
       appearance,
       fluidcast,
+      server,
     };
   }
   return {
@@ -134,6 +141,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
     terminal,
     appearance,
     fluidcast,
+    server,
   };
 }
 
@@ -195,6 +203,15 @@ function parseAppearance(value: unknown): AppearanceSettings {
   }
   const decoded = decodeSection(runtimeAppearanceSettingsSchema, value.appearance, ['appearance']);
   return { theme: decoded.theme ?? appearanceSettingsDefaults.theme };
+}
+
+function parseServer(value: unknown): RuntimeConfigShape['server'] {
+  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'server')) return {};
+  const decoded = decodeSection(runtimeServerSettingsSchema, value.server, ['server']);
+  return {
+    ...(decoded.host === undefined ? {} : { host: decoded.host }),
+    ...(decoded.port === undefined ? {} : { port: decoded.port }),
+  };
 }
 
 function parseWorkflows(value: unknown): RuntimeConfigShape['workflows'] {

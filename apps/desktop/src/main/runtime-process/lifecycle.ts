@@ -481,10 +481,20 @@ function stoppingFailure() {
   return failure('process_error', { message: 'Runtime lifecycle is stopping or stopped.' });
 }
 
+// The port must be written out. It is matched on the reported text because `URL` normalizes the
+// default port away (`http://127.0.0.1:80` has an empty `url.port`), and port 80 is a valid choice.
+const explicitLoopbackPort = /^http:\/\/127\.0\.0\.1:\d+(?:\/|$)/u;
+
 function validateManagedRuntimeUrl(value: string) {
   const url = new URL(value);
-  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) {
-    throw new Error('Managed runtime readiness URL must use http://127.0.0.1:<port>.');
+  if (
+    url.protocol !== 'http:' ||
+    url.hostname !== '127.0.0.1' ||
+    !explicitLoopbackPort.test(value)
+  ) {
+    throw new Error(
+      `Managed runtime readiness URL must use http://127.0.0.1:<port>; got ${value}. Set server.host (or ISAGI_HOST) to 127.0.0.1 or 0.0.0.0 for a desktop-managed runtime.`,
+    );
   }
   return url.toString();
 }

@@ -5,6 +5,7 @@ export type {
   FluidcastConfig,
   FluidcastConfigState,
   FluidcastConnection,
+  RuntimeConfigShape,
   RuntimeHarnessPolicy,
   RuntimeHarnessPolicyState,
 } from './policy.js';

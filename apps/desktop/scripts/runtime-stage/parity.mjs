@@ -4,7 +4,7 @@ import { basename, relative, resolve, sep } from 'node:path';
 
 import { StageValidationError } from './errors.mjs';
 
-const requiredPayloadFiles = ['index.js', 'package.json', 'runtime-stage.json'];
+const requiredPayloadFiles = ['isagi.mjs', 'index.js', 'package.json', 'runtime-stage.json'];
 const requiredPayloadDirectories = ['assets', 'drizzle'];
 
 export function verifyRuntimeStageParity(sourceRoot, packagedRoot, platform = process.platform) {

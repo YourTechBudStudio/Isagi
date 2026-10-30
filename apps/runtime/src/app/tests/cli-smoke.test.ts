@@ -19,19 +19,15 @@ describe('cli smoke', () => {
   let runtime: BootedRuntime | undefined;
   let dataDir: string | undefined;
   const savedEnvironment = new Map(
-    (['ISAGI_DATA_DIR', 'ISAGI_EDITOR_CAPABILITY', 'ISAGI_ALLOWED_ORIGINS'] as const).map(
-      (name) => [name, process.env[name]],
-    ),
+    (['ISAGI_EDITOR_CAPABILITY'] as const).map((name) => [name, process.env[name]]),
   );
 
   before(async () => {
     assert.ok(existsSync(cliBundlePath), `Build the CLI first: pnpm -C apps/cli build`);
     dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-cli-smoke-data-')));
-    process.env.ISAGI_DATA_DIR = dataDir;
     // Editor provisioning reports `not_applicable` without a capability, so nothing downloads.
     delete process.env.ISAGI_EDITOR_CAPABILITY;
-    delete process.env.ISAGI_ALLOWED_ORIGINS;
-    runtime = await bootRuntime();
+    runtime = await bootRuntime({ dataDirectory: dataDir });
   });
 
   after(async () => {

@@ -239,7 +239,7 @@ test('recovery restores the previous stage and removes stale next directories', 
   }
 });
 
-test('a stage without the bundled isagi CLI is invalid', () => {
+test('a stage without its isagi.mjs entry is invalid', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'isagi-stage-cli-'));
   for (const file of [
     'index.js',
@@ -256,8 +256,8 @@ test('a stage without the bundled isagi CLI is invalid', () => {
     () => validateStage(root, {}),
     (/** @type {any} */ error) =>
       error._tag === 'StageValidationError' &&
-      error.path === resolve(root, 'assets/cli/isagi.mjs') &&
-      /required staged file assets\/cli\/isagi.mjs is missing/.test(error.reason),
+      error.path === resolve(root, 'isagi.mjs') &&
+      /required staged file isagi.mjs is missing/.test(error.reason),
   );
   rmSync(root, { recursive: true, force: true });
 });

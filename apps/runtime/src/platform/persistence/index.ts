@@ -1,4 +1,4 @@
-export { DataDirectory, DataDirectoryError } from './data-directory.js';
+export { DataDirectory, DataDirectoryError, DataDirectoryRoot } from './data-directory.js';
 export type { IsagiDataDirectory } from './data-directory.js';
 export { DatabaseError, RuntimeDatabase } from './database.js';
 export type { RuntimeDrizzleDatabase } from './database.js';
