@@ -49,6 +49,7 @@ The project root is the project's main checkout; from inside an Isagi worktree, 
 | --- | --- |
 | Pause, Resume, Retry, Cancel, and runs after an app restart | [Run recovery](references/run-recovery.md) |
 | Read what a run did: tree, prompts and replies, checkpoints, events | [CLI investigation](references/cli-investigate-runs.md) |
-| Launch a run from the CLI (`isagi runs launch`), or rebuild a checkpoint in a new worktree and launch there | [CLI reconstruction](references/cli-reconstruct-and-launch.md) |
+| Launch a run from the CLI (`isagi workflows runs launch`), or rebuild a checkpoint in a new worktree and launch there | [CLI reconstruction](references/cli-reconstruct-and-launch.md) |
+| Run a runtime yourself (`isagi serve`): address, port, data directory, which setting wins | [CLI serve](references/cli-serve.md) |
 
 Report a request as unsupported when neither the schemas, the SDK nor these references support it; do not infer support from this index alone.

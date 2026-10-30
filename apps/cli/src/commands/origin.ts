@@ -38,7 +38,7 @@ export const resolveOrigin = Effect.fn('cli.resolveOrigin')(function* (flags: {
       CliFailure.of(
         'origin_unresolved',
         `The current directory ${io.cwd} cannot be resolved; pass --worktree.`,
-        { cwd: io.cwd },
+        { context: { cwd: io.cwd } },
       ),
   });
   const snapshot = yield* call(apiEndpoints.workspace.get);
@@ -59,7 +59,7 @@ export const resolveOrigin = Effect.fn('cli.resolveOrigin')(function* (flags: {
       CliFailure.of(
         'origin_unresolved',
         `${cwd} is not inside any worktree Isagi knows; pass --worktree.`,
-        { cwd },
+        { context: { cwd } },
       ),
     );
   }

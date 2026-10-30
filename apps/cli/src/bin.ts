@@ -1,23 +1,13 @@
 #!/usr/bin/env node
-import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
-import { runCli } from './main.js';
+import { runCliProcess } from './process.js';
 
-// The process boundary: set the exit status and let Node exit on its own, so everything written to
-// stdout — including streamed checkpoint file bytes — is flushed first. Never `process.exit()`.
-runCli(process.argv.slice(2), {
-  stdout: process.stdout,
-  stderr: process.stderr,
-  cwd: process.cwd(),
-  env: process.env,
-}).then(
-  (code) => {
-    process.exitCode = code;
+runCliProcess(process.argv.slice(2), {
+  runtimeEntry: {
+    // The runtime bundle beside this file in the serve distribution. Never bundled (`@vite-ignore`),
+    // so nothing but `serve` loads it or its native modules.
+    load: () => import(/* @vite-ignore */ new URL('./index.js', import.meta.url).href),
+    cliEntryPath: fileURLToPath(import.meta.url),
   },
-  (error: unknown) => {
-    process.stderr.write(
-      `isagi: unexpected failure: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-    );
-    process.exitCode = 1;
-  },
-);
+});

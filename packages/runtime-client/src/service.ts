@@ -17,8 +17,8 @@ import {
  */
 export const RuntimeHttpClient: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer.pipe(
   Layer.provide(
-    Layer.succeed(FetchHttpClient.Fetch, (input: RequestInfo | URL, init?: RequestInit) =>
-      globalThis.fetch(input, init),
+    Layer.succeed(FetchHttpClient.Fetch, (...args: Parameters<typeof globalThis.fetch>) =>
+      globalThis.fetch(...args),
     ),
   ),
 );

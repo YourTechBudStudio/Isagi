@@ -5,8 +5,9 @@ import type { ErrorDocument } from './errors.js';
  * How results and failures reach the terminal.
  *
  * With `--json`, stdout carries exactly one JSON document: the result or `{ "error": … }`. Without
- * it, a result prints as indented JSON and a failure as one stderr line. A raw command's stdout is
- * its bytes, so its failure always goes to stderr (as JSON under `--json`).
+ * it, a result prints as indented JSON and a failure as two stderr lines: the message, then its
+ * recovery step. A raw command's stdout is its bytes, so its failure always goes to stderr (as JSON
+ * under `--json`).
  */
 export function renderResult(io: CliIo, value: unknown, json: boolean): Promise<void> {
   return write(io.stdout, `${JSON.stringify(value, null, json ? undefined : 2)}\n`);
@@ -21,7 +22,10 @@ export function renderFailure(
     return write(mode.raw ? io.stderr : io.stdout, `${JSON.stringify({ error: document })}\n`);
   }
   const reason = document.reason === undefined ? '' : ` (${document.reason})`;
-  return write(io.stderr, `isagi: ${document.code}${reason}: ${document.message}\n`);
+  return write(
+    io.stderr,
+    `isagi: ${document.code}${reason}: ${document.message}\n  ${document.recovery}\n`,
+  );
 }
 
 export function renderText(io: CliIo, text: string): Promise<void> {

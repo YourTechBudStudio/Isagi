@@ -24,7 +24,7 @@ export const savePlan = checkpoint<State>({
 - After meaningful completion or approval, before useful files are overwritten or deleted, and at the end of a run.
 - After every writer touching the scopes has finished (agent turns and commands). Capture is not atomic, so a file changing mid-copy may be saved half-written.
 - Capture everything a rebuild needs in each checkpoint you plan to export. Phase directories such as `work/research` and `work/design` make that easy.
-- Reuse a `scope` name for the same thing across visits (`plan` every round) so `isagi checkpoints list --run <id> --scope plan` lists every version.
+- Reuse a `scope` name for the same thing across visits (`plan` every round) so `isagi workflows checkpoints list --run <id> --scope plan` lists every version.
 - Exclude secrets, dependencies, caches and generated bulk; ignored files inside a scope are captured and there is no size cap.
 
 Paths are relative to the checkout root with `/`; absolute paths, `..` and `.git` are refused. A checkpoint node has one outgoing edge and leaves graph state unchanged.

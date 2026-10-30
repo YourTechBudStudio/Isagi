@@ -191,7 +191,7 @@ function CheckpointItem({
 }
 
 /**
- * The `isagi checkpoints export` line for this checkpoint, shown and copyable.
+ * The `isagi workflows checkpoints export` line for this checkpoint, shown and copyable.
  *
  * It names the checkpoint and leaves the output folder for the person to fill in: the
  * command rebuilds the files there, and the panel has no business choosing where.

@@ -24,11 +24,11 @@ export function checkpointCommitLabel(commitSha: string | null): string {
 }
 
 /**
- * The `isagi checkpoints export` line for one checkpoint. The directory stays a placeholder so a
+ * The `isagi workflows checkpoints export` line for one checkpoint. The directory stays a placeholder so a
  * pasted line cannot write anywhere nobody chose.
  */
 export function checkpointExportCommand(checkpointId: number): string {
-  return `isagi checkpoints export ${checkpointId} --output <directory>`;
+  return `isagi workflows checkpoints export ${checkpointId} --output <directory>`;
 }
 
 /** `plan, notes` — the scope names a checkpoint captured, with a missing one marked. */

@@ -1,5 +1,5 @@
 /**
- * `workflows list` and `runs launch`: origin resolution from the current directory, explicit origin
+ * `workflows list` and `workflows runs launch`: origin resolution from the current directory, explicit origin
  * flags, placement and inputs.
  */
 import assert from 'node:assert/strict';
@@ -74,14 +74,19 @@ test('the origin is the longest worktree prefix of the cwd, with that worktreeâ€
     error: {
       code: 'origin_unresolved',
       message: `${join(setup.root, 'repo-other')} is not inside any worktree Isagi knows; pass --worktree.`,
-      data: { cwd: join(setup.root, 'repo-other') },
+      recovery:
+        'Pass --worktree with the origin worktree id (and --surface if the origin needs one).',
+      context: {
+        cwd: join(setup.root, 'repo-other'),
+        runtimeUrl: { value: 'http://127.0.0.1:4100/', source: 'env', name: 'ISAGI_RUNTIME_URL' },
+      },
     },
   });
 });
 
 test('a worktree without a focused surface is an origin with no surface', async () => {
   const setup = workspace({ featureSurface: null });
-  const run = await runIsagi(['runs', 'launch', 'implement-story', '--json'], {
+  const run = await runIsagi(['workflows', 'runs', 'launch', 'implement-story', '--json'], {
     runtime: setup.runtime,
     cwd: setup.feature,
   });
@@ -104,7 +109,17 @@ test('--worktree alone is an origin with no surface', async () => {
 test('explicit --worktree and --surface win over the cwd and skip the snapshot', async () => {
   const setup = workspace();
   const run = await runIsagi(
-    ['runs', 'launch', 'implement-story', '--worktree', '10', '--surface', '5', '--json'],
+    [
+      'workflows',
+      'runs',
+      'launch',
+      'implement-story',
+      '--worktree',
+      '10',
+      '--surface',
+      '5',
+      '--json',
+    ],
     { runtime: setup.runtime, cwd: setup.feature },
   );
   assert.equal(run.code, 0, run.stdout);
@@ -128,6 +143,7 @@ test('launch sends inputs from a file and echoes the requested placement', async
   writeFileSync(join(setup.feature, 'inputs.json'), '{"story": 47, "notes": "a:b"}');
   const run = await runIsagi(
     [
+      'workflows',
       'runs',
       'launch',
       'implement-story',
@@ -167,7 +183,7 @@ test('invalid, non-object or unreadable --inputs is a usage error before any req
   for (const inputs of ['{not json', '[1,2]', 'null', '"text"', '@missing.json']) {
     const setup = workspace();
     const run = await runIsagi(
-      ['runs', 'launch', 'implement-story', '--inputs', inputs, '--json'],
+      ['workflows', 'runs', 'launch', 'implement-story', '--inputs', inputs, '--json'],
       {
         runtime: setup.runtime,
         cwd: setup.feature,
@@ -198,15 +214,31 @@ test("the runtime's own launch rejection passes through unchanged", async () => 
       ),
   });
   const run = await runIsagi(
-    ['runs', 'launch', 'implement-story', '--worktree', '10', '--surface', '5', '--json'],
+    [
+      'workflows',
+      'runs',
+      'launch',
+      'implement-story',
+      '--worktree',
+      '10',
+      '--surface',
+      '5',
+      '--json',
+    ],
     { runtime, cwd: setup.feature },
   );
   assert.equal(run.code, 1);
   assert.deepEqual(onlyJsonDocument(run.stdout), {
     error: {
       code: 'workflow_rejected',
-      reason: 'workflow_launch_context_mismatch',
       message: 'The origin worktree is not in the checkpoint project.',
+      recovery:
+        'Read `reason` and `data` for what the runtime refused; correct the request, or report `requestId`.',
+      context: {
+        endpointId: 'workflows.start',
+        runtimeUrl: { value: 'http://127.0.0.1:4100/', source: 'env', name: 'ISAGI_RUNTIME_URL' },
+      },
+      reason: 'workflow_launch_context_mismatch',
       requestId: 'req-9',
       data: { reason: 'workflow_launch_context_mismatch' },
     },

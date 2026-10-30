@@ -1,6 +1,6 @@
 // CLI smoke: the built `isagi` bundle against a real booted runtime. CLI commands, flags, exit codes
 // and error codes are a public surface (agents script against them through the shipped skill), so
-// this pins what `runs list` and `runs show` print and return end to end.
+// this pins what `workflows runs list` and `workflows runs show` print and return end to end.
 //
 // It lives in the runtime package because the CLI cannot import the runtime (the runtime already
 // depends on `@isagi/cli`). The bundle is `apps/cli/dist/isagi.mjs`, built by the runtime's
@@ -43,9 +43,16 @@ describe('cli smoke', () => {
     if (dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
 
-  test('runs list --json prints one page document and exits 0', async () => {
+  test('workflows runs list --json prints one page document and exits 0', async () => {
     assert.ok(runtime);
-    const result = await runCli(['runs', 'list', '--json', '--runtime-url', runtime.url]);
+    const result = await runCli([
+      'workflows',
+      'runs',
+      'list',
+      '--json',
+      '--runtime-url',
+      runtime.url,
+    ]);
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(result.stderr, '');
     const document = parseSingleJsonDocument(result.stdout);
@@ -53,15 +60,31 @@ describe('cli smoke', () => {
     assert.deepEqual(document, { items: [], nextCursor: null });
   });
 
-  test('runs show of an unknown run --json prints the runtime error document and exits 1', async () => {
+  test('workflows runs show of an unknown run --json prints the runtime error document and exits 1', async () => {
     assert.ok(runtime);
-    const result = await runCli(['runs', 'show', '999999', '--json', '--runtime-url', runtime.url]);
+    const result = await runCli([
+      'workflows',
+      'runs',
+      'show',
+      '999999',
+      '--json',
+      '--runtime-url',
+      runtime.url,
+    ]);
     assert.equal(result.exitCode, 1, result.stderr);
     assert.equal(result.stderr, '');
     const document = parseSingleJsonDocument(result.stdout);
     assert.deepEqual(Object.keys(document), ['error']);
     const error = document.error as Record<string, unknown>;
-    assert.deepEqual(Object.keys(error).sort(), ['code', 'data', 'message', 'reason', 'requestId']);
+    assert.deepEqual(Object.keys(error).sort(), [
+      'code',
+      'context',
+      'data',
+      'message',
+      'reason',
+      'recovery',
+      'requestId',
+    ]);
     assert.equal(error.code, 'workflow_rejected');
     assert.equal(error.reason, 'workflow_run_not_found');
     assert.deepEqual(error.data, { workflowRunId: 999_999, reason: 'workflow_run_not_found' });
