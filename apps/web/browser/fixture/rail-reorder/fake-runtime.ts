@@ -34,9 +34,9 @@ export interface RailFixtureControls {
   /** Current server-side order, for asserting what actually persisted. */
   readonly order: () => string;
   /**
-   * Flip the runtime's editor capability. The rail reads it through the
+   * Flip whether the runtime's editor is ready. The rail reads it through the
    * production control-plane query, so the fixture re-reads that query the
-   * way a real capability change would.
+   * way a real provisioning change would.
    */
   readonly setEditorAvailable: (available: boolean) => Promise<void>;
   /** Worktree ids the editor was opened for, in call order. */
@@ -72,7 +72,7 @@ export function installFakeRuntime(registry: AtomRegistry.AtomRegistry) {
         ...controlPlane,
         editorProvisioning: available
           ? { status: 'ready', version: '1.0.0' }
-          : { status: 'not_applicable' },
+          : { status: 'checking', version: '1.0.0' },
       };
       await runApp(registry, revalidate(controlPlaneQuery));
     },

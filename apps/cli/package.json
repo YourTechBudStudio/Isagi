@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./commands": "./src/commands/table.ts",
-    "./error-codes": "./src/error-codes.ts"
+    "./commands": "./src/commands/check.ts",
+    "./error-codes": "./src/error-codes.ts",
+    "./process": "./src/process.ts",
+    "./serve-launch": "./src/serve/launch.ts"
   },
   "scripts": {
     "build": "vite build",

@@ -151,7 +151,6 @@ describe('editorProvisioningManifestLine', () => {
   // ask for and cannot steer does not get to interrupt setup.
   it('is silent for every state except a failure', () => {
     const quiet: readonly EditorProvisioningState[] = [
-      { status: 'not_applicable' },
       { status: 'ready', version: '4.135.0' },
       { status: 'checking', version: '4.135.0' },
       { status: 'downloading', version: '4.135.0' },

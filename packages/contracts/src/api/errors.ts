@@ -71,8 +71,6 @@ export const projectOperationRejectionReasonSchema = Schema.Literals(['command_c
 export const editorRejectionReasonSchema = Schema.Literals([
   'worktree_not_found',
   'editor_context_not_found',
-  // This runtime declares no editor capability.
-  'editor_unsupported_runtime',
   // Provisioning has not reached `ready`.
   'editor_unavailable',
   // A retry arrived while one was already running.

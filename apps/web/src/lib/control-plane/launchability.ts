@@ -42,10 +42,9 @@ export type StartupGate =
  * download earlier would forfeit the first-run user's chance to complete harness
  * setup while it runs.
  *
- * A host that declares the editor capability has made a promise, so a failure
- * blocks readiness rather than degrading quietly; `not_applicable` is the
- * already-modelled way to proceed without an editor, and it falls through here
- * exactly like `ready` does, so an external runtime is unaffected.
+ * Every runtime provisions its editor, so a failure blocks readiness rather
+ * than degrading quietly. How this gate should treat an external runtime whose
+ * editor is still provisioning or cannot provision belongs to #64.
  */
 export function deriveStartupGate(snapshot: ControlPlaneSnapshot): StartupGate {
   if (snapshot.inventory.status === 'pending') return { kind: 'inventory_pending' };
@@ -70,9 +69,10 @@ export function isTransientProvisioning(state: EditorProvisioningState): boolean
 
 /**
  * "Supported local worktree" resolves to exactly this (D13): the runtime says the
- * editor is available. No locality is re-derived here — provisioning is enabled
- * only for a runtime the host declares managed, and managed-plus-hosted is
- * `local` by construction, so availability already implies co-location.
+ * editor is available. No locality is re-derived here. Every runtime now
+ * provisions, so availability no longer implies co-location: a remote runtime
+ * can report `ready` for an editor the desktop cannot frame, a known limitation
+ * that #64 owns.
  */
 export function editorAvailable(snapshot: ControlPlaneSnapshot): boolean {
   return snapshot.editorProvisioning.status === 'ready';

@@ -1,6 +1,6 @@
 # Run recovery
 
-Controls for a run that is paused, failed or interrupted, in the app or with `isagi runs pause|resume|retry|cancel <run>` ([CLI](cli-investigate-runs.md#controls)). For a run that failed while preparing its worktree or surface, see [Environments](workflow-environments.md#failed-preparation). To design recovery into a workflow, see [Graphs](workflow-graphs.md#nodes-and-routing) and the [Agent turn recipe](workflow-recipes.md#agent-turn).
+Controls for a run that is paused, failed or interrupted, in the app or with `isagi workflows runs pause|resume|retry|cancel <run>` ([CLI](cli-investigate-runs.md#controls)). For a run that failed while preparing its worktree or surface, see [Environments](workflow-environments.md#failed-preparation). To design recovery into a workflow, see [Graphs](workflow-graphs.md#nodes-and-routing) and the [Agent turn recipe](workflow-recipes.md#agent-turn).
 
 ## What is saved
 

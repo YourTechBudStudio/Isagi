@@ -38,6 +38,7 @@ function serve<A>(
   handle: Handle,
   run: (server: { url: string; interruptRoutes: () => Promise<void> }) => Promise<A>,
   heartbeatInterval: number = 60_000,
+  allowedOrigins: readonly string[] = [],
 ) {
   return withListeningServer(
     Layer.empty,
@@ -48,6 +49,7 @@ function serve<A>(
         url: `${server.origin}${apiBasePath}/test/events/one`,
         interruptRoutes: server.interruptRoutes,
       }),
+    { allowedOrigins },
   );
 }
 
@@ -141,19 +143,14 @@ test('shutdown ends an open stream', () =>
   ));
 
 test('an allowed origin gets its CORS header on the stream', async () => {
-  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
-  process.env.ISAGI_ALLOWED_ORIGINS = 'http://allowed.test';
-  try {
-    await serve(
-      () => Effect.succeed(Stream.make(1)),
-      async ({ url }) => {
-        const response = await fetch(url, { headers: { Origin: 'http://allowed.test' } });
-        assert.equal(response.headers.get('access-control-allow-origin'), 'http://allowed.test');
-        await response.text();
-      },
-    );
-  } finally {
-    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
-    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
-  }
+  await serve(
+    () => Effect.succeed(Stream.make(1)),
+    async ({ url }) => {
+      const response = await fetch(url, { headers: { Origin: 'http://allowed.test' } });
+      assert.equal(response.headers.get('access-control-allow-origin'), 'http://allowed.test');
+      await response.text();
+    },
+    60_000,
+    ['http://allowed.test'],
+  );
 });

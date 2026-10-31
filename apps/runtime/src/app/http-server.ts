@@ -1,12 +1,26 @@
+import type { AddressInfo } from 'node:net';
+
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import { Cause, Context, Effect, FiberSet, Layer } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import { isAllowedRuntimeOrigin, sendApiError, type RouteRuntime } from '../platform/http/index.js';
+import {
+  installAllowedOrigins,
+  isAllowedRuntimeOrigin,
+  sendApiError,
+  type RouteRuntime,
+} from '../platform/http/index.js';
+import { RuntimeConfig } from '../runtime-config/index.js';
 import { WorkspaceService } from '../workspace/index.js';
+import { ServerLaunch } from './launch.js';
 import { AppLayer, type RuntimeServices } from './layer.js';
-import { RuntimeSettings } from './logger.js';
+import {
+  describeSource,
+  localRuntimeUrl,
+  resolveListenSettings,
+  RuntimeListenFailed,
+} from './listen.js';
 import { registerRuntimeRoutes } from './routes.js';
 import { startup } from './startup.js';
 
@@ -34,7 +48,17 @@ export class RuntimeServer extends Context.Service<
 export const HttpServerLayer = Layer.effect(
   RuntimeServer,
   Effect.gen(function* () {
-    const settings = yield* RuntimeSettings;
+    const launch = yield* ServerLaunch;
+    const config = yield* RuntimeConfig.use((runtimeConfig) => runtimeConfig.get);
+    const { host, port } = resolveListenSettings(launch, config.server);
+    yield* Effect.logInfo('Runtime listen settings').pipe(
+      Effect.annotateLogs({
+        host: host.value,
+        hostSource: describeSource(host),
+        port: port.value,
+        portSource: describeSource(port),
+      }),
+    );
     // After every service is built, so the command service's activation subscriber hears the restored activation,
     // and before any route can change the active context.
     yield* WorkspaceService.use((workspace) => workspace.publishRestoredActivation);
@@ -58,35 +82,40 @@ export const HttpServerLayer = Layer.effect(
       runFork: (effect) => void runFork(effect),
     };
 
+    // Before any plugin or route, so every encapsulated context inherits the set.
+    installAllowedOrigins(fastify, launch.allowedOrigins);
+    const allowedOrigins = fastify.isagiAllowedOrigins ?? new Set<string>();
     configureApiErrorHandlers(fastify);
     yield* tryPromise(() =>
       fastify.register(cors, {
         methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         origin: (origin, callback) => {
-          callback(null, isAllowedRuntimeOrigin(origin));
+          callback(null, isAllowedRuntimeOrigin(origin, allowedOrigins));
         },
       }),
     );
     yield* tryPromise(() => fastify.register(websocket));
     registerRuntimeRoutes(fastify, runtime);
 
-    const url = yield* tryPromise(() =>
-      fastify.listen({ host: settings.host, port: settings.port }),
-    ).pipe(Effect.uninterruptible);
+    yield* tryPromise(() => fastify.listen({ host: host.value, port: port.value })).pipe(
+      Effect.mapError((cause) => new RuntimeListenFailed({ host, port, cause })),
+      Effect.uninterruptible,
+    );
+    const url = localRuntimeUrl(fastify.server.address() as AddressInfo);
     yield* startup(url);
     return RuntimeServer.of({ url, fastify });
   }),
 );
 
 /**
- * The whole runtime: the server over every module service and the platform. `src/index.ts` launches it.
+ * The whole runtime: the server over every module service and the platform, open only in the launch inputs
+ * (`launchInputsLayer`). `src/index.ts` launches it.
  *
- * The settings are checked before anything is built, so a bad `PORT` fails startup without opening the database or
- * touching the data directory, as it always has; `HttpServerLayer` reads the same values again when it listens.
+ * Flag and environment values are validated by `isagi serve` before the runtime module even loads, so a bad
+ * `ISAGI_PORT` fails without opening the database or touching the data directory. A bad `config.yaml` `server`
+ * section fails while `RuntimeConfig` is built, like any other config section.
  */
-export const MainLayer = Layer.unwrap(
-  Effect.as(RuntimeSettings, HttpServerLayer.pipe(Layer.provide(AppLayer))),
-);
+export const MainLayer = HttpServerLayer.pipe(Layer.provide(AppLayer));
 
 /**
  * Fastify's own failures (a plugin that fails to register, `listen` failing with `EADDRINUSE`) keep their error, so

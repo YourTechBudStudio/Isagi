@@ -18,10 +18,9 @@ export const editorProvisioningFailureReasonSchema = Schema.Literals([
 
 /**
  * `checking | downloading | verifying | extracting` are the transient states the
- * startup gate polls on; `ready`, `failed`, and `not_applicable` are settled.
+ * startup gate polls on; `ready` and `failed` are settled.
  */
 export const editorProvisioningStateSchema = Schema.Union([
-  Schema.Struct({ status: Schema.Literal('not_applicable') }),
   Schema.Struct({
     status: Schema.Literals(['checking', 'downloading', 'verifying', 'extracting']),
     version: Schema.String,

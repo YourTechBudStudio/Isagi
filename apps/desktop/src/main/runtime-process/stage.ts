@@ -16,7 +16,7 @@ interface RuntimeStageMetadata {
   };
   readonly entrypoint: string;
   readonly fingerprint: string;
-  readonly layoutVersion: 1;
+  readonly layoutVersion: 2;
 }
 
 export interface ValidatedRuntimeStage {
@@ -37,17 +37,19 @@ export class RuntimeStageValidationError extends Data.TaggedError('RuntimeStageV
 export function validateRuntimeStage(root: string): ValidatedRuntimeStage {
   const metadataPath = resolve(root, 'runtime-stage.json');
   const metadata = readMetadata(metadataPath);
+  // The serve distribution: `isagi.mjs` is the entry and loads the runtime
+  // bundle `index.js` beside it.
   const required = [
-    metadata.entrypoint,
+    'isagi.mjs',
+    'index.js',
     'assets/manifest.json',
-    'assets/cli/isagi.mjs',
     'drizzle/meta/_journal.json',
     'package.json',
   ];
+  if (metadata.layoutVersion !== 2) fail(metadataPath, 'unsupported layoutVersion');
+  if (metadata.entrypoint !== 'isagi.mjs') fail(metadataPath, 'entrypoint must be isagi.mjs');
   for (const relativePath of required) requireFile(root, relativePath);
 
-  if (metadata.layoutVersion !== 1) fail(metadataPath, 'unsupported layoutVersion');
-  if (metadata.entrypoint !== 'index.js') fail(metadataPath, 'entrypoint must be index.js');
   if (!metadata.fingerprint) fail(metadataPath, 'fingerprint is missing');
   assertElectronContext(metadataPath, metadata);
   assertDependencyClosure(root, metadata);
@@ -78,7 +80,7 @@ function readMetadata(path: string): RuntimeStageMetadata {
   }
   if (typeof value.entrypoint !== 'string') fail(path, 'entrypoint must be a string');
   if (typeof value.fingerprint !== 'string') fail(path, 'fingerprint must be a string');
-  if (value.layoutVersion !== 1) fail(path, 'layoutVersion must be 1');
+  if (value.layoutVersion !== 2) fail(path, 'layoutVersion must be 2');
   return value as unknown as RuntimeStageMetadata;
 }
 

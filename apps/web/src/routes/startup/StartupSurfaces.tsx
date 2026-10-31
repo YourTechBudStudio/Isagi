@@ -112,11 +112,9 @@ function statusText(view: BootView): string | null {
   if (view.kind === 'environment_pending') return startupCopy.environmentPending.status;
   if (view.kind === 'opening') return startupCopy.opening.status;
   if (view.kind === 'editor_provisioning' && view.state.status !== 'failed') {
-    // `ready` and `not_applicable` never reach the boot surface — the gate falls
-    // straight through both — so only the transient phases have a line here.
-    return view.state.status === 'not_applicable' || view.state.status === 'ready'
-      ? null
-      : editorProvisioningCopy.status[view.state.status];
+    // `ready` never reaches the boot surface — the gate falls straight through
+    // it — so only the transient phases have a line here.
+    return view.state.status === 'ready' ? null : editorProvisioningCopy.status[view.state.status];
   }
   return null;
 }

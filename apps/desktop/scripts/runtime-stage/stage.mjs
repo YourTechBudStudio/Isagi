@@ -21,6 +21,7 @@ import { Effect } from 'effect';
 import {
   runtimeNativeExternals,
   runtimePackageExternals,
+  serveDistributionFiles,
 } from '../../../runtime/runtime-externals.mjs';
 import { prepareElectronExecutable } from '../electron-runtime.mjs';
 import { StageOperationError, StageValidationError } from './errors.mjs';
@@ -277,11 +278,9 @@ function readElectronRuntime() {
 function assembleStage({ cacheRoot, dependencyVersions, electron, fingerprint, nextRoot }) {
   rmSync(nextRoot, { recursive: true, force: true });
   mkdirSync(nextRoot, { recursive: true });
+  // The serve distribution as the runtime build wrote it: `isagi.mjs`,
+  // `index.js`, `assets/` and `drizzle/`.
   cpSync(resolve(runtimeRoot, 'dist'), nextRoot, {
-    recursive: true,
-    verbatimSymlinks: true,
-  });
-  cpSync(resolve(runtimeRoot, 'drizzle'), resolve(nextRoot, 'drizzle'), {
     recursive: true,
     verbatimSymlinks: true,
   });
@@ -300,9 +299,9 @@ function assembleStage({ cacheRoot, dependencyVersions, electron, fingerprint, n
       platform: electron.platform,
       version: electron.version,
     },
-    entrypoint: 'index.js',
+    entrypoint: 'isagi.mjs',
     fingerprint,
-    layoutVersion: 1,
+    layoutVersion: 2,
   });
 }
 
@@ -348,15 +347,7 @@ function publishStage(nextRoot) {
 }
 
 export function validateStage(root, dependencyVersions) {
-  for (const required of [
-    'index.js',
-    'assets/manifest.json',
-    // The bundled `isagi` CLI: the runtime refuses to start without it.
-    'assets/cli/isagi.mjs',
-    'drizzle/meta/_journal.json',
-    'package.json',
-    stageMetadataFileName,
-  ]) {
+  for (const required of [...serveDistributionFiles, 'package.json', stageMetadataFileName]) {
     const path = resolve(root, required);
     if (!existsSync(path)) {
       throw new StageValidationError({

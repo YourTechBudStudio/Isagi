@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseCommandLine } from '@isagi/cli/commands';
+import { checkCommandLine } from '@isagi/cli/commands';
 import { cliErrorCodeSchema } from '@isagi/cli/error-codes';
 
 import { isagiDocsPackageFiles } from './isagi-docs.js';
@@ -24,7 +24,7 @@ test('there is at least one shipped CLI reference', () => {
   assert.ok(cliReferences.length > 0);
 });
 
-test('every documented isagi command line parses against the CLI command table', () => {
+test('every documented isagi command line is one the CLI accepts', async () => {
   let checked = 0;
   for (const [path, source] of markdown) {
     for (const block of source.matchAll(/^```(?:sh|bash|shell)\r?\n([\s\S]*?)^```\s*$/gm)) {
@@ -32,11 +32,10 @@ test('every documented isagi command line parses against the CLI command table',
         const trimmed = line.trim();
         if (!trimmed.startsWith('isagi ')) continue;
         const argv = shellWords(trimmed).slice(1);
-        const parsed = parseCommandLine(argv);
-        assert.equal(
-          parsed.kind,
-          'command',
-          `${path}: \`${trimmed}\` does not parse${parsed.kind === 'usage_error' ? `: ${parsed.message}` : ''}`,
+        const result = await checkCommandLine(argv);
+        assert.ok(
+          result.ok,
+          `${path}: \`${trimmed}\` is refused${result.ok ? '' : `: ${result.error.message}`}`,
         );
         checked += 1;
       }

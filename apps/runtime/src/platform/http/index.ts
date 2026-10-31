@@ -19,6 +19,10 @@ export {
 } from './errors.js';
 export type { ApiRouteContext } from './errors.js';
 export type { InfrastructureError, InfrastructureErrorFor } from './infrastructure-errors.js';
-export { enforceRuntimeWebSocketOrigin, isAllowedRuntimeOrigin } from './origin.js';
+export {
+  enforceRuntimeWebSocketOrigin,
+  installAllowedOrigins,
+  isAllowedRuntimeOrigin,
+} from './origin.js';
 export { acquireWsConnection } from './websocket.js';
 export type { WebSocketLike, WsConnection } from './websocket.js';

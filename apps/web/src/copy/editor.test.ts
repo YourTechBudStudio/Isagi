@@ -79,7 +79,6 @@ test('every editor rejection reason maps to copy rather than the generic line', 
   const reasons: readonly EditorRejectionReason[] = [
     'worktree_not_found',
     'editor_context_not_found',
-    'editor_unsupported_runtime',
     'editor_unavailable',
     'editor_provisioning_busy',
     'editor_incarnation_superseded',

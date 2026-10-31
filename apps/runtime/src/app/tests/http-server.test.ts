@@ -12,17 +12,16 @@ import { expectNoNewHandles, makeLogCapture } from '../../../test/test-support.j
 import { CliAccess } from '../../cli-access/index.js';
 import { noCliAccess } from '../../cli-access/testing.js';
 import { HttpServerLayer } from '../http-server.js';
+import { launchInputsLayer } from '../launch.js';
 import { AppLayer } from '../layer.js';
-import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
+import { bootRuntime, testRuntimeLaunch, type BootedRuntime } from './runtime-harness.js';
 
 test('runtime server registers PTY routes after the websocket plugin is ready', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ws-'));
-  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
-  process.env.ISAGI_DATA_DIR = dataRoot;
   let runtime: BootedRuntime | undefined;
 
   try {
-    runtime = await bootRuntime();
+    runtime = await bootRuntime({ dataDirectory: dataRoot });
     const socket = new WebSocket(agentSessionPtyWebSocketUrl(runtime.url, 1));
     try {
       await waitForSocketOpen(socket);
@@ -35,7 +34,6 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
       socket.close();
     }
   } finally {
-    restoreDataDirectory(previousDataDirectory);
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -43,14 +41,13 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
 
 test('runtime HTTP CORS emits an allow origin only for the exact configured origin', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-origin-'));
-  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
-  const previousAllowedOrigins = process.env.ISAGI_ALLOWED_ORIGINS;
-  process.env.ISAGI_DATA_DIR = dataRoot;
-  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
   let runtime: BootedRuntime | undefined;
 
   try {
-    runtime = await bootRuntime();
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      allowedOrigins: ['http://127.0.0.1:43129'],
+    });
     const server = runtime.server;
     const allowed = await server.inject({
       method: 'GET',
@@ -65,8 +62,6 @@ test('runtime HTTP CORS emits an allow origin only for the exact configured orig
     assert.equal(allowed.headers['access-control-allow-origin'], 'http://127.0.0.1:43129');
     assert.equal(rejected.headers['access-control-allow-origin'], undefined);
   } finally {
-    restoreEnvironment('ISAGI_ALLOWED_ORIGINS', previousAllowedOrigins);
-    restoreDataDirectory(previousDataDirectory);
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -74,9 +69,7 @@ test('runtime HTTP CORS emits an allow origin only for the exact configured orig
 
 test('a route handler log reaches the runtime logger with the request annotations', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-logger-'));
-  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
   const previousDebug = process.env.ISAGI_RUNTIME_DEBUG;
-  process.env.ISAGI_DATA_DIR = dataRoot;
   process.env.ISAGI_RUNTIME_DEBUG = '1';
   // `RuntimeLogger` writes `Debug` entries through `console.debug`; record them instead of printing.
   const originalDebug = console.debug;
@@ -87,7 +80,7 @@ test('a route handler log reaches the runtime logger with the request annotation
   let runtime: BootedRuntime | undefined;
 
   try {
-    runtime = await bootRuntime();
+    runtime = await bootRuntime({ dataDirectory: dataRoot });
     const server = runtime.server;
     // A base directory that does not exist: the handler logs why the listing is empty and still answers.
     const response = await server.inject({
@@ -106,7 +99,6 @@ test('a route handler log reaches the runtime logger with the request annotation
   } finally {
     console.debug = originalDebug;
     restoreEnvironment('ISAGI_RUNTIME_DEBUG', previousDebug);
-    restoreDataDirectory(previousDataDirectory);
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -114,8 +106,6 @@ test('a route handler log reaches the runtime logger with the request annotation
 
 test('startup failure after listen closes Fastify and disposes the runtime', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-startup-failure-'));
-  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
-  process.env.ISAGI_DATA_DIR = dataRoot;
   const released: string[] = [];
   let listeningUrl: string | undefined;
   // The first startup step after `listen` fails. Its service is provided around the server, beside the app layer, so
@@ -135,7 +125,11 @@ test('startup failure after listen closes Fastify and disposes the runtime', asy
       () => Effect.sync(() => released.push('runtime services')),
     ),
   );
-  const server = HttpServerLayer.pipe(Layer.provide(failingStartupStep), Layer.provide(AppLayer));
+  const server = HttpServerLayer.pipe(
+    Layer.provide(failingStartupStep),
+    Layer.provide(AppLayer),
+    Layer.provide(launchInputsLayer(testRuntimeLaunch({ dataDirectory: dataRoot }))),
+  );
   const logs = makeLogCapture();
 
   try {
@@ -152,14 +146,9 @@ test('startup failure after listen closes Fastify and disposes the runtime', asy
     await assert.rejects(fetch(`${listeningUrl}/api/v1/health`), 'Fastify no longer listens');
     assert.deepEqual(released, ['runtime services']);
   } finally {
-    restoreDataDirectory(previousDataDirectory);
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
-
-function restoreDataDirectory(value: string | undefined) {
-  restoreEnvironment('ISAGI_DATA_DIR', value);
-}
 
 function restoreEnvironment(name: string, value: string | undefined) {
   if (value === undefined) {

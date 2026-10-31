@@ -1,6 +1,5 @@
 import { mkdirSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import process from 'node:process';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
@@ -20,7 +19,7 @@ export interface IsagiDataDirectory {
   /**
    * Versioned Isagi-owned tool installations: `<root>/tools/<tool>/<version>/`.
    * Isagi owns this root; the *contents* are provider-specific and are created
-   * by whichever capability-gated service provisions them.
+   * by whichever service provisions them.
    */
   readonly toolsPath: string;
   /**
@@ -75,31 +74,42 @@ function canonicalPath(path: string): string {
   }
 }
 
-const make = Effect.try({
-  try: () => {
-    const requested = normalizeHomePath(
-      process.env.ISAGI_DATA_DIR ?? process.env.ISAGI_HOME ?? '~/.isagi',
-    );
-    // Created before the paths are derived, and the order is load-bearing: `realpathSync` can
-    // only resolve a directory that exists, so deriving first would silently keep the unresolved
-    // spelling on exactly the run that matters most — a fresh install under a symlinked home.
-    mkdirSync(requested, { recursive: true });
-    const paths = isagiDataDirectoryPaths(requested);
+/**
+ * The data root this runtime was asked to use, before canonicalization. `serve` resolves it (flag,
+ * `ISAGI_DATA_DIR`, default `~/.isagi`) and the composition root provides it; nothing here reads the
+ * environment.
+ */
+export class DataDirectoryRoot extends Context.Service<
+  DataDirectoryRoot,
+  { readonly path: string }
+>()('isagi/runtime/platform/persistence/DataDirectoryRoot') {}
 
-    mkdirSync(paths.worktreesPath, { recursive: true });
-    mkdirSync(paths.sessionsPath, { recursive: true });
-    mkdirSync(paths.workflowsPath, { recursive: true });
-    // Created eagerly beside the other Isagi-owned roots even on a runtime
-    // that will never provision anything into them: an empty directory costs
-    // nothing, and creating them here keeps "who owns this location" a single
-    // answer rather than one that depends on whether a capability was declared.
-    mkdirSync(paths.toolsPath, { recursive: true });
-    mkdirSync(paths.editorsPath, { recursive: true });
-
-    return DataDirectory.of({ paths });
-  },
-  catch: (cause) => new DataDirectoryError({ cause }),
+const make = Effect.gen(function* () {
+  const root = yield* DataDirectoryRoot;
+  return yield* Effect.try({
+    try: () => createDataDirectory(root.path),
+    catch: (cause) => new DataDirectoryError({ cause }),
+  });
 });
+
+function createDataDirectory(root: string) {
+  const requested = normalizeHomePath(root);
+  // Created before the paths are derived, and the order is load-bearing: `realpathSync` can
+  // only resolve a directory that exists, so deriving first would silently keep the unresolved
+  // spelling on exactly the run that matters most — a fresh install under a symlinked home.
+  mkdirSync(requested, { recursive: true });
+  const paths = isagiDataDirectoryPaths(requested);
+
+  mkdirSync(paths.worktreesPath, { recursive: true });
+  mkdirSync(paths.sessionsPath, { recursive: true });
+  mkdirSync(paths.workflowsPath, { recursive: true });
+  // Created eagerly beside the other Isagi-owned roots, before anything provisions into them:
+  // creating them here keeps "who owns this location" a single answer.
+  mkdirSync(paths.toolsPath, { recursive: true });
+  mkdirSync(paths.editorsPath, { recursive: true });
+
+  return DataDirectory.of({ paths });
+}
 
 export class DataDirectory extends Context.Service<
   DataDirectory,

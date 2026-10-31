@@ -68,9 +68,11 @@ export function rendererRuntimeOrigins(input: {
 }
 
 /**
- * The renderer CSP. External runtime origins reach `connect-src` only: an
- * external runtime is never granted the editor capability, so `frame-src` stays
- * loopback-only regardless of what Isagi is attached to.
+ * The renderer CSP. External runtime origins reach `connect-src` only, and
+ * `frame-src` stays loopback-only regardless of what Isagi is attached to.
+ * Every runtime now provisions Code Server, so an external runtime can report
+ * its editor `ready`; a remote one's editor cannot be framed here, a known
+ * limitation that #64 (browser workbench) owns.
  *
  * In development the renderer *is served from* the dev origin, so `'self'`
  * already covers it in `default-src`, `script-src`, `style-src`, and the HTTP

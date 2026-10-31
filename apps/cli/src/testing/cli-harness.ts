@@ -9,8 +9,8 @@ import {
   type RuntimeContent,
 } from '@isagi/runtime-client';
 
-import type { CommandSpec } from '../commands/table.js';
 import { runCli } from '../main.js';
+import type { RuntimeEntry, RuntimeLaunch } from '../serve/launch.js';
 
 /**
  * A fake `RuntimeClient` keyed by endpoint id. A route answers with the value its handler returns
@@ -118,6 +118,7 @@ export async function runIsagi(
     readonly cwd?: string;
     /** Replaces the collected stdout, e.g. with one that fails like a closed pipe or a full disk. */
     readonly stdout?: NodeJS.WritableStream;
+    readonly runtimeEntry?: RuntimeEntry;
   } = {},
 ): Promise<CliRun> {
   const stdout = collector();
@@ -130,7 +131,10 @@ export async function runIsagi(
       cwd: options.cwd ?? process.cwd(),
       env: options.env ?? { ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' },
     },
-    options.runtime ? { runtimeClient: options.runtime.layer } : {},
+    {
+      ...(options.runtime ? { runtimeClient: options.runtime.layer } : {}),
+      ...(options.runtimeEntry ? { runtimeEntry: options.runtimeEntry } : {}),
+    },
   );
   const stdoutBytes = stdout.bytes();
   return {
@@ -159,16 +163,43 @@ export function onlyJsonDocument(stdout: string): unknown {
   return JSON.parse(lines[0]!);
 }
 
-/** The smallest command line the table accepts for one entry: every positional and required flag. */
-export function minimalArgv(spec: CommandSpec): string[] {
-  const argv = [spec.group, spec.verb];
-  for (const positional of spec.positionals) {
-    argv.push(positional.value === 'positive_integer' ? '7' : 'key_1');
-  }
-  for (const [name, option] of Object.entries(spec.options)) {
-    if (option.type === 'string' && option.required) {
-      argv.push(`--${name}`, option.value === 'positive_integer' ? '42' : 'value');
-    }
-  }
-  return argv;
+/**
+ * A runtime entry for `serve` that records every launch instead of starting a runtime. `load`
+ * replaces the module loader, e.g. with one that rejects like a native module built for another Node.
+ */
+export function fakeRuntimeEntry(options: { readonly load?: () => Promise<unknown> } = {}) {
+  const launches: RuntimeLaunch[] = [];
+  const entry: RuntimeEntry = {
+    cliEntryPath: '/opt/isagi/dist/isagi.mjs',
+    load:
+      options.load ??
+      (() =>
+        Promise.resolve({
+          serveRuntime: (launch: RuntimeLaunch) => {
+            launches.push(launch);
+          },
+        })),
+  };
+  return { entry, launches };
 }
+
+/** The smallest accepted command line of every leaf (after its words): each positional and required flag. */
+export const minimalCommandLines: Readonly<Record<string, readonly string[]>> = {
+  'workflows list': [],
+  'workflows runs launch': ['implement-story'],
+  'workflows runs list': [],
+  'workflows runs show': ['7'],
+  'workflows runs structure': ['7'],
+  'workflows runs events': ['7'],
+  'workflows runs pause': ['7'],
+  'workflows runs resume': ['7'],
+  'workflows runs retry': ['7'],
+  'workflows runs cancel': ['7'],
+  'workflows executions show': ['7'],
+  'workflows operations list': ['--run', '42'],
+  'workflows operations show': ['7'],
+  'workflows checkpoints list': ['--run', '42'],
+  'workflows checkpoints show': ['7'],
+  'workflows checkpoints read': ['7', 'scratch/plan.md'],
+  'workflows checkpoints export': ['7', '--output', 'rebuilt'],
+};

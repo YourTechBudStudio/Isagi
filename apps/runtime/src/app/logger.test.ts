@@ -1,77 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { Cause, ConfigProvider, Console, Effect, Exit, Logger } from 'effect';
+import { Cause, ConfigProvider, Console, Effect, Logger } from 'effect';
 
-import { InvalidRuntimeSetting, RuntimeLogger, RuntimeSettings } from './logger.js';
+import { isRuntimeDebugValue, RuntimeLogger } from './logger.js';
 
 const withEnv = (env: Record<string, string>) =>
   Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env }));
 
-const readSettings = (env: Record<string, string>) =>
-  Effect.runPromiseExit(RuntimeSettings.pipe(withEnv(env)));
-
-const settingsFor = async (env: Record<string, string>) => {
-  const exit = await readSettings(env);
-  assert.ok(Exit.isSuccess(exit), `expected settings for ${JSON.stringify(env)}`);
-  return exit.value;
-};
-
-const failureFor = async (env: Record<string, string>) => {
-  const exit = await readSettings(env);
-  assert.ok(Exit.isFailure(exit), `expected a failure for ${JSON.stringify(env)}`);
-  return Cause.squash(exit.cause);
-};
-
-describe('RuntimeSettings', () => {
-  test('unset HOST and PORT mean loopback and any free port', async () => {
-    assert.deepEqual(await settingsFor({}), { host: '127.0.0.1', port: 0, debug: false });
-  });
-
-  test('an empty HOST or PORT is treated as unset', async () => {
-    assert.deepEqual(await settingsFor({ HOST: '', PORT: '' }), {
-      host: '127.0.0.1',
-      port: 0,
-      debug: false,
-    });
-  });
-
-  test('HOST and PORT are read from the environment', async () => {
-    assert.deepEqual(await settingsFor({ HOST: '0.0.0.0', PORT: '8080' }), {
-      host: '0.0.0.0',
-      port: 8080,
-      debug: false,
-    });
-  });
-
-  test('PORT keeps parseInt semantics: a numeric prefix is the port', async () => {
-    assert.equal((await settingsFor({ PORT: '8080abc' })).port, 8080);
-    assert.equal((await settingsFor({ PORT: '65535' })).port, 65_535);
-    assert.equal((await settingsFor({ PORT: '0' })).port, 0);
-  });
-
-  test('a PORT that is not a number fails with the startup message', async () => {
-    const failure = await failureFor({ PORT: 'x' });
-    assert.ok(failure instanceof InvalidRuntimeSetting);
-    assert.equal(failure.message, 'Invalid PORT value: x');
-  });
-
-  test('a PORT outside 0-65535 fails with the startup message', async () => {
-    for (const value of ['70000', '65536', '-1']) {
-      const failure = await failureFor({ PORT: value });
-      assert.ok(failure instanceof InvalidRuntimeSetting, `expected ${value} to be rejected`);
-      assert.equal(failure.message, `Invalid PORT value: ${value}`);
-    }
-  });
-
-  test('ISAGI_RUNTIME_DEBUG is on for exactly 1, true and yes', async () => {
-    for (const value of ['1', 'true', 'yes']) {
-      assert.equal((await settingsFor({ ISAGI_RUNTIME_DEBUG: value })).debug, true, value);
-    }
-    for (const value of ['', '0', 'false', 'on', 'TRUE', 'debug']) {
-      assert.equal((await settingsFor({ ISAGI_RUNTIME_DEBUG: value })).debug, false, value);
-    }
-  });
+test('ISAGI_RUNTIME_DEBUG is on for exactly 1, true and yes', () => {
+  for (const value of ['1', 'true', 'yes']) assert.equal(isRuntimeDebugValue(value), true, value);
+  for (const value of ['', '0', 'false', 'on', 'TRUE', 'debug']) {
+    assert.equal(isRuntimeDebugValue(value), false, value);
+  }
 });
 
 describe('RuntimeLogger', () => {

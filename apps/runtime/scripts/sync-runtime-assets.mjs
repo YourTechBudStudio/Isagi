@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -22,10 +23,25 @@ const cliBundlePath = resolve(repoRoot, 'apps/cli/dist/isagi.mjs');
 const sourceAssetRoot = resolve(runtimeRoot, '.generated', 'assets');
 const shouldWriteDist = process.argv.includes('--dist');
 
+// The CLI bundle is the process entry of every runtime (`isagi serve`) and what terminals run.
+// Built by `workspace-deps`; a missing bundle is a build defect, so this fails rather than leave a
+// source-mode runtime whose terminals lack the CLI, or a distribution without its entry.
+if (!existsSync(cliBundlePath)) {
+  throw new Error(`Missing ${cliBundlePath}. Build it first: pnpm -C apps/cli build`);
+}
+
 syncAssets(sourceAssetRoot);
 
 if (shouldWriteDist) {
-  syncAssets(resolve(runtimeRoot, 'dist', 'assets'));
+  // The serve distribution: `isagi.mjs` (the entry, shebang intact), the `index.js` Vite just
+  // built beside it, `assets/` and the migrations `drizzle/` that `migrations.ts` finds beside
+  // `index.js`.
+  const distRoot = resolve(runtimeRoot, 'dist');
+  syncAssets(resolve(distRoot, 'assets'));
+  copyFileSync(cliBundlePath, resolve(distRoot, 'isagi.mjs'));
+  chmodSync(resolve(distRoot, 'isagi.mjs'), 0o755);
+  rmSync(resolve(distRoot, 'drizzle'), { recursive: true, force: true });
+  cpSync(resolve(runtimeRoot, 'drizzle'), resolve(distRoot, 'drizzle'), { recursive: true });
 }
 
 function syncAssets(assetRoot) {
@@ -61,14 +77,6 @@ function syncAssets(assetRoot) {
     if (!name.endsWith('.md') || name === 'AGENTS.md' || name === 'CLAUDE.md') continue;
     copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'isagi-docs', name));
   }
-
-  // The bundled `isagi` CLI the runtime's shim runs. Built by `workspace-deps`; a missing bundle is a
-  // build defect, so this fails rather than shipping a runtime whose terminals lack the CLI.
-  if (!existsSync(cliBundlePath)) {
-    throw new Error(`Missing ${cliBundlePath}. Build it first: pnpm -C apps/cli build`);
-  }
-  mkdirSync(resolve(assetRoot, 'cli'), { recursive: true });
-  copyFileSync(cliBundlePath, resolve(assetRoot, 'cli', 'isagi.mjs'));
 
   // The canonical workflow scaffold is copied verbatim so the shipped skill can carry it as
   // reference files. The verifier fixture is the single source of truth; node_modules and dist

@@ -10,7 +10,7 @@ import { Effect } from 'effect';
 import { runtimePackageVersion } from '../platform/assets/index.js';
 import { DataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { CliAccess, CliShimError } from './index.js';
+import { CliAccess, CliEntry, CliShimError } from './index.js';
 import { cliShimPath, renderCliShim, writeCliShim } from './shim.js';
 
 function scratch() {
@@ -18,12 +18,13 @@ function scratch() {
 }
 
 /** Builds the production layer over a data root whose tools directory is `toolsPath`. */
-function cliAccessAt(toolsPath: string) {
+function cliAccessAt(toolsPath: string, entryPath = '/opt/isagi/isagi.mjs') {
   return Effect.gen(function* () {
     return yield* CliAccess;
   }).pipe(
     Effect.provide(CliAccess.layer),
     Effect.provideService(DataDirectory, makeTestDataDirectory(scratch(), { toolsPath })),
+    Effect.provideService(CliEntry, { path: entryPath }),
   );
 }
 
@@ -104,4 +105,19 @@ test('the launch environment puts the shim first on PATH and adds the URL only o
       }),
     ),
   );
+});
+
+test('the shim runs the CLI entry the runtime was served from', async () => {
+  const root = scratch();
+  const toolsPath = join(root, 'tools');
+  const entryPath = join(root, 'served-from', 'isagi.mjs');
+  mkdirSync(join(entryPath, '..'), { recursive: true });
+  writeFileSync(entryPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+
+  await Effect.runPromise(Effect.scoped(cliAccessAt(toolsPath, entryPath)));
+
+  const output = execFileSync(cliShimPath(toolsPath, runtimePackageVersion), ['serve', '--help'], {
+    encoding: 'utf8',
+  });
+  assert.deepEqual(JSON.parse(output), ['serve', '--help']);
 });

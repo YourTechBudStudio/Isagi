@@ -14,7 +14,7 @@ test('runtime stage parity distinguishes bytes, layout, metadata, and executable
     createFixture(source);
     cpSync(source, packaged, { recursive: true });
     assert.deepEqual(verifyRuntimeStageParity(source, packaged, 'darwin'), {
-      byteFileCount: 8,
+      byteFileCount: 9,
       dependencyVersions: { 'node-pty': '1.1.0' },
       electron: {
         abi: '148',
@@ -49,7 +49,7 @@ test('Linux source-built node-pty parity does not require the macOS spawn helper
     rmSync(resolve(source, 'node_modules/node-pty/prebuilds'), { recursive: true });
     cpSync(source, packaged, { recursive: true });
     assert.deepEqual(verifyRuntimeStageParity(source, packaged, 'linux'), {
-      byteFileCount: 6,
+      byteFileCount: 7,
       dependencyVersions: { 'node-pty': '1.1.0' },
       electron: {
         abi: '148',
@@ -78,11 +78,12 @@ function createFixture(root, platform = 'darwin', arch = 'arm64') {
       platform,
       version: '43.1.0',
     },
-    entrypoint: 'index.js',
+    entrypoint: 'isagi.mjs',
     fingerprint: 'fingerprint',
-    layoutVersion: 1,
+    layoutVersion: 2,
   };
-  writeFileSync(resolve(root, 'index.js'), 'entry');
+  writeFileSync(resolve(root, 'isagi.mjs'), 'entry');
+  writeFileSync(resolve(root, 'index.js'), 'runtime');
   writeFileSync(resolve(root, 'package.json'), '{"type":"module"}');
   writeFileSync(resolve(root, 'runtime-stage.json'), JSON.stringify(metadata));
   writeFileSync(resolve(root, 'assets/manifest.json'), 'asset');

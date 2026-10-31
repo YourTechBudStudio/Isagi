@@ -10,7 +10,7 @@ import { appearanceSettingsDefaults, terminalSettingsDefaults } from '@isagi/con
 
 import type { EditorProvisioning } from '../../editor/index.js';
 import {
-  NotApplicableEditorProvisioningLayer,
+  UnavailableEditorProvisioningLayer,
   editorProvisioningStateLayer,
 } from '../../editor/testing.js';
 import { DataDirectory, type IsagiDataDirectory } from '../../platform/persistence/index.js';
@@ -141,12 +141,13 @@ test('start does not complete until initial host inventory is ready', async () =
             terminal: terminalSettingsDefaults,
             appearance: appearanceSettingsDefaults,
             fluidcast: { status: 'disabled' },
+            server: {},
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
         } satisfies RuntimeConfig['Service']),
       ),
       Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),
-      Layer.provide(NotApplicableEditorProvisioningLayer),
+      Layer.provide(UnavailableEditorProvisioningLayer),
     );
 
     const completedBeforeInventory = await Effect.runPromise(
@@ -276,18 +277,6 @@ test('the snapshot launch projection mirrors the enforced decision per harness',
   assert.deepEqual(byHarness.opencode?.launch, { status: 'blocked', reason: 'harness_disabled' });
 });
 
-test('the snapshot projects no editor capability for a runtime that declares none', async () => {
-  // This is a real wire fact every client reads, not merely a compiling field:
-  // the runtime declares no editor capability, so it truthfully reports that
-  // there is no installation to report on.
-  const snapshot = await runControlPlane(
-    policyState('valid', enabledPolicy()),
-    ready(available),
-    (service) => service.snapshot,
-  );
-  assert.deepEqual(snapshot.editorProvisioning, { status: 'not_applicable' });
-});
-
 test('the snapshot carries the provisioning state verbatim, whatever it is', async () => {
   // The control plane composes this dimension; it does not interpret it. A
   // projection that summarised, defaulted, or reordered the state would put a
@@ -334,6 +323,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
       terminal: terminalSettingsDefaults,
       appearance: appearanceSettingsDefaults,
       fluidcast: { status: 'disabled' },
+      server: {},
     }),
     acceptHarnessPolicy: () => {
       committed = true;
@@ -353,7 +343,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
         paths: dataPaths(resolve(tmpdir(), 'isagi-control-plane-not-ready')),
       }),
     ),
-    Layer.provide(NotApplicableEditorProvisioningLayer),
+    Layer.provide(UnavailableEditorProvisioningLayer),
   );
   const result = await Effect.runPromise(
     Effect.scoped(
@@ -406,7 +396,7 @@ function runControlPlane<A>(
     service: import('./service.js').HarnessControlPlane['Service'],
   ) => Effect.Effect<A, unknown>,
   root = resolve(tmpdir(), 'isagi-control-plane-test'),
-  provisioning = NotApplicableEditorProvisioningLayer,
+  provisioning = UnavailableEditorProvisioningLayer,
 ) {
   return Effect.runPromise(
     Effect.scoped(
@@ -422,7 +412,7 @@ function controlPlaneLayer(
   state: RuntimeHarnessPolicyState,
   initialInventory: HostInventoryState,
   root: string,
-  provisioning: Layer.Layer<EditorProvisioning> = NotApplicableEditorProvisioningLayer,
+  provisioning: Layer.Layer<EditorProvisioning> = UnavailableEditorProvisioningLayer,
 ) {
   const config: RuntimeConfig['Service'] = {
     get: Effect.succeed({
@@ -432,6 +422,7 @@ function controlPlaneLayer(
       terminal: terminalSettingsDefaults,
       appearance: appearanceSettingsDefaults,
       fluidcast: { status: 'disabled' },
+      server: {},
     }),
     acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
   };

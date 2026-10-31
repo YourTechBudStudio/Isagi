@@ -1,19 +1,19 @@
 # Reconstruct files and launch a fresh run
 
-`checkpoints export` rebuilds a checkpoint's files in a new folder; `runs launch` starts a separate, fresh run. For runtime access and output conventions, see [CLI basics](cli-investigate-runs.md#runtime-and-output). For what a checkpoint holds, see [Workflow checkpoints](workflow-checkpoints.md#what-it-holds).
+`workflows checkpoints export` rebuilds a checkpoint's files in a new folder; `workflows runs launch` starts a separate, fresh run. For runtime access and output conventions, see [CLI basics](cli-investigate-runs.md#runtime-and-output). For what a checkpoint holds, see [Workflow checkpoints](workflow-checkpoints.md#what-it-holds).
 
 ## Worked example: rerun from phase 1
 
 Find the checkpoint taken after phase 1, check what it holds, export it, then launch the workflow being tested in the export.
 
 ```sh
-isagi runs show 42 --json
-isagi checkpoints list --run 42 --execution 139 --json
-isagi checkpoints show 5 --json
-isagi checkpoints export 5 --output ~/isagi-experiments/phase-2-retry --json
+isagi workflows runs show 42 --json
+isagi workflows checkpoints list --run 42 --execution 139 --json
+isagi workflows checkpoints show 5 --json
+isagi workflows checkpoints export 5 --output ~/isagi-experiments/phase-2-retry --json
 ```
 
-Execution 139 is the phase 1 checkpoint node here; `checkpoints list --scope <name>` finds checkpoints by scope instead. `checkpoints show` returns the commit and every scope with its files (`path`, `sha256`, `sizeBytes`, `executable`) and a `missing` marker. Check it holds everything the next run needs before exporting: a checkpoint holds only the scopes its plan named.
+Execution 139 is the phase 1 checkpoint node here; `workflows checkpoints list --scope <name>` finds checkpoints by scope instead. `workflows checkpoints show` returns the commit and every scope with its files (`path`, `sha256`, `sizeBytes`, `executable`) and a `missing` marker. Check it holds everything the next run needs before exporting: a checkpoint holds only the scopes its plan named.
 
 ## What export does
 
@@ -37,12 +37,12 @@ Prepare and [verify](workflow-package.md#verify) the workflow in the origin work
 
 ```sh
 isagi workflows list --json
-isagi runs launch implement-story --inputs @inputs.json --worktree-placement existing:31 --surface-placement 'create:Phase 2 retry' --json
-isagi runs show 57 --json
+isagi workflows runs launch implement-story --inputs @inputs.json --worktree-placement existing:31 --surface-placement 'create:Phase 2 retry' --json
+isagi workflows runs show 57 --json
 ```
 
 Use the export's `worktreeId` (31 here) as the destination. The origin selects the workflow package and is separate from the destination. By default the origin is the Isagi worktree containing the current directory and its focused surface, if it has one; pass `--worktree <id>` (optionally with `--surface <id>`) to choose it. The origin must belong to the destination's project. A plain-folder export has no worktree ID: add it to Isagi as a folder project before it can be a launch destination.
 
-`--inputs` accepts a JSON object or `@file`. The original run's inputs are in `runs show` as `inputs`. Give both placement flags or neither; without them the workflow's `placement` hook decides. See [Workflow environments](workflow-environments.md) for placement choices. Check the new run's status and environment events: a run ID alone does not prove its worktree and surface were prepared.
+`--inputs` accepts a JSON object or `@file`. The original run's inputs are in `workflows runs show` as `inputs`. Give both placement flags or neither; without them the workflow's `placement` hook decides. See [Workflow environments](workflow-environments.md) for placement choices. Check the new run's status and environment events: a run ID alone does not prove its worktree and surface were prepared.
 
 The new run starts at its workflow's entry with fresh graph state and sessions. To exercise only part of a workflow, author a workflow for that part that reads the exported files as its inputs. Record the source run and checkpoint IDs, the new run ID and changed inputs in your notes; Isagi does not link the launch to its export.

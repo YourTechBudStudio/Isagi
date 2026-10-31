@@ -447,7 +447,7 @@ function overriddenWorktreeLookupLayer(
 // Internals and builders other modules' tests use; never imported by production code.
 export { EditorContextRepository } from './contexts/repository.js';
 export {
-  NotApplicableEditorProvisioningLayer,
+  UnavailableEditorProvisioningLayer,
   editorProvisioningStateLayer,
   readyEditorProvisioningLayer,
 } from './provisioning/tests/shared-support.js';

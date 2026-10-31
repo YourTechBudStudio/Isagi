@@ -18,7 +18,7 @@ Read only the references the task needs; links are relative to the file they app
 | Commands and ports | `<worktree>/.isagi/config.yaml`, `commands` (each worktree reads its own checkout's copy) | Next start of the command |
 | Project workflows | `<project root>/.isagi/workflows/<key>/` | Next listing or launch |
 
-`{{DATA_ROOT}}` was written in by the Isagi runtime that last installed this skill. The installed app (data root `~/.isagi`) and a development runtime (`pnpm dev`, which sets `ISAGI_DATA_DIR`) install into the same skill folder, so this path may belong to the other one. When the user means a specific runtime, use its data root. When `ISAGI_HARNESS_ARTIFACT_DIRECTORY` is set (Isagi sets it for the agent sessions it launches), the part before `/sessions/` is the data root of the runtime running you; if it differs from the path above, use it and say so. Never pick another `.isagi` directory by guesswork, and never put global settings in a project's `.isagi/config.yaml`.
+`{{DATA_ROOT}}` was written in by the Isagi runtime that last installed this skill. The installed app (data root `~/.isagi`) and a development runtime (`pnpm dev`, which serves the repository's `data/.isagi` instead of `ISAGI_DATA_DIR` or `~/.isagi`) install into the same skill folder, so this path may belong to the other one. When the user means a specific runtime, use its data root. When `ISAGI_HARNESS_ARTIFACT_DIRECTORY` is set (Isagi sets it for the agent sessions it launches), the part before `/sessions/` is the data root of the runtime running you; if it differs from the path above, use it and say so. Never pick another `.isagi` directory by guesswork, and never put global settings in a project's `.isagi/config.yaml`.
 
 The project root is the project's main checkout; from inside an Isagi worktree, it is the first entry of `git worktree list`. Add only the section you change to a config file and keep the rest as it is.
 
@@ -26,7 +26,7 @@ The project root is the project's main checkout; from inside an Isagi worktree, 
 
 | Task | Read |
 | --- | --- |
-| Theme (`appearance`), terminal history and cache (`terminal`), PTY backend (`pty`), harness enablement and Docs installation (`harnesses`) | The [global schema](references/config-global.schema.ts); edit that section of the global config |
+| Theme (`appearance`), terminal history and cache (`terminal`), PTY backend (`pty`), harness enablement and Docs installation (`harnesses`), listen address and port (`server`) | The [global schema](references/config-global.schema.ts); edit that section of the global config |
 | Fluidcast voice mode (`fluidcast`): providers, local model servers, speech, summary model, history compaction | [Fluidcast](references/config-fluidcast.md) |
 | Copying `.env` files, linking or installing into new worktrees (`worktrees.hooks`) | [Worktree setup](references/config-worktree-setup.md) |
 | Named commands, fixed or allocated ports, URLs, start/stop automation (`commands`) | [Commands](references/config-commands.md) |
@@ -49,6 +49,7 @@ The project root is the project's main checkout; from inside an Isagi worktree, 
 | --- | --- |
 | Pause, Resume, Retry, Cancel, and runs after an app restart | [Run recovery](references/run-recovery.md) |
 | Read what a run did: tree, prompts and replies, checkpoints, events | [CLI investigation](references/cli-investigate-runs.md) |
-| Launch a run from the CLI (`isagi runs launch`), or rebuild a checkpoint in a new worktree and launch there | [CLI reconstruction](references/cli-reconstruct-and-launch.md) |
+| Launch a run from the CLI (`isagi workflows runs launch`), or rebuild a checkpoint in a new worktree and launch there | [CLI reconstruction](references/cli-reconstruct-and-launch.md) |
+| Run a runtime yourself (`isagi serve`): address, port, data directory, which setting wins | [CLI serve](references/cli-serve.md) |
 
 Report a request as unsupported when neither the schemas, the SDK nor these references support it; do not infer support from this index alone.

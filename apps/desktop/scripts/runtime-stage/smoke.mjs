@@ -96,17 +96,16 @@ function runPtyProbe(root, workingDirectory, electronExecutable) {
 function runRuntimeProbe(root, workingDirectory, electronExecutable) {
   return Effect.callback((resume) => {
     const dataRoot = resolve(workingDirectory, `data-${Date.now()}-${Math.random()}`);
-    const child = spawn(electronExecutable, [resolve(root, 'index.js')], {
-      cwd: workingDirectory,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-        HOST: '127.0.0.1',
-        ISAGI_DATA_DIR: dataRoot,
-        PORT: '0',
+    // As the desktop starts it: `isagi.mjs serve`, with settings as flags.
+    const child = spawn(
+      electronExecutable,
+      [resolve(root, 'isagi.mjs'), 'serve', '--data-dir', dataRoot],
+      {
+        cwd: workingDirectory,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    );
     let settled = false;
     let stdout = '';
     let stdoutCarry = '';

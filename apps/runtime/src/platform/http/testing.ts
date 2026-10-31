@@ -2,7 +2,7 @@ import cors from '@fastify/cors';
 import { Effect, Exit, FiberSet, Layer, ManagedRuntime, Scope } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import { isAllowedRuntimeOrigin } from './origin.js';
+import { installAllowedOrigins, isAllowedRuntimeOrigin } from './origin.js';
 import type { RouteRuntime } from './route-runtime.js';
 
 /** A `RouteRuntime` over a test's `ManagedRuntime`. Production routes get theirs from the server's request fibers. */
@@ -31,10 +31,12 @@ export async function withApiServer<R, E, A>(
   layer: Layer.Layer<R, E>,
   register: (fastify: FastifyInstance, runtime: RouteRuntime<R>) => void | Promise<void>,
   run: (fastify: FastifyInstance) => Promise<A>,
+  options: TestServerOptions = {},
 ): Promise<A> {
   const runtime = ManagedRuntime.make(layer);
   try {
     const fastify = Fastify({ logger: false });
+    installAllowedOrigins(fastify, options.allowedOrigins ?? []);
     // Nested rather than sequential in one `finally`, so a rejected `fastify.close()` cannot leak the services.
     try {
       await register(fastify, routeRuntimeOf(runtime));
@@ -46,6 +48,11 @@ export async function withApiServer<R, E, A>(
   } finally {
     await runtime.dispose();
   }
+}
+
+export interface TestServerOptions {
+  /** The browser origins the server accepts, as `serve --allowed-origins` installs them. Default none. */
+  readonly allowedOrigins?: readonly string[];
 }
 
 export interface ListeningServer {
@@ -65,6 +72,7 @@ export async function withListeningServer<R, A>(
   layer: Layer.Layer<R>,
   register: (fastify: FastifyInstance, runtime: RouteRuntime<R>) => void,
   run: (server: ListeningServer) => Promise<A>,
+  options: TestServerOptions = {},
 ): Promise<A> {
   const scope = Scope.makeUnsafe();
   const fibers = await Effect.runPromise(
@@ -81,13 +89,15 @@ export async function withListeningServer<R, A>(
     }).pipe(Scope.provide(scope)),
   );
   const runtime: RouteRuntime<R> = {
-    runPromise: (effect, options) => fibers.runPromise(effect, options),
+    runPromise: (effect, runOptions) => fibers.runPromise(effect, runOptions),
     runFork: (effect) => void fibers.runFork(effect),
   };
   const fastify = Fastify({ logger: false });
+  installAllowedOrigins(fastify, options.allowedOrigins ?? []);
+  const allowedOrigins = fastify.isagiAllowedOrigins ?? new Set<string>();
   try {
     await fastify.register(cors, {
-      origin: (origin, callback) => callback(null, isAllowedRuntimeOrigin(origin)),
+      origin: (origin, callback) => callback(null, isAllowedRuntimeOrigin(origin, allowedOrigins)),
     });
     register(fastify, runtime);
     const address = await fastify.listen({ host: '127.0.0.1', port: 0 });

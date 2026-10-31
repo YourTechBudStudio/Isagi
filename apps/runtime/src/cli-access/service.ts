@@ -3,15 +3,17 @@ import process from 'node:process';
 
 import { Context, Data, Effect, Layer, Option, Ref } from 'effect';
 
-import { requireAssetFile, runtimePackageVersion } from '../platform/assets/index.js';
+import { runtimePackageVersion } from '../platform/assets/index.js';
 import { DataDirectory } from '../platform/persistence/index.js';
 import { cliShimPath, renderCliShim, writeCliShim } from './shim.js';
 
 /**
- * The bundled `isagi` CLI, which the runtime's shim runs. Asserted at load, like every other asset:
- * a runtime built without it is a build defect, and terminals would silently lack the CLI.
+ * The `isagi` CLI file the shim runs: the entry `serve` was started from, so terminals run the same
+ * CLI (and, in the serve distribution, the same runtime beside it) as the process that serves them.
  */
-const cliEntryPath = requireAssetFile('cli/isagi.mjs');
+export class CliEntry extends Context.Service<CliEntry, { readonly path: string }>()(
+  'isagi/runtime/cli-access/CliEntry',
+) {}
 
 /** The shim could not be written, so the runtime refuses to start rather than run without `isagi`. */
 export class CliShimError extends Data.TaggedError('CliShimError')<{
@@ -27,13 +29,11 @@ export class CliShimError extends Data.TaggedError('CliShimError')<{
 /** Writes the shim for this runtime version under the data root's tools directory, then serves the launch environment. */
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
+  const entry = yield* CliEntry;
   const shimPath = cliShimPath(directory.paths.toolsPath, runtimePackageVersion);
   yield* Effect.tryPromise({
     try: () =>
-      writeCliShim(
-        shimPath,
-        renderCliShim({ execPath: process.execPath, entryPath: cliEntryPath }),
-      ),
+      writeCliShim(shimPath, renderCliShim({ execPath: process.execPath, entryPath: entry.path })),
     catch: (cause) => new CliShimError({ path: shimPath, cause }),
   });
   const binDirectory = dirname(shimPath);

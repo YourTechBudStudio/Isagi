@@ -59,7 +59,8 @@ test('the packaged policy frames loopback and denies the ambient directives', ()
 /**
  * `frame-src` is the only reason this policy exists, so its breadth is asserted
  * negatively as well: `localhost` is unused given the runtime's `127.0.0.1`
- * endpoint invariant, and an external runtime never earns the editor capability.
+ * endpoint invariant, and an external runtime's editor stays unframed even when
+ * it reports `ready` (the remote case belongs to #64).
  *
  * It is also load-bearing for a surface outside this package. The inspector's
  * captured-HTML preview mounts an `about:srcdoc` frame, which Chromium treats as

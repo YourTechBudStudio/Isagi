@@ -83,6 +83,22 @@ export const runtimeAppearanceSettingsSchema = Schema.Struct({
     'How the Isagi app looks. Missing fields use defaults. Changes require restarting Isagi.',
 });
 
+export const runtimeServerSettingsSchema = Schema.Struct({
+  host: Schema.optional(Schema.NonEmptyString).annotate({
+    description:
+      'The exact address the runtime listens on. Missing defaults to 127.0.0.1, reachable from this machine only; use 0.0.0.0 to listen on every interface. A desktop-managed runtime needs 127.0.0.1 or 0.0.0.0. The isagi serve --host flag and ISAGI_HOST override it. Changes require restarting Isagi.',
+  }),
+  port: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65_535 })),
+  ).annotate({
+    description:
+      'The TCP port the runtime listens on, from 0 through 65535. Missing or 0 picks a free port on every start; set a fixed port such as 11299 for a server you return to. The isagi serve --port flag and ISAGI_PORT override it. Changes require restarting Isagi.',
+  }),
+}).annotate({
+  description:
+    'Where the runtime listens. Precedence: isagi serve flags, then ISAGI_HOST/ISAGI_PORT, then this section, then the defaults. A malformed value prevents Isagi from starting. Changes require restarting Isagi.',
+});
+
 // A value starting with `env.` names an environment variable; anything else is the key itself.
 const fluidcastSecret = Schema.RedactedFromValue(
   Schema.String.check(Schema.isPattern(/^(?!env\.)|^env\.[A-Za-z_][A-Za-z0-9_]*$/)),
@@ -281,6 +297,7 @@ export const runtimeConfigSchema = Schema.Struct({
   terminal: Schema.optional(runtimeTerminalSettingsSchema),
   appearance: Schema.optional(runtimeAppearanceSettingsSchema),
   fluidcast: Schema.optional(runtimeFluidcastSchema),
+  server: Schema.optional(runtimeServerSettingsSchema),
 }).annotate({ description: 'Runtime Isagi config from <dataRoot>/config.yaml.' });
 
 export type RuntimeConfigPtyBackend = typeof runtimeConfigPtyBackendSchema.Type;

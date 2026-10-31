@@ -47,7 +47,7 @@ function snapshot(
       lastAppliedFingerprint: null,
       lastResult: null,
     },
-    editorProvisioning: overrides.editorProvisioning ?? { status: 'not_applicable' },
+    editorProvisioning: overrides.editorProvisioning ?? { status: 'ready', version: '4.135.0' },
   };
 }
 

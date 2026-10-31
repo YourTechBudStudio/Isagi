@@ -1,6 +1,6 @@
 import { Layer } from 'effect';
 
-import { CliAccessLayer } from '../cli-access/index.js';
+import { CliAccessLayer, type CliEntry } from '../cli-access/index.js';
 import { CommandsLayer } from '../commands/index.js';
 import { EditorLayer } from '../editor/index.js';
 import { EnvironmentLayer, HarnessObservationTargetsLayer } from '../environment/index.js';
@@ -8,7 +8,11 @@ import { FluidcastLayer } from '../fluidcast/index.js';
 import { HarnessesLayer } from '../harnesses/index.js';
 import { EventLoopWatchdog } from '../platform/diagnostics/index.js';
 import { EventsLayer } from '../platform/events/index.js';
-import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
+import {
+  DataDirectory,
+  type DataDirectoryRoot,
+  RuntimeDatabase,
+} from '../platform/persistence/index.js';
 import { UserShell } from '../platform/process/index.js';
 import { ProjectsLayer } from '../projects/index.js';
 import { PtyProcessesLayer } from '../pty-processes/index.js';
@@ -17,8 +21,8 @@ import { WorkflowProjectErasure, WorkflowsLayer } from '../workflows/index.js';
 import { StateFile, WorkspaceLayer } from '../workspace/index.js';
 
 /**
- * The services every module layer leaves open: they read the process environment or own a process-wide handle, and
- * tests always replace them. Provided exactly once, here.
+ * The services every module layer leaves open: they own a process-wide handle or the data root, and tests always
+ * replace them. Provided exactly once, here; the data root itself comes from the launch (`DataDirectoryRoot`).
  */
 export const PlatformLayer = Layer.mergeAll(
   RuntimeDatabase.layer,
@@ -54,13 +58,14 @@ export const ModulesLayer = Layer.mergeAll(
 export const PortsLayer = Layer.mergeAll(WorkflowProjectErasure, HarnessObservationTargetsLayer);
 
 /**
- * The whole runtime service graph. The `satisfies` proves it closed: a module service whose requirement is neither
- * wired by its own `layer`, a platform service nor a port is a compile error here.
+ * The whole runtime service graph. The `satisfies` proves it closed apart from the two launch inputs a lower module
+ * reads (`launchInputsLayer` provides them): a module service whose requirement is neither wired by its own `layer`,
+ * a platform service, a port nor a launch input is a compile error here.
  */
 export const AppLayer = ModulesLayer.pipe(
   Layer.provide(PortsLayer),
   Layer.provideMerge(PlatformLayer),
-) satisfies Layer.Layer<never, unknown, never>;
+) satisfies Layer.Layer<never, unknown, DataDirectoryRoot | CliEntry>;
 
 /** Every service the routes and startup can use. */
 export type RuntimeServices = Layer.Success<typeof AppLayer>;

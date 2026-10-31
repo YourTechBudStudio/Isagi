@@ -128,7 +128,7 @@ const controlPlane: ControlPlaneSnapshot = {
     lastAppliedFingerprint: null,
     lastResult: null,
   },
-  editorProvisioning: { status: 'not_applicable' },
+  editorProvisioning: { status: 'ready', version: '4.135.0' },
 };
 
 const commands: WorktreeCommandsOutput = {

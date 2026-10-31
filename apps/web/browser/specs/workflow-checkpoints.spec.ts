@@ -61,7 +61,7 @@ test('a saved checkpoint replaces Operations with what it saved', async ({ page 
   await expect(column).toContainText('design, implementation, decisions, reviews (missing)');
   await expect(column).toContainText('4 scopes · 10 files');
   // The export command belongs to the Checkpoints tab, not to the dock.
-  await expect(column).not.toContainText('isagi checkpoints export');
+  await expect(column).not.toContainText('isagi workflows checkpoints export');
 });
 
 test('a failed capture saved nothing and keeps its failure rows', async ({ page }) => {
@@ -219,7 +219,7 @@ test('the Checkpoints tab lists every checkpoint, moves the dock, and keeps its 
   await expect(dockHeader(page)).toContainText('· Phase 1');
   await expect(dialog(page).locator(`[data-checkpoint-files="${SMALL}"]`)).toBeVisible();
 
-  const command = `isagi checkpoints export ${SMALL} --output <directory>`;
+  const command = `isagi workflows checkpoints export ${SMALL} --output <directory>`;
   await expect(dialog(page).locator('[data-checkpoint-export]')).toHaveText(command);
   await page.evaluate(() => {
     const scope = window as unknown as { copied: string[] };

@@ -13,6 +13,7 @@ import {
 
 import { makeFiberProbe } from '../../../test/test-support.js';
 import { HarnessAdapterError } from '../../harnesses/index.js';
+import { installAllowedOrigins } from '../../platform/http/index.js';
 import { EntityLock } from '../../platform/locks/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import type { PtyAttachment } from '../../pty-processes/testing.js';
@@ -47,9 +48,8 @@ test('PTY websocket API uses durable session-level contract routes', () => {
 });
 
 test('PTY websocket API rejects a different loopback origin before resolving a session', async () => {
-  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
-  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
   const fastify = Fastify({ logger: false });
+  installAllowedOrigins(fastify, ['http://127.0.0.1:43129']);
   try {
     await fastify.register(websocket);
     registerPtyApi(fastify, {
@@ -62,8 +62,6 @@ test('PTY websocket API rejects a different loopback origin before resolving a s
       }),
     );
   } finally {
-    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
-    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
     await fastify.close();
   }
 });

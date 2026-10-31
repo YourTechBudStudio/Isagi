@@ -69,7 +69,10 @@ test('each scope is its own root: a file, a directory tree, and a missing path',
 test('the commit label and export line say exactly what an export needs', () => {
   assert.equal(checkpointCommitLabel('abcdef0123456789abcdef0123456789abcdef01'), 'git · abcdef0');
   assert.match(checkpointCommitLabel(null), /no commit/);
-  assert.equal(checkpointExportCommand(12), 'isagi checkpoints export 12 --output <directory>');
+  assert.equal(
+    checkpointExportCommand(12),
+    'isagi workflows checkpoints export 12 --output <directory>',
+  );
 });
 
 test('checkpoints group by the declared address that saved them, including subgraph nesting', () => {

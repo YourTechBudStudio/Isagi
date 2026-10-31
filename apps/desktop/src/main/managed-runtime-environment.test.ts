@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  managedRuntimeServeArguments,
   managedRuntimeSpawnEnvironment,
   sanitizeManagedRuntimeEnvironment,
 } from './managed-runtime-environment.js';
@@ -21,9 +22,6 @@ test('managed runtime environment retains host tooling and removes private orche
     ISAGI_DESKTOP_LOG_MODE: 'supervisor',
     ISAGI_WEB_URL: 'http://127.0.0.1:4173',
     VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid',
-    ISAGI_ALLOWED_ORIGINS: 'http://stale.invalid',
-    ISAGI_DATA_DIR: '/tmp/stale-data',
-    ISAGI_EDITOR_CAPABILITY: 'code_server',
   });
   assert.deepEqual(sanitized, {
     PATH: '/usr/bin',
@@ -34,68 +32,59 @@ test('managed runtime environment retains host tooling and removes private orche
   });
 });
 
-test('the spawn environment declares the desktop-owned values over the inherited ones', () => {
+test('the spawn environment adds only ELECTRON_RUN_AS_NODE; serve settings travel as flags', () => {
   assert.deepEqual(
     managedRuntimeSpawnEnvironment({
-      inherited: {
-        PATH: '/usr/bin',
-        ISAGI_ALLOWED_ORIGINS: 'http://stale.invalid',
-        ISAGI_DATA_DIR: '/tmp/stale-data',
-        ISAGI_WEB_URL: 'http://127.0.0.1:4173',
-        HOST: 'stale.invalid',
-        PORT: '9999',
-      },
-      allowedOrigins: 'file://',
-      dataDirectory: '/data/.isagi',
+      inherited: { PATH: '/usr/bin', ISAGI_WEB_URL: 'http://127.0.0.1:4173' },
     }),
-    {
-      PATH: '/usr/bin',
-      ELECTRON_RUN_AS_NODE: '1',
-      HOST: '127.0.0.1',
-      PORT: '0',
-      ISAGI_ALLOWED_ORIGINS: 'file://',
-      ISAGI_EDITOR_CAPABILITY: 'code_server',
-      ISAGI_DATA_DIR: '/data/.isagi',
-    },
+    { PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1' },
   );
-});
-
-/**
- * The declaration is the desktop's own promise about the runtime it spawned.
- * An operator's inherited value must never be able to make that promise, nor
- * to shadow it with something the runtime would not recognize.
- */
-test('an inherited capability cannot survive or shadow the managed declaration', () => {
-  for (const inheritedCapability of ['code_server', 'vscode', '']) {
-    const environment = managedRuntimeSpawnEnvironment({
-      inherited: { ISAGI_EDITOR_CAPABILITY: inheritedCapability },
-      allowedOrigins: 'file://',
-      dataDirectory: undefined,
-    });
-    assert.equal(environment.ISAGI_EDITOR_CAPABILITY, 'code_server', inheritedCapability);
+  const environment = managedRuntimeSpawnEnvironment({ inherited: {} });
+  for (const name of [
+    'HOST',
+    'PORT',
+    'ISAGI_EDITOR_CAPABILITY',
+    'ISAGI_ALLOWED_ORIGINS',
+    'ISAGI_DATA_DIR',
+  ]) {
+    assert.equal(name in environment, false, name);
   }
-  // Sanitization removes it outright, so the declaration is the only source.
-  assert.equal(
-    'ISAGI_EDITOR_CAPABILITY' in
-      sanitizeManagedRuntimeEnvironment({ ISAGI_EDITOR_CAPABILITY: 'vscode' }),
-    false,
-  );
 });
 
-test('an absent data directory is omitted rather than declared empty', () => {
+test("the user's ISAGI_HOST and ISAGI_PORT reach serve, which applies them by precedence", () => {
   const environment = managedRuntimeSpawnEnvironment({
-    inherited: { ISAGI_DATA_DIR: '/tmp/stale-data' },
-    allowedOrigins: 'file://',
-    dataDirectory: undefined,
+    inherited: { ISAGI_HOST: '0.0.0.0', ISAGI_PORT: '11299' },
   });
-  assert.equal('ISAGI_DATA_DIR' in environment, false);
+  assert.equal(environment.ISAGI_HOST, '0.0.0.0');
+  assert.equal(environment.ISAGI_PORT, '11299');
+});
+
+test('serve arguments carry the origins and, when the desktop chose one, the data directory', () => {
+  assert.deepEqual(
+    managedRuntimeServeArguments({ allowedOrigins: 'file://', dataDirectory: undefined }),
+    ['serve', '--allowed-origins', 'file://'],
+  );
+  assert.deepEqual(
+    managedRuntimeServeArguments({
+      allowedOrigins: 'http://127.0.0.1:4173,http://localhost:4173',
+      dataDirectory: '/checkout/data/.isagi',
+    }),
+    [
+      'serve',
+      '--allowed-origins',
+      'http://127.0.0.1:4173,http://localhost:4173',
+      '--data-dir',
+      '/checkout/data/.isagi',
+    ],
+  );
 });
 
 /**
  * `runtime.ts` cannot be imported here — it requires Electron's `app` — so the
  * boundary is verified structurally. An externally attached runtime is not
- * spawned by the desktop at all, which is what makes "external runtimes are
- * never editor-capable" a property of the wiring rather than of a check.
+ * spawned by the desktop at all, which is what makes "an external runtime
+ * inherits nothing from the desktop" a property of the wiring rather than of a
+ * check.
  */
 test('only the managed target assembles a spawn environment', async () => {
   const source = await readFile(
@@ -115,5 +104,5 @@ test('only the managed target assembles a spawn environment', async () => {
     source.indexOf("{ ownership: 'external'"),
     source.indexOf("{ ownership: 'managed'"),
   );
-  assert.doesNotMatch(externalTarget, /env|prepare|CAPABILITY/u);
+  assert.doesNotMatch(externalTarget, /env|prepare/u);
 });

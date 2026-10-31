@@ -36,7 +36,7 @@ const snapshot: ControlPlaneSnapshot = {
     lastAppliedFingerprint: null,
     lastResult: null,
   },
-  editorProvisioning: { status: 'not_applicable' },
+  editorProvisioning: { status: 'ready', version: '4.135.0' },
 };
 
 function render(provisioning: PolicyProvisioningFailure | null): string {

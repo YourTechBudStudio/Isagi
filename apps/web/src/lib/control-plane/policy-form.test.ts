@@ -61,7 +61,7 @@ function snapshotWith(
       lastAppliedFingerprint: null,
       lastResult: null,
     },
-    editorProvisioning: { status: 'not_applicable' },
+    editorProvisioning: { status: 'ready', version: '4.135.0' },
   };
 }
 

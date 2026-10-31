@@ -12,6 +12,7 @@ export const cliErrorCodeSchema = Schema.Literals([
   'runtime_response_invalid',
   'origin_unresolved',
   'filesystem_write_failed',
+  'runtime_load_failed',
 ]);
 
 export type CliErrorCode = typeof cliErrorCodeSchema.Type;

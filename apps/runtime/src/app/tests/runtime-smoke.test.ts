@@ -311,12 +311,7 @@ interface SmokeRuntime {
   readonly shutdown: () => Promise<void>;
 }
 
-const smokeEnvironment = [
-  'ISAGI_DATA_DIR',
-  'SHELL',
-  'ISAGI_EDITOR_CAPABILITY',
-  'ISAGI_ALLOWED_ORIGINS',
-] as const;
+const smokeEnvironment = ['SHELL'] as const;
 
 async function bootSmokeRuntime(): Promise<SmokeRuntime> {
   const dataDir = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-smoke-data-')));
@@ -333,11 +328,8 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
     rmSync(repoDir, { recursive: true, force: true });
   };
 
-  process.env.ISAGI_DATA_DIR = dataDir;
   process.env.SHELL = '/bin/sh';
-  // Editor provisioning reports `not_applicable` without a capability, so nothing downloads.
-  delete process.env.ISAGI_EDITOR_CAPABILITY;
-  delete process.env.ISAGI_ALLOWED_ORIGINS;
+  // `bootRuntime` injects `startAtBoot: false`, so nothing downloads.
 
   try {
     execFileSync('git', ['init', '-q', '-b', 'main', repoDir]);
@@ -365,6 +357,7 @@ async function bootSmokeRuntime(): Promise<SmokeRuntime> {
   let started: BootedRuntime;
   try {
     started = await bootRuntime({
+      dataDirectory: dataDir,
       extraLayer: Layer.mergeAll(RuntimeLogger.layer, fiberProbe.layer),
     });
   } catch (error) {

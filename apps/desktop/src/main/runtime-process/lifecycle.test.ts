@@ -171,6 +171,49 @@ test('malformed readiness is a stored terminal failure', async () => {
   );
 });
 
+test('a non-loopback readiness URL fails with the URL and the server.host hint', async () => {
+  const subject = harness();
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.forkChild(Effect.result(process.start));
+      yield* settle;
+      subject.child.stdout.write('ISAGI_RUNTIME_READY {"url":"http://192.168.1.20:43129"}\n');
+      const outcome = yield* Fiber.join(result);
+      assert.equal(failureReason(outcome), 'readiness_malformed');
+      assert.ok(Result.isFailure(outcome));
+      assert.equal(
+        outcome.failure.diagnostic.message,
+        'Managed runtime readiness URL must use http://127.0.0.1:<port>; got http://192.168.1.20:43129. Set server.host (or ISAGI_HOST) to 127.0.0.1 or 0.0.0.0 for a desktop-managed runtime.',
+      );
+    }),
+  );
+});
+
+test('a loopback readiness URL on the default HTTP port is accepted', async () => {
+  const subject = harness();
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const url = yield* Effect.forkChild(process.url);
+      yield* settle;
+      ready(subject.child, 80);
+      assert.equal(yield* Fiber.join(url), 'http://127.0.0.1/');
+      assert.equal((yield* snapshotOf(process)).state, 'ready');
+    }),
+  );
+});
+
+test('a readiness URL without a port is malformed', async () => {
+  const subject = harness();
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.forkChild(Effect.result(process.start));
+      yield* settle;
+      subject.child.stdout.write('ISAGI_RUNTIME_READY {"url":"http://127.0.0.1"}\n');
+      assert.equal(failureReason(yield* Fiber.join(result)), 'readiness_malformed');
+    }),
+  );
+});
+
 test('readiness timeout is terminal and signals the child', async () => {
   const subject = harness();
   await subject.run((process) =>

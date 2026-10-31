@@ -14,6 +14,7 @@ import {
   paneSessionCreateInputSchema,
   paneSessionKindSchema,
   paneSessionSpecSchema,
+  worktreeBranchRemovalSchema,
   surfacePaneSessionSchema,
   type EditorContextFacts,
 } from '@isagi/contracts';
@@ -145,7 +146,10 @@ describe('editor DTOs round-trip', () => {
   });
 
   it('models provisioning as settled or versioned-transient', () => {
-    assert.equal(Schema.is(editorProvisioningStateSchema)({ status: 'not_applicable' }), true);
+    // `not_applicable` was the old gate's state and no runtime produces it anymore.
+    assert.equal(Schema.is(editorProvisioningStateSchema)({ status: 'not_applicable' }), false);
+    // The worktree branch-removal `not_applicable` is a different value with a live producer.
+    assert.equal(Schema.is(worktreeBranchRemovalSchema)({ status: 'not_applicable' }), true);
     assert.equal(
       Schema.is(editorProvisioningStateSchema)({ status: 'downloading', version: '4.135.0' }),
       true,
