@@ -21,6 +21,7 @@ import { Effect } from 'effect';
 import {
   runtimeNativeExternals,
   runtimePackageExternals,
+  serveDistributionFiles,
 } from '../../../runtime/runtime-externals.mjs';
 import { prepareElectronExecutable } from '../electron-runtime.mjs';
 import { StageOperationError, StageValidationError } from './errors.mjs';
@@ -346,15 +347,7 @@ function publishStage(nextRoot) {
 }
 
 export function validateStage(root, dependencyVersions) {
-  for (const required of [
-    // The process entry (`isagi.mjs serve`) and the runtime bundle it loads.
-    'isagi.mjs',
-    'index.js',
-    'assets/manifest.json',
-    'drizzle/meta/_journal.json',
-    'package.json',
-    stageMetadataFileName,
-  ]) {
+  for (const required of [...serveDistributionFiles, 'package.json', stageMetadataFileName]) {
     const path = resolve(root, required);
     if (!existsSync(path)) {
       throw new StageValidationError({

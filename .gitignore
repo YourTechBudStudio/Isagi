@@ -3,6 +3,7 @@ node_modules/
 dist/
 dist-electron/
 build/
+/.generated/
 apps/runtime/.generated/
 apps/desktop/.generated/
 release/
