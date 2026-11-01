@@ -141,7 +141,7 @@ test('start does not complete until initial host inventory is ready', async () =
             terminal: terminalSettingsDefaults,
             appearance: appearanceSettingsDefaults,
             fluidcast: { status: 'disabled' },
-            server: {},
+            server: { serveWebUi: false, allowedHosts: [] },
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
         } satisfies RuntimeConfig['Service']),
@@ -323,7 +323,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
       terminal: terminalSettingsDefaults,
       appearance: appearanceSettingsDefaults,
       fluidcast: { status: 'disabled' },
-      server: {},
+      server: { serveWebUi: false, allowedHosts: [] },
     }),
     acceptHarnessPolicy: () => {
       committed = true;
@@ -422,7 +422,7 @@ function controlPlaneLayer(
       terminal: terminalSettingsDefaults,
       appearance: appearanceSettingsDefaults,
       fluidcast: { status: 'disabled' },
-      server: {},
+      server: { serveWebUi: false, allowedHosts: [] },
     }),
     acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
   };

@@ -486,9 +486,10 @@ export interface RuntimeApiShape {
 }
 
 /**
- * The runtime API as a per-app service. `layer` resolves the runtime URL per request, with today's
- * precedence: the desktop bridge (`window.isagi.getRuntimeUrl()`), then `VITE_ISAGI_RUNTIME_URL`,
- * else a `RuntimeUrlUnavailable` failure. It reads `window` only when a request runs, so modules
+ * The runtime API as a per-app service. `layer` resolves the runtime URL per request
+ * (`resolveRuntimeUrl`): the desktop bridge (`window.isagi.getRuntimeUrl()`), then
+ * `VITE_ISAGI_RUNTIME_URL` in Vite development only, then the page's own http(s) origin, else a
+ * `RuntimeUrlUnavailable` failure. It reads `window` only when a request runs, so modules
  * that import it load cleanly in node tests.
  */
 export class RuntimeApi extends Context.Service<RuntimeApi, RuntimeApiShape>()(

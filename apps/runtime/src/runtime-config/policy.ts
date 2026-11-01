@@ -62,7 +62,14 @@ export interface RuntimeConfigShape {
   readonly appearance: AppearanceSettings;
   readonly fluidcast: FluidcastConfigState;
   /** Listen settings; `serve` flags and environment variables outrank them. */
-  readonly server: { readonly host?: string; readonly port?: number };
+  readonly server: {
+    readonly host?: string;
+    readonly port?: number;
+    /** Whether the runtime serves the web workbench at its own address. Default false (API only). */
+    readonly serveWebUi: boolean;
+    /** Non-loopback hosts the Host guard admits; lowercased once here. Default none. */
+    readonly allowedHosts: readonly string[];
+  };
 }
 
 /**
@@ -90,7 +97,7 @@ export const defaultRuntimeConfig: RuntimeConfigShape = {
   terminal: terminalSettingsDefaults,
   appearance: appearanceSettingsDefaults,
   fluidcast: { status: 'disabled' },
-  server: {},
+  server: { serveWebUi: false, allowedHosts: [] },
 };
 
 /** Throws `RuntimeConfigIssues` for a section that must fail; `harnesses` and `fluidcast` never do. */
@@ -206,11 +213,15 @@ function parseAppearance(value: unknown): AppearanceSettings {
 }
 
 function parseServer(value: unknown): RuntimeConfigShape['server'] {
-  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'server')) return {};
+  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'server')) {
+    return defaultRuntimeConfig.server;
+  }
   const decoded = decodeSection(runtimeServerSettingsSchema, value.server, ['server']);
   return {
     ...(decoded.host === undefined ? {} : { host: decoded.host }),
     ...(decoded.port === undefined ? {} : { port: decoded.port }),
+    serveWebUi: decoded.serveWebUi ?? false,
+    allowedHosts: (decoded.allowedHosts ?? []).map((entry) => entry.toLowerCase()),
   };
 }
 

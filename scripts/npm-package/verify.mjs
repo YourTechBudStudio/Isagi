@@ -5,7 +5,15 @@
 // a tarball this script passed. Usage: node scripts/npm-package/verify.mjs <tarball>
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, resolve } from 'node:path';
 import process from 'node:process';
@@ -169,6 +177,10 @@ async function checkErrorDocuments() {
 }
 
 async function checkServe() {
+  // With the web UI on, so the run proves the bundled default web root resolves and `@fastify/static` survives
+  // bundling. API-only mode is covered by the runtime's own tests.
+  mkdirSync(data, { recursive: true });
+  writeFileSync(resolve(data, 'config.yaml'), 'server:\n  serveWebUi: true\n', 'utf8');
   const child = spawn(resolve(prefix, 'bin/isagi'), ['serve', '--data-dir', data], {
     cwd: root,
     env: environment,
@@ -213,6 +225,17 @@ async function checkServe() {
     const health = await fetch(`${url}/api/v1/health`);
     if (health.status !== 200)
       throw new StepFailure(`GET /api/v1/health returned ${health.status}`);
+
+    const page = await fetch(`${url}/`);
+    if (page.status !== 200) throw new StepFailure(`GET / returned ${page.status}`);
+    if (!page.headers.get('content-security-policy')) {
+      throw new StepFailure('GET / has no content-security-policy header');
+    }
+    const packedDocument = readFileSync(resolve(installedRoot, 'web/index.html'), 'utf8');
+    if ((await page.text()) !== packedDocument) {
+      throw new StepFailure('GET / is not the packed web/index.html');
+    }
+    console.log('     web UI served from the bundled web root, with its CSP');
 
     const runs = await isagi(['workflows', 'runs', 'list', '--json', '--runtime-url', url]);
     expectExit(runs, 0, 'isagi workflows runs list');

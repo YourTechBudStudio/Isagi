@@ -276,3 +276,16 @@ test('every interaction-mode refusal has its own copy, refined by reason where i
     'This harness is disabled in Isagi configuration.',
   );
 });
+
+test('api_host_not_allowed names the setting that admits the address', () => {
+  assert.equal(
+    runtimeErrorCopy.fromApiError({
+      code: 'api_host_not_allowed',
+      status: 403,
+      message: 'diagnostic message',
+      requestId: 'req-1',
+      data: { host: '192.168.1.20:11299' },
+    } as ApiError),
+    'The runtime turned this address away. List it in server.allowedHosts on the runtime, then restart it.',
+  );
+});

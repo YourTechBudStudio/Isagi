@@ -677,6 +677,22 @@ export const editorDiagnosticsUnavailableErrorSchema = Schema.Struct({
 });
 
 /**
+ * Answered by the editor proxy at `/editor/<id>/…`, which is not a contract endpoint: the body is
+ * for logs and for a person opening the URL. The pane never reads it, because it frames only a
+ * context the runtime projects as ready. It joins no endpoint union, because no endpoint can
+ * produce it.
+ */
+export const editorProxyUnavailableErrorSchema = Schema.Struct({
+  code: Schema.Literal('editor_proxy_unavailable'),
+  status: Schema.Literals([502, 503]),
+  ...errorEnvelopeFields,
+  data: Schema.Struct({
+    reason: Schema.Literals(['not_running', 'upstream_unreachable']),
+    editorContextId: Schema.NullOr(positiveInteger),
+  }),
+});
+
+/**
  * One union serves all four editor endpoints, the way `surfaceApiErrorSchema`
  * already serves the surfaces routes. It must cover its mapper exactly: the
  * route helper validates every error whose code does not begin with `api_`
@@ -832,6 +848,7 @@ export type SurfaceRejectedError = typeof surfaceRejectedErrorSchema.Type;
 export type EditorRejectedError = typeof editorRejectedErrorSchema.Type;
 export type EditorLaunchFailedError = typeof editorLaunchFailedErrorSchema.Type;
 export type EditorDiagnosticsUnavailableError = typeof editorDiagnosticsUnavailableErrorSchema.Type;
+export type EditorProxyUnavailableError = typeof editorProxyUnavailableErrorSchema.Type;
 export type WorktreeEnvironmentFocusRejectedError =
   typeof worktreeEnvironmentFocusRejectedErrorSchema.Type;
 export type SessionLaunchRejectedError = typeof sessionLaunchRejectedErrorSchema.Type;

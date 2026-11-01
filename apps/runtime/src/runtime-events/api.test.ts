@@ -141,6 +141,33 @@ test('runtime events websocket accepts the explicitly configured packaged file o
   }
 });
 
+test('runtime events websocket admits a page served from the same host, whatever the scheme', async () => {
+  const fastify = Fastify({ logger: false });
+  installAllowedOrigins(fastify, []);
+  const runtime = ManagedRuntime.make(RuntimeEvents.layer);
+
+  try {
+    await fastify.register(websocket);
+    registerRuntimeEventsRoutes(fastify, runtime as never);
+    await fastify.ready();
+
+    // `injectWS` sends no Host of its own, so each case names the one under test.
+    const ws = await fastify.injectWS('/api/v1/events', {
+      headers: { origin: 'https://vm.ts.net', host: 'vm.ts.net' },
+    });
+    ws.terminate();
+    await assert.rejects(
+      fastify.injectWS('/api/v1/events', {
+        headers: { origin: 'https://other.ts.net', host: 'vm.ts.net' },
+      }),
+      /403/,
+    );
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
 test('unsubscribing on socket close removes the subscriber; publish after shutdown is a no-op', async () => {
   const subscribers = { active: 0 };
   const fastify = Fastify({ logger: false });

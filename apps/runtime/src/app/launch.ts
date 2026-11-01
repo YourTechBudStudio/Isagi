@@ -12,8 +12,8 @@ export class ServerLaunch extends Context.Service<
     /** Flag or environment; undefined means `config.yaml`, then the default. */
     readonly host: SourcedValue<string> | undefined;
     readonly port: SourcedValue<number> | undefined;
-    /** Carried for the browser workbench; nothing reads it yet. */
-    readonly webRoot: string | undefined;
+    /** The web workbench build; read and checked only when `server.serveWebUi` is true. */
+    readonly webRoot: SourcedValue<string> | undefined;
     readonly allowedOrigins: readonly string[];
   }
 >()('isagi/runtime/app/ServerLaunch') {}

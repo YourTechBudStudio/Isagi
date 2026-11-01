@@ -46,15 +46,22 @@ export function managedRuntimeSpawnEnvironment(input: {
  * inherited `ISAGI_DATA_DIR`, so the desktop's data directory always wins;
  * with none (a packaged app without an override) `serve` applies its own
  * `ISAGI_DATA_DIR`, then `~/.isagi`.
+ *
+ * `--web-root` names the desktop's own web build. The runtime serves it only
+ * when the user's `config.yaml` sets `server.serveWebUi`; the desktop never
+ * sets it.
  */
 export function managedRuntimeServeArguments(input: {
   readonly allowedOrigins: string;
   readonly dataDirectory: string | undefined;
+  readonly webRoot: string;
 }): string[] {
   return [
     'serve',
     '--allowed-origins',
     input.allowedOrigins,
     ...(input.dataDirectory ? ['--data-dir', input.dataDirectory] : []),
+    '--web-root',
+    input.webRoot,
   ];
 }

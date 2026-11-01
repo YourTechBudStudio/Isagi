@@ -13,6 +13,7 @@ import {
   type EditorStartIntent,
 } from '../../lib/editor/view.js';
 import { classifyRuntimeFailure } from '../../lib/runtime/classify.js';
+import { runtimeUrlAtom } from '../../lib/runtime/runtime-url.js';
 import { disabledQuery } from '../../lib/state/policy.js';
 import { useRegistry } from '../../lib/state/registry.js';
 import { queryError } from '../../lib/state/result.js';
@@ -45,7 +46,11 @@ export function EditorPaneContainer({
 }): ReactElement {
   const editorContextId = editorContext.id;
   const activePtyProcessId = editorContext.activePtyProcessId;
-  const view = editorPaneView(editorContext);
+  const runtimeUrl = useAtomValue(runtimeUrlAtom);
+  const view = editorPaneView(
+    editorContext,
+    runtimeUrl._tag === 'Success' ? runtimeUrl.value : null,
+  );
   const banner = editorAttemptBanner(editorContext);
 
   const registry = useRegistry();

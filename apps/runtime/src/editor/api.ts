@@ -17,8 +17,9 @@ import {
   EditorProvisioning,
   type EditorProvisioningBusy,
 } from './provisioning/service.js';
+import { registerEditorProxy } from './proxy/route.js';
 
-// The editor runtime routes. Opening an editor is a placement, so `editor.open`
+// The editor runtime routes, and the proxy to Code Server. Opening an editor is a placement, so `editor.open`
 // is registered by the environment's surface routes, which map its editor
 // failures through `editorRejection` below.
 
@@ -79,6 +80,9 @@ export function registerEditorRoutes(
       Effect.catchTag('EditorProvisioningBusy', (error) => request.reject(editorRejection(error))),
     ),
   );
+
+  // Not a contract endpoint: Code Server's own traffic, forwarded byte for byte.
+  registerEditorProxy(fastify, runtime);
 }
 
 /**

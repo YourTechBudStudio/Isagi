@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   describeSource,
+  exposureWarnings,
   localRuntimeUrl,
   resolveListenSettings,
   RuntimeListenFailed,
@@ -96,4 +97,17 @@ test('a listen failure names both values and their sources', () => {
     ipv6.message,
     'Could not listen on [::1]:80 (host from --host, port from ISAGI_PORT): listen EACCES',
   );
+});
+
+test('exposure warnings are both logged beyond loopback and neither on it', () => {
+  for (const host of ['127.0.0.1', '::1', '[::1]', 'localhost']) {
+    assert.deepEqual(exposureWarnings(host), [], host);
+  }
+  for (const host of ['0.0.0.0', '::', '192.168.1.20']) {
+    assert.deepEqual(
+      exposureWarnings(host),
+      ['login_off_beyond_loopback', 'plain_http_beyond_loopback'],
+      host,
+    );
+  }
 });

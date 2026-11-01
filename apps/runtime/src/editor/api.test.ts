@@ -49,6 +49,7 @@ function fakeEditors(
     ensureRuntime: () => Effect.die('ensureRuntime is not used by this test'),
     releaseIncarnation: () => Effect.die('releaseIncarnation is not used by editor API tests'),
     readinessFor: () => Effect.die('readinessFor is not used by editor API tests'),
+    proxyTarget: () => Effect.succeed(null),
     diagnostics: () => Effect.die('diagnostics is not used by this test'),
     ...overrides,
   };
@@ -329,7 +330,7 @@ const editorContextFacts: EditorContextFacts = {
   processDiagnosticDetail: null,
   workbenchReadiness: 'ready',
   readinessDetail: null,
-  endpoint: { host: '127.0.0.1', port: 41_234, url: 'http://127.0.0.1:41234' },
+  endpoint: { path: '/editor/5/' },
   hasDiagnostics: true,
   createdAt: '2026-06-15T00:00:00.000Z',
   updatedAt: '2026-06-15T00:00:00.000Z',

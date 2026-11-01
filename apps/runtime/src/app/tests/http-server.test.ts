@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -11,6 +13,7 @@ import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
 import { expectNoNewHandles, makeLogCapture } from '../../../test/test-support.js';
 import { CliAccess } from '../../cli-access/index.js';
 import { noCliAccess } from '../../cli-access/testing.js';
+import { WebRootUnusable, webUiContentSecurityPolicy } from '../../web-ui/index.js';
 import { HttpServerLayer } from '../http-server.js';
 import { launchInputsLayer } from '../launch.js';
 import { AppLayer } from '../layer.js';
@@ -61,6 +64,295 @@ test('runtime HTTP CORS emits an allow origin only for the exact configured orig
     });
     assert.equal(allowed.headers['access-control-allow-origin'], 'http://127.0.0.1:43129');
     assert.equal(rejected.headers['access-control-allow-origin'], undefined);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('the Host guard refuses an unlisted host on every route, upgrade and preflight', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-host-'));
+  let runtime: BootedRuntime | undefined;
+
+  try {
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      allowedOrigins: ['http://127.0.0.1:43129'],
+    });
+    const server = runtime.server;
+
+    const refused = await server.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { host: 'evil.test' },
+    });
+    assert.equal(refused.statusCode, 403);
+    const { error } = refused.json<{ error: { code: string; data: unknown } }>();
+    assert.equal(error.code, 'api_host_not_allowed');
+    assert.deepEqual(error.data, { host: 'evil.test' });
+
+    // Unknown routes too: the guard reaches the not-found context, so a refused host never learns what exists.
+    const unknown = await server.inject({
+      method: 'GET',
+      url: '/nope',
+      headers: { host: 'evil.test' },
+    });
+    assert.equal(unknown.statusCode, 403);
+    assert.equal(unknown.json<{ error: { code: string } }>().error.code, 'api_host_not_allowed');
+
+    // A preflight from a refused host is refused before CORS can answer it.
+    const preflight = await server.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/health',
+      headers: {
+        host: 'evil.test',
+        origin: 'http://127.0.0.1:43129',
+        'access-control-request-method': 'GET',
+      },
+    });
+    assert.equal(preflight.statusCode, 403);
+    assert.equal(preflight.headers['access-control-allow-origin'], undefined);
+
+    const loopback = await server.inject({ method: 'GET', url: '/api/v1/health' });
+    assert.equal(loopback.statusCode, 200);
+
+    // `injectWS` sends no Host of its own, so each upgrade names the one under test.
+    await assert.rejects(
+      server.injectWS('/api/v1/events', { headers: { host: 'evil.test' } }),
+      /403/,
+    );
+    const socket = await server.injectWS('/api/v1/events', { headers: { host: '127.0.0.1' } });
+    socket.terminate();
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+/** A real upgrade to the listening runtime: `injectWS` has no socket for the editor proxy to pipe. */
+function rawUpgrade(url: string, path: string, host: string) {
+  const { port } = new URL(url);
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port,
+      path,
+      agent: false,
+      headers: {
+        host,
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-version': '13',
+        'sec-websocket-key': randomBytes(16).toString('base64'),
+      },
+    });
+    request.on('upgrade', (_response, socket) => {
+      socket.destroy();
+      reject(new Error('Unexpected upgrade'));
+    });
+    request.on('response', (response) => {
+      let body = '';
+      response.on('data', (chunk: Buffer) => (body += chunk.toString()));
+      response.on('end', () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+test('the editor proxy is admitted only through the Host guard', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-editor-proxy-'));
+  let runtime: BootedRuntime | undefined;
+  try {
+    writeFileSync(
+      join(dataRoot, 'config.yaml'),
+      'server:\n  allowedHosts:\n    - vm.example.test\n',
+    );
+    runtime = await bootRuntime({ dataDirectory: dataRoot });
+
+    const refused = await rawUpgrade(runtime.url, '/editor/1/x', 'evil.test');
+    assert.equal(refused.status, 403);
+    assert.equal(
+      (JSON.parse(refused.body) as { error: { code: string } }).error.code,
+      'api_host_not_allowed',
+    );
+    for (const host of ['vm.example.test', '127.0.0.1']) {
+      const admitted = await rawUpgrade(runtime.url, '/editor/1/x', host);
+      assert.equal(admitted.status, 503, host);
+      const { error } = JSON.parse(admitted.body) as { error: { code: string; data: unknown } };
+      assert.equal(error.code, 'editor_proxy_unavailable');
+      assert.deepEqual(error.data, { reason: 'not_running', editorContextId: 1 });
+    }
+
+    const plain = await runtime.server.inject({
+      method: 'GET',
+      url: '/editor/1/x',
+      headers: { host: 'evil.test' },
+    });
+    assert.equal(plain.statusCode, 403);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("the runtime's own non-loopback address is refused until it is listed (D1)", async () => {
+  // What a PTY's ISAGI_RUNTIME_URL produces under `--host 192.168.1.20`, sent to a loopback-bound runtime, so the
+  // rule is exercised without binding a LAN address.
+  for (const [allowedHosts, expected] of [
+    [undefined, 403],
+    [['192.168.1.20', 'VM.Example.test'], 200],
+  ] as const) {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-d1-'));
+    let runtime: BootedRuntime | undefined;
+    try {
+      if (allowedHosts !== undefined) {
+        writeFileSync(
+          join(dataRoot, 'config.yaml'),
+          `server:\n  allowedHosts:\n${allowedHosts.map((entry) => `    - ${entry}\n`).join('')}`,
+          'utf8',
+        );
+      }
+      const booted = await bootRuntime({ dataDirectory: dataRoot });
+      runtime = booted;
+      const port = new URL(booted.url).port;
+      for (const host of [`192.168.1.20:${port}`, 'vm.example.test']) {
+        const response = await booted.server.inject({
+          method: 'GET',
+          url: '/api/v1/health',
+          headers: { host },
+        });
+        assert.equal(response.statusCode, expected, `${host} with ${JSON.stringify(allowedHosts)}`);
+      }
+    } finally {
+      await runtime?.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test('with serveWebUi off, / is a JSON contract error and the web root is never read', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ui-off-'));
+  let runtime: BootedRuntime | undefined;
+  try {
+    // A web root that does not exist: with the UI off it is neither checked nor served (AC2).
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      webRoot: { value: join(dataRoot, 'absent'), source: 'flag', name: '--web-root' },
+    });
+    const root = await runtime.server.inject({ method: 'GET', url: '/' });
+    assert.equal(root.statusCode, 404);
+    assert.equal(root.json<{ error: { code: string } }>().error.code, 'api_route_not_found');
+    assert.equal(root.headers['content-security-policy'], undefined);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('with serveWebUi on, the web build is served with the CSP and page misses fall back to it', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ui-on-'));
+  const webRoot = join(dataRoot, 'web');
+  const documentBody = '<!doctype html><title>Isagi</title>';
+  let runtime: BootedRuntime | undefined;
+  try {
+    mkdirSync(join(webRoot, 'assets'), { recursive: true });
+    writeFileSync(join(webRoot, 'index.html'), documentBody);
+    writeFileSync(join(webRoot, 'assets', 'a.js'), 'export {};');
+    writeFileSync(
+      join(dataRoot, 'config.yaml'),
+      'server:\n  serveWebUi: true\n  allowedHosts:\n    - vm.example.test\n',
+    );
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      webRoot: { value: webRoot, source: 'flag', name: '--web-root' },
+    });
+    const server = runtime.server;
+
+    for (const url of ['/', '/deep/path', '/apiary?x=1']) {
+      const page = await server.inject({ method: 'GET', url });
+      assert.equal(page.statusCode, 200, url);
+      assert.equal(page.body, documentBody, url);
+      assert.equal(page.headers['content-security-policy'], webUiContentSecurityPolicy, url);
+    }
+    const asset = await server.inject({ method: 'GET', url: '/assets/a.js' });
+    assert.equal(asset.statusCode, 200);
+    assert.equal(asset.body, 'export {};');
+    assert.equal(asset.headers['content-security-policy'], webUiContentSecurityPolicy);
+    const head = await server.inject({ method: 'HEAD', url: '/' });
+    assert.equal(head.statusCode, 200);
+    assert.equal(head.headers['content-security-policy'], webUiContentSecurityPolicy);
+
+    // API and editor misses, and anything but GET/HEAD, stay contract errors: never HTML.
+    for (const [method, url] of [
+      ['GET', '/api/v1/nope'],
+      ['GET', '/api'],
+      ['GET', '/editor/1'],
+      ['POST', '/x'],
+    ] as const) {
+      const miss = await server.inject({ method, url });
+      assert.equal(miss.statusCode, 404, `${method} ${url}`);
+      assert.equal(miss.json<{ error: { code: string } }>().error.code, 'api_route_not_found');
+      assert.equal(miss.headers['content-security-policy'], undefined, `${method} ${url}`);
+    }
+    assert.equal((await server.inject({ method: 'GET', url: '/api/v1/health' })).statusCode, 200);
+
+    // One admission path: the Host guard covers the static files and the fallback too.
+    for (const url of ['/', '/deep/path', '/assets/a.js']) {
+      const refused = await server.inject({ method: 'GET', url, headers: { host: 'evil.test' } });
+      assert.equal(refused.statusCode, 403, url);
+      assert.equal(refused.json<{ error: { code: string } }>().error.code, 'api_host_not_allowed');
+    }
+    const listed = await server.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'vm.example.test' },
+    });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.body, documentBody);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('with serveWebUi on, an unusable web root fails startup with WebRootUnusable', async () => {
+  for (const webRoot of [undefined, 'absent'] as const) {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ui-bad-'));
+    try {
+      writeFileSync(join(dataRoot, 'config.yaml'), 'server:\n  serveWebUi: true\n');
+      await assert.rejects(
+        bootRuntime({
+          dataDirectory: dataRoot,
+          webRoot:
+            webRoot === undefined
+              ? undefined
+              : { value: join(dataRoot, webRoot), source: 'flag', name: '--web-root' },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof WebRootUnusable, String(error));
+          assert.match(error.message, /^server\.serveWebUi is true, but /);
+          return true;
+        },
+      );
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test('a loopback runtime logs no exposure warning', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-warnings-'));
+  const logs = makeLogCapture();
+  let runtime: BootedRuntime | undefined;
+
+  try {
+    runtime = await bootRuntime({ dataDirectory: dataRoot, extraLayer: logs.layer });
+    assert.ok(logs.lines.some((line) => line.message === 'Runtime listen settings'));
+    assert.deepEqual(
+      logs.lines.filter((line) => line.message.includes('beyond loopback')),
+      [],
+    );
   } finally {
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });

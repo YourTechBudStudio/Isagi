@@ -4,14 +4,16 @@ import { editorCopy } from '../../copy/index.js';
 import { EditorWait } from './EditorWait.js';
 
 /**
- * The embedded workbench, and the only place in Isagi that frames a foreign
- * origin.
+ * The embedded workbench, served through the runtime at `/editor/<id>/`. In a
+ * runtime-served browser UI it is therefore same-origin with the app; in the
+ * desktop it is the runtime's origin.
  *
- * There is deliberately no `sandbox` attribute: the loopback origin is already
- * distinct from the app's, so `allow-scripts allow-same-origin` would add no
- * confinement while risking the workbench. The pane never speaks to the frame —
- * no `postMessage` listener, no `contentWindow` access — so the containment is
- * one-directional and stated here rather than assumed.
+ * There is deliberately no `sandbox` attribute: it cannot confine a same-origin
+ * frame that needs `allow-scripts allow-same-origin`, and Code Server's
+ * extensions already run code on the runtime host with the user's privileges,
+ * so the frame gains no capability from it. The pane never speaks to the frame
+ * — no `postMessage` listener, no `contentWindow` access — so the containment
+ * is one-directional and stated here rather than assumed.
  *
  * The cover is the frame's own load, not the runtime's readiness: the runtime
  * says a probe succeeded, which is a different fact from this document having

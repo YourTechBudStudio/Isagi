@@ -11,7 +11,7 @@ import { fluidcastCopy, ptyCopy } from '../../copy/index.js';
 import { useInteractionSwitchPending } from '../../lib/fluidcast/commits.js';
 import { fluidcastConnection } from '../../lib/fluidcast/connection.js';
 import { fluidcastPendingPausesAtom } from '../../lib/fluidcast/pending-pauses.js';
-import { runtimeUrlAtom } from '../../lib/fluidcast/runtime-url.js';
+import { runtimeUrlAtom } from '../../lib/runtime/runtime-url.js';
 import { useRegistry } from '../../lib/state/registry.js';
 import { restoreActivePaneFocus, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import { attentionForPane, attentionSourcesAtom } from '../../lib/workspace/attention.js';

@@ -84,13 +84,12 @@ export const editorWorkbenchReadinessSchema = Schema.Literals([
 ]);
 
 export const editorEndpointSchema = Schema.Struct({
-  host: Schema.String.check(Schema.isMinLength(1)),
-  port: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 65_535 })),
   /**
-   * Absolute loopback origin the pane frames. Composed by the runtime so no
-   * client ever assembles a URL from parts.
+   * Runtime-relative path the pane frames: `/editor/<editorContextId>/`. Composed by the runtime;
+   * the client resolves it against the runtime URL and never assembles it. Code Server's own port
+   * is never exposed (#64 AC3).
    */
-  url: Schema.String.check(Schema.isMinLength(1)),
+  path: Schema.String.check(Schema.isPattern(/^\//)),
 });
 
 /**

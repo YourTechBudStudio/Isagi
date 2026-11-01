@@ -19,8 +19,8 @@ export interface RuntimeLaunch {
   readonly port: SourcedValue<number> | undefined;
   /** Absolute; flag, env or default. Never read by the CLI. */
   readonly dataDirectory: SourcedValue<string>;
-  /** Absolute; carried for the browser workbench, not read yet. */
-  readonly webRoot: string | undefined;
+  /** Absolute; `--web-root`, else the copy bundled with this `isagi` (source `default`), else none. */
+  readonly webRoot: SourcedValue<string> | undefined;
   readonly allowedOrigins: readonly string[];
   /** The CLI file the runtime's shim runs. */
   readonly cliEntryPath: string;
@@ -36,4 +36,6 @@ export interface RuntimeEntry {
   readonly load: () => Promise<unknown>;
   /** The CLI file the runtime's shim runs. */
   readonly cliEntryPath: string;
+  /** The web build shipped beside this entry; the `--web-root` default. */
+  readonly defaultWebRoot?: string;
 }

@@ -20,7 +20,8 @@ export type ServeSettings = Omit<RuntimeLaunch, 'cliEntryPath'>;
 /**
  * The flag and environment tiers of every `serve` setting, validated and tagged with their source.
  * `config.yaml` and the defaults for host and port are the runtime's to resolve, so those stay
- * `undefined` here. The first invalid setting fails, and an invalid value never falls through to a
+ * `undefined` here. The web root is `--web-root`, else the build bundled with this `isagi`, else
+ * none. The first invalid setting fails, and an invalid value never falls through to a
  * lower tier. Pure: `home` and `cwd` come from the caller.
  */
 export function resolveServeLaunch(
@@ -30,6 +31,7 @@ export function resolveServeLaunch(
     readonly cwd: string;
     readonly home: string;
   },
+  bundled: { readonly webRoot: string | undefined },
 ):
   | { readonly ok: true; readonly settings: ServeSettings }
   | { readonly ok: false; readonly failure: CliFailure } {
@@ -65,9 +67,9 @@ export function resolveServeLaunch(
     return refused('dataDirectory', dataDirectory, 'a directory path', '--data-dir');
   }
 
-  const webRoot = read(flags.webRoot, '--web-root');
-  if (webRoot !== undefined && webRoot.value === '') {
-    return refused('webRoot', webRoot, 'a directory path', '--web-root');
+  const webRootFlag = read(flags.webRoot, '--web-root');
+  if (webRootFlag !== undefined && webRootFlag.value === '') {
+    return refused('webRoot', webRootFlag, 'a directory path', '--web-root');
   }
 
   const origins = read(flags.allowedOrigins, '--allowed-origins');
@@ -91,7 +93,12 @@ export function resolveServeLaunch(
       host,
       port,
       dataDirectory: { ...dataDirectory, value: absolute(dataDirectory.value) },
-      webRoot: webRoot === undefined ? undefined : absolute(webRoot.value),
+      webRoot:
+        webRootFlag !== undefined
+          ? { ...webRootFlag, value: absolute(webRootFlag.value) }
+          : bundled.webRoot !== undefined
+            ? { value: bundled.webRoot, source: 'default', name: 'default' }
+            : undefined,
       allowedOrigins,
     },
   };

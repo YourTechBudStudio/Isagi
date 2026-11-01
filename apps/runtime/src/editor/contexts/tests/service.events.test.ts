@@ -88,6 +88,7 @@ test('a terminal event for an owned incarnation ends its probe and publishes', a
       });
       const ptyProcessId = facts.activePtyProcessId ?? -1;
       const before = editorContextChangedIds(events).length;
+      const targetBefore = yield* service.proxyTarget(created.id);
 
       yield* bus.publish({
         type: 'pty_process_exited',
@@ -105,6 +106,8 @@ test('a terminal event for an owned incarnation ends its probe and publishes', a
 
       return {
         observations,
+        targetBefore,
+        targetAfter: yield* service.proxyTarget(created.id),
         newEvents: editorContextChangedIds(events).length - before,
       };
     }),
@@ -113,6 +116,9 @@ test('a terminal event for an owned incarnation ends its probe and publishes', a
   // The readiness entry is dropped, so the projection can no longer report the
   // dead incarnation as ready no matter what the probe had observed.
   assert.equal(result.observations.size, 0);
+  // And the proxy stops forwarding to it, though the row still names its endpoint.
+  assert.notEqual(result.targetBefore, null);
+  assert.equal(result.targetAfter, null);
   assert.equal(result.newEvents, 1);
 });
 

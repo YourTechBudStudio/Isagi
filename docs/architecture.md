@@ -8,9 +8,11 @@ Electron (hosting the React web app) is the client. The core runtime is a server
 
 This separation keeps the desktop experience local and direct while leaving room for remote execution later.
 
+The runtime is the single network entry point. Its one origin carries the API, the editor (Code Server, which listens only on loopback and is reached through the runtime's `/editor/<id>/` proxy, never directly) and, when `server.serveWebUi` is on, the web build that its launcher supplies. Every request is admitted by its `Host`: loopback, or a host listed in `server.allowedHosts`. The runtime does not terminate TLS, so reaching it from another machine relies on HTTPS in front of it, for example `tailscale serve`.
+
 ## Client
 
-The client is the React web app, hosted by the Electron desktop shell. The web app owns the interactive workbench experience:
+The client is the React web app, hosted either by the Electron desktop shell or by a browser loading it from the runtime. The web app owns the interactive workbench experience:
 
 - project/worktree/surface navigation
 - command palette

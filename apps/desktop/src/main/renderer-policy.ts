@@ -7,8 +7,9 @@ import type { OnHeadersReceivedListenerDetails } from 'electron';
  * testable without an Electron app.
  *
  * The one thing this module exists for is `frame-src`: Isagi frames a Code
- * Server workbench on loopback, and nothing else. Every other directive is the
- * conservative default that comes with introducing a policy at all.
+ * Server workbench, served through the runtime at `/editor/<id>/`, and nothing
+ * else. Every other directive is the conservative default that comes with
+ * introducing a policy at all.
  *
  * `index.ts` owns the Electron hooks and stays thin; the matching predicates,
  * the header rewrite, and the redaction all live here.
@@ -24,9 +25,10 @@ export type RendererTarget =
   | { readonly mode: 'packaged'; readonly indexPath: string }
   | { readonly mode: 'development'; readonly devWebUrl: string };
 
-/** The loopback the runtime pins its editor endpoint to. Deliberately not
- *  `localhost`: `editorLoopbackHost` in the runtime is `127.0.0.1`, so a
- *  `localhost` frame source would be breadth nothing can use. */
+/** The loopback a managed runtime listens on, which serves the editor at
+ *  `/editor/<id>/`. Deliberately not `localhost`: the desktop reaches its
+ *  managed runtime at `127.0.0.1`, so a `localhost` frame source would be
+ *  breadth nothing can use. */
 const loopbackFrameSource = 'http://127.0.0.1:*';
 const loopbackConnectSources = ['http://127.0.0.1:*', 'ws://127.0.0.1:*'] as const;
 
@@ -68,11 +70,15 @@ export function rendererRuntimeOrigins(input: {
 }
 
 /**
- * The renderer CSP. External runtime origins reach `connect-src` only, and
- * `frame-src` stays loopback-only regardless of what Isagi is attached to.
- * Every runtime now provisions Code Server, so an external runtime can report
- * its editor `ready`; a remote one's editor cannot be framed here, a known
- * limitation that #64 (browser workbench) owns.
+ * The renderer CSP. Twin of `webUiContentSecurityPolicy` in
+ * `apps/runtime/src/web-ui/policy.ts`, the policy of the runtime-served web
+ * UI: keep the directives in step, with `'self'` standing for the runtime there.
+ *
+ * External runtime origins reach `connect-src` in both forms, and `frame-src`
+ * and `media-src` in their http(s) form only: the editor is framed from the
+ * runtime's own origin, so an external runtime's editor needs that origin and
+ * nothing else, and a WebSocket origin can never be a frame. A managed
+ * runtime's origin is already inside the loopback source.
  *
  * In development the renderer *is served from* the dev origin, so `'self'`
  * already covers it in `default-src`, `script-src`, `style-src`, and the HTTP
@@ -93,18 +99,17 @@ export function rendererContentSecurityPolicy(input: {
     ...(development ? [webSocketOrigin(development)] : []),
     ...input.runtimeOrigins,
   ];
+  const httpRuntimeOrigins = input.runtimeOrigins.filter((origin) => /^https?:/u.test(origin));
+  // The editor frame loads from the runtime at `/editor/<id>/`: the loopback runtime, or a
+  // configured one.
+  const frameSources = [loopbackFrameSource, ...httpRuntimeOrigins];
   // An embedded Fluidcast player plays speech from blobs it buffered, or streams it progressively
-  // from the runtime's speech URL: the loopback runtime, or a configured one (its HTTP form only).
-  const mediaSources = [
-    "'self'",
-    'blob:',
-    loopbackFrameSource,
-    ...input.runtimeOrigins.filter((origin) => /^https?:/u.test(origin)),
-  ];
+  // from the runtime's speech URL: the loopback runtime, or a configured one.
+  const mediaSources = ["'self'", 'blob:', loopbackFrameSource, ...httpRuntimeOrigins];
 
   return [
     ['default-src', "'self'"],
-    ['frame-src', loopbackFrameSource],
+    ['frame-src', frameSources.join(' ')],
     ['img-src', "'self' data: blob:"],
     ['media-src', mediaSources.join(' ')],
     ['font-src', "'self'"],

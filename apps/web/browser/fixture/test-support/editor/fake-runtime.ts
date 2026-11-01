@@ -42,8 +42,6 @@ export interface EditorRuntimeControls {
   readonly failNextEnsure: (kind: 'launch' | 'database') => void;
 }
 
-const RUNTIME_ORIGIN = 'http://editor-test-support.invalid';
-
 export const WORKTREE_ID = 12;
 export const SURFACE_ID = 42;
 export const PANE_ID = 77;
@@ -59,8 +57,12 @@ export const PANE_ID = 77;
  */
 export const NEIGHBOUR_PANE_ID = 78;
 const EDITOR_CONTEXT_ID = 7;
-/** Served by the fixture's own dev server, so the frame is a real cross-document load. */
-const WORKBENCH_URL = '/test-support/editor/workbench.html';
+/**
+ * The endpoint path the fake runtime projects. Resolved against the runtime URL, which is this
+ * page's own origin, so it names the stand-in workbench the fixture's dev server serves and the
+ * frame is a real cross-document load.
+ */
+const WORKBENCH_PATH = '/test-support/editor/workbench.html';
 
 const IDLE_EDITOR: EditorContextMetadata = {
   paneId: PANE_ID,
@@ -83,7 +85,7 @@ const READY_EDITOR: Partial<EditorContextMetadata> = {
   activePtyProcessId: 48120,
   processStatus: 'running',
   workbenchReadiness: 'ready',
-  endpoint: { host: '127.0.0.1', port: 41287, url: WORKBENCH_URL },
+  endpoint: { path: WORKBENCH_PATH },
 };
 
 /** An incarnation that started, produced output, and died. */
@@ -134,6 +136,9 @@ export function installFakeRuntime(): EditorRuntimeControls {
   const ensureRequests: { editorContextId: number; intent: string }[] = [];
   const diagnosticsRequests: { editorContextId: number; ptyProcessId: number }[] = [];
 
+  // The page's own origin, as for a runtime-served UI, so the editor's runtime-relative endpoint
+  // resolves to a document this fixture actually serves. Read at install, once the page exists.
+  const RUNTIME_ORIGIN = window.location.origin;
   window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
 
   const controls: EditorRuntimeControls = {
@@ -154,7 +159,11 @@ export function installFakeRuntime(): EditorRuntimeControls {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
       window.location.origin,
     );
-    if (url.origin !== RUNTIME_ORIGIN) return realFetch(input as RequestInfo, init);
+    // The runtime shares the page's origin, so only its API prefix is the fake runtime's; the
+    // fixture's own files still load from the dev server.
+    if (url.origin !== RUNTIME_ORIGIN || !url.pathname.startsWith('/api/v1/')) {
+      return realFetch(input as RequestInfo, init);
+    }
 
     const method = init?.method ?? 'GET';
     const path = url.pathname.replace('/api/v1', '');

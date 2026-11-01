@@ -33,7 +33,9 @@ const serveCommand = Command.make(
     ),
     webRoot: Flag.String('web-root').pipe(
       Flag.withMetavar('path'),
-      Flag.withDescription('Directory of the web workbench build to serve. Not served yet.'),
+      Flag.withDescription(
+        'Directory of the web workbench build, served when config.yaml server.serveWebUi is true. Defaults to the copy bundled with isagi.',
+      ),
       Flag.optional,
     ),
     allowedOrigins: Flag.String('allowed-origins').pipe(

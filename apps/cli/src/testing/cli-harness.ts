@@ -167,10 +167,13 @@ export function onlyJsonDocument(stdout: string): unknown {
  * A runtime entry for `serve` that records every launch instead of starting a runtime. `load`
  * replaces the module loader, e.g. with one that rejects like a native module built for another Node.
  */
-export function fakeRuntimeEntry(options: { readonly load?: () => Promise<unknown> } = {}) {
+export function fakeRuntimeEntry(
+  options: { readonly load?: () => Promise<unknown>; readonly defaultWebRoot?: string } = {},
+) {
   const launches: RuntimeLaunch[] = [];
   const entry: RuntimeEntry = {
     cliEntryPath: '/opt/isagi/dist/isagi.mjs',
+    ...(options.defaultWebRoot === undefined ? {} : { defaultWebRoot: options.defaultWebRoot }),
     load:
       options.load ??
       (() =>

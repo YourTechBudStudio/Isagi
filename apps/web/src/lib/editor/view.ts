@@ -63,7 +63,15 @@ function isTerminal(status: SessionStatus): status is keyof typeof DIAGNOSTIC_FO
   return status === 'exited' || status === 'failed' || status === 'killed';
 }
 
-export function editorPaneView(context: EditorContextFacts): EditorPaneView {
+/**
+ * `runtimeUrl` is the runtime the projection came from, null while it is still resolving. The
+ * endpoint is a runtime-relative path, so a ready workbench is framed at that path resolved against
+ * it: URL resolution, never assembly from parts.
+ */
+export function editorPaneView(
+  context: EditorContextFacts,
+  runtimeUrl: string | null,
+): EditorPaneView {
   const { attempt, processStatus, workbenchReadiness, endpoint } = context;
 
   // 1. A failed attempt owns the pane only when it left nothing running. The
@@ -92,7 +100,11 @@ export function editorPaneView(context: EditorContextFacts): EditorPaneView {
     };
   }
   // 5. Live, observed ready, and the runtime composed an origin to frame.
-  if (workbenchReadiness === 'ready' && endpoint) return { kind: 'ready', url: endpoint.url };
+  // With no runtime URL yet there is nothing to frame, so a ready workbench falls through to
+  // `launching` below; in practice the startup gate resolves the URL first.
+  if (workbenchReadiness === 'ready' && endpoint && runtimeUrl !== null) {
+    return { kind: 'ready', url: new URL(endpoint.path, runtimeUrl).href };
+  }
   // 6-8. Live, and the readiness observation is the whole story.
   if (workbenchReadiness === 'pending') return { kind: 'waiting_for_workbench' };
   if (workbenchReadiness === 'unreachable') {

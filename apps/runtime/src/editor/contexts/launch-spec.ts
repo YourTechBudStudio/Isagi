@@ -42,7 +42,7 @@ export function editorSessionSocketPath(
   return path.join(socketDirectory, `${editorContextId}-${token}.sock`);
 }
 
-/** The absolute loopback origin the workbench is probed at and framed from. */
+/** The absolute loopback origin the workbench is probed at. */
 export function editorOrigin(host: string, port: number): string {
   return `http://${host}:${port}`;
 }

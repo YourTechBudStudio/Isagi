@@ -59,15 +59,26 @@ test("the user's ISAGI_HOST and ISAGI_PORT reach serve, which applies them by pr
   assert.equal(environment.ISAGI_PORT, '11299');
 });
 
-test('serve arguments carry the origins and, when the desktop chose one, the data directory', () => {
+test('serve arguments carry the origins, the web root and, when the desktop chose one, the data directory', () => {
   assert.deepEqual(
-    managedRuntimeServeArguments({ allowedOrigins: 'file://', dataDirectory: undefined }),
-    ['serve', '--allowed-origins', 'file://'],
+    managedRuntimeServeArguments({
+      allowedOrigins: 'file://',
+      dataDirectory: undefined,
+      webRoot: '/Applications/Isagi.app/Contents/Resources/web',
+    }),
+    [
+      'serve',
+      '--allowed-origins',
+      'file://',
+      '--web-root',
+      '/Applications/Isagi.app/Contents/Resources/web',
+    ],
   );
   assert.deepEqual(
     managedRuntimeServeArguments({
       allowedOrigins: 'http://127.0.0.1:4173,http://localhost:4173',
       dataDirectory: '/checkout/data/.isagi',
+      webRoot: '/checkout/apps/web/dist',
     }),
     [
       'serve',
@@ -75,6 +86,8 @@ test('serve arguments carry the origins and, when the desktop chose one, the dat
       'http://127.0.0.1:4173,http://localhost:4173',
       '--data-dir',
       '/checkout/data/.isagi',
+      '--web-root',
+      '/checkout/apps/web/dist',
     ],
   );
 });

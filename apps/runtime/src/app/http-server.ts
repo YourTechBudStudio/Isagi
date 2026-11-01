@@ -7,16 +7,25 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import {
   installAllowedOrigins,
+  installHostGuard,
   isAllowedRuntimeOrigin,
   sendApiError,
   type RouteRuntime,
 } from '../platform/http/index.js';
 import { RuntimeConfig } from '../runtime-config/index.js';
+import {
+  isWebUiDocumentRequest,
+  registerWebUi,
+  requireWebRoot,
+  sendWebUiDocument,
+} from '../web-ui/index.js';
 import { WorkspaceService } from '../workspace/index.js';
 import { ServerLaunch } from './launch.js';
 import { AppLayer, type RuntimeServices } from './layer.js';
 import {
   describeSource,
+  exposureWarningMessages,
+  exposureWarnings,
   localRuntimeUrl,
   resolveListenSettings,
   RuntimeListenFailed,
@@ -59,6 +68,10 @@ export const HttpServerLayer = Layer.effect(
         portSource: describeSource(port),
       }),
     );
+    const { serveWebUi } = config.server;
+    // Before anything listens or any route can change state, so a misconfigured web UI fails startup instead of
+    // silently serving the API only. With the UI off the web root is never read.
+    const webRoot = serveWebUi ? yield* requireWebRoot(launch.webRoot) : undefined;
     // After every service is built, so the command service's activation subscriber hears the restored activation,
     // and before any route can change the active context.
     yield* WorkspaceService.use((workspace) => workspace.publishRestoredActivation);
@@ -85,7 +98,16 @@ export const HttpServerLayer = Layer.effect(
     // Before any plugin or route, so every encapsulated context inherits the set.
     installAllowedOrigins(fastify, launch.allowedOrigins);
     const allowedOrigins = fastify.isagiAllowedOrigins ?? new Set<string>();
-    configureApiErrorHandlers(fastify);
+    configureApiErrorHandlers(fastify, { serveWebUi });
+    // The order of the next three is fixed; each relies on `onRequest` hooks running in registration order.
+    // 1. `@fastify/websocket` marks upgrades in its hook, and its `onResponse` hook destroys a marked upgrade's
+    //    socket, so a refused upgrade is closed rather than left hanging.
+    // 2. The Host guard is the one admission check for every request, the API, sockets and unknown routes alike.
+    //    #65's login hook goes right after it.
+    // 3. `@fastify/cors` answers preflights inside its own hook, so it must come after the guard, or a refused
+    //    host's preflight would be answered with CORS headers.
+    yield* tryPromise(() => fastify.register(websocket));
+    installHostGuard(fastify, config.server.allowedHosts);
     yield* tryPromise(() =>
       fastify.register(cors, {
         methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -94,14 +116,30 @@ export const HttpServerLayer = Layer.effect(
         },
       }),
     );
-    yield* tryPromise(() => fastify.register(websocket));
+    // After the admission hooks above, so the guard covers the static routes and the document fallback too.
+    if (webRoot !== undefined) {
+      yield* tryPromise(() => registerWebUi(fastify, webRoot));
+    }
     registerRuntimeRoutes(fastify, runtime);
 
     yield* tryPromise(() => fastify.listen({ host: host.value, port: port.value })).pipe(
       Effect.mapError((cause) => new RuntimeListenFailed({ host, port, cause })),
       Effect.uninterruptible,
     );
-    const url = localRuntimeUrl(fastify.server.address() as AddressInfo);
+    const address = fastify.server.address() as AddressInfo;
+    // After `listen`, so a bind that fails does not warn and the line shows the bound port.
+    for (const warning of exposureWarnings(host.value)) {
+      yield* Effect.logWarning(exposureWarningMessages[warning]).pipe(
+        Effect.annotateLogs({
+          warning,
+          host: host.value,
+          hostSource: describeSource(host),
+          port: address.port,
+          portSource: describeSource(port),
+        }),
+      );
+    }
+    const url = localRuntimeUrl(address);
     yield* startup(url);
     return RuntimeServer.of({ url, fastify });
   }),
@@ -128,16 +166,24 @@ function tryPromise<A>(run: () => PromiseLike<A>) {
   });
 }
 
-function configureApiErrorHandlers(fastify: FastifyInstance) {
-  fastify.setNotFoundHandler((request, reply) =>
-    sendApiError(reply, {
+function configureApiErrorHandlers(
+  fastify: FastifyInstance,
+  options: { readonly serveWebUi: boolean },
+) {
+  fastify.setNotFoundHandler((request, reply) => {
+    // With the web UI on, a page path no static file answers (a deep path) gets the document; API and editor misses
+    // stay contract errors.
+    if (options.serveWebUi && isWebUiDocumentRequest(request)) {
+      return sendWebUiDocument(reply);
+    }
+    return sendApiError(reply, {
       code: 'api_route_not_found',
       status: 404,
       message: `Route not found: ${request.method} ${request.url}`,
       requestId: String(request.id),
       data: { method: request.method, url: request.url },
-    }),
-  );
+    });
+  });
   fastify.setErrorHandler((error, request, reply) => {
     const status = errorStatusCode(error);
     return sendApiError(reply, {

@@ -13,6 +13,7 @@ export const apiSuccessResponseSchema = <Data extends Schema.Codec<unknown>>(dat
   });
 
 export const apiInfrastructureErrorCodeSchema = Schema.Literals([
+  'api_host_not_allowed', // refused by the runtime's Host guard
   'api_request_decoding_failed',
   'api_request_parsing_failed',
   'api_response_encoding_failed',

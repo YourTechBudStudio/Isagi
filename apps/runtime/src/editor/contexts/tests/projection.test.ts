@@ -132,11 +132,19 @@ test('a live process with a matching observation projects ready and its endpoint
   const facts = deriveEditorContextFacts(owned(ptyRow()), observation());
 
   assert.equal(facts.workbenchReadiness, 'ready');
-  assert.deepEqual(facts.endpoint, {
-    host: '127.0.0.1',
-    port: 41_287,
-    url: 'http://127.0.0.1:41287',
-  });
+  // The proxy path, never Code Server's own host and port (#64 AC3).
+  assert.deepEqual(facts.endpoint, { path: '/editor/7/' });
+});
+
+test('the proxy path is projected only for an incarnation with a stored endpoint', () => {
+  const process = ptyRow();
+  for (const endpoint of [
+    { endpointHost: null, endpointPort: 41_287 },
+    { endpointHost: '127.0.0.1', endpointPort: null },
+  ]) {
+    const facts = deriveEditorContextFacts({ ...owned(process), ...endpoint }, observation());
+    assert.equal(facts.endpoint, null);
+  }
 });
 
 test('a ready observation beside an exited process is NOT ready', () => {
@@ -214,7 +222,7 @@ test('a pointer to a vanished process row projects process_missing', () => {
   // The pointer and the endpoint are still the truth about what this context
   // owned, so they survive the missing row.
   assert.equal(facts.activePtyProcessId, 42);
-  assert.equal(facts.endpoint?.url, 'http://127.0.0.1:41287');
+  assert.deepEqual(facts.endpoint, { path: `/editor/${facts.id}/` });
 });
 
 // ---------------------------------------------------------------------------

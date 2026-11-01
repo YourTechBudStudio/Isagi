@@ -482,17 +482,65 @@ test('fluidcast history compaction resolves its threshold, and is absent unless 
   }
 });
 
-test('server settings are empty when absent and keep only what is configured', () => {
-  assert.deepEqual(defaultRuntimeConfig.server, {});
-  assert.deepEqual(parseRuntimeConfig({}).server, {});
-  assert.deepEqual(parseRuntimeConfig({ server: {} }).server, {});
-  assert.deepEqual(parseRuntimeConfig({ server: { host: '0.0.0.0' } }).server, { host: '0.0.0.0' });
+test('server settings default when absent and keep only what is configured', () => {
+  const none = { serveWebUi: false, allowedHosts: [] };
+  assert.deepEqual(defaultRuntimeConfig.server, none);
+  assert.deepEqual(parseRuntimeConfig({}).server, none);
+  assert.deepEqual(parseRuntimeConfig({ server: {} }).server, none);
+  assert.deepEqual(parseRuntimeConfig({ server: { host: '0.0.0.0' } }).server, {
+    host: '0.0.0.0',
+    ...none,
+  });
   assert.deepEqual(parseRuntimeConfig({ server: { host: '127.0.0.1', port: 11299 } }).server, {
     host: '127.0.0.1',
     port: 11_299,
+    ...none,
   });
-  assert.deepEqual(parseRuntimeConfig({ server: { port: 0 } }).server, { port: 0 });
-  assert.deepEqual(parseRuntimeConfig({ server: { port: 65_535 } }).server, { port: 65_535 });
+  assert.deepEqual(parseRuntimeConfig({ server: { port: 0 } }).server, { port: 0, ...none });
+  assert.deepEqual(parseRuntimeConfig({ server: { port: 65_535 } }).server, {
+    port: 65_535,
+    ...none,
+  });
+});
+
+test('serveWebUi is read as written and defaults to false', () => {
+  assert.equal(parseRuntimeConfig({ server: {} }).server.serveWebUi, false);
+  assert.equal(parseRuntimeConfig({ server: { serveWebUi: true } }).server.serveWebUi, true);
+  assert.equal(parseRuntimeConfig({ server: { serveWebUi: false } }).server.serveWebUi, false);
+});
+
+test('allowed hosts accept hostnames, IPs and leading wildcards, lowercased', () => {
+  assert.deepEqual(
+    parseRuntimeConfig({
+      server: {
+        allowedHosts: ['fd7a::1', 'VM.Tail.ts.net', '*.tail.ts.net', '*', '100.64.0.1'],
+      },
+    }).server.allowedHosts,
+    ['fd7a::1', 'vm.tail.ts.net', '*.tail.ts.net', '*', '100.64.0.1'],
+  );
+});
+
+test('a malformed allowed host fails startup at its entry', () => {
+  for (const entry of [
+    'https://vm.ts.net',
+    'vm.ts.net:443',
+    '[::1]',
+    'dev*.ts.net',
+    'a.*.net',
+    '**',
+    '*.',
+    '*.168.1.20',
+    '',
+  ]) {
+    assert.throws(
+      () => parseRuntimeConfig({ server: { allowedHosts: ['vm.ts.net', entry] } }),
+      (error: unknown) =>
+        error instanceof RuntimeConfigIssues &&
+        error.issuePaths.length === 1 &&
+        error.issuePaths[0] === 'server.allowedHosts.1',
+      entry,
+    );
+  }
 });
 
 test('an invalid server setting fails startup with its issue path only', () => {

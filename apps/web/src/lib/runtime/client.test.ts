@@ -593,8 +593,8 @@ test('RuntimeApi.layer resolves the runtime URL per request, so a restarted runt
   );
 });
 
-test('RuntimeApi.layer fails a request with RuntimeUrlUnavailable when no runtime URL is configured', async (t) => {
-  Object.assign(globalThis, { window: {} });
+test('RuntimeApi.layer fails a request with RuntimeUrlUnavailable when a file: page has no runtime URL', async (t) => {
+  Object.assign(globalThis, { window: { location: { protocol: 'file:', origin: 'null' } } });
   t.after(() => {
     Reflect.deleteProperty(globalThis, 'window');
   });
@@ -610,5 +610,5 @@ test('RuntimeApi.layer fails a request with RuntimeUrlUnavailable when no runtim
   );
 
   assert.equal(failure._tag, 'RuntimeUrlUnavailable');
-  assert.match(failure.message, /No runtime URL configured/);
+  assert.match(failure.message, /^No runtime URL: /);
 });

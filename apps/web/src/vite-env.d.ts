@@ -5,8 +5,9 @@ import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from './lib/des
 declare global {
   interface ImportMetaEnv {
     /**
-     * The runtime origin for the plain-browser development surface. Ignored when
-     * the Electron bridge is present, which owns runtime discovery.
+     * The runtime origin for the plain-browser development surface, read only in
+     * Vite development and never shipped in a production build. Ignored when the
+     * Electron bridge is present, which owns runtime discovery.
      */
     readonly VITE_ISAGI_RUNTIME_URL?: string;
     /**

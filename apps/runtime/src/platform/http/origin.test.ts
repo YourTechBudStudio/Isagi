@@ -7,6 +7,7 @@ import {
   enforceRuntimeWebSocketOrigin,
   installAllowedOrigins,
   isAllowedRuntimeOrigin,
+  isSameHostOrigin,
 } from './origin.js';
 
 test('allows only exact configured browser origins', () => {
@@ -59,4 +60,17 @@ test('the WebSocket guard reads the set installed on the serving instance, inher
     await fastify.close();
     await other.close();
   }
+});
+
+test('a same-host origin matches the Host whatever its scheme', () => {
+  assert.equal(isSameHostOrigin('https://vm.ts.net', 'vm.ts.net'), true);
+  assert.equal(isSameHostOrigin('http://vm.ts.net', 'VM.ts.net'), true);
+  assert.equal(isSameHostOrigin('http://127.0.0.1:11299', '127.0.0.1:11299'), true);
+  assert.equal(isSameHostOrigin('https://other.ts.net', 'vm.ts.net'), false);
+  assert.equal(isSameHostOrigin('http://127.0.0.1:11300', '127.0.0.1:11299'), false);
+  // A Host spelling the default port does not match the Origin's normalised host.
+  assert.equal(isSameHostOrigin('https://vm.ts.net', 'vm.ts.net:443'), false);
+  assert.equal(isSameHostOrigin('not a url', 'vm.ts.net'), false);
+  assert.equal(isSameHostOrigin('null', 'vm.ts.net'), false);
+  assert.equal(isSameHostOrigin('https://vm.ts.net', undefined), false);
 });

@@ -140,7 +140,7 @@ test('a slow ensure cannot install its notice over an incarnation that replaced 
       activePtyProcessId: 90210,
       processStatus: 'running',
       workbenchReadiness: 'ready',
-      endpoint: { host: '127.0.0.1', port: 41287, url: '/test-support/editor/workbench.html' },
+      endpoint: { path: '/test-support/editor/workbench.html' },
     });
     await window.editorTestSupport!.refetchSurface();
   });
@@ -212,6 +212,27 @@ test('the workbench frame loads and hands over from its cover', async ({ page })
   // The stand-in workbench is a real document, so this is a real cross-document
   // load rather than a simulated one.
   await expect(workbench(page).locator('.status')).toContainText('feat/embedded-editor');
+  await expect(pane(page).getByText('Loading the workbench…')).toHaveCount(0);
+});
+
+test('a replaced incarnation at the same path remounts the frame behind a fresh cover', async ({
+  page,
+}) => {
+  const frame = section(page).locator('iframe');
+  await expect(workbench(page).locator('.status')).toBeVisible();
+  await expect(pane(page).getByText('Loading the workbench…')).toHaveCount(0);
+  await frame.evaluate((element) => element.setAttribute('data-incarnation', 'first'));
+
+  // Every incarnation of a context is served at the same `/editor/<id>/` path, so only the
+  // incarnation changes. Without the per-incarnation key the browser would keep the old document.
+  await page.evaluate(async () => {
+    window.editorTestSupport!.setEditor({ activePtyProcessId: 90210 });
+    await window.editorTestSupport!.refetchSurface();
+  });
+
+  await expect(section(page).locator('iframe[data-incarnation="first"]')).toHaveCount(0);
+  await expect(frame).toHaveCount(1);
+  await expect(workbench(page).locator('.status')).toBeVisible();
   await expect(pane(page).getByText('Loading the workbench…')).toHaveCount(0);
 });
 

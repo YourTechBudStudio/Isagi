@@ -78,6 +78,12 @@ function byReason<Reason extends string>(
 // Keyed by API error `code`. `byReason` refines on `data.reason` where the reason
 // changes what the user should do; otherwise `summary` carries the whole message.
 const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
+  // Reachable when a client calls the runtime at an address its Host guard refuses, such as a desktop attached
+  // through ISAGI_RUNTIME_URL to an unlisted non-loopback address. The generic line would hide the fix.
+  api_host_not_allowed: {
+    summary:
+      'The runtime turned this address away. List it in server.allowedHosts on the runtime, then restart it.',
+  },
   project_path_rejected: {
     summary: "Isagi can't use that path.",
     byReason: byReason<ProjectPathRejectionReason>({
@@ -503,7 +509,7 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   unsupported_harness: 'This harness is not wired into Isagi yet.',
   ...harnessLaunchBlockCopy,
   session_already_attached: 'This session is already attached in another pane.',
-  session_attachment_moved: 'This session moved to another pane.',
+  session_attachment_moved: 'This session moved to another pane, window or device.',
   stream_superseded: 'This stream opened somewhere else.',
   attach_token_missing: 'This pane needs to claim the session before attaching.',
   attach_token_invalid: 'This pane no longer has the current attach claim.',

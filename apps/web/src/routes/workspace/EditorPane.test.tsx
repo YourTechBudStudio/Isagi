@@ -29,7 +29,7 @@ const base: EditorContextFacts = {
 const live = {
   activePtyProcessId: 48120,
   processStatus: 'running',
-  endpoint: { host: '127.0.0.1', port: 41287, url: 'http://127.0.0.1:41287' },
+  endpoint: { path: '/editor/7/' },
 } as const;
 
 function render(
@@ -48,7 +48,7 @@ function render(
       <AppStateProvider registry={registry}>
         <EditorPane
           title="isagi · feat/embedded-editor"
-          view={editorPaneView(context)}
+          view={editorPaneView(context, 'http://127.0.0.1:5000')}
           banner={editorAttemptBanner(context)}
           notice={options.notice ?? null}
           activePtyProcessId={context.activePtyProcessId}
@@ -95,7 +95,7 @@ describe('EditorPane state rendering', () => {
   it('frames the workbench only when the runtime says ready, and covers it until it loads', () => {
     const markup = render({ ...live, workbenchReadiness: 'ready' });
 
-    assert.match(markup, /<iframe[^>]+src="http:\/\/127\.0\.0\.1:41287"/);
+    assert.match(markup, /<iframe[^>]+src="http:\/\/127\.0\.0\.1:5000\/editor\/7\/"/);
     assert.match(markup, /allow=""/);
     assert.match(markup, /referrerpolicy="no-referrer"/i);
     assert.doesNotMatch(markup, /sandbox=/);
