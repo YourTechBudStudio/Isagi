@@ -7,6 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import {
   installAllowedOrigins,
+  installHostGuard,
   isAllowedRuntimeOrigin,
   sendApiError,
   type RouteRuntime,
@@ -17,6 +18,8 @@ import { ServerLaunch } from './launch.js';
 import { AppLayer, type RuntimeServices } from './layer.js';
 import {
   describeSource,
+  exposureWarningMessages,
+  exposureWarnings,
   localRuntimeUrl,
   resolveListenSettings,
   RuntimeListenFailed,
@@ -86,6 +89,15 @@ export const HttpServerLayer = Layer.effect(
     installAllowedOrigins(fastify, launch.allowedOrigins);
     const allowedOrigins = fastify.isagiAllowedOrigins ?? new Set<string>();
     configureApiErrorHandlers(fastify);
+    // The order of the next three is fixed; each relies on `onRequest` hooks running in registration order.
+    // 1. `@fastify/websocket` marks upgrades in its hook, and its `onResponse` hook destroys a marked upgrade's
+    //    socket, so a refused upgrade is closed rather than left hanging.
+    // 2. The Host guard is the one admission check for every request, the API, sockets and unknown routes alike.
+    //    #65's login hook goes right after it.
+    // 3. `@fastify/cors` answers preflights inside its own hook, so it must come after the guard, or a refused
+    //    host's preflight would be answered with CORS headers.
+    yield* tryPromise(() => fastify.register(websocket));
+    installHostGuard(fastify, config.server.allowedHosts);
     yield* tryPromise(() =>
       fastify.register(cors, {
         methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -94,14 +106,26 @@ export const HttpServerLayer = Layer.effect(
         },
       }),
     );
-    yield* tryPromise(() => fastify.register(websocket));
     registerRuntimeRoutes(fastify, runtime);
 
     yield* tryPromise(() => fastify.listen({ host: host.value, port: port.value })).pipe(
       Effect.mapError((cause) => new RuntimeListenFailed({ host, port, cause })),
       Effect.uninterruptible,
     );
-    const url = localRuntimeUrl(fastify.server.address() as AddressInfo);
+    const address = fastify.server.address() as AddressInfo;
+    // After `listen`, so a bind that fails does not warn and the line shows the bound port.
+    for (const warning of exposureWarnings(host.value)) {
+      yield* Effect.logWarning(exposureWarningMessages[warning]).pipe(
+        Effect.annotateLogs({
+          warning,
+          host: host.value,
+          hostSource: describeSource(host),
+          port: address.port,
+          portSource: describeSource(port),
+        }),
+      );
+    }
+    const url = localRuntimeUrl(address);
     yield* startup(url);
     return RuntimeServer.of({ url, fastify });
   }),

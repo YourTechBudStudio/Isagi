@@ -4,6 +4,7 @@ import { Data } from 'effect';
 
 import type { SourcedValue } from '@isagi/cli/serve-launch';
 
+import { isLoopbackHostname } from '../platform/http/index.js';
 import type { RuntimeConfigShape } from '../runtime-config/index.js';
 import type { ServerLaunch } from './launch.js';
 
@@ -28,7 +29,7 @@ const defaultPort: SourcedValue<number> = { value: 0, source: 'default', name: '
  */
 export function resolveListenSettings(
   launch: Pick<ServerLaunch['Service'], 'host' | 'port'>,
-  config: RuntimeConfigShape['server'],
+  config: Pick<RuntimeConfigShape['server'], 'host' | 'port'>,
 ): ListenSettings {
   return {
     host:
@@ -58,6 +59,23 @@ export function localRuntimeUrl(address: AddressInfo): string {
   }
   return `http://${address.address}:${address.port}`;
 }
+
+export type ExposureWarning = 'login_off_beyond_loopback' | 'plain_http_beyond_loopback';
+
+/** The exposure warnings for a listen host (#64 AC5). Wildcards (`0.0.0.0`, `::`) count as beyond loopback. */
+export function exposureWarnings(host: string): readonly ExposureWarning[] {
+  return isLoopbackHostname(host.replace(/^\[|\]$/g, '').toLowerCase())
+    ? []
+    : ['login_off_beyond_loopback', 'plain_http_beyond_loopback'];
+}
+
+/** The startup log line for each exposure warning. */
+export const exposureWarningMessages: Readonly<Record<ExposureWarning, string>> = {
+  login_off_beyond_loopback:
+    'Runtime is listening beyond loopback with login off: anyone who can reach this address can use Isagi.',
+  plain_http_beyond_loopback:
+    'Runtime is serving plain HTTP beyond loopback: editor webviews and clipboard need HTTPS or localhost; put HTTPS in front, for example tailscale serve.',
+};
 
 /** `--port`, `ISAGI_PORT`, `config.yaml server.port` or `default`: where a value came from, as the user wrote it. */
 export function describeSource(value: SourcedValue<unknown>): string {

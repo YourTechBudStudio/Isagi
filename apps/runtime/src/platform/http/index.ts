@@ -19,6 +19,7 @@ export {
 } from './errors.js';
 export type { ApiRouteContext } from './errors.js';
 export type { InfrastructureError, InfrastructureErrorFor } from './infrastructure-errors.js';
+export { hostnameFromHostHeader, installHostGuard, isLoopbackHostname } from './host.js';
 export {
   enforceRuntimeWebSocketOrigin,
   installAllowedOrigins,

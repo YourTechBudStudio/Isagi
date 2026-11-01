@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -61,6 +61,118 @@ test('runtime HTTP CORS emits an allow origin only for the exact configured orig
     });
     assert.equal(allowed.headers['access-control-allow-origin'], 'http://127.0.0.1:43129');
     assert.equal(rejected.headers['access-control-allow-origin'], undefined);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('the Host guard refuses an unlisted host on every route, upgrade and preflight', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-host-'));
+  let runtime: BootedRuntime | undefined;
+
+  try {
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      allowedOrigins: ['http://127.0.0.1:43129'],
+    });
+    const server = runtime.server;
+
+    const refused = await server.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { host: 'evil.test' },
+    });
+    assert.equal(refused.statusCode, 403);
+    const { error } = refused.json<{ error: { code: string; data: unknown } }>();
+    assert.equal(error.code, 'api_host_not_allowed');
+    assert.deepEqual(error.data, { host: 'evil.test' });
+
+    // Unknown routes too: the guard reaches the not-found context, so a refused host never learns what exists.
+    const unknown = await server.inject({
+      method: 'GET',
+      url: '/nope',
+      headers: { host: 'evil.test' },
+    });
+    assert.equal(unknown.statusCode, 403);
+    assert.equal(unknown.json<{ error: { code: string } }>().error.code, 'api_host_not_allowed');
+
+    // A preflight from a refused host is refused before CORS can answer it.
+    const preflight = await server.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/health',
+      headers: {
+        host: 'evil.test',
+        origin: 'http://127.0.0.1:43129',
+        'access-control-request-method': 'GET',
+      },
+    });
+    assert.equal(preflight.statusCode, 403);
+    assert.equal(preflight.headers['access-control-allow-origin'], undefined);
+
+    const loopback = await server.inject({ method: 'GET', url: '/api/v1/health' });
+    assert.equal(loopback.statusCode, 200);
+
+    // `injectWS` sends no Host of its own, so each upgrade names the one under test.
+    await assert.rejects(
+      server.injectWS('/api/v1/events', { headers: { host: 'evil.test' } }),
+      /403/,
+    );
+    const socket = await server.injectWS('/api/v1/events', { headers: { host: '127.0.0.1' } });
+    socket.terminate();
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("the runtime's own non-loopback address is refused until it is listed (D1)", async () => {
+  // What a PTY's ISAGI_RUNTIME_URL produces under `--host 192.168.1.20`, sent to a loopback-bound runtime, so the
+  // rule is exercised without binding a LAN address.
+  for (const [allowedHosts, expected] of [
+    [undefined, 403],
+    [['192.168.1.20', 'VM.Example.test'], 200],
+  ] as const) {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-d1-'));
+    let runtime: BootedRuntime | undefined;
+    try {
+      if (allowedHosts !== undefined) {
+        writeFileSync(
+          join(dataRoot, 'config.yaml'),
+          `server:\n  allowedHosts:\n${allowedHosts.map((entry) => `    - ${entry}\n`).join('')}`,
+          'utf8',
+        );
+      }
+      const booted = await bootRuntime({ dataDirectory: dataRoot });
+      runtime = booted;
+      const port = new URL(booted.url).port;
+      for (const host of [`192.168.1.20:${port}`, 'vm.example.test']) {
+        const response = await booted.server.inject({
+          method: 'GET',
+          url: '/api/v1/health',
+          headers: { host },
+        });
+        assert.equal(response.statusCode, expected, `${host} with ${JSON.stringify(allowedHosts)}`);
+      }
+    } finally {
+      await runtime?.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test('a loopback runtime logs no exposure warning', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-warnings-'));
+  const logs = makeLogCapture();
+  let runtime: BootedRuntime | undefined;
+
+  try {
+    runtime = await bootRuntime({ dataDirectory: dataRoot, extraLayer: logs.layer });
+    assert.ok(logs.lines.some((line) => line.message === 'Runtime listen settings'));
+    assert.deepEqual(
+      logs.lines.filter((line) => line.message.includes('beyond loopback')),
+      [],
+    );
   } finally {
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });

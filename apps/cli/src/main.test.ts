@@ -297,6 +297,32 @@ test('a route the runtime does not serve points at the matching isagi', async ()
   );
 });
 
+test('a Host the runtime refuses points at server.allowedHosts', async () => {
+  const runtime = fakeRuntime({
+    'workflows.getRun': () =>
+      fail(
+        new RuntimeApiError({
+          endpointId: 'workflows.getRun',
+          apiError: {
+            code: 'api_host_not_allowed',
+            status: 403,
+            message: 'Requests for host "192.168.1.20" are not allowed.',
+            requestId: 'r',
+            data: { host: '192.168.1.20:11299' },
+          },
+        }),
+      ),
+  });
+  const run = await runIsagi(['workflows', 'runs', 'show', '9', '--json'], { runtime });
+  assert.equal(run.code, 1);
+  const error = errorDocument(run.stdout);
+  assert.equal(error.code, 'api_host_not_allowed');
+  assert.equal(
+    error.recovery,
+    "The runtime refused the request's Host (`data.host`). Add that host to server.allowedHosts in the runtime's config.yaml and restart the runtime; a runtime listening on a specific non-loopback address must list that address.",
+  );
+});
+
 test('a transport failure is runtime_unreachable, naming the endpoint and runtime', async () => {
   const cause = Object.assign(new TypeError('fetch failed'), {
     cause: new Error('connect ECONNREFUSED 127.0.0.1:4100'),

@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 import { Schema } from 'effect';
 
 import { terminalSettingsBounds } from '@isagi/contracts';
@@ -83,16 +85,41 @@ export const runtimeAppearanceSettingsSchema = Schema.Struct({
     'How the Isagi app looks. Missing fields use defaults. Changes require restarting Isagi.',
 });
 
+const hostnamePattern = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
+// The rest of a `*.` entry: a domain name, never an IP literal or anything ending in a numeric label.
+const isWildcardSuffix = (rest: string) =>
+  hostnamePattern.test(rest) &&
+  isIP(rest) === 0 &&
+  !/^\d+$/.test(rest.slice(rest.lastIndexOf('.') + 1));
+
+const allowedHostEntry = Schema.String.check(
+  Schema.makeFilter(
+    (entry: string) =>
+      entry === '*' ||
+      isIP(entry) !== 0 ||
+      hostnamePattern.test(entry) ||
+      (entry.startsWith('*.') && isWildcardSuffix(entry.slice(2))),
+    {
+      description:
+        'a hostname, an IP address, *.<domain> or *, without scheme, port, path or brackets; a wildcard is allowed only as the whole first label',
+    },
+  ),
+);
+
 export const runtimeServerSettingsSchema = Schema.Struct({
   host: Schema.optional(Schema.NonEmptyString).annotate({
     description:
-      'The exact address the runtime listens on. Missing defaults to 127.0.0.1, reachable from this machine only; use 0.0.0.0 to listen on every interface. A desktop-managed runtime needs 127.0.0.1 or 0.0.0.0. The isagi serve --host flag and ISAGI_HOST override it. Changes require restarting Isagi.',
+      'The exact address the runtime listens on. Missing defaults to 127.0.0.1, reachable from this machine only; use 0.0.0.0 to listen on every interface. A desktop-managed runtime needs 127.0.0.1 or 0.0.0.0. The isagi serve --host flag and ISAGI_HOST override it. Changes require restarting Isagi. A specific non-loopback address must also be listed in allowedHosts.',
   }),
   port: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65_535 })),
   ).annotate({
     description:
       'The TCP port the runtime listens on, from 0 through 65535. Missing or 0 picks a free port on every start; set a fixed port such as 11299 for a server you return to. The isagi serve --port flag and ISAGI_PORT override it. Changes require restarting Isagi.',
+  }),
+  allowedHosts: Schema.optional(Schema.Array(allowedHostEntry)).annotate({
+    description:
+      "Hostnames or IP addresses, other than loopback, that may reach the runtime. Requests whose Host header names anything else are refused with api_host_not_allowed; this guards against DNS rebinding. List the machine's .ts.net name when the runtime sits behind tailscale serve, or the LAN name or address you browse to when it listens on 0.0.0.0. When host is a specific non-loopback address, list that address too: Isagi's own terminals, agents and workflows call the runtime at it. Entries are exact hostnames or IP addresses, without scheme or port. A leading *. admits every subdomain of the rest (any number of labels, not the domain itself), and * admits every host. Prefer the narrowest entry, for example *.<your-tailnet>.ts.net, and use * only when necessary. Changes require restarting Isagi.",
   }),
 }).annotate({
   description:
