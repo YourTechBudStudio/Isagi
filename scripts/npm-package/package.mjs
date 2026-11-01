@@ -129,6 +129,7 @@ isagi serve --host 0.0.0.0 --data-dir ~/isagi-server
 | \`--port <0-65535>\` | \`ISAGI_PORT\` | \`server.port\` in \`config.yaml\`, else \`0\` (a free port) |
 | \`--data-dir <path>\` | \`ISAGI_DATA_DIR\` | \`~/.isagi\` |
 | \`--allowed-origins <origin,…>\` | — | none |
+| \`--web-root <path>\` | — | the copy bundled with \`isagi\`; served only when \`server.serveWebUi\` is true |
 
 A flag beats its environment variable, which beats \`config.yaml\` in the data directory, which beats the default. Run \`isagi --help\` or \`isagi serve --help\` for every command and flag; add \`--json\` for machine-readable errors.
 

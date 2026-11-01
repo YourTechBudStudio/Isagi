@@ -68,7 +68,11 @@ export function rendererRuntimeOrigins(input: {
 }
 
 /**
- * The renderer CSP. External runtime origins reach `connect-src` only, and
+ * The renderer CSP. Twin of `webUiContentSecurityPolicy` in
+ * `apps/runtime/src/web-ui/policy.ts`, the policy of the runtime-served web
+ * UI: keep the directives in step, with `'self'` standing for the runtime there.
+ *
+ * External runtime origins reach `connect-src` only, and
  * `frame-src` stays loopback-only regardless of what Isagi is attached to.
  * Every runtime now provisions Code Server, so an external runtime can report
  * its editor `ready`; a remote one's editor cannot be framed here, a known

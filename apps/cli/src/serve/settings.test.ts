@@ -17,12 +17,13 @@ const where = { cwd: '/work/here', home: '/home/me' };
 function resolve(
   flags: Partial<Record<keyof ServeFlags, string>>,
   env: Record<string, string> = {},
+  bundled: { readonly webRoot: string | undefined } = { webRoot: undefined },
 ) {
   const given: ServeFlags = {
     ...none,
     ...Object.fromEntries(Object.entries(flags).map(([key, value]) => [key, Option.some(value)])),
   };
-  return resolveServeLaunch(given, { ...where, env });
+  return resolveServeLaunch(given, { ...where, env }, bundled);
 }
 
 function settingsOf(result: ReturnType<typeof resolve>) {
@@ -107,7 +108,29 @@ test('paths expand ~ and resolve against the current directory', () => {
   );
   assert.equal(settingsOf(resolve({ dataDir: 'data' })).dataDirectory.value, '/work/here/data');
   assert.equal(settingsOf(resolve({}, { ISAGI_DATA_DIR: '../d' })).dataDirectory.value, '/work/d');
-  assert.equal(settingsOf(resolve({ webRoot: 'web' })).webRoot, '/work/here/web');
+  assert.deepEqual(settingsOf(resolve({ webRoot: 'web' })).webRoot, {
+    value: '/work/here/web',
+    source: 'flag',
+    name: '--web-root',
+  });
+});
+
+test('the web root is the flag, else the bundled copy, else none', () => {
+  const bundled = { webRoot: '/pkg/web' };
+  assert.deepEqual(settingsOf(resolve({ webRoot: '/srv/web' }, {}, bundled)).webRoot, {
+    value: '/srv/web',
+    source: 'flag',
+    name: '--web-root',
+  });
+  assert.deepEqual(settingsOf(resolve({}, {}, bundled)).webRoot, {
+    value: '/pkg/web',
+    source: 'default',
+    name: 'default',
+  });
+  assert.equal(settingsOf(resolve({})).webRoot, undefined);
+  assert.deepEqual(failureOf(resolve({ webRoot: '' }, {}, bundled)).context, {
+    webRoot: { value: '', source: 'flag', name: '--web-root' },
+  });
 });
 
 test('allowed origins are trimmed, empties dropped, and each must be an origin or file://', () => {

@@ -443,6 +443,23 @@ test('serve hands the resolved launch to the runtime entry and prints nothing', 
   ]);
 });
 
+test('serve hands the entry’s bundled web root over as the default, and --web-root beats it', async () => {
+  const runtime = fakeRuntimeEntry({ defaultWebRoot: '/opt/isagi/web' });
+  await runIsagi(['serve'], { runtimeEntry: runtime.entry, cwd: '/work', env: {} });
+  await runIsagi(['serve', '--web-root', 'web'], {
+    runtimeEntry: runtime.entry,
+    cwd: '/work',
+    env: {},
+  });
+  assert.deepEqual(
+    runtime.launches.map((launch) => launch.webRoot),
+    [
+      { value: '/opt/isagi/web', source: 'default', name: 'default' },
+      { value: '/work/web', source: 'flag', name: '--web-root' },
+    ],
+  );
+});
+
 test('serve reports a bad setting before loading the runtime, and a load failure with its facts', async () => {
   let loaded = 0;
   const entry = fakeRuntimeEntry({

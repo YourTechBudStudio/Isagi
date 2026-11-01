@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,7 @@ import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
 import { expectNoNewHandles, makeLogCapture } from '../../../test/test-support.js';
 import { CliAccess } from '../../cli-access/index.js';
 import { noCliAccess } from '../../cli-access/testing.js';
+import { WebRootUnusable, webUiContentSecurityPolicy } from '../../web-ui/index.js';
 import { HttpServerLayer } from '../http-server.js';
 import { launchInputsLayer } from '../launch.js';
 import { AppLayer } from '../layer.js';
@@ -156,6 +157,116 @@ test("the runtime's own non-loopback address is refused until it is listed (D1)"
       }
     } finally {
       await runtime?.close();
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test('with serveWebUi off, / is a JSON contract error and the web root is never read', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ui-off-'));
+  let runtime: BootedRuntime | undefined;
+  try {
+    // A web root that does not exist: with the UI off it is neither checked nor served (AC2).
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      webRoot: { value: join(dataRoot, 'absent'), source: 'flag', name: '--web-root' },
+    });
+    const root = await runtime.server.inject({ method: 'GET', url: '/' });
+    assert.equal(root.statusCode, 404);
+    assert.equal(root.json<{ error: { code: string } }>().error.code, 'api_route_not_found');
+    assert.equal(root.headers['content-security-policy'], undefined);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('with serveWebUi on, the web build is served with the CSP and page misses fall back to it', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ui-on-'));
+  const webRoot = join(dataRoot, 'web');
+  const documentBody = '<!doctype html><title>Isagi</title>';
+  let runtime: BootedRuntime | undefined;
+  try {
+    mkdirSync(join(webRoot, 'assets'), { recursive: true });
+    writeFileSync(join(webRoot, 'index.html'), documentBody);
+    writeFileSync(join(webRoot, 'assets', 'a.js'), 'export {};');
+    writeFileSync(
+      join(dataRoot, 'config.yaml'),
+      'server:\n  serveWebUi: true\n  allowedHosts:\n    - vm.example.test\n',
+    );
+    runtime = await bootRuntime({
+      dataDirectory: dataRoot,
+      webRoot: { value: webRoot, source: 'flag', name: '--web-root' },
+    });
+    const server = runtime.server;
+
+    for (const url of ['/', '/deep/path', '/apiary?x=1']) {
+      const page = await server.inject({ method: 'GET', url });
+      assert.equal(page.statusCode, 200, url);
+      assert.equal(page.body, documentBody, url);
+      assert.equal(page.headers['content-security-policy'], webUiContentSecurityPolicy, url);
+    }
+    const asset = await server.inject({ method: 'GET', url: '/assets/a.js' });
+    assert.equal(asset.statusCode, 200);
+    assert.equal(asset.body, 'export {};');
+    assert.equal(asset.headers['content-security-policy'], webUiContentSecurityPolicy);
+    const head = await server.inject({ method: 'HEAD', url: '/' });
+    assert.equal(head.statusCode, 200);
+    assert.equal(head.headers['content-security-policy'], webUiContentSecurityPolicy);
+
+    // API and editor misses, and anything but GET/HEAD, stay contract errors: never HTML.
+    for (const [method, url] of [
+      ['GET', '/api/v1/nope'],
+      ['GET', '/api'],
+      ['GET', '/editor/1'],
+      ['POST', '/x'],
+    ] as const) {
+      const miss = await server.inject({ method, url });
+      assert.equal(miss.statusCode, 404, `${method} ${url}`);
+      assert.equal(miss.json<{ error: { code: string } }>().error.code, 'api_route_not_found');
+      assert.equal(miss.headers['content-security-policy'], undefined, `${method} ${url}`);
+    }
+    assert.equal((await server.inject({ method: 'GET', url: '/api/v1/health' })).statusCode, 200);
+
+    // One admission path: the Host guard covers the static files and the fallback too.
+    for (const url of ['/', '/deep/path', '/assets/a.js']) {
+      const refused = await server.inject({ method: 'GET', url, headers: { host: 'evil.test' } });
+      assert.equal(refused.statusCode, 403, url);
+      assert.equal(refused.json<{ error: { code: string } }>().error.code, 'api_host_not_allowed');
+    }
+    const listed = await server.inject({
+      method: 'GET',
+      url: '/',
+      headers: { host: 'vm.example.test' },
+    });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.body, documentBody);
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('with serveWebUi on, an unusable web root fails startup with WebRootUnusable', async () => {
+  for (const webRoot of [undefined, 'absent'] as const) {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ui-bad-'));
+    try {
+      writeFileSync(join(dataRoot, 'config.yaml'), 'server:\n  serveWebUi: true\n');
+      await assert.rejects(
+        bootRuntime({
+          dataDirectory: dataRoot,
+          webRoot:
+            webRoot === undefined
+              ? undefined
+              : { value: join(dataRoot, webRoot), source: 'flag', name: '--web-root' },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof WebRootUnusable, String(error));
+          assert.match(error.message, /^server\.serveWebUi is true, but /);
+          return true;
+        },
+      );
+    } finally {
       rmSync(dataRoot, { recursive: true, force: true });
     }
   }

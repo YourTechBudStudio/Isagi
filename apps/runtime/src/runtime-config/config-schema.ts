@@ -117,6 +117,10 @@ export const runtimeServerSettingsSchema = Schema.Struct({
     description:
       'The TCP port the runtime listens on, from 0 through 65535. Missing or 0 picks a free port on every start; set a fixed port such as 11299 for a server you return to. The isagi serve --port flag and ISAGI_PORT override it. Changes require restarting Isagi.',
   }),
+  serveWebUi: Schema.optional(Schema.Boolean).annotate({
+    description:
+      'Serve the web workbench from the runtime at its own address, so a browser can use Isagi. Missing or false serves the API only. isagi serve and the desktop respect this value as written; neither turns it on. Editor webviews (such as Markdown preview) and clipboard copy need HTTPS or localhost, so to use the workbench from another machine put HTTPS in front of the runtime, for example tailscale serve, and list that hostname in allowedHosts. Changes require restarting Isagi.',
+  }),
   allowedHosts: Schema.optional(Schema.Array(allowedHostEntry)).annotate({
     description:
       "Hostnames or IP addresses, other than loopback, that may reach the runtime. Requests whose Host header names anything else are refused with api_host_not_allowed; this guards against DNS rebinding. List the machine's .ts.net name when the runtime sits behind tailscale serve, or the LAN name or address you browse to when it listens on 0.0.0.0. When host is a specific non-loopback address, list that address too: Isagi's own terminals, agents and workflows call the runtime at it. Entries are exact hostnames or IP addresses, without scheme or port. A leading *. admits every subdomain of the rest (any number of labels, not the domain itself), and * admits every host. Prefer the narrowest entry, for example *.<your-tailnet>.ts.net, and use * only when necessary. Changes require restarting Isagi.",

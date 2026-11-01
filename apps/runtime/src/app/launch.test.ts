@@ -14,7 +14,7 @@ test('the launch is split into the inputs each owner reads', async () => {
     host: { value: '0.0.0.0', source: 'env', name: 'ISAGI_HOST' },
     port: undefined,
     dataDirectory: { value: '/srv/isagi', source: 'flag', name: '--data-dir' },
-    webRoot: '/srv/web',
+    webRoot: { value: '/srv/web', source: 'flag', name: '--web-root' },
     allowedOrigins: ['https://isagi.example.test'],
     cliEntryPath: '/opt/isagi/isagi.mjs',
   };
@@ -28,7 +28,7 @@ test('the launch is split into the inputs each owner reads', async () => {
   assert.deepEqual(inputs.server, {
     host: launch.host,
     port: undefined,
-    webRoot: '/srv/web',
+    webRoot: launch.webRoot,
     allowedOrigins: ['https://isagi.example.test'],
   });
   assert.deepEqual(inputs.root, { path: '/srv/isagi' });

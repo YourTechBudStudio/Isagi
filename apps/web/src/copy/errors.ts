@@ -509,7 +509,7 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   unsupported_harness: 'This harness is not wired into Isagi yet.',
   ...harnessLaunchBlockCopy,
   session_already_attached: 'This session is already attached in another pane.',
-  session_attachment_moved: 'This session moved to another pane.',
+  session_attachment_moved: 'This session moved to another pane, window or device.',
   stream_superseded: 'This stream opened somewhere else.',
   attach_token_missing: 'This pane needs to claim the session before attaching.',
   attach_token_invalid: 'This pane no longer has the current attach claim.',

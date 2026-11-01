@@ -13,6 +13,12 @@ import {
   type RouteRuntime,
 } from '../platform/http/index.js';
 import { RuntimeConfig } from '../runtime-config/index.js';
+import {
+  isWebUiDocumentRequest,
+  registerWebUi,
+  requireWebRoot,
+  sendWebUiDocument,
+} from '../web-ui/index.js';
 import { WorkspaceService } from '../workspace/index.js';
 import { ServerLaunch } from './launch.js';
 import { AppLayer, type RuntimeServices } from './layer.js';
@@ -62,6 +68,10 @@ export const HttpServerLayer = Layer.effect(
         portSource: describeSource(port),
       }),
     );
+    const { serveWebUi } = config.server;
+    // Before anything listens or any route can change state, so a misconfigured web UI fails startup instead of
+    // silently serving the API only. With the UI off the web root is never read.
+    const webRoot = serveWebUi ? yield* requireWebRoot(launch.webRoot) : undefined;
     // After every service is built, so the command service's activation subscriber hears the restored activation,
     // and before any route can change the active context.
     yield* WorkspaceService.use((workspace) => workspace.publishRestoredActivation);
@@ -88,7 +98,7 @@ export const HttpServerLayer = Layer.effect(
     // Before any plugin or route, so every encapsulated context inherits the set.
     installAllowedOrigins(fastify, launch.allowedOrigins);
     const allowedOrigins = fastify.isagiAllowedOrigins ?? new Set<string>();
-    configureApiErrorHandlers(fastify);
+    configureApiErrorHandlers(fastify, { serveWebUi });
     // The order of the next three is fixed; each relies on `onRequest` hooks running in registration order.
     // 1. `@fastify/websocket` marks upgrades in its hook, and its `onResponse` hook destroys a marked upgrade's
     //    socket, so a refused upgrade is closed rather than left hanging.
@@ -106,6 +116,10 @@ export const HttpServerLayer = Layer.effect(
         },
       }),
     );
+    // After the admission hooks above, so the guard covers the static routes and the document fallback too.
+    if (webRoot !== undefined) {
+      yield* tryPromise(() => registerWebUi(fastify, webRoot));
+    }
     registerRuntimeRoutes(fastify, runtime);
 
     yield* tryPromise(() => fastify.listen({ host: host.value, port: port.value })).pipe(
@@ -152,16 +166,24 @@ function tryPromise<A>(run: () => PromiseLike<A>) {
   });
 }
 
-function configureApiErrorHandlers(fastify: FastifyInstance) {
-  fastify.setNotFoundHandler((request, reply) =>
-    sendApiError(reply, {
+function configureApiErrorHandlers(
+  fastify: FastifyInstance,
+  options: { readonly serveWebUi: boolean },
+) {
+  fastify.setNotFoundHandler((request, reply) => {
+    // With the web UI on, a page path no static file answers (a deep path) gets the document; API and editor misses
+    // stay contract errors.
+    if (options.serveWebUi && isWebUiDocumentRequest(request)) {
+      return sendWebUiDocument(reply);
+    }
+    return sendApiError(reply, {
       code: 'api_route_not_found',
       status: 404,
       message: `Route not found: ${request.method} ${request.url}`,
       requestId: String(request.id),
       data: { method: request.method, url: request.url },
-    }),
-  );
+    });
+  });
   fastify.setErrorHandler((error, request, reply) => {
     const status = errorStatusCode(error);
     return sendApiError(reply, {

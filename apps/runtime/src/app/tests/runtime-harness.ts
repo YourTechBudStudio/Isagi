@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import type { RuntimeLaunch } from '@isagi/cli/serve-launch';
+import type { RuntimeLaunch, SourcedValue } from '@isagi/cli/serve-launch';
 
 import { EditorProvisioningSettings, editorProvisioningDeadline } from '../../editor/index.js';
 import { MainLayer, RuntimeServer } from '../http-server.js';
@@ -23,6 +23,8 @@ export interface BootRuntimeOptions {
   readonly dataDirectory: string;
   /** The browser origins the server accepts, as `serve --allowed-origins` would pass them. Default none. */
   readonly allowedOrigins?: readonly string[];
+  /** The web workbench build, as `serve --web-root` would pass it. Default none. */
+  readonly webRoot?: SourcedValue<string> | undefined;
   /**
    * Provided around the whole runtime instead of `RuntimeLogger.layer`, so it reaches construction, request fibers and
    * background fibers: a log capture, a fiber probe, or `RuntimeLogger.layer` merged with either.
@@ -39,7 +41,7 @@ export function testRuntimeLaunch(options: BootRuntimeOptions): RuntimeLaunch {
     host: undefined,
     port: undefined,
     dataDirectory: { value: options.dataDirectory, source: 'flag', name: '--data-dir' },
-    webRoot: undefined,
+    webRoot: options.webRoot,
     allowedOrigins: options.allowedOrigins ?? [],
     cliEntryPath,
   };

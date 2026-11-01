@@ -72,9 +72,11 @@ const prepareManagedRuntime = Effect.gen(function* () {
     ? {
         stageRoot: resolve(process.resourcesPath, 'runtime'),
         dataDirectory: configuredDataDirectory,
+        // The directory `resolveRendererTarget` loads the renderer's `index.html` from.
+        webRoot: resolve(process.resourcesPath, 'web'),
       }
     : developmentLocations(resolveDevelopmentRoot(repositoryRoot));
-  const { stageRoot, dataDirectory } = locations;
+  const { stageRoot, dataDirectory, webRoot } = locations;
   if (!app.isPackaged) {
     yield* Effect.logInfo(`runtime stage ${stageRoot}`);
     yield* Effect.logInfo(`runtime data ${dataDirectory}`);
@@ -95,7 +97,10 @@ const prepareManagedRuntime = Effect.gen(function* () {
 
   const specification: RuntimeSpawnSpecification = {
     command: process.execPath,
-    args: [stage.entrypoint, ...managedRuntimeServeArguments({ allowedOrigins, dataDirectory })],
+    args: [
+      stage.entrypoint,
+      ...managedRuntimeServeArguments({ allowedOrigins, dataDirectory, webRoot }),
+    ],
     cwd: stage.root,
     processGroupOwnership:
       !app.isPackaged && process.env[developmentEnvironmentKeys.processOwner] === '1'
@@ -111,6 +116,8 @@ function developmentLocations(developmentRoot: string) {
   return {
     stageRoot: paths.runtimeStage,
     dataDirectory: paths.dataRoot,
+    // Built by `pnpm --filter @isagi/web build`; read only when `server.serveWebUi` is true.
+    webRoot: resolve(developmentRoot, 'apps/web/dist'),
   };
 }
 

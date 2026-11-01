@@ -21,7 +21,11 @@ export function serveRuntimeCommand(
   runtimeEntry: RuntimeEntry | undefined,
 ): (flags: ServeFlags) => Effect.Effect<void, CliFailure> {
   return Effect.fn('cli.serve')(function* (flags: ServeFlags) {
-    const resolved = resolveServeLaunch(flags, { env: io.env, cwd: io.cwd, home: homedir() });
+    const resolved = resolveServeLaunch(
+      flags,
+      { env: io.env, cwd: io.cwd, home: homedir() },
+      { webRoot: runtimeEntry?.defaultWebRoot },
+    );
     if (!resolved.ok) return yield* resolved.failure;
     if (runtimeEntry === undefined) {
       return yield* Effect.die(new Error('runCli was called without a runtime entry.'));
