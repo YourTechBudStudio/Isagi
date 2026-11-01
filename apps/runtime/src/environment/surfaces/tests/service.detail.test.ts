@@ -48,12 +48,10 @@ test('an editor pane projects the editor context beside its placement', async ()
     assert.equal(session.editorContext.paneId, detail.opened.paneId);
     assert.equal(session.editorContext.id, detail.opened.editorContextId);
     assert.equal(session.editorContext.activePtyProcessId, detail.ptyProcessId);
-    // The composed loopback URL is the runtime's, not the client's: the pane
-    // frames exactly what the runtime allocated and bound.
+    // The runtime composes the proxy path; Code Server's own host and port
+    // never reach the client (#64 AC3).
     assert.deepEqual(session.editorContext.endpoint, {
-      host: '127.0.0.1',
-      port: 41_234,
-      url: 'http://127.0.0.1:41234',
+      path: `/editor/${detail.opened.editorContextId}/`,
     });
     // No probe has settled for this incarnation, so readiness is honestly
     // unknown rather than optimistically ready.

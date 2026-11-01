@@ -344,6 +344,7 @@ const dyingEditorContextService: EditorContextService['Service'] = {
   ensureRuntime: () => Effect.die('editor ensureRuntime is not used by session tests'),
   releaseIncarnation: () => Effect.die('editor releaseIncarnation is not used by session tests'),
   readinessFor: () => Effect.die('editor readinessFor is not used by session tests'),
+  proxyTarget: () => Effect.die('editor proxyTarget is not used by session tests'),
   diagnostics: () => Effect.die('editor diagnostics is not used by session tests'),
 };
 

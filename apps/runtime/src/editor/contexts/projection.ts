@@ -1,7 +1,6 @@
 import type { EditorProcessDiagnostic } from '@isagi/contracts';
 
 import { exitDetail, type PtyProcessRow } from '../../pty-processes/index.js';
-import { editorOrigin } from './launch-spec.js';
 import type { EditorContextFacts, EditorContextRow, EditorReadinessObservation } from './types.js';
 
 /**
@@ -50,14 +49,11 @@ export function deriveEditorContextFacts(
     };
   }
 
+  // The runtime-relative path the editor proxy serves this context at. Gated on the stored
+  // endpoint, so it still says whether the incarnation was ever reachable; Code Server's own host
+  // and port never leave the runtime (#64 AC3).
   const endpoint =
-    row.endpointHost === null || row.endpointPort === null
-      ? null
-      : {
-          host: row.endpointHost,
-          port: row.endpointPort,
-          url: editorOrigin(row.endpointHost, row.endpointPort),
-        };
+    row.endpointHost === null || row.endpointPort === null ? null : { path: `/editor/${row.id}/` };
 
   const process = row.activePtyProcess;
   if (process === null) {

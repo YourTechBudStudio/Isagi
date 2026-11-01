@@ -27,8 +27,9 @@ test('branch 2: a fresh context launches exactly once and lands an owned incarna
         intent: 'reuse',
       });
       const row = yield* repository.find(created.id);
+      const target = yield* service.proxyTarget(created.id);
 
-      return { facts, row, changed: editorContextChangedIds(events) };
+      return { facts, row, target, changed: editorContextChangedIds(events) };
     }),
   );
 
@@ -38,7 +39,9 @@ test('branch 2: a fresh context launches exactly once and lands an owned incarna
   // The handoff resets the attempt: ownership and an in-flight attempt never coexist.
   assert.deepEqual(result.row?.attempt, { state: 'none' });
   assert.equal(result.facts.workbenchReadiness, 'pending');
-  assert.equal(result.facts.endpoint?.host, '127.0.0.1');
+  // The client gets the proxy path; only the runtime's memory knows the port.
+  assert.deepEqual(result.facts.endpoint, { path: `/editor/${result.facts.id}/` });
+  assert.deepEqual(result.target, { host: '127.0.0.1', port: result.row?.endpointPort });
   // in_progress, the handoff, and the post-start transition.
   assert.equal(result.changed.length, 3);
 });

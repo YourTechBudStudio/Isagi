@@ -78,7 +78,13 @@ const make = Effect.gen(function* () {
   // what lets the PTY-event subscriber recognize its own processes without a
   // database read per event, and its emptiness after a restart is exactly
   // right: an incarnation this runtime did not launch is not one it adopts.
-  const incarnations = new Map<number, number>();
+  // It also keeps where the incarnation listens, because it is the editor
+  // proxy's only source of a forwarding target: the row's stored endpoint
+  // outlives the process, and its port may since belong to another one.
+  const incarnations = new Map<
+    number,
+    { readonly editorContextId: number; readonly host: string; readonly port: number }
+  >();
 
   // Construction step 3, registered first so it runs last: once the probe map
   // below has interrupted every live probe, drop the in-memory state.
@@ -189,7 +195,11 @@ const make = Effect.gen(function* () {
       detail: null,
       observedAt: now(),
     });
-    incarnations.set(input.ptyProcessId, input.editorContextId);
+    incarnations.set(input.ptyProcessId, {
+      editorContextId: input.editorContextId,
+      host: input.host,
+      port: input.port,
+    });
 
     // Uninterruptible, so a supersession landing mid settlement waits for the
     // observation and its change event rather than cutting between them; the
@@ -347,7 +357,7 @@ const make = Effect.gen(function* () {
   const handleProcessEvent = Effect.fnUntraced(function* (event: {
     readonly ptyProcessId: number;
   }) {
-    const editorContextId = incarnations.get(event.ptyProcessId);
+    const editorContextId = incarnations.get(event.ptyProcessId)?.editorContextId;
     // Not an incarnation this runtime launched, so not this subscriber's to
     // interpret. Every other domain's processes leave here without a query.
     if (editorContextId === undefined) return;
@@ -411,6 +421,16 @@ const make = Effect.gen(function* () {
       const cleared = yield* repository.clearIncarnation(editorContextId);
       if (cleared === 'applied') yield* publishChanged(editorContextId);
     }),
+
+    proxyTarget: (editorContextId) =>
+      Effect.sync(() => {
+        for (const incarnation of incarnations.values()) {
+          if (incarnation.editorContextId === editorContextId) {
+            return { host: incarnation.host, port: incarnation.port };
+          }
+        }
+        return null;
+      }),
 
     readinessFor: (ptyProcessIds) =>
       Effect.sync(() => {
@@ -551,6 +571,15 @@ export class EditorContextService extends Context.Service<
       readonly held: EntityLockHeld;
       readonly editorContextId: number;
     }) => Effect.Effect<void, DatabaseError>;
+    /**
+     * Where the proxy forwards for this context: the incarnation this runtime launched and has not
+     * seen end, or null. Memory only, so a proxied asset costs no database read. At most one entry
+     * names a context: replacement forgets the old incarnation before launching (`runEnsure`), and a
+     * refused stop launches nothing.
+     */
+    readonly proxyTarget: (
+      editorContextId: number,
+    ) => Effect.Effect<{ readonly host: string; readonly port: number } | null>;
     /** The in-memory half of the read projection, composed by surface detail. */
     readonly readinessFor: (
       ptyProcessIds: readonly number[],

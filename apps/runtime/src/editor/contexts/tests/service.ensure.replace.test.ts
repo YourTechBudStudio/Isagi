@@ -28,6 +28,7 @@ test('replace stops the previous incarnation and launches a new one', async () =
         editorContextId: created.id,
         intent: 'reuse',
       });
+      const firstRow = yield* repository.find(created.id);
       const eventsBefore = editorContextChangedIds(events).length;
       const second = yield* service.ensureRuntime({
         editorContextId: created.id,
@@ -36,6 +37,8 @@ test('replace stops the previous incarnation and launches a new one', async () =
       const row = yield* repository.find(created.id);
 
       return {
+        firstPort: firstRow?.endpointPort,
+        target: yield* service.proxyTarget(created.id),
         firstPtyProcessId: first.activePtyProcessId,
         secondPtyProcessId: second.activePtyProcessId,
         row,
@@ -46,6 +49,9 @@ test('replace stops the previous incarnation and launches a new one', async () =
 
   assert.notEqual(result.firstPtyProcessId, result.secondPtyProcessId);
   assert.equal(result.row?.activePtyProcessId, result.secondPtyProcessId);
+  // The proxy forwards to the replacement only; the old incarnation is never a target again.
+  assert.deepEqual(result.target, { host: '127.0.0.1', port: result.row?.endpointPort });
+  assert.notEqual(result.target?.port, result.firstPort);
   assert.deepEqual(result.row?.attempt, { state: 'none' });
   // clear+in_progress, the handoff, and the post-start transition.
   assert.equal(result.newEvents, 3);
@@ -71,6 +77,7 @@ test('a termination failure launches nothing and retains the previous ownership'
           editorContextId: created.id,
           intent: 'reuse',
         });
+        const firstRow = yield* repository.find(created.id);
         const failure = yield* service
           .ensureRuntime({ editorContextId: created.id, intent: 'replace' })
           .pipe(Effect.flip);
@@ -79,7 +86,15 @@ test('a termination failure launches nothing and retains the previous ownership'
           .findByActivePtyProcessId(first.activePtyProcessId ?? -1)
           .pipe(Effect.map((found) => found?.id ?? null));
 
-        return { first, failure, row, ownedBy: processes, events };
+        return {
+          first,
+          firstPort: firstRow?.endpointPort,
+          failure,
+          row,
+          target: yield* service.proxyTarget(created.id),
+          ownedBy: processes,
+          events,
+        };
       }),
   );
 
@@ -88,7 +103,9 @@ test('a termination failure launches nothing and retains the previous ownership'
   // Nothing was cleared: a second incarnation beside a process that may still be
   // alive is the one outcome this path must never produce.
   assert.equal(result.row?.activePtyProcessId, result.first.activePtyProcessId);
-  assert.equal(result.row?.endpointPort, result.first.endpoint?.port);
+  assert.equal(result.row?.endpointPort, result.firstPort);
+  // The surviving incarnation is still the proxy's target.
+  assert.deepEqual(result.target, { host: '127.0.0.1', port: result.firstPort });
   assert.equal(result.ownedBy, result.row?.id);
   const attempt = result.row?.attempt;
   assert.ok(attempt !== undefined && attempt.state === 'failed');

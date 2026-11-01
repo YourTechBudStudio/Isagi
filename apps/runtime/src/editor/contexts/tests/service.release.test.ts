@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Context, Effect, Exit, Layer, Scope } from 'effect';
 
 import { EntityLock } from '../../../platform/locks/index.js';
 import { PtyKillError } from '../../../pty-processes/index.js';
 import { PtyRepository } from '../../../pty-processes/testing.js';
 import {
   editorBackendStub,
+  editorServiceLayer,
   immediateProbe,
   insertWorktree,
   neverSettlingProbe,
@@ -36,10 +40,12 @@ test('an affirmative stop clears the pointer, endpoint, and attempt', async () =
       return {
         row: yield* repository.find(created.id),
         observations: yield* service.readinessFor([facts.activePtyProcessId ?? -1]),
+        target: yield* service.proxyTarget(created.id),
       };
     }),
   );
 
+  assert.equal(result.target, null);
   assert.equal(result.row?.activePtyProcessId, null);
   assert.equal(result.row?.endpointHost, null);
   assert.equal(result.row?.endpointPort, null);
@@ -134,4 +140,33 @@ test('release stops the process it owned', async () => {
   );
 
   assert.equal(result?.status, 'killed');
+});
+
+test('closing the layer leaves the proxy no target', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-close-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const context = yield* Layer.buildWithScope(
+          editorServiceLayer({ dataRoot, events: [], options: { probe: neverSettlingProbe } }),
+          scope,
+        );
+        const service = Context.get(context, EditorContextService);
+        const created = yield* Effect.gen(function* () {
+          const worktreeId = yield* insertWorktree('/repo/isagi');
+          const repository = yield* EditorContextRepository;
+          return yield* repository.create({ worktreeId });
+        }).pipe(Effect.provideContext(context));
+        yield* service.ensureRuntime({ editorContextId: created.id, intent: 'reuse' });
+        const before = yield* service.proxyTarget(created.id);
+        yield* Scope.close(scope, Exit.void);
+        return { before, after: yield* service.proxyTarget(created.id) };
+      }),
+    );
+    assert.notEqual(result.before, null);
+    assert.equal(result.after, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });

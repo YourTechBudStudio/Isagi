@@ -10,6 +10,8 @@ import {
   editorStartIsPending,
 } from './view.js';
 
+const RUNTIME_URL = 'http://127.0.0.1:5000';
+
 const base: EditorContextFacts = {
   id: 7,
   worktreeId: 3,
@@ -34,7 +36,7 @@ const facts = (overrides: Partial<EditorContextFacts>): EditorContextFacts => ({
 const live = {
   activePtyProcessId: 48120,
   processStatus: 'running',
-  endpoint: { host: '127.0.0.1', port: 41287, url: 'http://127.0.0.1:41287' },
+  endpoint: { path: '/editor/7/' },
 } as const;
 
 describe('editorPaneView precedence', () => {
@@ -43,6 +45,7 @@ describe('editorPaneView precedence', () => {
       facts({
         attempt: { state: 'failed', reason: 'port_allocation_failed', detail: 'no free port' },
       }),
+      RUNTIME_URL,
     );
 
     assert.deepEqual(view, {
@@ -62,7 +65,10 @@ describe('editorPaneView precedence', () => {
       workbenchReadiness: 'ready',
     });
 
-    assert.deepEqual(editorPaneView(context), { kind: 'ready', url: 'http://127.0.0.1:41287' });
+    assert.deepEqual(editorPaneView(context, RUNTIME_URL), {
+      kind: 'ready',
+      url: 'http://127.0.0.1:5000/editor/7/',
+    });
     assert.deepEqual(editorAttemptBanner(context), {
       reason: 'previous_incarnation_not_stopped',
       detail: null,
@@ -76,13 +82,14 @@ describe('editorPaneView precedence', () => {
         workbenchReadiness: 'ready',
         attempt: { state: 'in_progress', startedAt: '2026-08-31T09:12:00.000Z' },
       }),
+      RUNTIME_URL,
     );
 
     assert.deepEqual(view, { kind: 'launching' });
   });
 
   it('rule 3 — no attempt and no pointer is idle', () => {
-    assert.deepEqual(editorPaneView(base), { kind: 'idle' });
+    assert.deepEqual(editorPaneView(base, RUNTIME_URL), { kind: 'idle' });
   });
 
   it('rule 4 — a terminal status reports the runtime diagnostic', () => {
@@ -93,6 +100,7 @@ describe('editorPaneView precedence', () => {
         processDiagnostic: 'attach_failed',
         processDiagnosticDetail: 'spawn ENOENT',
       }),
+      RUNTIME_URL,
     );
 
     assert.deepEqual(view, {
@@ -108,7 +116,10 @@ describe('editorPaneView precedence', () => {
       ['killed', 'killed'],
       ['failed', 'launch_failed'],
     ] as const) {
-      const view = editorPaneView(facts({ activePtyProcessId: 1, processStatus: status }));
+      const view = editorPaneView(
+        facts({ activePtyProcessId: 1, processStatus: status }),
+        RUNTIME_URL,
+      );
       assert.deepEqual(view, {
         kind: 'settled',
         reason: { kind: 'process', diagnostic },
@@ -118,13 +129,33 @@ describe('editorPaneView precedence', () => {
   });
 
   it('rule 5 — ready with an endpoint is the only state that frames a url', () => {
-    const view = editorPaneView(facts({ ...live, workbenchReadiness: 'ready' }));
-    assert.deepEqual(view, { kind: 'ready', url: 'http://127.0.0.1:41287' });
+    const view = editorPaneView(facts({ ...live, workbenchReadiness: 'ready' }), RUNTIME_URL);
+    assert.deepEqual(view, { kind: 'ready', url: 'http://127.0.0.1:5000/editor/7/' });
+  });
+
+  it('rule 5 resolves the runtime-relative path against whichever runtime URL it is given', () => {
+    const ready = facts({ ...live, workbenchReadiness: 'ready' });
+    assert.deepEqual(editorPaneView(ready, 'https://vm.tail.ts.net'), {
+      kind: 'ready',
+      url: 'https://vm.tail.ts.net/editor/7/',
+    });
+    // A runtime URL with a path of its own does not change where the root-relative path lands.
+    assert.deepEqual(editorPaneView(ready, 'https://vm.tail.ts.net/some/page'), {
+      kind: 'ready',
+      url: 'https://vm.tail.ts.net/editor/7/',
+    });
+  });
+
+  it('rule 5 waits as launching while the runtime URL is unresolved', () => {
+    assert.deepEqual(editorPaneView(facts({ ...live, workbenchReadiness: 'ready' }), null), {
+      kind: 'launching',
+    });
   });
 
   it('rule 6 — a running probe is a wait, not a failure', () => {
     const view = editorPaneView(
       facts({ activePtyProcessId: 48120, processStatus: 'running', workbenchReadiness: 'pending' }),
+      RUNTIME_URL,
     );
     assert.deepEqual(view, { kind: 'waiting_for_workbench' });
   });
@@ -136,6 +167,7 @@ describe('editorPaneView precedence', () => {
         workbenchReadiness: 'unreachable',
         readinessDetail: 'ECONNREFUSED',
       }),
+      RUNTIME_URL,
     );
     assert.deepEqual(unreachable, {
       kind: 'settled',
@@ -145,13 +177,14 @@ describe('editorPaneView precedence', () => {
 
     const unknown = editorPaneView(
       facts({ ...live, workbenchReadiness: 'unknown', readinessDetail: null }),
+      RUNTIME_URL,
     );
     assert.deepEqual(unknown, { kind: 'settled', reason: { kind: 'unknown' }, detail: null });
   });
 
   it('rule 9 — starting with nothing observed is launching', () => {
     assert.deepEqual(
-      editorPaneView(facts({ activePtyProcessId: 48120, processStatus: 'starting' })),
+      editorPaneView(facts({ activePtyProcessId: 48120, processStatus: 'starting' }), RUNTIME_URL),
       { kind: 'launching' },
     );
   });
@@ -160,6 +193,7 @@ describe('editorPaneView precedence', () => {
     assert.deepEqual(
       editorPaneView(
         facts({ activePtyProcessId: 1, processStatus: 'running', workbenchReadiness: 'ready' }),
+        RUNTIME_URL,
       ),
       { kind: 'launching' },
     );
@@ -207,6 +241,7 @@ describe('editorStartIntent', () => {
         processStatus: 'killed',
         processDiagnostic: 'killed',
       }),
+      RUNTIME_URL,
     );
 
     assert.equal(editorStartIsPending(settled, 'reuse'), false);

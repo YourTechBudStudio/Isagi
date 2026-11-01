@@ -58,9 +58,10 @@ test('the packaged policy frames loopback and denies the ambient directives', ()
 
 /**
  * `frame-src` is the only reason this policy exists, so its breadth is asserted
- * negatively as well: `localhost` is unused given the runtime's `127.0.0.1`
- * endpoint invariant, and an external runtime's editor stays unframed even when
- * it reports `ready` (the remote case belongs to #64).
+ * negatively as well: `localhost` is unused given the managed runtime's
+ * `127.0.0.1` address, and an external runtime adds exactly its own http(s)
+ * origin, where it serves the editor at `/editor/<id>/`, never its WebSocket
+ * form.
  *
  * It is also load-bearing for a surface outside this package. The inspector's
  * captured-HTML preview mounts an `about:srcdoc` frame, which Chromium treats as
@@ -70,15 +71,19 @@ test('the packaged policy frames loopback and denies the ambient directives', ()
  * ever changes, re-run that spec: the preview's real control is its empty
  * `sandbox` attribute, which must not be weakened to compensate.
  */
-test('frame-src admits neither localhost, a wildcard, nor an external runtime', () => {
+test('frame-src admits loopback and an external runtime in its https form, nothing broader', () => {
   const policy = policyFor(developmentTarget, ['https://runtime.example', 'wss://runtime.example']);
   const sources = (policy.get('frame-src') ?? '').split(' ');
   // A wildcard *port* is the point; a wildcard *source* would defeat it.
   assert.ok(!sources.includes('*'));
   assert.ok(!sources.some((source) => source.includes('localhost')));
-  assert.ok(!sources.some((source) => source.includes('runtime.example')));
   assert.ok(!sources.some((source) => /^[a-z]+:\/\/\*/u.test(source)));
-  assert.deepEqual(sources, ['http://127.0.0.1:*']);
+  assert.ok(!sources.includes('wss://runtime.example'));
+  assert.deepEqual(sources, ['http://127.0.0.1:*', 'https://runtime.example']);
+  // With no external runtime, loopback only.
+  assert.deepEqual((policyFor(developmentTarget).get('frame-src') ?? '').split(' '), [
+    'http://127.0.0.1:*',
+  ]);
 });
 
 test('development adds only the dev WebSocket origin and the Vite script allowances', () => {
@@ -135,7 +140,7 @@ test('external runtime origins reach connect-src in http and ws form', () => {
     policy.get('connect-src'),
     "'self' http://127.0.0.1:* ws://127.0.0.1:* https://runtime.test:8443 wss://runtime.test:8443",
   );
-  assert.equal(policy.get('frame-src'), 'http://127.0.0.1:*');
+  assert.equal(policy.get('frame-src'), 'http://127.0.0.1:* https://runtime.test:8443');
 });
 
 test('a plain http external runtime contributes its ws form', () => {

@@ -157,7 +157,9 @@ export function EditorPane({
 
   // A replacement is a different workbench behind the same pane. Covering it
   // again is the honest reading of "this document has not painted yet".
-  useEffect(() => setFrameLoaded(false), [url]);
+  // Per incarnation, not only per URL: every incarnation of a context is served at the same
+  // `/editor/<id>/` path, so a replacement would otherwise keep the old frame's lifted cover.
+  useEffect(() => setFrameLoaded(false), [url, activePtyProcessId]);
 
   const errored = view.kind === 'settled' && view.reason.kind !== 'unknown';
   const locked = actions?.locked ?? false;
@@ -266,6 +268,9 @@ export function EditorPane({
 
       {view.kind === 'ready' ? (
         <EditorFrame
+          // Remounts the iframe for a new incarnation even when its `src` is unchanged, which
+          // the browser would otherwise not reload.
+          key={activePtyProcessId ?? 'none'}
           url={view.url}
           title={title}
           loaded={frameLoaded}

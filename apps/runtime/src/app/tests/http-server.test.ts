@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -121,6 +123,73 @@ test('the Host guard refuses an unlisted host on every route, upgrade and prefli
     );
     const socket = await server.injectWS('/api/v1/events', { headers: { host: '127.0.0.1' } });
     socket.terminate();
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+/** A real upgrade to the listening runtime: `injectWS` has no socket for the editor proxy to pipe. */
+function rawUpgrade(url: string, path: string, host: string) {
+  const { port } = new URL(url);
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port,
+      path,
+      agent: false,
+      headers: {
+        host,
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-version': '13',
+        'sec-websocket-key': randomBytes(16).toString('base64'),
+      },
+    });
+    request.on('upgrade', (_response, socket) => {
+      socket.destroy();
+      reject(new Error('Unexpected upgrade'));
+    });
+    request.on('response', (response) => {
+      let body = '';
+      response.on('data', (chunk: Buffer) => (body += chunk.toString()));
+      response.on('end', () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+test('the editor proxy is admitted only through the Host guard', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-editor-proxy-'));
+  let runtime: BootedRuntime | undefined;
+  try {
+    writeFileSync(
+      join(dataRoot, 'config.yaml'),
+      'server:\n  allowedHosts:\n    - vm.example.test\n',
+    );
+    runtime = await bootRuntime({ dataDirectory: dataRoot });
+
+    const refused = await rawUpgrade(runtime.url, '/editor/1/x', 'evil.test');
+    assert.equal(refused.status, 403);
+    assert.equal(
+      (JSON.parse(refused.body) as { error: { code: string } }).error.code,
+      'api_host_not_allowed',
+    );
+    for (const host of ['vm.example.test', '127.0.0.1']) {
+      const admitted = await rawUpgrade(runtime.url, '/editor/1/x', host);
+      assert.equal(admitted.status, 503, host);
+      const { error } = JSON.parse(admitted.body) as { error: { code: string; data: unknown } };
+      assert.equal(error.code, 'editor_proxy_unavailable');
+      assert.deepEqual(error.data, { reason: 'not_running', editorContextId: 1 });
+    }
+
+    const plain = await runtime.server.inject({
+      method: 'GET',
+      url: '/editor/1/x',
+      headers: { host: 'evil.test' },
+    });
+    assert.equal(plain.statusCode, 403);
   } finally {
     await runtime?.close();
     rmSync(dataRoot, { recursive: true, force: true });

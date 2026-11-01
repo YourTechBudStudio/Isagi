@@ -128,21 +128,21 @@ describe('editor DTOs round-trip', () => {
       activePtyProcessId: 12,
       processStatus: 'running',
       workbenchReadiness: 'ready',
-      endpoint: { host: '127.0.0.1', port: 41_234, url: 'http://127.0.0.1:41234/' },
+      endpoint: { path: '/editor/12/' },
       hasDiagnostics: true,
     });
-    assert.equal(live.endpoint?.url, 'http://127.0.0.1:41234/');
+    assert.equal(live.endpoint?.path, '/editor/12/');
     assert.equal(live.workbenchReadiness, 'ready');
   });
 
-  it('rejects a port outside the addressable range', () => {
-    assert.equal(
-      Schema.is(editorContextFactsSchema)({
-        ...facts,
-        endpoint: { host: '127.0.0.1', port: 70_000, url: 'http://127.0.0.1:70000/' },
-      }),
-      false,
-    );
+  it('rejects an endpoint that is not a runtime-relative path', () => {
+    for (const endpoint of [
+      { path: 'editor/12/' },
+      { path: 'http://127.0.0.1:41234/' },
+      { host: '127.0.0.1', port: 41_234, url: 'http://127.0.0.1:41234/' },
+    ]) {
+      assert.equal(Schema.is(editorContextFactsSchema)({ ...facts, endpoint }), false);
+    }
   });
 
   it('models provisioning as settled or versioned-transient', () => {
