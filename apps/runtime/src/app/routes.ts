@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { registerAccessRoutes, type Access } from '../access/index.js';
 import { registerCommandsRoutes } from '../commands/index.js';
 import { registerEditorRoutes } from '../editor/index.js';
 import { registerEnvironmentRoutes } from '../environment/index.js';
@@ -14,14 +15,16 @@ import { registerHealthRoutes } from './health.js';
 import type { RuntimeServices } from './layer.js';
 
 /**
- * Every runtime route: the runtime's own health route, then each module's routes. Each registrar takes the narrower
+ * Every runtime route: the runtime's own health route, the auth routes, then each module's routes. Each registrar takes the narrower
  * `RouteRuntime` its module needs; the server's runtime provides every service, so it fits all of them.
  */
 export function registerRuntimeRoutes(
   fastify: FastifyInstance,
   runtime: RouteRuntime<RuntimeServices>,
+  access: Access['Service'],
 ) {
   registerHealthRoutes(fastify, runtime);
+  registerAccessRoutes(fastify, runtime, access);
   registerEnvironmentRoutes(fastify, runtime);
   registerRuntimeConfigRoutes(fastify, runtime);
   registerHarnessesRoutes(fastify, runtime);

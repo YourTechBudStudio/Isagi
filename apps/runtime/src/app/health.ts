@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints } from '@isagi/contracts';
 
+import { publicRoute } from '../access/index.js';
 import { runtimePackageVersion } from '../platform/assets/index.js';
 import { registerApiEndpoint, type RouteRuntime } from '../platform/http/index.js';
 
@@ -24,7 +25,9 @@ export function getRuntimeHealth() {
   }));
 }
 
-/** The one route `app/` owns: the runtime describing itself. It needs no service. */
+/** The one route `app/` owns: the runtime describing itself. It needs no service, and is public with login on. */
 export function registerHealthRoutes(fastify: FastifyInstance, runtime: RouteRuntime<never>) {
-  registerApiEndpoint(fastify, runtime, apiEndpoints.health, () => getRuntimeHealth());
+  registerApiEndpoint(fastify, runtime, apiEndpoints.health, () => getRuntimeHealth(), {
+    config: publicRoute,
+  });
 }

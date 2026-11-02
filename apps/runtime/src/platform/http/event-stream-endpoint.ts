@@ -6,7 +6,7 @@ import { apiBasePath, type AnyApiEventStreamEndpoint } from '@isagi/contracts';
 import { runRoute, type ApiHandler } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';
 import { streamToReadable } from './readable-stream.js';
-import { runRouteRequest, type RouteRuntime } from './route-runtime.js';
+import { runRouteRequest, type RouteRuntime, httpExchange } from './route-runtime.js';
 
 /** Long enough to be cheap, short enough that proxies and idle sockets keep the stream open. */
 export const eventStreamHeartbeatInterval = Duration.seconds(15);
@@ -56,6 +56,7 @@ export function registerEventStreamEndpoint<Endpoint extends AnyApiEventStreamEn
             body: undefined,
             params: request.params,
             query: undefined,
+            http: httpExchange(request, reply),
           },
           handle,
         ),

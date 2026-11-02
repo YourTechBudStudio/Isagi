@@ -251,9 +251,11 @@ function prepareLaunch(
     // `foreground.clear` and `envForProcess` have empty expected-error channels
     // by contract, so nothing they raise is folded into a launch failure.
     yield* deps.foreground.clear(ptyProcessId);
-    // Resolved per launch (see `LaunchEnvironment`). Explicit overrides still win.
+    // Resolved per launch (see `LaunchEnvironment`), with this process's own token, which the
+    // access module releases on its `pty_process_*` end event. Explicit overrides still win, as
+    // they do for the URL.
     const processEnvironment: NodeJS.ProcessEnv = {
-      ...(yield* deps.launchEnvironment.base),
+      ...(yield* deps.launchEnvironment.forProcess({ _tag: 'pty', ptyProcessId })),
       ...input.envOverrides,
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };
@@ -471,6 +473,10 @@ function cleanupCancelledSpawn(deps: PtyLaunchDependencies, ptyProcessId: number
 
 // Best-effort terminal marker for a launch that never produced a usable
 // process. Absorbed on failure: startup reconciliation and GC own the residue.
+// A failed write publishes no end event, so a process token `prepareLaunch`
+// already issued stays in memory until the runtime exits. That is accepted: the
+// process never ran, nobody holds the token, and the leak is bounded by such
+// failures.
 function markLaunchFailed(
   deps: PtyLaunchDependencies,
   ptyProcessId: number,

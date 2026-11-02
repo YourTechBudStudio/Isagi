@@ -7,6 +7,7 @@ import { useEffect } from 'react';
 import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { workspaceBootCopy } from '../../copy/index.js';
+import { workbenchShownAtom } from '../../lib/auth/state.js';
 import { clientSettingsAtom } from '../../lib/client-settings/queries.js';
 import { useFluidcastPresentation } from '../../lib/fluidcast/presentation.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
@@ -98,6 +99,10 @@ export function WorkspacePage() {
   usePersistActiveContextSelection();
   // The runtime-events connection lives while the workspace is shown; unmounting closes it.
   useAtomMount(runtimeConnectionAtom);
+  // Recorded for the page: a later sign-out shows the expiry screen before the sign-in view.
+  useEffect(() => {
+    registry.set(workbenchShownAtom, true);
+  }, [registry]);
 
   // Ask the optional host shell to quiet native chrome in zen. Browser-hosted
   // web builds simply do not provide this bridge.

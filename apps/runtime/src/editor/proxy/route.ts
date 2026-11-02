@@ -29,8 +29,8 @@ export function registerEditorProxy(
     '/editor/:editorContextId/*',
     {
       onRequest: (request, reply, done) => {
-        // Route-level, so the global hooks (the Host guard; #65's login) already ran. Before body parsing, so the raw
-        // stream reaches Code Server untouched. Hijacking skips the rest of the chain, including
+        // Route-level, so the global hooks (the Host guard, then the access guard) already ran. Before body parsing,
+        // so the raw stream reaches Code Server untouched. Hijacking skips the rest of the chain, including
         // `@fastify/websocket`'s handler wrapper, which would otherwise complete a ws handshake itself. Forked on the
         // server's request fibers, so shutdown interrupts the exchange and closes its sockets.
         reply.hijack();

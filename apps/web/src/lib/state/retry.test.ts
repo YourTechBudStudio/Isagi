@@ -5,7 +5,7 @@ import { mock, test, type TestContext } from 'node:test';
 import { Duration } from 'effect';
 
 import type { WorkspaceSnapshot } from '@isagi/contracts';
-import { RuntimeTransportError } from '@isagi/runtime-client';
+import { RuntimeApiError, RuntimeTransportError } from '@isagi/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { query, type QueryPolicy } from './policy.js';
@@ -58,6 +58,28 @@ test('workflow resources fail on the first error', async (t) => {
   await flush();
   const result = registry.get(atom);
   assert.equal(result._tag, 'Failure');
+  assert.equal(result.waiting, false);
+  await advance(60_000);
+  assert.equal(req.calls.length, 1, 'never retried');
+});
+
+test('auth_required is never retried: the page is signed out and the gate unmounts the read', async (t) => {
+  const { req, registry, atom } = setup(t, {});
+  req.last().reject(
+    new RuntimeApiError({
+      endpointId: 'workspace.get',
+      apiError: {
+        code: 'auth_required',
+        status: 401,
+        message: 'Sign in to use this runtime.',
+        requestId: 'req-auth',
+      },
+      // The fake's error channel is typed for transport failures; the read sees this one as-is.
+    }) as never,
+  );
+  await flush();
+  const result = registry.get(atom);
+  assert.equal(result._tag, 'Failure', 'fails at once, without the retry backoff');
   assert.equal(result.waiting, false);
   await advance(60_000);
   assert.equal(req.calls.length, 1, 'never retried');

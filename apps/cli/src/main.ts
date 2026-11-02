@@ -1,7 +1,8 @@
-import { Cause, Effect, Exit, Layer, Option } from 'effect';
+import { Cause, Effect, Exit, Layer, Option, type Redacted } from 'effect';
 import { CliError, Command } from 'effect/cli';
+import { HttpClient } from 'effect/http';
 
-import { RuntimeClient, RuntimeHttpClient } from '@isagi/runtime-client';
+import { RuntimeClient, RuntimeHttpClient, withRuntimeToken } from '@isagi/runtime-client';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { cliEnvironment, newCliCapture } from './cli-environment.js';
@@ -12,22 +13,36 @@ import { CliFailure } from './errors.js';
 import { exitCodeFor, renderFailure, renderResult, renderText } from './output.js';
 import type { RuntimeEntry } from './serve/launch.js';
 import { serveRuntimeCommand } from './serve/run.js';
-import { resolveRuntimeUrl } from './target.js';
+import { resolveRuntimeToken, resolveRuntimeUrl } from './target.js';
 import { usageFailure } from './usage.js';
 
 /** The CLI's version, kept equal to the app's by `pnpm versions:sync`. */
 export const cliVersion: string = packageJson.version;
 
+/** Where a client command sends its requests, and the process token it sends with them, if any. */
+export interface RuntimeTarget {
+  readonly url: string;
+  readonly token: Redacted.Redacted<string> | undefined;
+}
+
 export interface RunCliOptions {
-  /** The runtime client for a resolved URL; tests pass a fake keyed by endpoint id. */
-  readonly runtimeClient?: (runtimeUrl: string) => Layer.Layer<RuntimeClient>;
+  /** The runtime client for a resolved target; tests pass a fake keyed by endpoint id. */
+  readonly runtimeClient?: (target: RuntimeTarget) => Layer.Layer<RuntimeClient>;
   /** Where `serve` finds the runtime. `bin.ts` passes the sibling `index.js`; tests pass a fake. */
   readonly runtimeEntry?: RuntimeEntry;
 }
 
-/** The runtime client over the platform `fetch`. */
-const httpRuntimeClient = (runtimeUrl: string): Layer.Layer<RuntimeClient> =>
-  RuntimeClient.layer(runtimeUrl).pipe(Layer.provide(RuntimeHttpClient));
+/** The runtime client over the platform `fetch`, sending the process token as a bearer when there is one. */
+const httpRuntimeClient = ({ url, token }: RuntimeTarget): Layer.Layer<RuntimeClient> =>
+  RuntimeClient.layer(url).pipe(
+    Layer.provide(token === undefined ? RuntimeHttpClient : runtimeHttpClientWithToken(token)),
+  );
+
+const runtimeHttpClientWithToken = (token: Redacted.Redacted<string>) =>
+  Layer.effect(
+    HttpClient.HttpClient,
+    Effect.map(Effect.service(HttpClient.HttpClient), withRuntimeToken(token)),
+  ).pipe(Layer.provide(RuntimeHttpClient));
 
 /**
  * One `isagi` invocation: parse, target, run, render. Returns the exit status.
@@ -137,7 +152,10 @@ function runClient(
     const value = yield* invocation.run.pipe(
       Effect.provide(
         Layer.merge(
-          (options.runtimeClient ?? httpRuntimeClient)(target.url.value),
+          (options.runtimeClient ?? httpRuntimeClient)({
+            url: target.url.value,
+            token: resolveRuntimeToken(io.env),
+          }),
           Layer.succeed(CliContext, io),
         ),
       ),

@@ -5,7 +5,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { Context, Effect, Layer, Stream, SubscriptionRef } from 'effect';
+import { Context, Effect, Layer, type Redacted, Stream, SubscriptionRef } from 'effect';
 import type { HttpClient } from 'effect/http';
 
 import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
@@ -17,7 +17,12 @@ import {
   RuntimeProcess,
   type RuntimeProcessConfig,
 } from './runtime-process/index.js';
-import { DesktopUpdater, type DesktopUpdaterConfig, UpdaterDiagnostics } from './updater/index.js';
+import {
+  DesktopUpdater,
+  type DesktopUpdaterConfig,
+  type RuntimeAccess,
+  UpdaterDiagnostics,
+} from './updater/index.js';
 
 export const RUNTIME_STATUS_CHANNEL = 'isagi:runtime-status-changed';
 export const DESKTOP_UPDATE_CHANNEL = 'isagi:desktop-update-changed';
@@ -33,6 +38,14 @@ export class DesktopShell extends Context.Service<
     readonly isPackaged: boolean;
     /** Electron's logs directory; read only when something is written there. */
     readonly logsDirectory: () => string;
+    /**
+     * Makes every window request to the managed runtime's host carry its launcher token. Called once, before the
+     * renderer is told the runtime is ready; a second call is ignored.
+     */
+    readonly authorizeRuntimeRequests: (runtime: {
+      readonly url: string;
+      readonly launcherToken: Redacted.Redacted<string>;
+    }) => void;
   }
 >()('isagi/desktop/DesktopShell') {}
 
@@ -42,6 +55,10 @@ type FailedRuntimeSnapshot = Extract<HostRuntimeStatusSnapshot, { readonly state
  * Keeps the renderer told: every runtime status and update snapshot is pushed as it is published. Each stream starts
  * with the current snapshot (a `SubscriptionRef` replays its latest value), which is what the renderer's
  * subscribe-then-reconcile expects. A failed managed runtime is not pushed: it ends the app instead.
+ *
+ * The first managed `ready` installs the window's runtime authorization before it is forwarded. The renderer's
+ * queries wait for that `ready`, so no window request reaches the runtime without the launcher token. An external
+ * runtime is never authorized: the desktop holds no credential for it.
  */
 export const RendererBridgeStartup = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -49,12 +66,29 @@ export const RendererBridgeStartup = Layer.effectDiscard(
     const runtimeProcess = yield* RuntimeProcess;
     const updater = yield* DesktopUpdater;
 
-    yield* SubscriptionRef.changes(runtimeProcess.status).pipe(
-      Stream.runForEach((snapshot) =>
-        snapshot.state === 'failed'
-          ? exitAfterRuntimeFailure(shell, snapshot)
-          : Effect.sync(() => shell.send(RUNTIME_STATUS_CHANNEL, snapshot)),
+    let authorized = false;
+    const authorizeOnce = Effect.gen(function* () {
+      if (authorized) return;
+      authorized = true;
+      // Ready, so this is the URL the runtime announced, at once.
+      const url = yield* runtimeProcess.url;
+      shell.authorizeRuntimeRequests({ url, launcherToken: runtimeProcess.launcherToken });
+    }).pipe(
+      Effect.catch((failure) =>
+        Effect.logError('Could not authorize window requests to the managed runtime', {
+          reason: failure.reason,
+        }),
       ),
+    );
+
+    yield* SubscriptionRef.changes(runtimeProcess.status).pipe(
+      Stream.runForEach((snapshot) => {
+        if (snapshot.state === 'failed') return exitAfterRuntimeFailure(shell, snapshot);
+        const forward = Effect.sync(() => shell.send(RUNTIME_STATUS_CHANNEL, snapshot));
+        return snapshot.state === 'ready' && snapshot.ownership === 'managed'
+          ? Effect.andThen(authorizeOnce, forward)
+          : forward;
+      }),
       Effect.forkScoped,
     );
     yield* SubscriptionRef.changes(updater.status).pipe(
@@ -116,16 +150,21 @@ const writeRuntimeFailure = (logDirectory: string, snapshot: FailedRuntimeSnapsh
   );
 };
 
-/** The runtime URL as the updater's restart-readiness read asks for it. */
-const runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure, RuntimeProcess> =
-  RuntimeProcess.use((runtimeProcess) => runtimeProcess.url);
+/** The runtime URL and launcher token, as the updater's restart-readiness read asks for them. */
+const runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure, RuntimeProcess> =
+  RuntimeProcess.use((runtimeProcess) =>
+    Effect.map(runtimeProcess.url, (url) => ({
+      url,
+      launcherToken: runtimeProcess.launcherToken,
+    })),
+  );
 
 export interface DesktopServicesOptions {
   /** How the runtime process is configured (`RuntimeProcessConfigElectron` in the app). */
   readonly runtimeProcessConfig: Layer.Layer<RuntimeProcessConfig, never, HttpClient.HttpClient>;
-  /** How the updater is configured (`DesktopUpdaterConfig.layerElectron` in the app), given the runtime URL. */
+  /** How the updater is configured (`DesktopUpdaterConfig.layerElectron` in the app), given runtime access. */
   readonly updaterConfig: (
-    runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure, RuntimeProcess>,
+    runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure, RuntimeProcess>,
   ) => Layer.Layer<DesktopUpdaterConfig, never, RuntimeProcess>;
 }
 
@@ -141,7 +180,7 @@ export const makeDesktopServices = (
   RendererBridgeStartup.pipe(
     Layer.provideMerge(DesktopUpdater.layer),
     Layer.provide(UpdaterDiagnostics.layer),
-    Layer.provide(options.updaterConfig(runtimeUrl)),
+    Layer.provide(options.updaterConfig(runtimeAccess)),
     Layer.provideMerge(RuntimeProcess.layer),
     Layer.provide(options.runtimeProcessConfig),
   );

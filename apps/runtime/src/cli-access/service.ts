@@ -3,6 +3,7 @@ import process from 'node:process';
 
 import { Context, Data, Effect, Layer, Option, Ref } from 'effect';
 
+import { ProcessTokens, type ProcessTokenHolder } from '../access/index.js';
 import { runtimePackageVersion } from '../platform/assets/index.js';
 import { DataDirectory } from '../platform/persistence/index.js';
 import { cliShimPath, renderCliShim, writeCliShim } from './shim.js';
@@ -30,6 +31,7 @@ export class CliShimError extends Data.TaggedError('CliShimError')<{
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
   const entry = yield* CliEntry;
+  const tokens = yield* ProcessTokens;
   const shimPath = cliShimPath(directory.paths.toolsPath, runtimePackageVersion);
   yield* Effect.tryPromise({
     try: () =>
@@ -44,10 +46,13 @@ const make = Effect.gen(function* () {
     }),
     launchEnvironment: Effect.fn('CliAccess.launchEnvironment')(function* (
       basePath: string | undefined,
+      holder: ProcessTokenHolder,
     ) {
       const url = yield* Ref.get(runtimeUrl);
       return {
         PATH: basePath ? `${binDirectory}${delimiter}${basePath}` : binDirectory,
+        // Issued whether login is on or off, so a launch's environment is the same in both modes.
+        ISAGI_RUNTIME_TOKEN: yield* tokens.issue(holder),
         // Before `listen` there is no URL to give; the CLI then reports `runtime_unconfigured`.
         ...Option.match(url, {
           onNone: () => ({}),
@@ -60,7 +65,8 @@ const make = Effect.gen(function* () {
 
 /**
  * What makes the `isagi` CLI usable from every process the runtime launches: the shim's directory
- * first on `PATH`, and the runtime's URL once it is listening.
+ * first on `PATH`, the process's own token (`ISAGI_RUNTIME_TOKEN`, which the access guard admits
+ * while that process lives), and the runtime's URL once it is listening.
  *
  * The PTY layer asks for these per launch and knows nothing else about the CLI.
  */
@@ -69,11 +75,17 @@ export class CliAccess extends Context.Service<
   {
     /** Called once, right after the server is listening. */
     readonly publishRuntimeUrl: (url: string) => Effect.Effect<void>;
-    /** The variables every runtime-launched PTY gets on top of its sanitized user environment. */
+    /**
+     * The variables every runtime-launched process gets on top of its sanitized user environment.
+     * Issues `holder`'s process token; its owner releases it when the process ends.
+     */
     readonly launchEnvironment: (
       basePath: string | undefined,
+      holder: ProcessTokenHolder,
     ) => Effect.Effect<Readonly<Record<string, string>>>;
   }
 >()('isagi/runtime/cli-access/CliAccess') {
-  static readonly layer = Layer.effect(CliAccess, make);
+  static readonly layerNoDeps = Layer.effect(CliAccess, make);
+  /** Provides `ProcessTokens.layer` by reference, so launches issue the tokens the access guard checks. */
+  static readonly layer = CliAccess.layerNoDeps.pipe(Layer.provide(ProcessTokens.layer));
 }

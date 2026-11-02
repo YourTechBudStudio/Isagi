@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Redacted } from 'effect';
 
 import { DesktopUpdaterConfig } from './config.js';
 
@@ -21,7 +21,9 @@ test('the Electron configuration binds the runtime URL services and asks for the
   } as unknown as Parameters<typeof DesktopUpdaterConfig.layerElectron>[0];
   const requested: (() => void)[] = [];
   const layer = DesktopUpdaterConfig.layerElectron(application, {
-    runtimeUrl: RuntimeUrlSource.use((source) => Effect.succeed(source.url)),
+    runtimeAccess: RuntimeUrlSource.use((source) =>
+      Effect.succeed({ url: source.url, launcherToken: Redacted.make('t') }),
+    ),
     isExitCommitted: () => false,
     requestInstall: (install) => void requested.push(install),
   }).pipe(
@@ -38,7 +40,7 @@ test('the Electron configuration binds the runtime URL services and asks for the
         assert.equal(config.logsDirectory(), '/logs');
         config.requestInstall(() => undefined);
         // The configured effect carries no requirements of its own.
-        return yield* config.runtimeUrl;
+        return (yield* config.runtimeAccess).url;
       }).pipe(Effect.provide(layer)),
     ),
   );

@@ -220,6 +220,53 @@ describe(
         await new Promise<void>((resolve) => blocker.close(() => resolve()));
       }
     });
+
+    test('login on with a missing password exits 1 naming the field, never a value (AC6)', async () => {
+      const run = await runRuntime(
+        'auth-missing-password',
+        { AUTH_TEST_SECRET: 'secret-value-never-printed' },
+        {
+          config:
+            'server:\n  auth:\n    enabled: true\n    username: user-value-never-printed\n    signingSecret: env.AUTH_TEST_SECRET\n',
+        },
+      );
+
+      assert.equal(run.url, undefined);
+      assert.deepEqual([run.code, run.signal], [1, null], run.stderr);
+      assert.match(run.stderr, /^ISAGI_RUNTIME_STARTUP_FAILED\n/m);
+      assert.ok(run.stderr.includes('server.auth.password is missing or empty'), run.stderr);
+      assert.doesNotMatch(run.stderr + run.stdout, /never-printed/);
+    });
+
+    test('with login on, serve hands ISAGI_LAUNCHER_TOKEN to the runtime as a bearer credential', async () => {
+      const statuses: Record<string, number> = {};
+      const run = await runRuntime(
+        'auth-launcher-token',
+        { ISAGI_LAUNCHER_TOKEN: ' launcher-token-for-test\n' },
+        {
+          config:
+            'server:\n  auth:\n    enabled: true\n    username: ada\n    password: pw\n    signingSecret: s3\n',
+          signal: 'SIGTERM',
+          onReady: async (url) => {
+            statuses.health = (await fetch(`${url}/api/v1/health`)).status;
+            statuses.anonymous = (await fetch(`${url}/api/v1/auth/session`)).status;
+            const admitted = await fetch(`${url}/api/v1/auth/session`, {
+              headers: { authorization: 'Bearer launcher-token-for-test' },
+            });
+            statuses.launcher = admitted.status;
+            statuses.credential =
+              ((await admitted.json()) as { data: { credential: string } }).data.credential ===
+              'token'
+                ? 1
+                : 0;
+          },
+        },
+      );
+      assert.deepEqual([run.code, run.signal], [0, null], run.stderr);
+      assert.equal(run.readyError, undefined);
+      assert.deepEqual(statuses, { health: 200, anonymous: 401, launcher: 200, credential: 1 });
+      assert.doesNotMatch(run.stdout + run.stderr, /launcher-token-for-test/);
+    });
   },
 );
 

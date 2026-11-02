@@ -483,7 +483,7 @@ test('fluidcast history compaction resolves its threshold, and is absent unless 
 });
 
 test('server settings default when absent and keep only what is configured', () => {
-  const none = { serveWebUi: false, allowedHosts: [] };
+  const none = { serveWebUi: false, allowedHosts: [], auth: { enabled: false } };
   assert.deepEqual(defaultRuntimeConfig.server, none);
   assert.deepEqual(parseRuntimeConfig({}).server, none);
   assert.deepEqual(parseRuntimeConfig({ server: {} }).server, none);
@@ -501,6 +501,44 @@ test('server settings default when absent and keep only what is configured', () 
     port: 65_535,
     ...none,
   });
+});
+
+test('server.auth keeps its fields as written, redacted, and defaults to off', () => {
+  assert.deepEqual(parseRuntimeConfig({ server: { auth: {} } }).server.auth, { enabled: false });
+  const auth = parseRuntimeConfig({
+    server: {
+      auth: { enabled: true, username: 'ada', password: 'env.LOGIN_PASSWORD', signingSecret: 's3' },
+    },
+  }).server.auth;
+  assert.equal(auth.enabled, true);
+  assert.ok(auth.username !== undefined && Redacted.isRedacted(auth.username));
+  assert.equal(auth.username === undefined ? undefined : Redacted.value(auth.username), 'ada');
+  assert.equal(
+    auth.password === undefined ? undefined : Redacted.value(auth.password),
+    'env.LOGIN_PASSWORD',
+  );
+  // Disabled fields are kept but never checked for presence here; `access/` decides that only when enabled.
+  assert.deepEqual(
+    Object.keys(parseRuntimeConfig({ server: { auth: { password: 'x' } } }).server.auth),
+    ['enabled', 'password'],
+  );
+});
+
+test('a malformed server.auth field fails startup at its path', () => {
+  for (const [auth, path] of [
+    [{ enabled: 'yes' }, 'server.auth.enabled'],
+    [{ enabled: true, password: 'env.1BAD' }, 'server.auth.password'],
+    [{ signingSecret: 42 }, 'server.auth.signingSecret'],
+  ] as const) {
+    assert.throws(
+      () => parseRuntimeConfig({ server: { auth } }),
+      (error: unknown) =>
+        error instanceof RuntimeConfigIssues &&
+        error.issuePaths.length === 1 &&
+        error.issuePaths[0] === path,
+      path,
+    );
+  }
 });
 
 test('serveWebUi is read as written and defaults to false', () => {

@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { Effect, Exit } from 'effect';
-import type { FastifyRequest } from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 
-import { isWebUiDocumentRequest, requireWebRoot, WebRootUnusable } from './index.js';
+import { isWebUiDocumentRequest, registerWebUi, requireWebRoot, WebRootUnusable } from './index.js';
 
 async function unusable(webRoot: Parameters<typeof requireWebRoot>[0]) {
   const exit = await Effect.runPromiseExit(requireWebRoot(webRoot));
@@ -74,4 +74,28 @@ test('document requests are page GETs and HEADs outside /api and /editor/, by pa
     assert.ok(!isWebUiDocumentRequest(request('GET', url)), url);
   }
   assert.ok(!isWebUiDocumentRequest(request('POST', '/x')));
+});
+
+test('the static routes are public to the access guard, and a route registered after them is not', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-web-ui-public-'));
+  writeFileSync(join(root, 'index.html'), '<!doctype html>');
+  const fastify = Fastify({ logger: false });
+  const seen = new Map<string, unknown>();
+  fastify.addHook('onRequest', (request, _reply, done) => {
+    seen.set(request.url, request.routeOptions.config.isagiPublic);
+    done();
+  });
+  try {
+    await registerWebUi(fastify, root);
+    fastify.get('/api/v1/after', () => ({}));
+    await fastify.inject({ method: 'GET', url: '/index.html' });
+    await fastify.inject({ method: 'GET', url: '/deep/page' });
+    await fastify.inject({ method: 'GET', url: '/api/v1/after' });
+    assert.equal(seen.get('/index.html'), true);
+    assert.equal(seen.get('/deep/page'), true);
+    assert.equal(seen.get('/api/v1/after'), undefined);
+  } finally {
+    await fastify.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

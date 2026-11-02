@@ -9,6 +9,8 @@ export interface CliIo {
   readonly stderr: NodeJS.WritableStream;
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** Removes a variable from this process's environment (`serve` drops `ISAGI_LAUNCHER_TOKEN`). */
+  readonly unsetEnv: (name: string) => void;
 }
 
 export class CliContext extends Context.Service<CliContext, CliIo>()('isagi/cli/CliContext') {}

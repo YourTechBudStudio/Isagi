@@ -1,3 +1,5 @@
+import { Redacted } from 'effect';
+
 import { privateRuntimeEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 
 /**
@@ -15,6 +17,8 @@ import { privateRuntimeEnvironmentKeys } from '../../../../scripts/dev-superviso
  * operator's stray value cannot reach a runtime the desktop did not intend it
  * for. The supervisor's private keys and `VITE_ISAGI_RUNTIME_URL` are removed
  * with no replacement, because a managed runtime has no business reading them.
+ * An inherited `ISAGI_LAUNCHER_TOKEN` is removed too; the spawn environment
+ * sets the desktop's own.
  *
  * `ISAGI_HOST`/`ISAGI_PORT` pass through on purpose: the desktop passes no
  * `--host`/`--port`, so the user's own settings apply by precedence, and a
@@ -24,20 +28,26 @@ export function sanitizeManagedRuntimeEnvironment(environment: NodeJS.ProcessEnv
   const sanitized = { ...environment };
   for (const key of privateRuntimeEnvironmentKeys) delete sanitized[key];
   delete sanitized.VITE_ISAGI_RUNTIME_URL;
+  delete sanitized.ISAGI_LAUNCHER_TOKEN;
   return sanitized;
 }
 
 /**
  * The single assembler for a managed runtime's spawn environment: the
- * sanitized inherited values plus `ELECTRON_RUN_AS_NODE`, so Electron's binary
- * runs `isagi.mjs` as Node. Every other setting is a `serve` flag.
+ * sanitized inherited values, `ELECTRON_RUN_AS_NODE`, so Electron's binary
+ * runs `isagi.mjs` as Node, and `ISAGI_LAUNCHER_TOKEN`, the bearer the runtime
+ * admits for the desktop. The token travels only here, never in argv, so no
+ * process list shows it, and `serve` removes it from its own environment
+ * before the runtime loads. Every other setting is a `serve` flag.
  */
 export function managedRuntimeSpawnEnvironment(input: {
   readonly inherited: NodeJS.ProcessEnv;
+  readonly launcherToken: Redacted.Redacted<string>;
 }): NodeJS.ProcessEnv {
   return {
     ...sanitizeManagedRuntimeEnvironment(input.inherited),
     ELECTRON_RUN_AS_NODE: '1',
+    ISAGI_LAUNCHER_TOKEN: Redacted.value(input.launcherToken),
   };
 }
 

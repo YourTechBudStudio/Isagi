@@ -42,6 +42,7 @@ import { HttpClient, HttpClientResponse } from 'effect/http';
 
 import { apiBasePath } from '@isagi/contracts';
 
+import { ProcessTokens } from '../../access/index.js';
 import {
   AgentSessionArtifacts,
   HarnessAdapterError,
@@ -175,6 +176,8 @@ export interface FakeWorkerOptions {
   /** The attached session's history; `attach` fails with this reason instead when set. */
   readonly history?: ReadonlyArray<TranscriptEntry>;
   readonly attachFails?: 'SessionNotFound' | 'SessionUnreadable';
+  /** Set: `attach` never returns, so a session build that attaches hangs past its environment. */
+  readonly attachHangs?: boolean;
   /** What listing skills returns, or why it fails; no skills by default. */
   readonly skills?: ReadonlyArray<Skill> | SkillsUnavailable['reason'];
   /**
@@ -196,6 +199,7 @@ export function fakeWorkerType(options: FakeWorkerOptions = {}) {
     composeMessage: (prompt) => prompt,
     attach: (sessionId) => {
       calls.attach.push(sessionId);
+      if (options.attachHangs) return Effect.never;
       return options.attachFails === undefined
         ? Effect.succeed({ cwd: '/repo', history: options.history ?? [] })
         : Effect.fail(new WorkerSetupError({ sessionId, reason: options.attachFails }));
@@ -303,20 +307,40 @@ export function stubRegistry(options: { readonly fails?: boolean } = {}) {
   );
 }
 
-/** A launch base whose `PATH` holds an executable `claude` unless `withClaude` is false. */
+/**
+ * A launch environment over a real `ProcessTokens`, which it also provides: `forProcess` adds the
+ * holder's token to `environment` as `ISAGI_RUNTIME_TOKEN`, as `CliAccess` does.
+ */
+export function fakeLaunchEnvironment(
+  environment: NodeJS.ProcessEnv,
+): Layer.Layer<LaunchEnvironment | ProcessTokens> {
+  return Layer.effect(
+    LaunchEnvironment,
+    Effect.gen(function* () {
+      const tokens = yield* ProcessTokens;
+      return LaunchEnvironment.of({
+        userEnvironment: environment,
+        forProcess: (holder) =>
+          Effect.map(tokens.issue(holder), (token) => ({
+            ...environment,
+            ISAGI_RUNTIME_TOKEN: token,
+          })),
+      });
+    }),
+  ).pipe(Layer.provideMerge(ProcessTokens.layer));
+}
+
+/** A launch environment whose `PATH` holds an executable `claude` unless `withClaude` is false. */
 export function withLaunchEnvironment<A>(
   withClaude: boolean,
-  run: (layer: Layer.Layer<LaunchEnvironment>, binDirectory: string) => Promise<A>,
+  run: (layer: Layer.Layer<LaunchEnvironment | ProcessTokens>, binDirectory: string) => Promise<A>,
 ): Promise<A> {
   const bin = mkdtempSync(join(tmpdir(), 'isagi-fluidcast-bin-'));
   if (withClaude) {
     writeFileSync(join(bin, 'claude'), '#!/bin/sh\n', 'utf8');
     chmodSync(join(bin, 'claude'), 0o755);
   }
-  const layer = Layer.succeed(
-    LaunchEnvironment,
-    LaunchEnvironment.of({ base: Effect.succeed({ HOME: '/home/dev', PATH: bin }) }),
-  );
+  const layer = fakeLaunchEnvironment({ HOME: '/home/dev', PATH: bin });
   return run(layer, bin).finally(() => rmSync(bin, { recursive: true, force: true }));
 }
 
@@ -567,11 +591,9 @@ export function fakeSessionsLayer(options: {
       }),
       events.layer,
       stubRegistry(),
-      Layer.succeed(
-        LaunchEnvironment,
-        LaunchEnvironment.of({ base: Effect.succeed(options.environment ?? {}) }),
-      ),
     ]),
+    // Merged, so a test can read the tokens the sessions issue and release.
+    Layer.provideMerge(fakeLaunchEnvironment(options.environment ?? {})),
   );
   return { layer, events: events.events, writes, built };
 }

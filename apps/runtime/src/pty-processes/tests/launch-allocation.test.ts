@@ -117,7 +117,15 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             activeAttachments: new Map(),
             runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
-            launchEnvironment: { base: Effect.succeed(baseEnvironment) },
+            launchEnvironment: {
+              userEnvironment: baseEnvironment,
+              // Names the holder, so a test can see whose token the launch asked for.
+              forProcess: (holder) =>
+                Effect.succeed({
+                  ...baseEnvironment,
+                  ISAGI_RUNTIME_TOKEN: `token-for-${JSON.stringify(holder)}`,
+                }),
+            },
           }),
         });
       }).pipe(Effect.provide(PtyRepository.layer.pipe(Layer.provide(database)))),
@@ -667,7 +675,7 @@ test('a launch pending past the retention window is excluded from orphan GC', as
   );
 });
 
-test('a PTY environment layers the launch base, then overrides, then per-process values', async () => {
+test('a PTY environment layers its own process environment, then overrides, then per-process values', async () => {
   await withHarness((harness) =>
     Effect.gen(function* () {
       let launched: NodeJS.ProcessEnv | null = null;
@@ -693,7 +701,12 @@ test('a PTY environment layers the launch base, then overrides, then per-process
       );
       yield* allocation.start;
 
-      assert.deepEqual(launched, { BASE: 'base', OVERRIDE: 'override', PROCESS: 'process' });
+      assert.deepEqual(launched, {
+        BASE: 'base',
+        OVERRIDE: 'override',
+        PROCESS: 'process',
+        ISAGI_RUNTIME_TOKEN: `token-for-${JSON.stringify({ _tag: 'pty', ptyProcessId: allocation.ptyProcessId })}`,
+      });
     }),
   );
 });

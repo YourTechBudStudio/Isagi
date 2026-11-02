@@ -9,7 +9,7 @@ import {
   type RuntimeContent,
 } from '@isagi/runtime-client';
 
-import { runCli } from '../main.js';
+import { runCli, type RuntimeTarget } from '../main.js';
 import type { RuntimeEntry, RuntimeLaunch } from '../serve/launch.js';
 
 /**
@@ -69,11 +69,11 @@ export function fakeRuntime(
     }
     return Effect.succeed(value);
   };
-  const layer = (runtimeUrl: string): Layer.Layer<RuntimeClient> =>
+  const layer = ({ url }: RuntimeTarget): Layer.Layer<RuntimeClient> =>
     Layer.succeed(
       RuntimeClient,
       RuntimeClient.of({
-        runtimeUrl,
+        runtimeUrl: url,
         request: ((endpoint: { id: string }, ...args: unknown[]) =>
           Effect.suspend(() => {
             calls.push({ endpointId: endpoint.id, args });
@@ -107,6 +107,10 @@ export interface CliRun {
   readonly stdout: string;
   readonly stdoutBytes: Buffer;
   readonly stderr: string;
+  /** The environment after the run, with whatever the CLI unset removed. */
+  readonly env: Readonly<Record<string, string | undefined>>;
+  /** The environment when `serve` loaded the runtime entry; undefined when it never did. */
+  readonly envAtLoad: Readonly<Record<string, string | undefined>> | undefined;
 }
 
 /** Runs the whole CLI in process against a fake runtime (or none). */
@@ -123,17 +127,35 @@ export async function runIsagi(
 ): Promise<CliRun> {
   const stdout = collector();
   const stderr = collector();
+  const env: Record<string, string | undefined> = {
+    ...(options.env ?? { ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' }),
+  };
+  let envAtLoad: Record<string, string | undefined> | undefined;
+  const runtimeEntry = options.runtimeEntry;
   const code = await runCli(
     argv,
     {
       stdout: options.stdout ?? stdout.stream,
       stderr: stderr.stream,
       cwd: options.cwd ?? process.cwd(),
-      env: options.env ?? { ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' },
+      env,
+      unsetEnv: (name) => {
+        delete env[name];
+      },
     },
     {
       ...(options.runtime ? { runtimeClient: options.runtime.layer } : {}),
-      ...(options.runtimeEntry ? { runtimeEntry: options.runtimeEntry } : {}),
+      ...(runtimeEntry
+        ? {
+            runtimeEntry: {
+              ...runtimeEntry,
+              load: () => {
+                envAtLoad = { ...env };
+                return runtimeEntry.load();
+              },
+            },
+          }
+        : {}),
     },
   );
   const stdoutBytes = stdout.bytes();
@@ -142,6 +164,8 @@ export async function runIsagi(
     stdout: stdoutBytes.toString('utf8'),
     stdoutBytes,
     stderr: stderr.bytes().toString('utf8'),
+    env,
+    envAtLoad,
   };
 }
 

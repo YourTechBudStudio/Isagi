@@ -14,7 +14,15 @@ import { runCli, type RunCliOptions } from './main.js';
 export function runCliProcess(argv: readonly string[], options: RunCliOptions): void {
   runCli(
     argv,
-    { stdout: process.stdout, stderr: process.stderr, cwd: process.cwd(), env: process.env },
+    {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      cwd: process.cwd(),
+      env: process.env,
+      unsetEnv: (name) => {
+        delete process.env[name];
+      },
+    },
     options,
   ).then(
     (code) => {

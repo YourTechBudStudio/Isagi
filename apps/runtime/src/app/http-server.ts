@@ -5,6 +5,7 @@ import websocket from '@fastify/websocket';
 import { Cause, Context, Effect, FiberSet, Layer } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { Access, installAccessGuard } from '../access/index.js';
 import {
   installAllowedOrigins,
   installHostGuard,
@@ -59,6 +60,7 @@ export const HttpServerLayer = Layer.effect(
   Effect.gen(function* () {
     const launch = yield* ServerLaunch;
     const config = yield* RuntimeConfig.use((runtimeConfig) => runtimeConfig.get);
+    const access = yield* Access;
     const { host, port } = resolveListenSettings(launch, config.server);
     yield* Effect.logInfo('Runtime listen settings').pipe(
       Effect.annotateLogs({
@@ -99,13 +101,14 @@ export const HttpServerLayer = Layer.effect(
     installAllowedOrigins(fastify, launch.allowedOrigins);
     const allowedOrigins = fastify.isagiAllowedOrigins ?? new Set<string>();
     configureApiErrorHandlers(fastify, { serveWebUi });
-    // The order of the next three is fixed; each relies on `onRequest` hooks running in registration order.
+    // The order of the next four is fixed; each relies on `onRequest` hooks running in registration order.
     // 1. `@fastify/websocket` marks upgrades in its hook, and its `onResponse` hook destroys a marked upgrade's
-    //    socket, so a refused upgrade is closed rather than left hanging.
-    // 2. The Host guard is the one admission check for every request, the API, sockets and unknown routes alike.
-    //    #65's login hook goes right after it.
-    // 3. `@fastify/cors` answers preflights inside its own hook, so it must come after the guard, or a refused
+    //    socket, so a refused upgrade (by either guard) is closed rather than left hanging.
+    // 2. The Host guard is the first admission check for every request, the API, sockets and unknown routes alike.
+    // 3. `@fastify/cors` answers preflights inside its own hook, so it must come after the Host guard, or a refused
     //    host's preflight would be answered with CORS headers.
+    // 4. The access guard (only with `server.auth` on) comes after CORS: preflights carry no credentials and are
+    //    already answered, and a 401 carries the CORS headers a cross-origin client needs to read it.
     yield* tryPromise(() => fastify.register(websocket));
     installHostGuard(fastify, config.server.allowedHosts);
     yield* tryPromise(() =>
@@ -116,11 +119,12 @@ export const HttpServerLayer = Layer.effect(
         },
       }),
     );
+    if (access.mode === 'enabled') installAccessGuard(fastify, access);
     // After the admission hooks above, so the guard covers the static routes and the document fallback too.
     if (webRoot !== undefined) {
       yield* tryPromise(() => registerWebUi(fastify, webRoot));
     }
-    registerRuntimeRoutes(fastify, runtime);
+    registerRuntimeRoutes(fastify, runtime, access);
 
     yield* tryPromise(() => fastify.listen({ host: host.value, port: port.value })).pipe(
       Effect.mapError((cause) => new RuntimeListenFailed({ host, port, cause })),
@@ -128,7 +132,7 @@ export const HttpServerLayer = Layer.effect(
     );
     const address = fastify.server.address() as AddressInfo;
     // After `listen`, so a bind that fails does not warn and the line shows the bound port.
-    for (const warning of exposureWarnings(host.value)) {
+    for (const warning of exposureWarnings(host.value, access.mode)) {
       yield* Effect.logWarning(exposureWarningMessages[warning]).pipe(
         Effect.annotateLogs({
           warning,

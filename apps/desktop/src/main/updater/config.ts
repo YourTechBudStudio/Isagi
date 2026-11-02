@@ -5,6 +5,7 @@ import type { App } from 'electron';
 
 import type { RuntimeLifecycleFailure } from '../runtime-process/index.js';
 import { loadElectronUpdater } from './load-electron-updater.js';
+import type { RuntimeAccess } from './restart-readiness.js';
 
 type UpdaterEvent =
   | 'error'
@@ -53,19 +54,19 @@ export class DesktopUpdaterConfig extends Context.Service<
     readonly isExitCommitted: () => boolean;
     /** Hands the process to the installer through main's shutdown sequence. */
     readonly requestInstall: (install: () => void) => void;
-    /** The runtime the restart-readiness read asks for agent activity. */
-    readonly runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure>;
+    /** The runtime the restart-readiness read asks for agent activity, and the launcher token it admits. */
+    readonly runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure>;
   }
 >()('isagi/desktop/updater/DesktopUpdaterConfig') {
   /**
-   * The configuration of the running app. `runtimeUrl` may need services (main passes
-   * `RuntimeProcess.use((process) => process.url)`); they are captured when this layer builds, so
-   * the configured effect has no requirements of its own.
+   * The configuration of the running app. `runtimeAccess` may need services (main reads it from
+   * `RuntimeProcess`); they are captured when this layer builds, so the configured effect has no
+   * requirements of its own.
    */
   static readonly layerElectron = <R = never>(
     application: Pick<App, 'getPath' | 'getVersion' | 'isPackaged'>,
     wiring: {
-      readonly runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure, R>;
+      readonly runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure, R>;
       readonly isExitCommitted: () => boolean;
       readonly requestInstall: (install: () => void) => void;
     },
@@ -83,7 +84,7 @@ export class DesktopUpdaterConfig extends Context.Service<
           loadUpdater: loadElectronUpdater,
           isExitCommitted: wiring.isExitCommitted,
           requestInstall: wiring.requestInstall,
-          runtimeUrl: Effect.provideContext(wiring.runtimeUrl, context),
+          runtimeAccess: Effect.provideContext(wiring.runtimeAccess, context),
         });
       }),
     );

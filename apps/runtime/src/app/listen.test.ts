@@ -99,15 +99,23 @@ test('a listen failure names both values and their sources', () => {
   );
 });
 
-test('exposure warnings are both logged beyond loopback and neither on it', () => {
-  for (const host of ['127.0.0.1', '::1', '[::1]', 'localhost']) {
-    assert.deepEqual(exposureWarnings(host), [], host);
+test('exposure warnings are both logged beyond loopback with login off, and neither on it', () => {
+  for (const login of ['disabled', 'enabled'] as const) {
+    for (const host of ['127.0.0.1', '::1', '[::1]', 'localhost']) {
+      assert.deepEqual(exposureWarnings(host, login), [], host);
+    }
   }
   for (const host of ['0.0.0.0', '::', '192.168.1.20']) {
     assert.deepEqual(
-      exposureWarnings(host),
+      exposureWarnings(host, 'disabled'),
       ['login_off_beyond_loopback', 'plain_http_beyond_loopback'],
       host,
     );
+  }
+});
+
+test('with login on, only the plain-HTTP warning is logged beyond loopback', () => {
+  for (const host of ['0.0.0.0', '::', '192.168.1.20']) {
+    assert.deepEqual(exposureWarnings(host, 'enabled'), ['plain_http_beyond_loopback'], host);
   }
 });

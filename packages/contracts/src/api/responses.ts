@@ -19,6 +19,8 @@ export const apiInfrastructureErrorCodeSchema = Schema.Literals([
   'api_response_encoding_failed',
   'api_route_not_found',
   'api_unhandled_error',
+  // Refused by the runtime's access guard (`server.auth`). The one unprefixed code: the login story fixes the name.
+  'auth_required',
 ]);
 
 const apiErrorFields = {

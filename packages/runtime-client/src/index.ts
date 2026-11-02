@@ -4,7 +4,7 @@ export {
   RuntimeTransportError,
   type RuntimeClientError,
 } from './errors.js';
-export { RuntimeClient, RuntimeHttpClient } from './service.js';
+export { RuntimeClient, RuntimeHttpClient, withRuntimeToken } from './service.js';
 export {
   contentEndpointUrl,
   interpolatePath,

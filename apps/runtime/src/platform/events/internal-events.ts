@@ -137,7 +137,7 @@ export type InternalEvent =
       readonly status: SessionStatus;
     }
   | {
-      /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection). */
+      /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection), access (process tokens). */
       readonly type: 'pty_process_exited';
       readonly ptyProcessId: number;
       readonly status: SessionStatus;
@@ -145,14 +145,14 @@ export type InternalEvent =
       readonly signal: string | null;
     }
   | {
-      /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection). */
+      /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection), access (process tokens). */
       readonly type: 'pty_process_failed';
       readonly ptyProcessId: number;
       readonly status: SessionStatus;
       readonly statusReason: string | null;
     }
   | {
-      /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection). */
+      /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection), access (process tokens). */
       readonly type: 'pty_process_killed';
       readonly ptyProcessId: number;
       readonly status: SessionStatus;

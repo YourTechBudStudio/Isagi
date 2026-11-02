@@ -3,6 +3,8 @@
 // The child process's Node callbacks are adapted once, at spawn: listeners only forward log lines or complete
 // Deferreds. Everything else (readiness, health, the post-ready watch, termination) is one supervising fiber forked
 // into the layer's scope, so closing that scope (disposing the desktop runtime) always stops the child.
+import { randomBytes } from 'node:crypto';
+
 import {
   Cause,
   Context,
@@ -14,6 +16,7 @@ import {
   Fiber,
   Layer,
   Option,
+  Redacted,
   SubscriptionRef,
 } from 'effect';
 
@@ -52,10 +55,12 @@ export type RuntimeTarget =
   | {
       readonly ownership: 'managed';
       /**
-       * Resolves what to spawn. A `RuntimeLifecycleFailure` keeps its reason; anything thrown (a defect) is reported
-       * as `stage_invalid`.
+       * Resolves what to spawn, carrying `launcherToken` to the runtime in its environment (never its arguments). A
+       * `RuntimeLifecycleFailure` keeps its reason; anything thrown (a defect) is reported as `stage_invalid`.
        */
-      readonly prepare: Effect.Effect<RuntimeSpawnSpecification, RuntimeLifecycleFailure>;
+      readonly prepare: (launch: {
+        readonly launcherToken: Redacted.Redacted<string>;
+      }) => Effect.Effect<RuntimeSpawnSpecification, RuntimeLifecycleFailure>;
     }
   | {
       readonly ownership: 'external';
@@ -106,6 +111,8 @@ interface AttachedChild {
 const make = Effect.gen(function* () {
   const config = yield* RuntimeProcessConfig;
   const layerScope = yield* Effect.scope;
+  // One per app run, as there is one managed spawn. Made in external mode too, where nothing uses it.
+  const launcherToken = Redacted.make(randomBytes(32).toString('hex'));
   const status = yield* SubscriptionRef.make<HostRuntimeStatusSnapshot>({
     protocolVersion: HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
     revision: 0,
@@ -230,9 +237,9 @@ const make = Effect.gen(function* () {
       attached.release();
     });
 
-  const runManaged = (prepare: Effect.Effect<RuntimeSpawnSpecification, RuntimeLifecycleFailure>) =>
+  const runManaged = (prepare: Extract<RuntimeTarget, { ownership: 'managed' }>['prepare']) =>
     Effect.gen(function* () {
-      const specification = yield* prepare.pipe(
+      const specification = yield* Effect.suspend(() => prepare({ launcherToken })).pipe(
         Effect.catchDefect((defect) =>
           Effect.fail(failure('stage_invalid', { message: errorMessage(defect) })),
         ),
@@ -413,6 +420,7 @@ const make = Effect.gen(function* () {
 
   return RuntimeProcess.of({
     status,
+    launcherToken,
     start,
     url:
       config.target.ownership === 'external'
@@ -427,6 +435,11 @@ export class RuntimeProcess extends Context.Service<
   {
     /** The current snapshot and every later one. */
     readonly status: SubscriptionRef.SubscriptionRef<HostRuntimeStatusSnapshot>;
+    /**
+     * The bearer the managed runtime admits for this app run (`ISAGI_LAUNCHER_TOKEN` at spawn): the window's requests
+     * and restart readiness carry it. In memory only; unused for an external runtime.
+     */
+    readonly launcherToken: Redacted.Redacted<string>;
     /** Idempotent and shared: the first call spawns (or health-checks an external runtime); every caller waits for the same outcome. */
     readonly start: Effect.Effect<void, RuntimeLifecycleFailure>;
     /** The runtime URL: an external one immediately, a managed one once it is ready. */

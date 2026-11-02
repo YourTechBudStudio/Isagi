@@ -24,6 +24,14 @@ export interface RuntimeLaunch {
   readonly allowedOrigins: readonly string[];
   /** The CLI file the runtime's shim runs. */
   readonly cliEntryPath: string;
+  /**
+   * The desktop's private bearer token, from `ISAGI_LAUNCHER_TOKEN` (trimmed; unset or empty is none), removed from
+   * the environment before the runtime loads. Never a flag, so it never appears in a process list.
+   *
+   * A plain string, like everything on this seam: the CLI and the runtime ship as separate bundles, each with its own
+   * copy of `effect`, and a `Redacted` made by one copy cannot be read by the other. The runtime wraps it at once.
+   */
+  readonly launcherToken: string | undefined;
 }
 
 export interface RuntimeEntryModule {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { defaultCompactionThreshold } from '@yourtechbudstudio/fluidcast-presets';
-import { Cause, Schema } from 'effect';
+import { Cause, type Redacted, Schema } from 'effect';
 
 import {
   appearanceSettingsDefaults,
@@ -69,7 +69,16 @@ export interface RuntimeConfigShape {
     readonly serveWebUi: boolean;
     /** Non-loopback hosts the Host guard admits; lowercased once here. Default none. */
     readonly allowedHosts: readonly string[];
+    /** Runtime login, as written: `env.NAME` references are resolved by `access/` only when enabled. Default off. */
+    readonly auth: RuntimeAuthSettings;
   };
+}
+
+export interface RuntimeAuthSettings {
+  readonly enabled: boolean;
+  readonly username?: Redacted.Redacted<string>;
+  readonly password?: Redacted.Redacted<string>;
+  readonly signingSecret?: Redacted.Redacted<string>;
 }
 
 /**
@@ -97,7 +106,7 @@ export const defaultRuntimeConfig: RuntimeConfigShape = {
   terminal: terminalSettingsDefaults,
   appearance: appearanceSettingsDefaults,
   fluidcast: { status: 'disabled' },
-  server: { serveWebUi: false, allowedHosts: [] },
+  server: { serveWebUi: false, allowedHosts: [], auth: { enabled: false } },
 };
 
 /** Throws `RuntimeConfigIssues` for a section that must fail; `harnesses` and `fluidcast` never do. */
@@ -222,6 +231,14 @@ function parseServer(value: unknown): RuntimeConfigShape['server'] {
     ...(decoded.port === undefined ? {} : { port: decoded.port }),
     serveWebUi: decoded.serveWebUi ?? false,
     allowedHosts: (decoded.allowedHosts ?? []).map((entry) => entry.toLowerCase()),
+    auth: {
+      enabled: decoded.auth?.enabled ?? false,
+      ...(decoded.auth?.username === undefined ? {} : { username: decoded.auth.username }),
+      ...(decoded.auth?.password === undefined ? {} : { password: decoded.auth.password }),
+      ...(decoded.auth?.signingSecret === undefined
+        ? {}
+        : { signingSecret: decoded.auth.signingSecret }),
+    },
   };
 }
 

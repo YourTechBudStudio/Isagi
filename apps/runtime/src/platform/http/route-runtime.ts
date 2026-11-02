@@ -29,6 +29,31 @@ export interface RouteRuntime<R> {
   readonly runFork: (effect: Effect.Effect<void, never, R>) => void;
 }
 
+/**
+ * Transport-level request facts and reply headers. Only transport concerns (credentials, cookies) use it; domain input
+ * always comes from the contract (body, params, query). Grep for `.http.` to find every use.
+ */
+export interface ApiHttpExchange {
+  /** The first value of a request header, by lowercase name. */
+  readonly header: (name: string) => string | undefined;
+  /** Sets a reply header, replacing any value an earlier hook set (the access guard's cookie renewal). */
+  readonly setReplyHeader: (name: string, value: string) => void;
+}
+
+/** The `ApiHttpExchange` over one Fastify request and its reply. */
+export function httpExchange(request: FastifyRequest, reply: FastifyReply): ApiHttpExchange {
+  return {
+    header: (name) => {
+      const value = request.headers[name];
+      return Array.isArray(value) ? value[0] : value;
+    },
+    setReplyHeader: (name, value) => {
+      reply.removeHeader(name);
+      reply.header(name, value);
+    },
+  };
+}
+
 /** A request taking at least this long is reported at `Debug` (`ISAGI_RUNTIME_DEBUG`). */
 export const slowApiRequestThreshold = Duration.seconds(1);
 

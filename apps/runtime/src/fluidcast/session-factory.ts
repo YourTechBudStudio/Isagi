@@ -29,6 +29,7 @@ import { showTool } from '@yourtechbudstudio/fluidcast-tool-show';
 import { Context, Effect, Layer, Option, type Scope, Stream } from 'effect';
 import { LanguageModel } from 'effect/ai';
 
+import { ProcessTokens } from '../access/index.js';
 import {
   harnessDefinition,
   HarnessAdapterRegistry,
@@ -94,7 +95,7 @@ export const buildFluidcastSession = (
 ): Effect.Effect<
   BuiltFluidcastSession,
   FluidcastSessionUnreadable | FluidcastStartFailed,
-  Scope.Scope | HarnessAdapterRegistry | LaunchEnvironment
+  Scope.Scope | HarnessAdapterRegistry | LaunchEnvironment | ProcessTokens
 > =>
   Effect.gen(function* () {
     const { config, models, workers } = dependencies;
@@ -106,9 +107,22 @@ export const buildFluidcastSession = (
         executionId: input.fluidcastSessionId,
       })
       .pipe(Effect.mapError(() => new FluidcastStartFailed({ reason: 'instrumentation_failed' })));
-    const base = yield* (yield* LaunchEnvironment).base;
-    const environment = { ...base, ...instrumentation.environment };
-    const worker = yield* workerType(input, instrumentation, { base, environment }, workers);
+    // One token for this SDK execution, shared by the worker and the probe. Issuance and release
+    // registration happen together, so an interruption of this (interruptible) build cannot land
+    // between them and leave the token live; `watchHealth` also releases it on an observed fault.
+    const holder = { _tag: 'sdk', executionId: input.fluidcastSessionId } as const;
+    const tokens = yield* ProcessTokens;
+    const processEnvironment = yield* Effect.acquireRelease(
+      (yield* LaunchEnvironment).forProcess(holder),
+      () => tokens.release(holder),
+    );
+    const environment = { ...processEnvironment, ...instrumentation.environment };
+    const worker = yield* workerType(
+      input,
+      instrumentation,
+      { processEnvironment, environment },
+      workers,
+    );
 
     const tool = yield* forwardAgentTool({
       worker,
@@ -182,7 +196,7 @@ export const buildFluidcastSession = (
 /**
  * The harness's worker, instrumented per invocation, with its skill listing served by an
  * uninstrumented probe of the same kind. Listing skills starts a short-lived query or app-server
- * that is a probe, not a conversation (ADR 0007): built from the base environment with no hook
+ * that is a probe, not a conversation (ADR 0007): built from the process environment with no hook
  * settings, args or thread, it cannot write to the agent session's hook ledger or disturb native
  * session ID capture. Skills, `isagi-docs` included, live in the harness's user directory, so the
  * probe still sees them.
@@ -190,10 +204,13 @@ export const buildFluidcastSession = (
 function workerType(
   input: FluidcastSessionInput,
   instrumentation: SdkInstrumentation,
-  environments: { readonly base: NodeJS.ProcessEnv; readonly environment: NodeJS.ProcessEnv },
+  environments: {
+    readonly processEnvironment: NodeJS.ProcessEnv;
+    readonly environment: NodeJS.ProcessEnv;
+  },
   workers: FluidcastWorkers,
 ): Effect.Effect<WorkerType, FluidcastStartFailed> {
-  const { base, environment } = environments;
+  const { processEnvironment, environment } = environments;
   switch (instrumentation.harness) {
     case 'claude':
       // The SDK needs an absolute path, and must never fall back to its bundled Claude Code.
@@ -207,7 +224,11 @@ function workerType(
             environment,
             settings: instrumentation.settingsPath,
           }),
-          listSkills: workers.claude({ cwd: input.cwd, executable, environment: base }).listSkills,
+          listSkills: workers.claude({
+            cwd: input.cwd,
+            executable,
+            environment: processEnvironment,
+          }).listSkills,
         })),
       );
     case 'codex':
@@ -220,7 +241,7 @@ function workerType(
           args: instrumentation.args,
           thread: instrumentation.thread,
         }),
-        listSkills: workers.codex({ cwd: input.cwd, environment: base }).listSkills,
+        listSkills: workers.codex({ cwd: input.cwd, environment: processEnvironment }).listSkills,
       });
   }
 }

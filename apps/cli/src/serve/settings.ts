@@ -15,7 +15,7 @@ export interface ServeFlags {
   readonly allowedOrigins: Option.Option<string>;
 }
 
-export type ServeSettings = Omit<RuntimeLaunch, 'cliEntryPath'>;
+export type ServeSettings = Omit<RuntimeLaunch, 'cliEntryPath' | 'launcherToken'>;
 
 /**
  * The flag and environment tiers of every `serve` setting, validated and tagged with their source.

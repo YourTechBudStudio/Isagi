@@ -392,6 +392,15 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   api_unhandled_error: {
     summary: 'Something went wrong inside the runtime.',
   },
+  // The access guard's refusal. The page flips to the sign-in view on any 401, so this line shows
+  // only where a request's own failure is printed before that happens.
+  auth_required: {
+    summary: 'The runtime wants you to sign in first.',
+  },
+  // The sign-in form prints it after the code, terminal style: `auth_login_failed · …`.
+  auth_login_failed: {
+    summary: "that pair didn't match.",
+  },
 };
 
 const genericApiError = 'The runtime ran into a problem.';

@@ -21,6 +21,7 @@ import {
 } from 'effect';
 import { FetchHttpClient } from 'effect/http';
 
+import { ProcessTokens } from '../access/index.js';
 import { AgentSessionArtifacts, HarnessAdapterRegistry } from '../harnesses/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { LaunchEnvironment } from '../pty-processes/index.js';
@@ -86,7 +87,7 @@ export type FluidcastSessionBuilder = (
 ) => Effect.Effect<
   BuiltFluidcastSession,
   FluidcastSessionUnreadable | FluidcastStartFailed,
-  Scope.Scope | HarnessAdapterRegistry | LaunchEnvironment
+  Scope.Scope | HarnessAdapterRegistry | LaunchEnvironment | ProcessTokens
 >;
 
 interface Entry {
@@ -111,7 +112,7 @@ export const fluidcastBuildTimeout: Duration.Input = '60 seconds';
 const resolveKeys = (state: FluidcastConfigState) =>
   Effect.gen(function* () {
     if (state.status !== 'ready') return state;
-    const resolved = resolveFluidcastKeys(state.config, yield* (yield* LaunchEnvironment).base);
+    const resolved = resolveFluidcastKeys(state.config, (yield* LaunchEnvironment).userEnvironment);
     if (resolved.status === 'resolved') return { ...state, config: resolved.config };
     yield* Effect.logWarning('fluidcast key variables unset').pipe(
       Effect.annotateLogs({
@@ -136,7 +137,10 @@ export const makeFluidcastSessions = (
     const state = yield* resolveKeys((yield* (yield* RuntimeConfig).get).fluidcast);
     const artifacts = yield* AgentSessionArtifacts;
     const events = yield* InternalEvents;
-    const buildContext = yield* Effect.context<HarnessAdapterRegistry | LaunchEnvironment>();
+    const tokens = yield* ProcessTokens;
+    const buildContext = yield* Effect.context<
+      HarnessAdapterRegistry | LaunchEnvironment | ProcessTokens
+    >();
     const layerScope = yield* Effect.scope;
     const entries = new Map<FluidcastSessionId, Entry>();
 
@@ -203,6 +207,9 @@ export const makeFluidcastSessions = (
             reason: fault.reason,
           }),
         );
+        // The worker is gone, so its credential goes with it; the session stays stoppable, and
+        // its scope's release of the same token is then a no-op.
+        yield* tokens.release({ _tag: 'sdk', executionId: entry.live.fluidcastSessionId });
         yield* events.publish({
           type: 'agent_session_execution_changed',
           agentSessionId: entry.live.agentSessionId,
@@ -383,6 +390,7 @@ export class FluidcastSessions extends Context.Service<
       AgentSessionArtifacts.layer,
       LaunchEnvironment.layer,
       InternalEvents.layer,
+      ProcessTokens.layer,
     ]),
   );
 }

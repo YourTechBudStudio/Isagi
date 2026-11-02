@@ -331,6 +331,35 @@ test('HTTP: the prefix is stripped, the query kept, and Host, Origin and Cookie 
   assert.equal(seen.headers?.['x-forwarded-proto'], 'https');
 });
 
+test('HTTP: the runtime login cookie and Authorization never reach Code Server; other cookies do', async () => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  await withUpstream(
+    {
+      request: (request, response) => {
+        seen.push(request.headers);
+        response.end('ok');
+      },
+    },
+    (target) =>
+      withProxy(new Map([[7, target]]), async (proxy) => {
+        const mixed = await send(proxy.port, '/editor/7/x', {
+          headers: {
+            authorization: 'Bearer launcher-secret',
+            cookie: 'vscode-tkn=abc; isagi_session=v1.1.mac; other=def',
+          },
+        });
+        assert.equal(mixed.status, 200);
+        const onlyLogin = await send(proxy.port, '/editor/7/y', {
+          headers: { cookie: 'isagi_session=v1.1.mac' },
+        });
+        assert.equal(onlyLogin.status, 200);
+      }),
+  );
+  assert.equal(seen[0]?.authorization, undefined);
+  assert.equal(seen[0]?.cookie, 'vscode-tkn=abc; other=def');
+  assert.equal(seen[1]?.cookie, undefined);
+});
+
 test('HTTP: a 1 MiB POST body with a non-JSON content type arrives intact', async () => {
   const body = randomBytes(1024 * 1024);
   let received: { length: number; hash: string; type: string | undefined } | undefined;
@@ -560,6 +589,34 @@ test('upgrade: the request line and every header reach Code Server verbatim', as
   assert.equal(seen.headers?.upgrade, 'websocket');
   assert.equal(seen.headers?.connection, 'Upgrade');
   assert.ok(seen.headers?.['sec-websocket-key']);
+});
+
+test('upgrade: the runtime login cookie and Authorization never reach Code Server; other cookies do', async () => {
+  let seen: http.IncomingHttpHeaders | undefined;
+  await withUpstream(
+    {
+      upgrade: (request, socket) => {
+        seen = request.headers;
+        socket.write(
+          'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+        );
+      },
+    },
+    (target) =>
+      withProxy(new Map([[5, target]]), async (proxy) => {
+        const { outcome } = upgradeRequest(proxy.port, '/editor/5/socket', {
+          host: 'vm.tail.ts.net',
+          authorization: 'Bearer launcher-secret',
+          cookie: 'isagi_session=v1.1.mac; vscode-tkn=abc',
+        });
+        const result = await outcome;
+        assert.equal(result.kind, 'upgraded');
+        if (result.kind === 'upgraded') result.socket.destroy();
+      }),
+  );
+  assert.equal(seen?.authorization, undefined);
+  assert.equal(seen?.cookie, 'vscode-tkn=abc');
+  assert.equal(seen?.upgrade, 'websocket');
 });
 
 test('upgrade: a non-WebSocket upgrade is forwarded verbatim too', async () => {

@@ -8,6 +8,7 @@
 import { Duration, Effect, Option, Schedule, type Scope } from 'effect';
 import { AsyncResult, Atom, AtomRegistry, type Reactivity } from 'effect/reactivity';
 
+import { isAuthRequired } from '../runtime/classify.js';
 import type { RuntimeApi } from '../runtime/client.js';
 import { appReactivityAtom, appRuntime } from './runtime.js';
 
@@ -112,7 +113,10 @@ export const query = <A, E>(
     invalidatedBy(get, resolved.keys);
     const effect = read(get);
     const retry = get.once(queryRetryAtom);
-    return !resolved.retry || retry === null ? effect : Effect.retry(effect, retry);
+    // `auth_required` is never retried: the page is signed out, and the gate unmounts this read.
+    return !resolved.retry || retry === null
+      ? effect
+      : Effect.retry(effect, { ...retry, while: (error) => !isAuthRequired(error) });
   });
   // A write patches a held success in place (the old `setQueryData`); a read already in flight
   // still lands over it, as before. `cache` is the only node ever mounted, so the write reads it.

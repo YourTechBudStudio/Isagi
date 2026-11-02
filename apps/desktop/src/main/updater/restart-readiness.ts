@@ -1,12 +1,18 @@
-import { Data, Duration, Effect } from 'effect';
-import type { HttpClient } from 'effect/http';
+import { Data, Duration, Effect, type Redacted } from 'effect';
+import { HttpClient } from 'effect/http';
 
 import { apiBasePath, apiEndpoints } from '@isagi/contracts';
-import { RuntimeClient, type RuntimeClientError } from '@isagi/runtime-client';
+import { RuntimeClient, type RuntimeClientError, withRuntimeToken } from '@isagi/runtime-client';
 
 import type { RuntimeLifecycleFailure } from '../runtime-process/index.js';
 
 export const restartReadinessTimeout = Duration.seconds(2);
+
+/** Where the managed runtime listens, and the launcher token it admits for this app run. */
+export interface RuntimeAccess {
+  readonly url: string;
+  readonly launcherToken: Redacted.Redacted<string>;
+}
 
 export type RestartReadiness =
   | { readonly kind: 'clear' }
@@ -28,10 +34,10 @@ class RestartReadinessFailure extends Data.TaggedError('RestartReadinessFailure'
  * not outlive the deadline either.
  */
 export const readRestartReadiness = Effect.fn('DesktopUpdater.readRestartReadiness')(function* (
-  runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure>,
+  runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure>,
   diagnose: (category: RestartReadinessDiagnosticCategory) => Effect.Effect<void>,
 ): Effect.fn.Return<RestartReadiness, never, HttpClient.HttpClient> {
-  return yield* probeActivity(runtimeUrl).pipe(
+  return yield* probeActivity(runtimeAccess).pipe(
     Effect.timeoutOrElse({
       duration: restartReadinessTimeout,
       orElse: () => Effect.fail(new RestartReadinessFailure({ category: 'timeout' })),
@@ -45,9 +51,9 @@ export const readRestartReadiness = Effect.fn('DesktopUpdater.readRestartReadine
 // Every step lives in the tagged failure channel: a degraded runtime can hand back an unusable URL,
 // and that has to become a diagnosed `unknown` rather than a defect the caller never hears about.
 const probeActivity = Effect.fnUntraced(function* (
-  runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure>,
+  runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure>,
 ) {
-  const url = yield* runtimeUrl.pipe(
+  const { url, launcherToken } = yield* runtimeAccess.pipe(
     Effect.mapError(() => new RestartReadinessFailure({ category: 'transport' })),
   );
   // The requester builds its URL with `new URL`, which throws on a malformed base; check the same
@@ -56,7 +62,11 @@ const probeActivity = Effect.fnUntraced(function* (
     try: () => new URL(apiBasePath, url),
     catch: () => new RestartReadinessFailure({ category: 'transport' }),
   });
-  const client = yield* RuntimeClient.make(url);
+  // The one guarded call main makes: only this client carries the launcher token. The shared client stays tokenless,
+  // because it also reaches the development web server.
+  const client = yield* RuntimeClient.make(url).pipe(
+    Effect.updateService(HttpClient.HttpClient, withRuntimeToken(launcherToken)),
+  );
   const activity = yield* client
     .request(apiEndpoints.agentSessions.activity)
     .pipe(Effect.mapError((error) => new RestartReadinessFailure({ category: categoryOf(error) })));
