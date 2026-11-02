@@ -28,6 +28,8 @@ export function runtimeRecovery(code: string): string {
       return "This runtime does not serve that command's route; use the `isagi` on PATH inside an Isagi terminal, which matches its runtime's version.";
     case 'api_host_not_allowed':
       return "The runtime refused the request's Host (`data.host`). Add that host to server.allowedHosts in the runtime's config.yaml and restart the runtime; a runtime listening on a specific non-loopback address must list that address.";
+    case 'auth_required':
+      return 'This runtime has login on. Run `isagi` inside an Isagi terminal or agent, which sets ISAGI_RUNTIME_TOKEN; a plain shell cannot call it. A terminal that outlived a runtime restart needs to be reopened.';
     case 'api_request_parsing_failed':
       return "The runtime refused the request's shape; check the command's flags with `--help`, then report `requestId` if they are right.";
     default:

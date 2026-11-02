@@ -1,3 +1,5 @@
+import { Redacted } from 'effect';
+
 import { CliFailure } from './errors.js';
 import type { SourcedValue } from './serve/launch.js';
 import { fromFlagOrEnv } from './settings.js';
@@ -45,6 +47,20 @@ export function resolveRuntimeUrl(input: {
     return { ok: false, failure: invalid(source, 'must not carry credentials') };
   }
   return { ok: true, url: { ...source, value: url.toString() } };
+}
+
+/**
+ * The process token: `ISAGI_RUNTIME_TOKEN` whenever it is set and non-empty, whatever the target.
+ *
+ * Isagi gives every terminal and agent it launches its own token, which a runtime with login on
+ * requires. Read from the environment only, so it never appears in a process list, and never
+ * echoed: it is a credential.
+ */
+export function resolveRuntimeToken(
+  env: Readonly<Record<string, string | undefined>>,
+): Redacted.Redacted<string> | undefined {
+  const value = env.ISAGI_RUNTIME_TOKEN;
+  return value === undefined || value === '' ? undefined : Redacted.make(value);
 }
 
 function invalid(source: SourcedValue<string>, problem: string) {

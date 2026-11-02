@@ -1,6 +1,6 @@
 # Run a runtime with `isagi serve`
 
-`isagi serve` runs an Isagi runtime in the current process until it is stopped (Ctrl-C or SIGTERM). Once it listens it prints `ISAGI_RUNTIME_READY <url>`; pass that URL to client commands with `--runtime-url`. Terminals and agents the runtime launches get `ISAGI_RUNTIME_URL` and an `isagi` on `PATH` that call it.
+`isagi serve` runs an Isagi runtime in the current process until it is stopped (Ctrl-C or SIGTERM). Once it listens it prints `ISAGI_RUNTIME_READY <url>`; pass that URL to client commands with `--runtime-url` while [login](#login) is off. Terminals and agents the runtime launches get `ISAGI_RUNTIME_URL`, `ISAGI_RUNTIME_TOKEN` and an `isagi` on `PATH` that call it.
 
 ```sh
 isagi serve
@@ -16,7 +16,24 @@ isagi serve --host 0.0.0.0 --data-dir ~/isagi-server
 | Browser origins allowed to call the runtime | `--allowed-origins <origin,…>` | — | none; clients without an origin are always allowed |
 | Web workbench build | `--web-root <path>` | — | the copy bundled with `isagi`; served only when `server.serveWebUi` is true |
 
-To use the workbench from a browser on another machine, set `server.serveWebUi: true`, list the hostname you browse to in `server.allowedHosts`, and put HTTPS in front (for example `tailscale serve`); the [global schema](config-global.schema.ts) has the details.
+To use the workbench from a browser on another machine, set `server.serveWebUi: true`, list the hostname you browse to in `server.allowedHosts`, and put HTTPS in front (for example `tailscale serve`); the [global schema](config-global.schema.ts) has the details. Anyone who can reach that address can then use the runtime unless login is on.
+
+## Login
+
+Turn on `server.auth` to require a login, keeping the secrets in login-shell variables rather than in the file.
+
+```yaml
+server:
+  serveWebUi: true
+  allowedHosts: ['*.example-tailnet.ts.net']
+  auth:
+    enabled: true
+    username: env.RUNTIME_LOGIN_USER
+    password: env.RUNTIME_LOGIN_PASSWORD
+    signingSecret: env.RUNTIME_LOGIN_SECRET
+```
+
+With login on, a browser signs in with the username and password. Isagi's own terminals, agents and workflows, and the desktop app with its own runtime, keep working without signing in: every process the runtime launches gets its own `ISAGI_RUNTIME_TOKEN`, which `isagi` sends with each request and which stops working when that process ends. `isagi` from a plain shell, including with `--runtime-url`, fails with `auth_required`; run it inside an Isagi terminal or agent instead. A terminal that outlived a runtime restart holds a token the new runtime does not know, so open a new terminal. With login off, `--runtime-url` works from any shell.
 
 A flag beats its environment variable, which beats the default. For the listen address and port, the `server` section of that data directory's `config.yaml` ([global schema](config-global.schema.ts)) sits between the environment variable and the default, and is the place to set them for a desktop-managed runtime, which passes neither flag. An empty environment variable counts as unset. An invalid value fails the command (`cli_usage_invalid`, exit 2) and is never replaced by a lower tier. Use a fixed port for a runtime you return to; with the default the port changes on every start. A runtime with another `--data-dir` is a separate Isagi with its own projects, runs and config.
 

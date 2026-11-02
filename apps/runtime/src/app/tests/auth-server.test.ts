@@ -1,7 +1,7 @@
 // The runtime with `server.auth` on, booted through the harness the way a user turns it on: config.yaml.
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import { Redacted } from 'effect';
 
 import { makeLogCapture } from '../../../test/test-support.js';
 import { sessionCookieName, signSession } from '../../access/testing.js';
+import { PtyService } from '../../pty-processes/index.js';
 import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 
 const signingSecret = 'test-signing-secret';
@@ -336,4 +337,43 @@ test('logout over an old cookie answers exactly one clearing Set-Cookie', async 
     logout.headers['set-cookie'],
     'isagi_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax',
   );
+});
+
+/** Polls `condition` until it holds, or fails after `ms`. */
+async function eventually(condition: () => boolean | Promise<boolean>, label: string, ms = 10_000) {
+  for (let waited = 0; !(await condition()); waited += 25) {
+    if (waited >= ms) assert.fail(`${label} never held`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+test("a launched process's own token is admitted while it runs and refused once it ends", async () => {
+  // A real PTY through the real launch environment: one `ProcessTokens` from the launchers to the guard.
+  const out = join(dataRoot, 'process-token');
+  const { ptyProcessId } = await runtime.run(
+    PtyService.use((pty) =>
+      pty.launch({
+        command: '/bin/sh',
+        args: ['-c', `printf %s "$ISAGI_RUNTIME_TOKEN" > '${out}'; exec sleep 60`],
+        cwd: dataRoot,
+      }),
+    ),
+  );
+  await eventually(() => existsSync(out) && readFileSync(out, 'utf8') !== '', 'the token write');
+  // Asserted by shape and status only, so a failure never prints the token.
+  const token = readFileSync(out, 'utf8');
+  assert.ok(/^[0-9a-f]{64}$/.test(token), 'the process received a token');
+  const asProcess = () =>
+    runtime.server.inject({
+      method: 'GET',
+      url: '/api/v1/workspace',
+      headers: { authorization: `Bearer ${token}` },
+    });
+  assert.equal((await asProcess()).statusCode, 200, 'admitted while the process runs');
+
+  await runtime.run(
+    PtyService.use((pty) => pty.terminate({ ptyProcessId, gracefulTimeoutMs: 1_000 })),
+  );
+  await eventually(async () => (await asProcess()).statusCode === 401, 'refusal after the end');
+  assertAuthRequired(await asProcess(), 'a released process token');
 });

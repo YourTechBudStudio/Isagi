@@ -4,7 +4,7 @@ Use the `isagi` CLI to read what a run did: its tree of graph invocations and ex
 
 ## Runtime and output
 
-Isagi-launched terminals and agents receive `isagi` on `PATH` and `ISAGI_RUNTIME_URL`. `--runtime-url <url>` overrides that address. Use a plain HTTP(S) URL without credentials. Run on the runtime's machine; export writes on that machine's filesystem.
+Isagi-launched terminals and agents receive `isagi` on `PATH`, `ISAGI_RUNTIME_URL` and `ISAGI_RUNTIME_TOKEN`, which `isagi` sends whenever it is set. `--runtime-url <url>` overrides the address. Use a plain HTTP(S) URL without credentials. Run on the runtime's machine; export writes on that machine's filesystem. A runtime with [login](cli-serve.md#login) on answers `auth_required` to `isagi` outside an Isagi terminal or agent.
 
 If the command is missing, use an Isagi terminal or the fallback binary listed in the skill's [locations](../SKILL.md#where-things-live) with `--runtime-url`. Legacy tmux terminals may also need this. After a runtime restart, open a new terminal if its old address no longer answers. Respect the active harness's network and write permissions; use its supported approval mechanism if available, otherwise report the blocked access.
 

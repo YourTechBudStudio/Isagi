@@ -9,7 +9,7 @@ import {
   type RuntimeContent,
 } from '@isagi/runtime-client';
 
-import { runCli } from '../main.js';
+import { runCli, type RuntimeTarget } from '../main.js';
 import type { RuntimeEntry, RuntimeLaunch } from '../serve/launch.js';
 
 /**
@@ -69,11 +69,11 @@ export function fakeRuntime(
     }
     return Effect.succeed(value);
   };
-  const layer = (runtimeUrl: string): Layer.Layer<RuntimeClient> =>
+  const layer = ({ url }: RuntimeTarget): Layer.Layer<RuntimeClient> =>
     Layer.succeed(
       RuntimeClient,
       RuntimeClient.of({
-        runtimeUrl,
+        runtimeUrl: url,
         request: ((endpoint: { id: string }, ...args: unknown[]) =>
           Effect.suspend(() => {
             calls.push({ endpointId: endpoint.id, args });

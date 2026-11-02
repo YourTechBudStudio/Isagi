@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 
+import { ProcessTokens } from '../access/index.js';
 import { runtimePackageVersion } from '../platform/assets/index.js';
 import { DataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
@@ -96,12 +97,53 @@ test('the launch environment puts the shim first on PATH and adds the URL only o
           "building the service writes this version's shim",
         );
 
-        const before = yield* access.launchEnvironment(`/usr/bin${delimiter}/bin`);
+        const holder = { _tag: 'pty', ptyProcessId: 1 } as const;
+        const { ISAGI_RUNTIME_TOKEN: token, ...before } = yield* access.launchEnvironment(
+          `/usr/bin${delimiter}/bin`,
+          holder,
+        );
         assert.deepEqual(before, { PATH: `${binDirectory}${delimiter}/usr/bin${delimiter}/bin` });
+        assert.match(token ?? '', /^[0-9a-f]{64}$/, 'a token is issued before the URL is known');
 
         yield* access.publishRuntimeUrl('http://127.0.0.1:4100');
-        const after = yield* access.launchEnvironment(undefined);
-        assert.deepEqual(after, { PATH: binDirectory, ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100' });
+        const after = yield* access.launchEnvironment(undefined, holder);
+        assert.deepEqual(after, {
+          PATH: binDirectory,
+          ISAGI_RUNTIME_TOKEN: token,
+          ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100',
+        });
+      }),
+    ),
+  );
+});
+
+test('each launched process gets its own token, issued by the ProcessTokens the access guard checks', async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The production wiring: `CliAccess.layer` provides `ProcessTokens.layer` by reference,
+        // so building both in one build yields one `ProcessTokens`.
+        const context = yield* Layer.build(Layer.merge(CliAccess.layer, ProcessTokens.layer)).pipe(
+          Effect.provideService(DataDirectory, makeTestDataDirectory(scratch(), {})),
+          Effect.provideService(CliEntry, { path: '/opt/isagi/isagi.mjs' }),
+        );
+        const access = Context.get(context, CliAccess);
+        const tokens = Context.get(context, ProcessTokens);
+
+        const first = (yield* access.launchEnvironment(undefined, { _tag: 'pty', ptyProcessId: 1 }))
+          .ISAGI_RUNTIME_TOKEN;
+        const second = (yield* access.launchEnvironment(undefined, {
+          _tag: 'sdk',
+          executionId: 'fc-1',
+        })).ISAGI_RUNTIME_TOKEN;
+
+        assert.ok(first !== undefined && second !== undefined);
+        assert.notEqual(first, second, 'holders do not share a token');
+        assert.equal(tokens.isLive(first), true);
+        assert.equal(tokens.isLive(second), true);
+        yield* tokens.release({ _tag: 'pty', ptyProcessId: 1 });
+        assert.equal(tokens.isLive(first), false);
+        assert.equal(tokens.isLive(second), true);
       }),
     ),
   );

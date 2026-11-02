@@ -1,5 +1,5 @@
-import { Context, Layer } from 'effect';
-import { FetchHttpClient, type HttpClient } from 'effect/http';
+import { Context, Layer, type Redacted } from 'effect';
+import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http';
 
 import {
   makeRequesters,
@@ -22,6 +22,16 @@ export const RuntimeHttpClient: Layer.Layer<HttpClient.HttpClient> = FetchHttpCl
     ),
   ),
 );
+
+/**
+ * Sends `Authorization: Bearer <token>` on every request `client` makes. For clients that hold a
+ * runtime credential (a process token, the desktop's launcher token); transform only a client that
+ * talks to that runtime alone, because the header goes wherever the client sends.
+ */
+export const withRuntimeToken =
+  (token: Redacted.Redacted<string>) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    HttpClient.mapRequest(client, HttpClientRequest.bearerToken(token));
 
 /**
  * The runtime API bound to one runtime URL. Clients provide it once at their boundary and call

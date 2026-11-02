@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Redacted } from 'effect';
-
 import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
 import { cliErrorCodeSchema } from './errors.js';
-import { splitJsonFlag } from './main.js';
+import { splitJsonFlag, type RuntimeTarget } from './main.js';
 import {
   content,
   fail,
@@ -367,9 +365,9 @@ test('targeting: --runtime-url beats ISAGI_RUNTIME_URL; neither is runtime_uncon
   const seen: string[] = [];
   const recording = {
     ...runtime,
-    layer: (url: string) => {
-      seen.push(url);
-      return runtime.layer(url);
+    layer: (target: RuntimeTarget) => {
+      seen.push(target.url);
+      return runtime.layer(target);
     },
   };
 
@@ -454,9 +452,8 @@ test('serve passes a trimmed ISAGI_LAUNCHER_TOKEN and removes it before loading 
     env: { ISAGI_LAUNCHER_TOKEN: '  launcher-secret\n', KEEP: 'yes' },
   });
   assert.equal(run.code, 0, run.stdout);
-  const token = runtime.launches[0]?.launcherToken;
-  assert.ok(token !== undefined && Redacted.isRedacted(token));
-  assert.equal(Redacted.value(token), 'launcher-secret');
+  // Plain data: the runtime is another bundle with its own `effect`, so it wraps the token itself.
+  assert.equal(runtime.launches[0]?.launcherToken, 'launcher-secret');
   assert.deepEqual(run.envAtLoad, { KEEP: 'yes' });
   assert.deepEqual(run.env, { KEEP: 'yes' });
   assert.ok(!run.stdout.includes('launcher-secret') && !run.stderr.includes('launcher-secret'));

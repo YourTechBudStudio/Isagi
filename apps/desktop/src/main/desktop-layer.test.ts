@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { Cause, Duration, Effect, Exit, Layer, ManagedRuntime, SubscriptionRef } from 'effect';
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Redacted,
+  SubscriptionRef,
+} from 'effect';
 
 import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/contracts';
 
@@ -22,7 +32,7 @@ import {
   RuntimeProcess,
   RuntimeProcessConfig,
 } from './runtime-process/index.js';
-import { DesktopUpdater, DesktopUpdaterConfig } from './updater/index.js';
+import { DesktopUpdater, DesktopUpdaterConfig, type RuntimeAccess } from './updater/index.js';
 import { activityResponse, FakeUpdater, fakeRuntimeHttp } from './updater/test-support.js';
 
 class FakeStream extends EventEmitter {
@@ -75,12 +85,17 @@ function harness(
     ) => void;
     /** Runs when the shell is asked to exit, as main's coordinator does: synchronously, from the caller's stack. */
     readonly onRequestExit?: (runtime: ManagedRuntime.ManagedRuntime<unknown, never>) => void;
+    /** An external runtime at this URL instead of a managed child. */
+    readonly externalUrl?: string;
   } = {},
 ) {
   const order: string[] = [];
   const sends: { readonly channel: string; readonly payload: unknown }[] = [];
   const exits: number[] = [];
   const requests: string[] = [];
+  const authorizations: (string | undefined)[] = [];
+  /** What the shell was told, in order: `authorize <url> <token>` and `send <state>` for runtime snapshots. */
+  const bridge: string[] = [];
   const child = new FakeChild();
   let spawns = 0;
   const updater = new RecordingUpdater(order);
@@ -89,16 +104,19 @@ function harness(
   const runtimeProcessConfig = Layer.succeed(
     RuntimeProcessConfig,
     RuntimeProcessConfig.of({
-      target: {
-        ownership: 'managed',
-        prepare: Effect.succeed({
-          command: 'electron',
-          args: ['index.js'],
-          cwd: '/stage',
-          env: {},
-          processGroupOwnership: 'self',
-        }),
-      },
+      target: options.externalUrl
+        ? { ownership: 'external', url: options.externalUrl }
+        : {
+            ownership: 'managed',
+            prepare: () =>
+              Effect.succeed({
+                command: 'electron',
+                args: ['index.js'],
+                cwd: '/stage',
+                env: {},
+                processGroupOwnership: 'self',
+              }),
+          },
       adapter: {
         spawn: () => {
           spawns += 1;
@@ -117,7 +135,7 @@ function harness(
   );
 
   const updaterConfig = (
-    runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure, RuntimeProcess>,
+    runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure, RuntimeProcess>,
   ) =>
     Layer.effect(
       DesktopUpdaterConfig,
@@ -138,14 +156,21 @@ function harness(
               install,
               runtime as ManagedRuntime.ManagedRuntime<unknown, never>,
             ),
-          runtimeUrl: Effect.provideContext(runtimeUrl, context),
+          runtimeAccess: Effect.provideContext(runtimeAccess, context),
         });
       }),
     );
 
   const logsDirectory = options.logsDirectory;
   const shell = DesktopShell.of({
-    send: (channel, payload) => void sends.push({ channel, payload }),
+    send: (channel, payload) => {
+      sends.push({ channel, payload });
+      if (channel === RUNTIME_STATUS_CHANNEL) {
+        bridge.push(`send ${(payload as HostRuntimeStatusSnapshot).state}`);
+      }
+    },
+    authorizeRuntimeRequests: ({ url, launcherToken }) =>
+      void bridge.push(`authorize ${url} ${Redacted.value(launcherToken)}`),
     requestExit: (code) => {
       exits.push(code);
       options.onRequestExit?.(runtime as ManagedRuntime.ManagedRuntime<unknown, never>);
@@ -165,6 +190,7 @@ function harness(
           fakeRuntimeHttp((request) =>
             Effect.sync(() => {
               requests.push(request.url);
+              authorizations.push(request.headers.authorization);
               return activityResponse(0);
             }),
           ),
@@ -186,6 +212,8 @@ function harness(
     runtime.runPromise(DesktopUpdater.use((service) => SubscriptionRef.get(service.status)));
 
   return {
+    authorizations,
+    bridge,
     child,
     exits,
     logs: logs.lines,
@@ -374,6 +402,10 @@ test('the updater reads restart readiness from the runtime the runtime process s
 
     assert.equal(subject.requests.length, 1);
     assert.equal(new URL(subject.requests[0]!).origin, 'http://127.0.0.1:43131');
+    const token = await subject.runtime.runPromise(
+      RuntimeProcess.use((process) => Effect.succeed(Redacted.value(process.launcherToken))),
+    );
+    assert.deepEqual(subject.authorizations, [`Bearer ${token}`]);
     assert.equal((await subject.updateSnapshot()).state, 'installing');
     assert.equal(handedOver.length, 1);
   } finally {
@@ -411,4 +443,67 @@ test('handing over to the installer disposes the desktop runtime from inside the
   assert.deepEqual(subject.order, [...detached, 'runtime SIGTERM']);
   install?.();
   assert.equal(subject.updater.installs, 1);
+});
+
+test("the first managed ready authorizes the window's runtime requests before the renderer hears of it, once", async () => {
+  const subject = harness();
+  try {
+    await subject.runtime.runPromise(Effect.void);
+    await until(() => subject.bridge.length === 1);
+    assert.deepEqual(subject.bridge, ['send connecting']);
+
+    await startRuntime(subject, 43132);
+    await until(() => subject.bridge.length === 3);
+    const token = await subject.runtime.runPromise(
+      RuntimeProcess.use((process) => Effect.succeed(Redacted.value(process.launcherToken))),
+    );
+    assert.deepEqual(subject.bridge, [
+      'send connecting',
+      `authorize http://127.0.0.1:43132/ ${token}`,
+      'send ready',
+    ]);
+    assert.equal(
+      subject.logs.some((line) => JSON.stringify(line).includes(token)),
+      false,
+      'the token is never logged',
+    );
+  } finally {
+    await subject.runtime.dispose();
+  }
+});
+
+test('an external runtime is never authorized', async () => {
+  const subject = harness({ externalUrl: 'http://127.0.0.1:43133' });
+  try {
+    await subject.runtime.runPromise(RuntimeProcess.use((process) => process.start));
+    await until(() => subject.bridge.includes('send ready'));
+    assert.equal(
+      subject.bridge.some((entry) => entry.startsWith('authorize')),
+      false,
+    );
+  } finally {
+    await subject.runtime.dispose();
+  }
+});
+
+/**
+ * The shared client also reaches the development web server (`waitForWebServer`), so wrapping it would send the
+ * launcher token there; `boot.test.ts` pins that health polling and the web-server wait send bare GETs. This pins that
+ * restart readiness is the only main-process code that applies the token.
+ */
+test('the launcher token is applied to main-process requests only by restart readiness', async () => {
+  const mainDirectory = dirname(fileURLToPath(import.meta.url));
+  const sources = await readdir(mainDirectory, { recursive: true });
+  const applying = [];
+  for (const file of sources) {
+    if (!file.endsWith('.ts') || file.endsWith('.test.ts')) continue;
+    const text = await readFile(join(mainDirectory, file), 'utf8');
+    if (/withRuntimeToken\(/u.test(text)) applying.push(file);
+  }
+  assert.deepEqual(applying, [join('updater', 'restart-readiness.ts')]);
+  const layer = await readFile(join(mainDirectory, 'desktop-layer.ts'), 'utf8');
+  assert.match(
+    layer,
+    /Layer\.succeed\(DesktopShell, options\.shell\), RuntimeHttpClient, DesktopLogger/u,
+  );
 });

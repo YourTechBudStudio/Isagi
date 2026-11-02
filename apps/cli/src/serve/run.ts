@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import process from 'node:process';
 
-import { Effect, Redacted } from 'effect';
+import { Effect } from 'effect';
 
 import type { CliIo } from '../context.js';
 import { causeText, CliFailure } from '../errors.js';
@@ -52,10 +52,10 @@ export function serveRuntimeCommand(
  * The desktop's launcher token from `ISAGI_LAUNCHER_TOKEN`: trimmed, and unset or empty means none. The variable is
  * always removed before the runtime loads, because worktree setup hooks run with the runtime's raw `process.env`.
  */
-function takeLauncherToken(io: CliIo): Redacted.Redacted<string> | undefined {
+function takeLauncherToken(io: CliIo): string | undefined {
   const value = io.env[launcherTokenVariable]?.trim();
   io.unsetEnv(launcherTokenVariable);
-  return value === undefined || value === '' ? undefined : Redacted.make(value);
+  return value === undefined || value === '' ? undefined : value;
 }
 
 const launcherTokenVariable = 'ISAGI_LAUNCHER_TOKEN';

@@ -7,11 +7,18 @@ import { TestClock } from 'effect/testing';
 
 import type { RuntimeLifecycleFailure } from '../runtime-process/index.js';
 import {
+  type RuntimeAccess,
   readRestartReadiness,
   restartReadinessTimeout,
   type RestartReadinessDiagnosticCategory,
 } from './restart-readiness.js';
-import { activityResponse, settle, testRuntimeUrl } from './test-support.js';
+import {
+  activityResponse,
+  settle,
+  testLauncherToken,
+  testRuntimeAccess,
+  testRuntimeUrl,
+} from './test-support.js';
 
 const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
   effect.pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.runPromise);
@@ -19,10 +26,12 @@ const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
 /** Reads readiness through the real `FetchHttpClient` over a fake `fetch`. */
 function reader(
   fetch: typeof globalThis.fetch,
-  runtimeUrl: Effect.Effect<string, RuntimeLifecycleFailure> = Effect.succeed(testRuntimeUrl),
+  runtimeAccess: Effect.Effect<RuntimeAccess, RuntimeLifecycleFailure> = Effect.succeed(
+    testRuntimeAccess,
+  ),
 ) {
   const diagnostics: RestartReadinessDiagnosticCategory[] = [];
-  const read = readRestartReadiness(runtimeUrl, (category) =>
+  const read = readRestartReadiness(runtimeAccess, (category) =>
     Effect.sync(() => void diagnostics.push(category)),
   ).pipe(
     Effect.provide(
@@ -95,10 +104,13 @@ test('restart readiness reports an unusable runtime URL as a diagnosed unknown',
       // A degraded external runtime still hands back its configured URL, so a
       // malformed one must stay in the failure channel instead of escaping as a
       // defect the coordinator never sees.
-      const subject = reader(() => {
-        fetched = true;
-        return Promise.resolve(activityResponse(0));
-      }, Effect.succeed('not-a-url'));
+      const subject = reader(
+        () => {
+          fetched = true;
+          return Promise.resolve(activityResponse(0));
+        },
+        Effect.succeed({ ...testRuntimeAccess, url: 'not-a-url' }),
+      );
       assert.deepEqual(yield* subject.read, { kind: 'unknown' });
       assert.deepEqual(subject.diagnostics, ['transport']);
       assert.equal(fetched, false);
@@ -164,5 +176,26 @@ test('restart readiness aborts a response whose body never finishes', () =>
       assert.deepEqual(yield* Fiber.join(reading), { kind: 'unknown' });
       assert.equal(signal?.aborted, true);
       assert.deepEqual(subject.diagnostics, ['timeout']);
+    }),
+  ));
+
+test("restart readiness sends the launcher token to the runtime's activity read, and only there", () =>
+  runWithTestClock(
+    Effect.gen(function* () {
+      const seen: { url: string; authorization: string | null }[] = [];
+      const subject = reader((input, init) => {
+        seen.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get('authorization'),
+        });
+        return Promise.resolve(activityResponse(0));
+      });
+      assert.deepEqual(yield* subject.read, { kind: 'clear' });
+      assert.deepEqual(seen, [
+        {
+          url: `${testRuntimeUrl}/api/v1/agent-sessions/activity`,
+          authorization: `Bearer ${testLauncherToken}`,
+        },
+      ]);
     }),
   ));

@@ -335,7 +335,7 @@ export const makeSelfUpdatingUpdater = Effect.gen(function* () {
       .pipe(Effect.andThen(Effect.sync(() => config.requestInstall(quitAndInstall))));
   });
 
-  const readiness = readRestartReadiness(config.runtimeUrl, diagnoseReadiness).pipe(
+  const readiness = readRestartReadiness(config.runtimeAccess, diagnoseReadiness).pipe(
     Effect.provideService(HttpClient.HttpClient, httpClient),
   );
 

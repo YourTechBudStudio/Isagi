@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { Duration, Effect, Layer } from 'effect';
+import { Duration, Effect, Layer, type Redacted } from 'effect';
 import { HttpClient } from 'effect/http';
 import { app } from 'electron';
 
@@ -59,57 +59,62 @@ export const RuntimeProcessConfigElectron: Layer.Layer<
   }),
 );
 
-const prepareManagedRuntime = Effect.gen(function* () {
-  const configuredDataDirectory = process.env.ISAGI_DATA_DIR;
-  const allowedOrigins = app.isPackaged
-    ? managedRuntimeAllowedOrigins({ mode: 'packaged' })
-    : managedRuntimeAllowedOrigins({
-        mode: 'development',
-        webOrigin: yield* requiredDevelopmentWebOrigin,
-        configuredAllowedOrigins: process.env.ISAGI_ALLOWED_ORIGINS,
-      });
-  const locations = app.isPackaged
-    ? {
-        stageRoot: resolve(process.resourcesPath, 'runtime'),
-        dataDirectory: configuredDataDirectory,
-        // The directory `resolveRendererTarget` loads the renderer's `index.html` from.
-        webRoot: resolve(process.resourcesPath, 'web'),
+function prepareManagedRuntime(launch: { readonly launcherToken: Redacted.Redacted<string> }) {
+  return Effect.gen(function* () {
+    const configuredDataDirectory = process.env.ISAGI_DATA_DIR;
+    const allowedOrigins = app.isPackaged
+      ? managedRuntimeAllowedOrigins({ mode: 'packaged' })
+      : managedRuntimeAllowedOrigins({
+          mode: 'development',
+          webOrigin: yield* requiredDevelopmentWebOrigin,
+          configuredAllowedOrigins: process.env.ISAGI_ALLOWED_ORIGINS,
+        });
+    const locations = app.isPackaged
+      ? {
+          stageRoot: resolve(process.resourcesPath, 'runtime'),
+          dataDirectory: configuredDataDirectory,
+          // The directory `resolveRendererTarget` loads the renderer's `index.html` from.
+          webRoot: resolve(process.resourcesPath, 'web'),
+        }
+      : developmentLocations(resolveDevelopmentRoot(repositoryRoot));
+    const { stageRoot, dataDirectory, webRoot } = locations;
+    if (!app.isPackaged) {
+      yield* Effect.logInfo(`runtime stage ${stageRoot}`);
+      yield* Effect.logInfo(`runtime data ${dataDirectory}`);
+      if (configuredDataDirectory && configuredDataDirectory !== dataDirectory) {
+        yield* Effect.logInfo(
+          `ignoring ISAGI_DATA_DIR=${configuredDataDirectory}; managed development uses ${dataDirectory}`,
+        );
       }
-    : developmentLocations(resolveDevelopmentRoot(repositoryRoot));
-  const { stageRoot, dataDirectory, webRoot } = locations;
-  if (!app.isPackaged) {
-    yield* Effect.logInfo(`runtime stage ${stageRoot}`);
-    yield* Effect.logInfo(`runtime data ${dataDirectory}`);
-    if (configuredDataDirectory && configuredDataDirectory !== dataDirectory) {
-      yield* Effect.logInfo(
-        `ignoring ISAGI_DATA_DIR=${configuredDataDirectory}; managed development uses ${dataDirectory}`,
-      );
     }
-  }
-  const stage = yield* Effect.try({
-    try: () => validateRuntimeStage(stageRoot),
-    catch: (error) =>
-      new RuntimeLifecycleFailure({
-        reason: 'stage_invalid',
-        diagnostic: { message: errorMessage(error) },
-      }),
-  });
+    const stage = yield* Effect.try({
+      try: () => validateRuntimeStage(stageRoot),
+      catch: (error) =>
+        new RuntimeLifecycleFailure({
+          reason: 'stage_invalid',
+          diagnostic: { message: errorMessage(error) },
+        }),
+    });
 
-  const specification: RuntimeSpawnSpecification = {
-    command: process.execPath,
-    args: [
-      stage.entrypoint,
-      ...managedRuntimeServeArguments({ allowedOrigins, dataDirectory, webRoot }),
-    ],
-    cwd: stage.root,
-    processGroupOwnership:
-      !app.isPackaged && process.env[developmentEnvironmentKeys.processOwner] === '1'
-        ? 'external'
-        : 'self',
-    env: managedRuntimeSpawnEnvironment({ inherited: process.env }),
-  };
-  return specification;
-});
+    const specification: RuntimeSpawnSpecification = {
+      command: process.execPath,
+      args: [
+        stage.entrypoint,
+        ...managedRuntimeServeArguments({ allowedOrigins, dataDirectory, webRoot }),
+      ],
+      cwd: stage.root,
+      processGroupOwnership:
+        !app.isPackaged && process.env[developmentEnvironmentKeys.processOwner] === '1'
+          ? 'external'
+          : 'self',
+      env: managedRuntimeSpawnEnvironment({
+        inherited: process.env,
+        launcherToken: launch.launcherToken,
+      }),
+    };
+    return specification;
+  });
+}
 
 function developmentLocations(developmentRoot: string) {
   const paths = developmentPaths(developmentRoot);

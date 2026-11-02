@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { ConfigProvider, Context, Effect, Exit, Layer, Redacted, Scope } from 'effect';
+import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import type { RuntimeLaunch, SourcedValue } from '@isagi/cli/serve-launch';
@@ -8,6 +8,7 @@ import type { RuntimeLaunch, SourcedValue } from '@isagi/cli/serve-launch';
 import { EditorProvisioningSettings, editorProvisioningDeadline } from '../../editor/index.js';
 import { MainLayer, RuntimeServer } from '../http-server.js';
 import { launchInputsLayer } from '../launch.js';
+import { AppLayer, type RuntimeServices } from '../layer.js';
 import { RuntimeLogger } from '../logger.js';
 
 export interface BootedRuntime {
@@ -16,6 +17,8 @@ export interface BootedRuntime {
   readonly url: string;
   /** Shuts the runtime down the way a signal does: closes the scope `MainLayer` was built in. Idempotent. */
   readonly close: () => Promise<void>;
+  /** Runs `effect` against the services this runtime's routes use: the same instances, not a second build. */
+  readonly run: <A, E>(effect: Effect.Effect<A, E, RuntimeServices>) => Promise<A>;
 }
 
 export interface BootRuntimeOptions {
@@ -49,8 +52,7 @@ export function testRuntimeLaunch(options: BootRuntimeOptions): RuntimeLaunch {
     webRoot: options.webRoot,
     allowedOrigins: options.allowedOrigins ?? [],
     cliEntryPath,
-    launcherToken:
-      options.launcherToken === undefined ? undefined : Redacted.make(options.launcherToken),
+    launcherToken: options.launcherToken,
   };
 }
 
@@ -67,7 +69,8 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<BootedRu
   const scope = Scope.makeUnsafe();
   const services = await Effect.runPromise(
     Layer.buildWithScope(
-      MainLayer.pipe(
+      // `AppLayer` is merged by reference, so the build makes it once and `run` sees the server's own services.
+      Layer.merge(MainLayer, AppLayer).pipe(
         Layer.provide(launchInputsLayer(testRuntimeLaunch(options))),
         Layer.provide(
           Layer.succeed(EditorProvisioningSettings, {
@@ -92,5 +95,6 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<BootedRu
       closing ??= Effect.runPromise(Scope.close(scope, Exit.void));
       return closing;
     },
+    run: (effect) => Effect.runPromise(Effect.provideContext(effect, services)),
   };
 }

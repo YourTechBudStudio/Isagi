@@ -62,6 +62,20 @@ test('the header hook is the session-scoped, filterless, single owner', () => {
   assert.match(source, /callback\(decision\.response\);/u);
 });
 
+test("the runtime authorization hook is the default session's single, filterless onBeforeSendHeaders owner", () => {
+  assert.match(
+    source,
+    /session\.defaultSession\.webRequest\.onBeforeSendHeaders\(\(details, callback\) =>/u,
+  );
+  // Exactly one registration, beside the one `onHeadersReceived`: Electron keeps only the most
+  // recent listener per event, so a second would silently displace the launcher token.
+  assert.equal(source.match(/onBeforeSendHeaders\(/gu)?.length, 1);
+  assert.match(
+    source,
+    /callback\(\{ requestHeaders: runtimeRequestHeaders\(details, target\) \}\);/u,
+  );
+});
+
 test('navigation and window opening are both denied, and neither logs a raw URL', () => {
   assert.match(source, /window\.webContents\.on\('will-navigate'/u);
   assert.match(source, /details\.preventDefault\(\)/u);

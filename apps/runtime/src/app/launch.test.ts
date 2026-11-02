@@ -18,7 +18,7 @@ test('the launch is split into the inputs each owner reads', async () => {
     webRoot: { value: '/srv/web', source: 'flag', name: '--web-root' },
     allowedOrigins: ['https://isagi.example.test'],
     cliEntryPath: '/opt/isagi/isagi.mjs',
-    launcherToken: Redacted.make('launcher-token'),
+    launcherToken: 'launcher-token',
   };
 
   const inputs = await Effect.runPromise(
@@ -27,7 +27,9 @@ test('the launch is split into the inputs each owner reads', async () => {
       root: DataDirectoryRoot,
       entry: CliEntry,
       launcher: LauncherToken,
-    }).pipe(Effect.provide(launchInputsLayer(launch))),
+      // A structured clone: the launch arrives from the CLI's bundle, so only plain data may cross. A value that
+      // needs the CLI's own `effect` to read (a `Redacted`) would not survive this, as it did not in the packaged app.
+    }).pipe(Effect.provide(launchInputsLayer(structuredClone(launch)))),
   );
 
   assert.deepEqual(inputs.server, {
@@ -38,6 +40,7 @@ test('the launch is split into the inputs each owner reads', async () => {
   });
   assert.deepEqual(inputs.root, { path: '/srv/isagi' });
   assert.deepEqual(inputs.entry, { path: '/opt/isagi/isagi.mjs' });
-  assert.equal(inputs.launcher.token, launch.launcherToken);
+  assert.ok(inputs.launcher.token !== undefined && Redacted.isRedacted(inputs.launcher.token));
+  assert.equal(Redacted.value(inputs.launcher.token), 'launcher-token');
   assert.ok(!('launcherToken' in inputs.server));
 });

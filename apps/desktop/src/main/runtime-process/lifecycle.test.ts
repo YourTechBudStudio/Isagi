@@ -9,6 +9,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Redacted,
   Result,
   Stream,
   SubscriptionRef,
@@ -54,13 +55,14 @@ const stopGrace = Duration.seconds(3);
 function managedTarget(): RuntimeTarget {
   return {
     ownership: 'managed',
-    prepare: Effect.succeed({
-      command: 'electron',
-      args: ['index.js'],
-      cwd: '/stage',
-      env: {},
-      processGroupOwnership: 'self',
-    }),
+    prepare: () =>
+      Effect.succeed({
+        command: 'electron',
+        args: ['index.js'],
+        cwd: '/stage',
+        env: {},
+        processGroupOwnership: 'self',
+      }),
   };
 }
 
@@ -151,6 +153,39 @@ test('concurrent URL callers share one spawn and readiness plus health gate', as
       assert.equal(yield* Fiber.join(first), 'http://127.0.0.1:43129/');
       assert.equal(yield* Fiber.join(second), 'http://127.0.0.1:43129/');
       assert.equal((yield* snapshotOf(process)).state, 'ready');
+    }),
+  );
+});
+
+test("the managed spawn is prepared with this run's launcher token, which is never logged", async () => {
+  const given: Redacted.Redacted<string>[] = [];
+  const subject = harness({
+    target: {
+      ownership: 'managed',
+      prepare: ({ launcherToken }) =>
+        Effect.sync(() => {
+          given.push(launcherToken);
+          return {
+            command: 'electron',
+            args: ['index.js'],
+            cwd: '/stage',
+            env: {},
+            processGroupOwnership: 'self',
+          } as const;
+        }),
+    },
+  });
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const started = yield* Effect.forkChild(process.start);
+      yield* settle;
+      subject.child.stdout.write('ISAGI_RUNTIME_READY {"url":"http://127.0.0.1:43129"}\n');
+      yield* Fiber.join(started);
+      assert.equal(given.length, 1);
+      assert.equal(given[0], process.launcherToken);
+      const token = Redacted.value(process.launcherToken);
+      assert.match(token, /^[0-9a-f]{64}$/);
+      assert.equal(JSON.stringify(subject.logs).includes(token), false);
     }),
   );
 });
@@ -267,12 +302,13 @@ test('stage preparation and post-ready process errors retain their stable reason
   const stageFailure = harness({
     target: {
       ownership: 'managed',
-      prepare: Effect.fail(
-        new RuntimeLifecycleFailure({
-          reason: 'stage_invalid',
-          diagnostic: { message: 'metadata mismatch' },
-        }),
-      ),
+      prepare: () =>
+        Effect.fail(
+          new RuntimeLifecycleFailure({
+            reason: 'stage_invalid',
+            diagnostic: { message: 'metadata mismatch' },
+          }),
+        ),
     },
   });
   await stageFailure.run((process) =>
@@ -286,12 +322,13 @@ test('stage preparation and post-ready process errors retain their stable reason
   const launchFailure = harness({
     target: {
       ownership: 'managed',
-      prepare: Effect.fail(
-        new RuntimeLifecycleFailure({
-          reason: 'launch_configuration_invalid',
-          diagnostic: { message: 'no web origin' },
-        }),
-      ),
+      prepare: () =>
+        Effect.fail(
+          new RuntimeLifecycleFailure({
+            reason: 'launch_configuration_invalid',
+            diagnostic: { message: 'no web origin' },
+          }),
+        ),
     },
   });
   await launchFailure.run((process) =>
@@ -307,9 +344,10 @@ test('stage preparation and post-ready process errors retain their stable reason
   const thrown = harness({
     target: {
       ownership: 'managed',
-      prepare: Effect.sync(() => {
-        throw new Error('stage metadata unreadable');
-      }),
+      prepare: () =>
+        Effect.sync(() => {
+          throw new Error('stage metadata unreadable');
+        }),
     },
   });
   await thrown.run((process) =>

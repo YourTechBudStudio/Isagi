@@ -211,9 +211,14 @@ test('Codex keeps the bare executable and takes the instrumentation args and thr
   assert.equal(options.environment?.ISAGI_SDK_EXECUTION_ID, 'fluidcast-1');
 });
 
-/** Isagi's per-invocation instrumentation in a worker's options: none of it may reach the probe. */
+/**
+ * Isagi's per-invocation instrumentation in a worker's options: none of it may reach the probe. The
+ * process token is CLI access, not instrumentation: the probe shares the worker's.
+ */
 const isagiVariables = (environment: Readonly<Record<string, string | undefined>> | undefined) =>
-  Object.keys(environment ?? {}).filter((name) => name.startsWith('ISAGI_'));
+  Object.keys(environment ?? {}).filter(
+    (name) => name.startsWith('ISAGI_') && name !== 'ISAGI_RUNTIME_TOKEN',
+  );
 
 const skills = [{ name: 'review', description: 'Review the diff' }];
 
@@ -231,11 +236,14 @@ test("Claude's skills are listed by an uninstrumented probe beside the instrumen
     'ISAGI_SDK_EXECUTION_ID',
   ]);
   assert.equal(conversation.settings, '/data/claude/settings.json');
-  // The probe: same directory and executable, the launch base alone, no hook settings.
+  // The probe: same directory and executable, the process environment alone (the worker's token
+  // included: one token per SDK execution), no hook settings.
+  const token = conversation.environment?.ISAGI_RUNTIME_TOKEN;
+  assert.match(token ?? '', /^[0-9a-f]{64}$/);
   assert.deepEqual(probe, {
     cwd: '/repo',
     executable: join(result.bin, 'claude'),
-    environment: { HOME: '/home/dev', PATH: result.bin },
+    environment: { HOME: '/home/dev', PATH: result.bin, ISAGI_RUNTIME_TOKEN: token },
   });
   assert.deepEqual(result.listed, [{ harness: 'claude', index: 1 }]);
   assert.deepEqual(result.calls.listSkills, ['/repo']);
@@ -252,8 +260,14 @@ test("Codex's skills are listed by an uninstrumented probe beside the instrument
   assert.ok(conversation && probe);
   assert.ok(conversation.args && conversation.thread);
   assert.equal(isagiVariables(conversation.environment).length, 2);
-  // The probe: same directory, the launch base alone, no hook args or thread.
-  assert.deepEqual(probe, { cwd: '/repo', environment: { HOME: '/home/dev', PATH: result.bin } });
+  // The probe: same directory, the process environment alone (the worker's token included), no
+  // hook args or thread.
+  const token = conversation.environment?.ISAGI_RUNTIME_TOKEN;
+  assert.match(token ?? '', /^[0-9a-f]{64}$/);
+  assert.deepEqual(probe, {
+    cwd: '/repo',
+    environment: { HOME: '/home/dev', PATH: result.bin, ISAGI_RUNTIME_TOKEN: token },
+  });
   assert.deepEqual(result.listed, [{ harness: 'codex', index: 1 }]);
 });
 

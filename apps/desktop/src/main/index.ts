@@ -2,8 +2,8 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { Cause, Effect, Exit, ManagedRuntime, SubscriptionRef } from 'effect';
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { Cause, Effect, Exit, ManagedRuntime, Redacted, SubscriptionRef } from 'effect';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 
 import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
@@ -20,6 +20,7 @@ import {
   rendererRuntimeOrigins,
   type RendererTarget,
 } from './renderer-policy.js';
+import { runtimeRequestHeaders } from './runtime-authorization.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { RuntimeProcess } from './runtime-process/index.js';
 import { RuntimeProcessConfigElectron } from './runtime.js';
@@ -83,7 +84,40 @@ const desktopShell = DesktopShell.of({
   requestExit: (code) => void requestExit({ code }),
   isPackaged: app.isPackaged,
   logsDirectory: () => app.getPath('logs'),
+  authorizeRuntimeRequests: (runtime) => installRuntimeAuthorization(runtime),
 });
+
+let runtimeAuthorizationInstalled = false;
+
+/**
+ * Makes every window request to the managed runtime carry its launcher token: fetches (Fluidcast's
+ * event streams included), the sockets, the editor iframe and everything inside it, and media URLs.
+ * The renderer, the preload bridge and the web app never see the token.
+ *
+ * Electron keeps only the most recent listener for a WebRequest event, so this hook is the default
+ * session's single `onBeforeSendHeaders` owner; anything else that wants one must extend this
+ * handler rather than add a second. The window uses the default session, as the containment hook's
+ * `webContents.session` does. The filter is omitted deliberately: `runtimeRequestHeaders` matches
+ * the runtime's host itself, which Electron's URL patterns cannot express by port.
+ */
+function installRuntimeAuthorization(runtime: {
+  readonly url: string;
+  readonly launcherToken: Redacted.Redacted<string>;
+}) {
+  if (runtimeAuthorizationInstalled) {
+    console.warn('[desktop] runtime request authorization is already installed; ignoring');
+    return;
+  }
+  runtimeAuthorizationInstalled = true;
+  const target = {
+    host: new URL(runtime.url).host,
+    authorization: `Bearer ${Redacted.value(runtime.launcherToken)}`,
+  };
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    callback({ requestHeaders: runtimeRequestHeaders(details, target) });
+  });
+  console.info('[desktop] runtime request authorization installed');
+}
 
 /**
  * The process's one Effect runtime. Nothing builds until its first use, which is after `whenReady`, so Electron's
@@ -93,9 +127,9 @@ const desktop = ManagedRuntime.make(
   makeDesktopLayer({
     shell: desktopShell,
     runtimeProcessConfig: RuntimeProcessConfigElectron,
-    updaterConfig: (runtimeUrl) =>
+    updaterConfig: (runtimeAccess) =>
       DesktopUpdaterConfig.layerElectron(app, {
-        runtimeUrl,
+        runtimeAccess,
         isExitCommitted: () => shutdown.committed,
         requestInstall: (install) => void shutdown.request({ kind: 'install_update', install }),
       }),

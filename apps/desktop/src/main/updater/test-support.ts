@@ -2,7 +2,7 @@
 // diagnostic trail and the runtime's HTTP API.
 import { EventEmitter } from 'node:events';
 
-import { Context, Effect, Exit, Layer, Scope, SubscriptionRef } from 'effect';
+import { Context, Effect, Exit, Layer, Redacted, Scope, SubscriptionRef } from 'effect';
 import {
   HttpClient,
   HttpClientError,
@@ -17,6 +17,11 @@ import { UpdaterDiagnostics, type UpdaterDiagnosticRecord } from './diagnostics.
 import { DesktopUpdater } from './service.js';
 
 export const testRuntimeUrl = 'http://127.0.0.1:43129';
+export const testLauncherToken = 'launcher-token-for-tests';
+export const testRuntimeAccess = {
+  url: testRuntimeUrl,
+  launcherToken: Redacted.make(testLauncherToken),
+};
 
 export class FakeUpdater extends EventEmitter implements UpdaterAdapter {
   // Every flag starts at the opposite of what starting the updater must set, so
@@ -76,7 +81,7 @@ export function testConfig(
       },
       isExitCommitted: () => false,
       requestInstall: () => undefined,
-      runtimeUrl: Effect.succeed(testRuntimeUrl),
+      runtimeAccess: Effect.succeed(testRuntimeAccess),
       ...overrides,
     }),
   );

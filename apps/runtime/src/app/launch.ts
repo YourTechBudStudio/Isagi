@@ -1,4 +1,4 @@
-import { Context, Layer } from 'effect';
+import { Context, Layer, Redacted } from 'effect';
 
 import type { RuntimeLaunch, SourcedValue } from '@isagi/cli/serve-launch';
 
@@ -36,6 +36,9 @@ export function launchInputsLayer(
     }),
     Layer.succeed(DataDirectoryRoot, { path: launch.dataDirectory.value }),
     Layer.succeed(CliEntry, { path: launch.cliEntryPath }),
-    Layer.succeed(LauncherToken, { token: launch.launcherToken }),
+    // Wrapped here, by the runtime's own `effect`: the launch is plain data from another bundle.
+    Layer.succeed(LauncherToken, {
+      token: launch.launcherToken === undefined ? undefined : Redacted.make(launch.launcherToken),
+    }),
   );
 }

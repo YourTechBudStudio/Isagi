@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { Redacted } from 'effect';
+
 import {
   managedRuntimeServeArguments,
   managedRuntimeSpawnEnvironment,
@@ -22,6 +24,7 @@ test('managed runtime environment retains host tooling and removes private orche
     ISAGI_DESKTOP_LOG_MODE: 'supervisor',
     ISAGI_WEB_URL: 'http://127.0.0.1:4173',
     VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid',
+    ISAGI_LAUNCHER_TOKEN: 'inherited',
   });
   assert.deepEqual(sanitized, {
     PATH: '/usr/bin',
@@ -32,14 +35,17 @@ test('managed runtime environment retains host tooling and removes private orche
   });
 });
 
-test('the spawn environment adds only ELECTRON_RUN_AS_NODE; serve settings travel as flags', () => {
+const launcherToken = Redacted.make('a'.repeat(64));
+
+test('the spawn environment adds only ELECTRON_RUN_AS_NODE and the launcher token; serve settings travel as flags', () => {
   assert.deepEqual(
     managedRuntimeSpawnEnvironment({
       inherited: { PATH: '/usr/bin', ISAGI_WEB_URL: 'http://127.0.0.1:4173' },
+      launcherToken,
     }),
-    { PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1' },
+    { PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1', ISAGI_LAUNCHER_TOKEN: 'a'.repeat(64) },
   );
-  const environment = managedRuntimeSpawnEnvironment({ inherited: {} });
+  const environment = managedRuntimeSpawnEnvironment({ inherited: {}, launcherToken });
   for (const name of [
     'HOST',
     'PORT',
@@ -54,9 +60,28 @@ test('the spawn environment adds only ELECTRON_RUN_AS_NODE; serve settings trave
 test("the user's ISAGI_HOST and ISAGI_PORT reach serve, which applies them by precedence", () => {
   const environment = managedRuntimeSpawnEnvironment({
     inherited: { ISAGI_HOST: '0.0.0.0', ISAGI_PORT: '11299' },
+    launcherToken,
   });
   assert.equal(environment.ISAGI_HOST, '0.0.0.0');
   assert.equal(environment.ISAGI_PORT, '11299');
+});
+
+test("the desktop's launcher token replaces an inherited one, and serve arguments never carry it", () => {
+  const environment = managedRuntimeSpawnEnvironment({
+    inherited: { ISAGI_LAUNCHER_TOKEN: 'stale-from-the-shell' },
+    launcherToken,
+  });
+  assert.equal(environment.ISAGI_LAUNCHER_TOKEN, 'a'.repeat(64));
+  const args = managedRuntimeServeArguments({
+    allowedOrigins: 'file://',
+    dataDirectory: '/data',
+    webRoot: '/web',
+  });
+  assert.equal(args.join(' ').includes('a'.repeat(64)), false);
+  assert.equal(
+    args.some((arg) => /token/i.test(arg)),
+    false,
+  );
 });
 
 test('serve arguments carry the origins, the web root and, when the desktop chose one, the data directory', () => {
