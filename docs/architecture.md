@@ -8,7 +8,7 @@ Electron (hosting the React web app) is the client. The core runtime is a server
 
 This separation keeps the desktop experience local and direct while leaving room for remote execution later.
 
-The runtime is the single network entry point. Its one origin carries the API, the editor (Code Server, which listens only on loopback and is reached through the runtime's `/editor/<id>/` proxy, never directly) and, when `server.serveWebUi` is on, the web build that its launcher supplies. Every request is admitted by its `Host`: loopback, or a host listed in `server.allowedHosts`. The runtime does not terminate TLS, so reaching it from another machine relies on HTTPS in front of it, for example `tailscale serve`.
+The runtime is the single network entry point. Its one origin carries the API, the editor (Code Server, which listens only on loopback and is reached through the runtime's `/editor/<id>/` proxy, never directly) and, when `server.serveWebUi` is on, the web build that its launcher supplies. Every request is admitted by its `Host`: loopback, or a host listed in `server.allowedHosts`. With `server.auth.enabled`, an access guard after the Host and CORS checks also requires a credential on every route not marked public (health, login, web UI files): a browser signs in for a session cookie, while the desktop window and every process the runtime launches carry bearer tokens the runtime trusts. There is no loopback exemption. This guards against other people on a trusted network; it is not hardened security. The runtime does not terminate TLS, so reaching it from another machine relies on HTTPS in front of it, for example `tailscale serve`.
 
 ## Client
 
