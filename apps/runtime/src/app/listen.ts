@@ -4,6 +4,7 @@ import { Data } from 'effect';
 
 import type { SourcedValue } from '@isagi/cli/serve-launch';
 
+import type { AuthMode } from '../access/index.js';
 import { isLoopbackHostname } from '../platform/http/index.js';
 import type { RuntimeConfigShape } from '../runtime-config/index.js';
 import type { ServerLaunch } from './launch.js';
@@ -62,10 +63,17 @@ export function localRuntimeUrl(address: AddressInfo): string {
 
 export type ExposureWarning = 'login_off_beyond_loopback' | 'plain_http_beyond_loopback';
 
-/** The exposure warnings for a listen host (#64 AC5). Wildcards (`0.0.0.0`, `::`) count as beyond loopback. */
-export function exposureWarnings(host: string): readonly ExposureWarning[] {
-  return isLoopbackHostname(host.replace(/^\[|\]$/g, '').toLowerCase())
-    ? []
+/**
+ * The exposure warnings for a listen host and login mode (#64 AC5). Wildcards (`0.0.0.0`, `::`) count as beyond
+ * loopback; the login warning is dropped when login is on.
+ */
+export function exposureWarnings(
+  host: string,
+  login: AuthMode['_tag'],
+): readonly ExposureWarning[] {
+  if (isLoopbackHostname(host.replace(/^\[|\]$/g, '').toLowerCase())) return [];
+  return login === 'enabled'
+    ? ['plain_http_beyond_loopback']
     : ['login_off_beyond_loopback', 'plain_http_beyond_loopback'];
 }
 

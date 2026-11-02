@@ -1,5 +1,5 @@
 import { Cause, Data, Effect, Exit, Option, Schema } from 'effect';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyContextConfig, FastifyInstance } from 'fastify';
 
 import {
   apiBasePath,
@@ -29,7 +29,13 @@ import {
   isInfrastructureError,
   type InfrastructureErrorFor,
 } from './infrastructure-errors.js';
-import { coerceRouteParams, runRouteRequest, type RouteRuntime } from './route-runtime.js';
+import {
+  coerceRouteParams,
+  httpExchange,
+  runRouteRequest,
+  type ApiHttpExchange,
+  type RouteRuntime,
+} from './route-runtime.js';
 
 /**
  * Typed API endpoints: a handler's error channel is exactly what its contract can answer with.
@@ -76,6 +82,8 @@ export interface ApiRequest<Endpoint extends AnyRoute> {
   readonly reject: (
     rejection: Rejection<Endpoint>,
   ) => Effect.Effect<never, ApiRejected<Rejection<Endpoint>>>;
+  /** Transport-level headers; only credentials and cookies use it (`access/`). */
+  readonly http: ApiHttpExchange;
 }
 
 export type ApiHandler<Endpoint extends AnyRoute, A, R> = (
@@ -88,6 +96,7 @@ export interface RouteInput {
   readonly body: unknown;
   readonly params: unknown;
   readonly query: unknown;
+  readonly http: ApiHttpExchange;
 }
 
 /** What a request pipeline produced: the handler's value, or the error envelope to send instead. */
@@ -133,6 +142,7 @@ export function runRoute<Endpoint extends AnyRoute, A, R>(
       params: params as ApiEndpointParams<Endpoint>,
       query: query as ApiEndpointQuery<Endpoint>,
       reject: (rejection) => Effect.fail(new ApiRejected({ rejection })),
+      http: input.http,
     });
   });
   return Effect.flatMap(Effect.exit(program), (exit) => routeResult(endpoint, context, exit));
@@ -240,6 +250,11 @@ export function runEndpoint<Endpoint extends AnyApiEndpoint, R>(
   );
 }
 
+export interface RegisterApiEndpointOptions {
+  /** Merged into the Fastify route config; global hooks read it as `request.routeOptions.config`. */
+  readonly config?: FastifyContextConfig;
+}
+
 /**
  * Registers a JSON endpoint whose handler runs on `runtime`.
  *
@@ -251,11 +266,13 @@ export function registerApiEndpoint<Endpoint extends AnyApiEndpoint, R>(
   runtime: RouteRuntime<R>,
   endpoint: Endpoint,
   handle: ApiHandler<Endpoint, ApiEndpointOutput<Endpoint>, NoInfer<R>>,
+  options: RegisterApiEndpointOptions = {},
 ) {
   const successSchema = apiSuccessResponseSchema(endpoint.output);
   fastify.route({
     method: endpoint.method,
     url: `${apiBasePath}${endpoint.path}`,
+    ...(options.config === undefined ? {} : { config: options.config }),
     handler: async (request, reply) => {
       const context: ApiRouteContext = { endpointId: endpoint.id, requestId: String(request.id) };
       const result = await runRouteRequest(
@@ -270,6 +287,7 @@ export function registerApiEndpoint<Endpoint extends AnyApiEndpoint, R>(
             body: request.body,
             params: request.params,
             query: request.query,
+            http: httpExchange(request, reply),
           },
           handle,
           successSchema,

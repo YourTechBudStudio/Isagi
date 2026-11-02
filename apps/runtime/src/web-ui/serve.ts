@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { SourcedValue } from '@isagi/cli/serve-launch';
 
+import { publicRoute } from '../access/index.js';
 import { webUiContentSecurityPolicy } from './policy.js';
 
 const documentFile = 'index.html';
@@ -68,15 +69,27 @@ export function requireWebRoot(
  * Static serving over `root`: wildcard `GET`/`HEAD` routes, `index.html` at `/`, and the CSP on every file sent. A
  * missing file goes to the not-found handler through `reply.callNotFound()`, where `isWebUiDocumentRequest` decides
  * between the document and the JSON contract error.
+ *
+ * The static routes are public to the access guard (they serve only files under the web root), so the plugin is
+ * registered inside its own encapsulated scope whose `onRoute` hook marks exactly them; routes registered later are
+ * not marked. Consequence: `@fastify/static` decorates `reply.sendFile` only inside that scope. That is safe because
+ * with the web UI on the wildcard route matches every `GET` and `HEAD`, so `sendWebUiDocument` is only ever reached
+ * through `reply.callNotFound()` from that route, whose reply carries the decoration.
  */
 export async function registerWebUi(fastify: FastifyInstance, root: string): Promise<void> {
-  await fastify.register(fastifyStatic, {
-    root,
-    wildcard: true,
-    index: documentFile,
-    setHeaders: (reply) => {
-      reply.header('content-security-policy', webUiContentSecurityPolicy);
-    },
+  await fastify.register(async (scope) => {
+    scope.addHook('onRoute', (routeOptions) => {
+      // Merged, not replaced: `@fastify/static` writes its own config in non-wildcard mode.
+      routeOptions.config = { ...routeOptions.config, ...publicRoute };
+    });
+    await scope.register(fastifyStatic, {
+      root,
+      wildcard: true,
+      index: documentFile,
+      setHeaders: (reply) => {
+        reply.header('content-security-policy', webUiContentSecurityPolicy);
+      },
+    });
   });
 }
 

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Redacted } from 'effect';
 
 import type { RuntimeLaunch } from '@isagi/cli/serve-launch';
 
+import { LauncherToken } from '../access/index.js';
 import { CliEntry } from '../cli-access/index.js';
 import { DataDirectoryRoot } from '../platform/persistence/index.js';
 import { launchInputsLayer, ServerLaunch } from './launch.js';
@@ -17,12 +18,16 @@ test('the launch is split into the inputs each owner reads', async () => {
     webRoot: { value: '/srv/web', source: 'flag', name: '--web-root' },
     allowedOrigins: ['https://isagi.example.test'],
     cliEntryPath: '/opt/isagi/isagi.mjs',
+    launcherToken: Redacted.make('launcher-token'),
   };
 
   const inputs = await Effect.runPromise(
-    Effect.all({ server: ServerLaunch, root: DataDirectoryRoot, entry: CliEntry }).pipe(
-      Effect.provide(launchInputsLayer(launch)),
-    ),
+    Effect.all({
+      server: ServerLaunch,
+      root: DataDirectoryRoot,
+      entry: CliEntry,
+      launcher: LauncherToken,
+    }).pipe(Effect.provide(launchInputsLayer(launch))),
   );
 
   assert.deepEqual(inputs.server, {
@@ -33,4 +38,6 @@ test('the launch is split into the inputs each owner reads', async () => {
   });
   assert.deepEqual(inputs.root, { path: '/srv/isagi' });
   assert.deepEqual(inputs.entry, { path: '/opt/isagi/isagi.mjs' });
+  assert.equal(inputs.launcher.token, launch.launcherToken);
+  assert.ok(!('launcherToken' in inputs.server));
 });

@@ -6,6 +6,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { EditorProxyUnavailableError } from '@isagi/contracts';
 
+import { stripSessionCookie } from '../../access/index.js';
 import { errorMessage } from '../../platform/http/index.js';
 import { EditorContextService } from '../contexts/service.js';
 import { editorProxyRequestTarget } from './target.js';
@@ -84,10 +85,31 @@ interface Forward {
 
 /**
  * Connection-level headers that describe one leg, not the message. Node frames each leg itself. Everything else,
- * including `Host`, `Origin`, `Cookie` and `X-Forwarded-*`, passes unchanged, because Code Server checks Origin
- * against Host. #65's login-cookie stripping belongs in this copy.
+ * including `Host`, `Origin`, other cookies and `X-Forwarded-*`, passes unchanged, because Code Server checks Origin
+ * against Host. Request legs also drop the runtime's own credentials first (`withoutRuntimeCredentials`).
  */
 const hopByHopHeaders = new Set(['connection', 'keep-alive', 'transfer-encoding']);
+
+/**
+ * A request's raw headers without the runtime's credentials, for both proxy legs: `Authorization` (the desktop's
+ * launcher token) is dropped and `isagi_session` is removed from each `Cookie` (dropped when nothing remains), so
+ * neither reaches Code Server.
+ */
+export function withoutRuntimeCredentials(rawHeaders: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+    const name = rawHeaders[index]!;
+    const lower = name.toLowerCase();
+    if (lower === 'authorization') continue;
+    if (lower === 'cookie') {
+      const cookie = stripSessionCookie(rawHeaders[index + 1]!);
+      if (cookie !== undefined) kept.push(name, cookie);
+      continue;
+    }
+    kept.push(name, rawHeaders[index + 1]!);
+  }
+  return kept;
+}
 
 function endToEndHeaders(rawHeaders: readonly string[]): string[] {
   const kept: string[] = [];
@@ -135,7 +157,7 @@ function forwardHttp(
         port: input.port,
         method: request.raw.method,
         path: input.path,
-        headers: endToEndHeaders(request.raw.rawHeaders),
+        headers: endToEndHeaders(withoutRuntimeCredentials(request.raw.rawHeaders)),
         agent: input.agent,
       });
     } catch (cause) {
@@ -209,7 +231,7 @@ function forwardUpgrade(input: Forward): Effect.Effect<ForwardEnding> {
         port: input.port,
         method: request.raw.method,
         path: input.path,
-        headers: [...request.raw.rawHeaders],
+        headers: withoutRuntimeCredentials(request.raw.rawHeaders),
         agent: false,
       });
     } catch (cause) {

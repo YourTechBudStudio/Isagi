@@ -341,6 +341,32 @@ test('with serveWebUi on, an unusable web root fails startup with WebRootUnusabl
   }
 });
 
+test('with login off, auth.session reports none, login and logout do not exist, and the log says so', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-auth-off-'));
+  const logs = makeLogCapture();
+  let runtime: BootedRuntime | undefined;
+  try {
+    runtime = await bootRuntime({ dataDirectory: dataRoot, extraLayer: logs.layer });
+    const server = runtime.server;
+    const session = await server.inject({ method: 'GET', url: '/api/v1/auth/session' });
+    assert.equal(session.statusCode, 200);
+    assert.deepEqual(session.json<{ data: unknown }>().data, { credential: 'none' });
+    for (const url of ['/api/v1/auth/login', '/api/v1/auth/logout']) {
+      const missing = await server.inject({ method: 'POST', url, payload: {} });
+      assert.equal(missing.statusCode, 404, url);
+      assert.equal(missing.json<{ error: { code: string } }>().error.code, 'api_route_not_found');
+    }
+    assert.equal(
+      (await server.inject({ method: 'GET', url: '/api/v1/workspace' })).statusCode,
+      200,
+    );
+    assert.ok(logs.lines.some((line) => line.message === 'Runtime login is off'));
+  } finally {
+    await runtime?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('a loopback runtime logs no exposure warning', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-warnings-'));
   const logs = makeLogCapture();

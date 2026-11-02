@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { Redacted } from 'effect';
+
 import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
 import { cliErrorCodeSchema } from './errors.js';
@@ -439,8 +441,35 @@ test('serve hands the resolved launch to the runtime entry and prints nothing', 
       webRoot: undefined,
       allowedOrigins: ['file://'],
       cliEntryPath: '/opt/isagi/dist/isagi.mjs',
+      launcherToken: undefined,
     },
   ]);
+});
+
+test('serve passes a trimmed ISAGI_LAUNCHER_TOKEN and removes it before loading the runtime', async () => {
+  const runtime = fakeRuntimeEntry();
+  const run = await runIsagi(['serve'], {
+    runtimeEntry: runtime.entry,
+    cwd: '/work',
+    env: { ISAGI_LAUNCHER_TOKEN: '  launcher-secret\n', KEEP: 'yes' },
+  });
+  assert.equal(run.code, 0, run.stdout);
+  const token = runtime.launches[0]?.launcherToken;
+  assert.ok(token !== undefined && Redacted.isRedacted(token));
+  assert.equal(Redacted.value(token), 'launcher-secret');
+  assert.deepEqual(run.envAtLoad, { KEEP: 'yes' });
+  assert.deepEqual(run.env, { KEEP: 'yes' });
+  assert.ok(!run.stdout.includes('launcher-secret') && !run.stderr.includes('launcher-secret'));
+});
+
+test('serve treats an unset or empty ISAGI_LAUNCHER_TOKEN as none and still removes it', async () => {
+  for (const env of [{}, { ISAGI_LAUNCHER_TOKEN: '' }, { ISAGI_LAUNCHER_TOKEN: '   ' }]) {
+    const runtime = fakeRuntimeEntry();
+    const run = await runIsagi(['serve'], { runtimeEntry: runtime.entry, cwd: '/work', env });
+    assert.equal(run.code, 0, run.stdout);
+    assert.equal(runtime.launches[0]?.launcherToken, undefined);
+    assert.deepEqual(run.envAtLoad, {});
+  }
 });
 
 test('serve hands the entry’s bundled web root over as the default, and --web-root beats it', async () => {

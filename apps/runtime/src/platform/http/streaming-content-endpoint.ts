@@ -6,7 +6,7 @@ import { apiBasePath, type AnyApiContentEndpoint } from '@isagi/contracts';
 import { runRoute, type ApiHandler, type Rejection } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';
 import { streamToReadable } from './readable-stream.js';
-import { runRouteRequest, type RouteRuntime } from './route-runtime.js';
+import { runRouteRequest, type RouteRuntime, httpExchange } from './route-runtime.js';
 
 /** Bytes of unknown length, produced while they are sent (for example synthesized audio). */
 export interface StreamingContent<E> {
@@ -63,6 +63,7 @@ export function registerStreamingContentEndpoint<Endpoint extends AnyApiContentE
             body: undefined,
             params: request.params,
             query: request.query,
+            http: httpExchange(request, reply),
           },
           (decoded) =>
             Effect.gen(function* () {

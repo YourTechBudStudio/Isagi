@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import process from 'node:process';
 
-import { Effect } from 'effect';
+import { Effect, Redacted } from 'effect';
 
 import type { CliIo } from '../context.js';
 import { causeText, CliFailure } from '../errors.js';
@@ -30,6 +30,7 @@ export function serveRuntimeCommand(
     if (runtimeEntry === undefined) {
       return yield* Effect.die(new Error('runCli was called without a runtime entry.'));
     }
+    const launcherToken = takeLauncherToken(io);
     const module = yield* Effect.tryPromise({
       try: () => runtimeEntry.load(),
       catch: (cause) => loadFailed(runtimeEntry, causeText(cause)),
@@ -38,10 +39,26 @@ export function serveRuntimeCommand(
       return yield* loadFailed(runtimeEntry, 'The runtime module does not export serveRuntime.');
     }
     yield* Effect.sync(() =>
-      module.serveRuntime({ ...resolved.settings, cliEntryPath: runtimeEntry.cliEntryPath }),
+      module.serveRuntime({
+        ...resolved.settings,
+        cliEntryPath: runtimeEntry.cliEntryPath,
+        launcherToken,
+      }),
     );
   });
 }
+
+/**
+ * The desktop's launcher token from `ISAGI_LAUNCHER_TOKEN`: trimmed, and unset or empty means none. The variable is
+ * always removed before the runtime loads, because worktree setup hooks run with the runtime's raw `process.env`.
+ */
+function takeLauncherToken(io: CliIo): Redacted.Redacted<string> | undefined {
+  const value = io.env[launcherTokenVariable]?.trim();
+  io.unsetEnv(launcherTokenVariable);
+  return value === undefined || value === '' ? undefined : Redacted.make(value);
+}
+
+const launcherTokenVariable = 'ISAGI_LAUNCHER_TOKEN';
 
 function isRuntimeEntryModule(value: unknown): value is RuntimeEntryModule {
   return (

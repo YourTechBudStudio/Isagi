@@ -1,8 +1,7 @@
-import { Redacted } from 'effect';
+import type { Redacted } from 'effect';
 
 import type { FluidcastConfig } from './policy.js';
-
-const envPrefix = 'env.';
+import { resolveSecretReference } from './secret-reference.js';
 
 /** A key's variable that the environment does not set, by its config path; never its value. */
 export interface UnsetFluidcastKeyVariable {
@@ -25,15 +24,10 @@ export function resolveFluidcastKeys(
 ): ResolvedFluidcastKeys {
   const unset: UnsetFluidcastKeyVariable[] = [];
   const resolve = (key: Redacted.Redacted<string>, issuePath: string) => {
-    const written = Redacted.value(key);
-    if (!written.startsWith(envPrefix)) return key;
-    const variable = written.slice(envPrefix.length);
-    const value = environment[variable];
-    if (value === undefined || value === '') {
-      unset.push({ issuePath, variable });
-      return key;
-    }
-    return Redacted.make(value);
+    const resolution = resolveSecretReference(key, environment);
+    if (resolution._tag === 'resolved') return resolution.value;
+    unset.push({ issuePath, variable: resolution.variable });
+    return key;
   };
   // Every connection has a key; only an openai-compatible model's is optional.
   const resolveKey = <

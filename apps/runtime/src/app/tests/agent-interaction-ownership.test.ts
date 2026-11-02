@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Context, Deferred, Effect, Fiber, Layer, Result } from 'effect';
 
+import { LauncherToken } from '../../access/index.js';
 import { CliEntry } from '../../cli-access/index.js';
 import { AgentSessionAttentionProjection } from '../../environment/agent-sessions/attention.js';
 import { AgentSessionInteraction } from '../../environment/agent-sessions/interaction.js';
@@ -41,7 +42,10 @@ import {
 import { ModulesLayer } from '../layer.js';
 
 /** The shim's target; the shim is written but never run here. */
-const testCliEntry = Layer.succeed(CliEntry, { path: '/opt/isagi/isagi.mjs' });
+const testCliEntry = Layer.mergeAll(
+  Layer.succeed(CliEntry, { path: '/opt/isagi/isagi.mjs' }),
+  Layer.succeed(LauncherToken, { token: undefined }),
+);
 
 /**
  * The ownership invariant across real modules: a mode switch creates a controller only for an

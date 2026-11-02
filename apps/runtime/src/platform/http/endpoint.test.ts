@@ -314,3 +314,53 @@ test('API endpoint reports a slow request at Debug while it runs and when it com
     await runtime.dispose();
   }
 });
+
+test('a JSON handler reads a request header and its reply header replaces one an earlier hook set', async () => {
+  const fastify = Fastify({ logger: false });
+  fastify.addHook('onRequest', (_request, reply, done) => {
+    reply.header('set-cookie', 'from-hook');
+    done();
+  });
+  registerApiEndpoint(fastify, serviceFreeRouteRuntime, apiEndpoints.auth.session, (request) =>
+    Effect.sync(() => {
+      request.http.setReplyHeader('set-cookie', 'from-route');
+      return { credential: request.http.header('x-probe') === 'yes' ? 'token' : 'none' } as const;
+    }),
+  );
+
+  try {
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/v1/auth/session',
+      headers: { 'x-probe': 'yes' },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json().data, { credential: 'token' });
+    assert.equal(response.headers['set-cookie'], 'from-route');
+  } finally {
+    await fastify.close();
+  }
+});
+
+test('API endpoint route config reaches global hooks as routeOptions.config', async () => {
+  const fastify = Fastify({ logger: false });
+  const seen: unknown[] = [];
+  fastify.addHook('onRequest', (request, _reply, done) => {
+    seen.push(request.routeOptions.config);
+    done();
+  });
+  registerApiEndpoint(
+    fastify,
+    serviceFreeRouteRuntime,
+    apiEndpoints.health,
+    () => Effect.succeed(health),
+    { config: { probe: true } as never },
+  );
+
+  try {
+    await fastify.inject({ method: 'GET', url: '/api/v1/health' });
+    assert.equal((seen[0] as { probe?: unknown }).probe, true);
+  } finally {
+    await fastify.close();
+  }
+});

@@ -7,6 +7,7 @@ import test from 'node:test';
 import { Context, Effect, Layer } from 'effect';
 
 import { makeLogCapture } from '../../../test/test-support.js';
+import { LauncherToken } from '../../access/index.js';
 import { CliEntry } from '../../cli-access/index.js';
 import { HarnessObservationTargetsLayer } from '../../environment/index.js';
 import { FluidcastSessions } from '../../fluidcast/index.js';
@@ -20,7 +21,10 @@ import { StateFile } from '../../workspace/index.js';
 import { ModulesLayer } from '../layer.js';
 
 /** The shim's target; the shim is written but never run here. */
-const testCliEntry = Layer.succeed(CliEntry, { path: '/opt/isagi/isagi.mjs' });
+const testCliEntry = Layer.mergeAll(
+  Layer.succeed(CliEntry, { path: '/opt/isagi/isagi.mjs' }),
+  Layer.succeed(LauncherToken, { token: undefined }),
+);
 
 /**
  * The composition root's structural guarantees, over the real module graph: every service wires its own module

@@ -32,13 +32,52 @@ interface SignIn {
 
 const PRESETS = {
   empty: { label: 'Empty', username: '', password: '', phase: 'idle', slow: false },
-  filled: { label: 'Filled', username: 'noorain', password: 'hunter22', phase: 'idle', slow: false },
-  pending: { label: 'Submitting', username: 'noorain', password: 'hunter22', phase: 'pending', slow: false },
-  slow: { label: 'Throttled', username: 'noorain', password: 'hunter22', phase: 'pending', slow: true },
-  failed: { label: 'Wrong password', username: 'noorain', password: 'hunter22', phase: 'failed', slow: false },
-  unreachable: { label: 'Unreachable', username: 'noorain', password: 'hunter22', phase: 'unreachable', slow: false },
-  success: { label: 'Signed in', username: 'noorain', password: 'hunter22', phase: 'success', slow: false },
-} as const satisfies Record<string, { label: string; username: string; password: string; phase: Phase; slow: boolean }>;
+  filled: {
+    label: 'Filled',
+    username: 'noorain',
+    password: 'hunter22',
+    phase: 'idle',
+    slow: false,
+  },
+  pending: {
+    label: 'Submitting',
+    username: 'noorain',
+    password: 'hunter22',
+    phase: 'pending',
+    slow: false,
+  },
+  slow: {
+    label: 'Throttled',
+    username: 'noorain',
+    password: 'hunter22',
+    phase: 'pending',
+    slow: true,
+  },
+  failed: {
+    label: 'Wrong password',
+    username: 'noorain',
+    password: 'hunter22',
+    phase: 'failed',
+    slow: false,
+  },
+  unreachable: {
+    label: 'Unreachable',
+    username: 'noorain',
+    password: 'hunter22',
+    phase: 'unreachable',
+    slow: false,
+  },
+  success: {
+    label: 'Signed in',
+    username: 'noorain',
+    password: 'hunter22',
+    phase: 'success',
+    slow: false,
+  },
+} as const satisfies Record<
+  string,
+  { label: string; username: string; password: string; phase: Phase; slow: boolean }
+>;
 
 type PresetKey = keyof typeof PRESETS;
 
@@ -113,7 +152,8 @@ const copy = {
 };
 
 function outputLine(s: SignIn): { text: string; tone: string } | null {
-  if (s.phase === 'pending') return { text: s.slow ? copy.slow : copy.checking, tone: 'text-fg-subtle' };
+  if (s.phase === 'pending')
+    return { text: s.slow ? copy.slow : copy.checking, tone: 'text-fg-subtle' };
   if (s.phase === 'failed') return { text: copy.failed, tone: 'text-amber' };
   if (s.phase === 'unreachable') return { text: copy.unreachable, tone: 'text-error' };
   if (s.phase === 'success') return { text: copy.success, tone: 'text-idle' };
@@ -125,13 +165,17 @@ function outputLine(s: SignIn): { text: string; tone: string } | null {
 // ---------------------------------------------------------------------------
 
 function Mark() {
-  return <div className="font-display text-[21px] leading-none font-semibold tracking-[-0.035em] text-fg">Isagi</div>;
+  return (
+    <div className="font-display text-[21px] leading-none font-semibold tracking-[-0.035em] text-fg">
+      Isagi
+    </div>
+  );
 }
 
 function Track({ percent, error, live }: { percent: number; error: boolean; live: boolean }) {
   return (
     <div
-      className={`relative mt-4.5 h-0.75 w-[150px] rounded-full transition-all duration-surface ease-expo ${
+      className={`relative mt-4.5 h-0.75 w-37.5 rounded-full transition-all duration-surface ease-expo ${
         error ? 'bg-error/10' : 'bg-line/16'
       }`}
     >
@@ -166,7 +210,8 @@ function PromptLine({ children, className = '' }: { children: ReactNode; classNa
   return <div className={`flex items-center gap-2 py-1 ${className}`}>{children}</div>;
 }
 
-const promptInput = 'min-w-0 flex-1 bg-transparent text-fg caret-violet outline-none disabled:opacity-60';
+const promptInput =
+  'min-w-0 flex-1 bg-transparent text-fg caret-violet outline-none disabled:opacity-60';
 
 function SignInPrompt({ s }: { s: SignIn }) {
   const out = outputLine(s);
@@ -178,7 +223,11 @@ function SignInPrompt({ s }: { s: SignIn }) {
   return (
     <div className="flex w-full max-w-110 flex-col items-center">
       <Mark />
-      <Track percent={s.phase === 'success' ? 50 : 25} error={s.phase === 'unreachable'} live={busy(s)} />
+      <Track
+        percent={s.phase === 'success' ? 50 : 25}
+        error={s.phase === 'unreachable'}
+        live={busy(s)}
+      />
       <form
         onSubmit={onSubmit}
         className="mt-7 w-full rounded-lg border border-line/24 bg-scrim/40 px-4 py-3.5 text-left font-mono text-[13px] shadow-soft"
@@ -264,7 +313,9 @@ export function SignInMock() {
                   setNonce((n) => n + 1);
                 }}
                 className={`rounded-md px-2.5 py-1 transition duration-micro ease-expo ${
-                  preset === key ? 'bg-tint/10 text-fg' : 'text-fg-subtle hover:bg-tint/6 hover:text-fg'
+                  preset === key
+                    ? 'bg-tint/10 text-fg'
+                    : 'text-fg-subtle hover:bg-tint/6 hover:text-fg'
                 }`}
               >
                 {PRESETS[key].label}

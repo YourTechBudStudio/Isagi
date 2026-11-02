@@ -1,4 +1,5 @@
 import { agentSessionsEndpoints } from './agent-sessions/api.js';
+import { authEndpoints } from './auth/api.js';
 import { clientSettingsEndpoint } from './client-settings/api.js';
 import { commandsEndpoints } from './commands/api.js';
 import { controlPlaneEndpoints } from './control-plane/api.js';
@@ -18,6 +19,7 @@ import { worktreesEndpoints } from './worktrees/api.js';
  */
 export interface ApiEndpoints {
   readonly agentSessions: typeof agentSessionsEndpoints;
+  readonly auth: typeof authEndpoints;
   readonly commands: typeof commandsEndpoints;
   readonly clientSettings: typeof clientSettingsEndpoint;
   readonly controlPlane: typeof controlPlaneEndpoints;
@@ -34,6 +36,7 @@ export interface ApiEndpoints {
 
 export const apiEndpoints: ApiEndpoints = {
   agentSessions: agentSessionsEndpoints,
+  auth: authEndpoints,
   commands: commandsEndpoints,
   clientSettings: clientSettingsEndpoint,
   controlPlane: controlPlaneEndpoints,
@@ -82,6 +85,13 @@ export type {
   SetAgentSessionInteractionModeOutput,
 } from './agent-sessions/types.js';
 
+export { authEndpoints, authLoginApiErrorSchema } from './auth/api.js';
+export {
+  authLoginFailedErrorSchema,
+  authLoginInputSchema,
+  authSessionOutputSchema,
+} from './auth/types.js';
+export type { AuthLoginFailedError, AuthLoginInput, AuthSessionOutput } from './auth/types.js';
 export { clientSettingsEndpoint } from './client-settings/api.js';
 export {
   appearanceSettingsDefaults,

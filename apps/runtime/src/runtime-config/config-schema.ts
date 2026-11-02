@@ -106,6 +106,34 @@ const allowedHostEntry = Schema.String.check(
   ),
 );
 
+// A secret written in config.yaml: a value starting with `env.` names an environment variable; anything else is the
+// secret itself. Shared by the Fluidcast keys and `server.auth`, and resolved by `resolveSecretReference`.
+const secretReference = Schema.RedactedFromValue(
+  Schema.String.check(Schema.isPattern(/^(?!env\.)|^env\.[A-Za-z_][A-Za-z0-9_]*$/)),
+);
+
+const authSecretReferenceDescription =
+  'Write it inline, or write env.NAME to read it from the NAME environment variable of your login shell; only the lowercase env. prefix is a reference. A variable whose name starts with ISAGI_ always reads as unset. When login is on, a missing value or an unset or empty variable prevents Isagi from starting, and the error names the field and variable. Changes require restarting Isagi.';
+
+export const runtimeAuthSettingsSchema = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean).annotate({
+    description:
+      'Require a login for the browser workbench and the runtime API. Missing or false leaves the runtime open to every host allowedHosts admits. Changes require restarting Isagi.',
+  }),
+  username: Schema.optional(secretReference).annotate({
+    description: `The username a browser signs in with. ${authSecretReferenceDescription}`,
+  }),
+  password: Schema.optional(secretReference).annotate({
+    description: `The password a browser signs in with. Changing it keeps browsers that are already signed in. ${authSecretReferenceDescription}`,
+  }),
+  signingSecret: Schema.optional(secretReference).annotate({
+    description: `Signs the login cookie, which keeps a browser signed in for a week. Generate one with openssl rand -hex 32. Changing it signs every browser out. ${authSecretReferenceDescription}`,
+  }),
+}).annotate({
+  description:
+    "Optional login for the browser workbench and the runtime API. A browser signs in once with username and password and stays signed in for a week of inactivity. Isagi's own terminals, agents and workflows, and the desktop app with its own runtime, keep working without signing in; isagi in a plain shell cannot reach a runtime with login on. A light lock for a shared network, not hardened security. When enabled is false, the other fields are not checked. Changes require restarting Isagi.",
+});
+
 export const runtimeServerSettingsSchema = Schema.Struct({
   host: Schema.optional(Schema.NonEmptyString).annotate({
     description:
@@ -125,15 +153,12 @@ export const runtimeServerSettingsSchema = Schema.Struct({
     description:
       "Hostnames or IP addresses, other than loopback, that may reach the runtime. Requests whose Host header names anything else are refused with api_host_not_allowed; this guards against DNS rebinding. List the machine's .ts.net name when the runtime sits behind tailscale serve, or the LAN name or address you browse to when it listens on 0.0.0.0. When host is a specific non-loopback address, list that address too: Isagi's own terminals, agents and workflows call the runtime at it. Entries are exact hostnames or IP addresses, without scheme or port. A leading *. admits every subdomain of the rest (any number of labels, not the domain itself), and * admits every host. Prefer the narrowest entry, for example *.<your-tailnet>.ts.net, and use * only when necessary. Changes require restarting Isagi.",
   }),
+  auth: Schema.optional(runtimeAuthSettingsSchema),
 }).annotate({
   description:
-    'Where the runtime listens. Precedence: isagi serve flags, then ISAGI_HOST/ISAGI_PORT, then this section, then the defaults. A malformed value prevents Isagi from starting. Changes require restarting Isagi.',
+    'Where the runtime listens, and whether it requires a login (auth). Precedence for host and port: isagi serve flags, then ISAGI_HOST/ISAGI_PORT, then this section, then the defaults. A malformed value prevents Isagi from starting. Changes require restarting Isagi.',
 });
 
-// A value starting with `env.` names an environment variable; anything else is the key itself.
-const fluidcastSecret = Schema.RedactedFromValue(
-  Schema.String.check(Schema.isPattern(/^(?!env\.)|^env\.[A-Za-z_][A-Za-z0-9_]*$/)),
-);
 const fluidcastSecretDescription =
   'It stays in the runtime. Write env.NAME, for example env.OPENAI_API_KEY, to read it from the NAME environment variable of your login shell instead; only the lowercase env. prefix is a reference. An unset or empty variable makes voice mode unavailable, and the runtime log names the field and variable.';
 
@@ -165,7 +190,7 @@ const fluidcastOpenAiConnection = {
   provider: Schema.Literal('openai').annotate({
     description: 'The OpenAI Responses API.',
   }),
-  apiKey: fluidcastSecret.annotate({
+  apiKey: secretReference.annotate({
     description: `API key for the language-model API. ${fluidcastSecretDescription}`,
   }),
   ...fluidcastConnectionCommon,
@@ -175,7 +200,7 @@ const fluidcastOpenAiCompatibleConnection = {
   provider: Schema.Literal('openai-compatible').annotate({
     description: 'Any OpenAI-compatible Chat Completions API, such as a local model server.',
   }),
-  apiKey: Schema.optional(fluidcastSecret).annotate({
+  apiKey: Schema.optional(secretReference).annotate({
     description: `API key, if the server needs one. ${fluidcastSecretDescription}`,
   }),
   ...fluidcastConnectionCommon,
@@ -185,7 +210,7 @@ const fluidcastAnthropicConnection = {
   provider: Schema.Literal('anthropic').annotate({
     description: "Anthropic's Messages API.",
   }),
-  apiKey: fluidcastSecret.annotate({
+  apiKey: secretReference.annotate({
     description: `Anthropic API key. ${fluidcastSecretDescription}`,
   }),
   ...fluidcastConnectionCommon,
@@ -264,7 +289,7 @@ export const runtimeFluidcastSchema = Schema.Struct({
     model: Schema.NonEmptyString.annotate({
       description: 'Text-to-speech model ID, for example gpt-4o-mini-tts.',
     }),
-    apiKey: fluidcastSecret.annotate({
+    apiKey: secretReference.annotate({
       description: `API key for the speech API. Required even for a local server that ignores keys; write any placeholder then. ${fluidcastSecretDescription}`,
     }),
     baseUrl: Schema.optional(Schema.String).annotate({

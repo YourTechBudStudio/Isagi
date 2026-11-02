@@ -4,6 +4,8 @@
  * runtime or its native modules.
  */
 
+import type { Redacted } from 'effect';
+
 export type SettingSource = 'flag' | 'env' | 'config' | 'default';
 
 export interface SourcedValue<A> {
@@ -24,6 +26,11 @@ export interface RuntimeLaunch {
   readonly allowedOrigins: readonly string[];
   /** The CLI file the runtime's shim runs. */
   readonly cliEntryPath: string;
+  /**
+   * The desktop's private bearer token, from `ISAGI_LAUNCHER_TOKEN` (trimmed; unset or empty is none), removed from
+   * the environment before the runtime loads. Never a flag, so it never appears in a process list.
+   */
+  readonly launcherToken: Redacted.Redacted<string> | undefined;
 }
 
 export interface RuntimeEntryModule {

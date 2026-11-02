@@ -11,7 +11,12 @@ import {
 
 import { runRoute, type ApiHandler } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';
-import { runRouteRequest, watchContentStream, type RouteRuntime } from './route-runtime.js';
+import {
+  runRouteRequest,
+  watchContentStream,
+  type RouteRuntime,
+  httpExchange,
+} from './route-runtime.js';
 
 /**
  * Routes whose success body is bytes.
@@ -75,6 +80,7 @@ export function registerContentEndpoint<Endpoint extends AnyApiContentEndpoint, 
             body: undefined,
             params: request.params,
             query: request.query,
+            http: httpExchange(request, reply),
           },
           (decoded) =>
             Effect.map(handle(decoded), (content) => ({

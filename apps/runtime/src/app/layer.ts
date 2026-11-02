@@ -1,5 +1,6 @@
 import { Layer } from 'effect';
 
+import { AccessLayer, type LauncherToken } from '../access/index.js';
 import { CliAccessLayer, type CliEntry } from '../cli-access/index.js';
 import { CommandsLayer } from '../commands/index.js';
 import { EditorLayer } from '../editor/index.js';
@@ -37,6 +38,7 @@ export const PlatformLayer = Layer.mergeAll(
  * lock, the harness observer) is one instance. The platform and the two ports stay open.
  */
 export const ModulesLayer = Layer.mergeAll(
+  AccessLayer,
   CliAccessLayer,
   ProjectsLayer,
   PtyProcessesLayer,
@@ -58,14 +60,14 @@ export const ModulesLayer = Layer.mergeAll(
 export const PortsLayer = Layer.mergeAll(WorkflowProjectErasure, HarnessObservationTargetsLayer);
 
 /**
- * The whole runtime service graph. The `satisfies` proves it closed apart from the two launch inputs a lower module
+ * The whole runtime service graph. The `satisfies` proves it closed apart from the three launch inputs a lower module
  * reads (`launchInputsLayer` provides them): a module service whose requirement is neither wired by its own `layer`,
  * a platform service, a port nor a launch input is a compile error here.
  */
 export const AppLayer = ModulesLayer.pipe(
   Layer.provide(PortsLayer),
   Layer.provideMerge(PlatformLayer),
-) satisfies Layer.Layer<never, unknown, DataDirectoryRoot | CliEntry>;
+) satisfies Layer.Layer<never, unknown, DataDirectoryRoot | CliEntry | LauncherToken>;
 
 /** Every service the routes and startup can use. */
 export type RuntimeServices = Layer.Success<typeof AppLayer>;
