@@ -17,6 +17,9 @@ import { EditorProvisioningNotice } from './EditorProvisioningNotice.js';
 // going: blue→violet running, amber blocked on the user, red only for the
 // runtime itself being gone.
 
+/** Where a sign-in attempt stands; `SignInForm` owns it and the surface reads the track from it. */
+export type SignInPhase = 'idle' | 'checking' | 'failed' | 'error' | 'signed_in';
+
 export type BootView =
   | { kind: 'connecting' }
   | { kind: 'host_failed' }
@@ -28,6 +31,11 @@ export type BootView =
   // supplies the unfolded content and drives `live` (a save or retry is running),
   // the whisper, and `stepKey` (form vs results) so step changes crossfade.
   | { kind: 'setup'; live: boolean; whisper: string | null; stepKey: string; children: ReactNode }
+  // The runtime wants credentials. The owner (SignInForm) holds the form state and supplies the
+  // prompt card; the phase drives the track.
+  | { kind: 'sign_in'; phase: SignInPhase; children: ReactNode }
+  // The sign-in lapsed while the workbench was open: a blocker that waits on the user.
+  | { kind: 'session_expired'; onSignIn: () => void }
   // The last boot beat: Code Server has to be on disk before the workspace can
   // offer an editor. Transient states are a status line; only a failure unfolds.
   | {
@@ -57,10 +65,19 @@ const FILL: Record<BootKind, number> = {
   config_invalid: 50,
   // After setup, before opening: the track shows where boot actually is.
   editor_provisioning: 88,
+  // Both sit at the first beat: the runtime answered, but will not talk to this page yet.
+  sign_in: 25,
+  session_expired: 25,
 };
 
 // Views that compact the mark and unfold content below the track.
-const COMPACT_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_invalid', 'setup'];
+const COMPACT_KINDS: readonly BootKind[] = [
+  'runtime_unreachable',
+  'config_invalid',
+  'setup',
+  'sign_in',
+  'session_expired',
+];
 
 // The diagnostic-bearing blocker states get a wider column so multi-line
 // diagnostics have room to read. Loading states and onboarding (`setup`) keep the
@@ -82,6 +99,13 @@ function needsWideColumn(view: BootView): boolean {
     : WIDE_KINDS.includes(view.kind);
 }
 
+// The sign-in card is a terminal session: slightly wider than the calm column so the prompts and
+// the inline submit fit on one line each, nowhere near the diagnostic width.
+function columnWidth(view: BootView): string {
+  if (needsWideColumn(view)) return 'max-w-2xl';
+  return view.kind === 'sign_in' ? 'max-w-110' : 'max-w-100';
+}
+
 function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
   switch (view.kind) {
     case 'connecting':
@@ -98,6 +122,14 @@ function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
     case 'runtime_unreachable':
       return view.retrying ? { tone: 'running', live: true } : { tone: 'error', live: false };
     case 'config_invalid':
+      return { tone: 'blocked', live: false };
+    // Signing in is not a failure, so never amber: live while a check runs or the page reloads,
+    // red only when the runtime itself could not be reached.
+    case 'sign_in':
+      if (view.phase === 'error') return { tone: 'error', live: false };
+      return { tone: 'running', live: view.phase === 'checking' || view.phase === 'signed_in' };
+    // Waits on the user, like the other blockers.
+    case 'session_expired':
       return { tone: 'blocked', live: false };
     // A retry puts the track back to running and live, the same shape
     // `runtime_unreachable` uses; anything not yet failed is still working.
@@ -123,6 +155,7 @@ function whisperText(view: BootView): string | null {
   if (view.kind === 'connecting') return startupCopy.connecting.aside;
   if (view.kind === 'environment_pending') return startupCopy.environmentPending.aside;
   if (view.kind === 'setup') return view.whisper;
+  if (view.kind === 'sign_in') return startupCopy.signIn.whisper;
   return null;
 }
 
@@ -250,8 +283,21 @@ function BootActions({ children }: { children: ReactNode }) {
 }
 
 function BootDetail({ view }: { view: BootView }) {
-  if (view.kind === 'setup') {
+  if (view.kind === 'setup' || view.kind === 'sign_in') {
     return <>{view.children}</>;
+  }
+  if (view.kind === 'session_expired') {
+    return (
+      <>
+        <BootTitle>{startupCopy.sessionExpired.title}</BootTitle>
+        <BootBody>{startupCopy.sessionExpired.body}</BootBody>
+        <BootActions>
+          <Button variant="primary" size="sm" onClick={view.onSignIn}>
+            {startupCopy.sessionExpired.signIn}
+          </Button>
+        </BootActions>
+      </>
+    );
   }
   if (view.kind === 'config_invalid') {
     return (
@@ -308,7 +354,7 @@ function BootDetail({ view }: { view: BootView }) {
  */
 export function BootSurface({ view }: { view: BootView }) {
   const compact = unfoldsDetail(view);
-  const wide = needsWideColumn(view);
+  const width = columnWidth(view);
   const { tone, live } = trackTone(view);
   const status = statusText(view);
   const whisper = whisperText(view);
@@ -321,9 +367,7 @@ export function BootSurface({ view }: { view: BootView }) {
     // which wraps this, is deliberately left alone.
     <MotionConfig reducedMotion="user">
       <div className="canvas-atmosphere relative grid h-screen place-items-center overflow-hidden p-6">
-        <div
-          className={`flex w-full flex-col items-center text-center ${wide ? 'max-w-2xl' : 'max-w-100'}`}
-        >
+        <div className={`flex w-full flex-col items-center text-center ${width}`}>
           <BootMark compact={compact} />
           <BootTrack percent={FILL[view.kind]} tone={tone} live={live} compact={compact} />
           <AnimatePresence mode="wait" initial={false}>
@@ -334,7 +378,12 @@ export function BootSurface({ view }: { view: BootView }) {
             ) : (
               <motion.div
                 key={detailKey}
-                className="flex flex-col items-center"
+                // The sign-in card spans the column; every other detail centres at its own width.
+                className={
+                  view.kind === 'sign_in'
+                    ? 'flex w-full flex-col items-center'
+                    : 'flex flex-col items-center'
+                }
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}

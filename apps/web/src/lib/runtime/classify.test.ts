@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import type { ApiError } from '@isagi/contracts';
 import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
-import { classifyRuntimeFailure } from './classify.js';
+import { classifyRuntimeFailure, isAuthRequired } from './classify.js';
 
 const apiError = {
   code: 'runtime_database_failed',
@@ -51,4 +51,24 @@ test('classifies decode failures and captures the endpoint id', () => {
 test('classifies anything else as unknown', () => {
   assert.equal(classifyRuntimeFailure(new Error('defect')).kind, 'unknown');
   assert.equal(classifyRuntimeFailure(undefined).kind, 'unknown');
+});
+
+test('isAuthRequired is true only for the access guard refusal', () => {
+  const refusal = (code: string) =>
+    new RuntimeApiError({
+      endpointId: 'controlPlane.get',
+      apiError: { code, status: 401, message: 'no', requestId: 'req-auth' },
+    });
+  assert.equal(isAuthRequired(refusal('auth_required')), true);
+  assert.equal(
+    isAuthRequired(refusal('auth_login_failed')),
+    false,
+    'a wrong pair is not a refusal',
+  );
+  assert.equal(isAuthRequired(new RuntimeApiError({ endpointId: 'x', apiError })), false);
+  assert.equal(
+    isAuthRequired(new RuntimeTransportError({ endpointId: 'x', cause: 'down' })),
+    false,
+  );
+  assert.equal(isAuthRequired(new Error('auth_required')), false);
 });

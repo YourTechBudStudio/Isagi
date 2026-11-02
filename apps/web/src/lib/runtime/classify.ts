@@ -45,3 +45,9 @@ function isRuntimeClientError(error: unknown): error is RuntimeClientError {
     runtimeClientErrorTags.has(error._tag)
   );
 }
+
+/** True for the access guard's refusal (`auth_required`): retrying it cannot succeed. */
+export function isAuthRequired(error: unknown): boolean {
+  const classified = classifyRuntimeFailure(error);
+  return classified.kind === 'api' && classified.apiError.code === 'auth_required';
+}

@@ -47,6 +47,9 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   // the rail prototype that emitted it, and `useRecheckPrototype` in phase 08
   // along with the recovery prototype: once the only code that could have leaked
   // a marker is deleted, asserting its absence tests nothing.
+  // The startup harness mounts the production `App` itself; only its wrapper is fixture code.
+  expect(bundle).not.toContain('data-startup-test-support');
+  expect(bundle).not.toContain('startupTestSupport');
   expect(bundle).not.toContain('FolderProjectApp');
   expect(bundle).not.toContain('folderProjectFixture');
   expect(bundle).not.toContain('data-scenario');

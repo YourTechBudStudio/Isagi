@@ -5,6 +5,7 @@ import { motion } from 'motion/react';
 import { useLayoutEffect, useMemo, useState } from 'react';
 
 import { applyDocumentTheme } from '../../lib/appearance/theme.js';
+import { signedOutAtom } from '../../lib/auth/state.js';
 import { clientSettingsAtom } from '../../lib/client-settings/queries.js';
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
 import { controlPlaneAtom } from '../../lib/control-plane/queries.js';
@@ -16,6 +17,7 @@ import { useRegistry } from '../../lib/state/registry.js';
 import { WorkspacePage } from '../workspace/WorkspacePage.js';
 import { hostRuntimeAllowsQueries, useHostRuntimeGate } from './HostRuntimeGate.js';
 import { OnboardingFlow } from './OnboardingFlow.js';
+import { SignedOutSurface } from './SignedOutSurface.js';
 import { startupBootView } from './startup-view.js';
 import { BootSurface, type BootView } from './StartupSurfaces.js';
 
@@ -41,17 +43,22 @@ import { BootSurface, type BootView } from './StartupSurfaces.js';
  * subscription is needed. Only `WorkspacePage` is wrapped: locality decides
  * whether a command's URL is worth offering, which is a question the boot,
  * onboarding, and failure surfaces never ask.
+ *
+ * Right after the host gate comes the signed-out branch: once the runtime has
+ * answered 401 (`signedOutAtom`), the gate stops reading and shows the sign-in
+ * view, or the expiry screen first if the workbench was showing on this page.
+ * Unmounting the workspace there also closes its socket and queries, so nothing
+ * keeps retrying against a runtime that has refused the page.
  */
 export function StartupGate() {
   const host = useHostRuntimeGate();
   const registry = useRegistry();
-  // While the host disallows queries the gate reads nothing (the old `enabled: false`).
-  const controlPlane = useAtomValue(
-    hostRuntimeAllowsQueries(host.decision) ? controlPlaneAtom : disabledQuery,
-  );
-  const clientSettings = useAtomValue(
-    hostRuntimeAllowsQueries(host.decision) ? clientSettingsAtom : disabledQuery,
-  );
+  const signedOut = useAtomValue(signedOutAtom);
+  // While the host disallows queries, or the runtime has refused this page, the gate reads nothing
+  // (the old `enabled: false`); a mounted read would keep earning 401s on every focus revalidation.
+  const readsAllowed = hostRuntimeAllowsQueries(host.decision) && !signedOut;
+  const controlPlane = useAtomValue(readsAllowed ? controlPlaneAtom : disabledQuery);
+  const clientSettings = useAtomValue(readsAllowed ? clientSettingsAtom : disabledQuery);
   const theme = Option.getOrUndefined(AsyncResult.value(clientSettings))?.appearance.theme;
   // Painted here, ahead of every boot, onboarding, and workspace surface. Terminals transcribe the
   // tokens once at construction, which waits on font readiness, so this always lands first.
@@ -77,6 +84,12 @@ export function StartupGate() {
   // fatal-exit path closes the renderer.
   if (hostView) {
     return <BootSurface view={hostView} />;
+  }
+
+  // Ahead of onboarding, boot views and the workspace (and its opening splash): unmounting the
+  // workspace here closes its socket and queries.
+  if (signedOut) {
+    return <SignedOutSurface />;
   }
 
   if (snapshot && (gate?.kind === 'onboarding' || onboardingHeld)) {

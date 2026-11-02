@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
+import { HttpClient } from 'effect/http';
 
 import {
   apiBasePath,
@@ -10,6 +11,8 @@ import {
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   type AcceptHarnessPolicyInput,
+  type AuthLoginInput,
+  type AuthSessionOutput,
   type SetAgentSessionInteractionModeInput,
   type SetAgentSessionInteractionModeOutput,
   type AcceptHarnessPolicyOutput,
@@ -95,7 +98,25 @@ import {
   type RuntimeEndpointError,
 } from '@isagi/runtime-client';
 
+import { signalAuthRequired } from '../auth/signal.js';
 import { resolveRuntimeUrl, RuntimeUrlUnavailable } from './resolve.js';
+
+/**
+ * The web's one runtime `HttpClient`: the platform `fetch` client, plus the page's single 401
+ * detector. Any runtime response with status 401 raises `signalAuthRequired()`. The runtime answers
+ * 401 only for `auth_required` and a failed login, and the sign-in view is already signed out, so
+ * the signal is idempotent there. Reading the status rather than the decoded body also covers
+ * content and stream requests. `RuntimeApi` and the Fluidcast connection both provide it.
+ */
+export const authAwareRuntimeHttpClient: Layer.Layer<HttpClient.HttpClient> = Layer.effect(
+  HttpClient.HttpClient,
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    return HttpClient.tap(client, (response) =>
+      response.status === 401 ? Effect.sync(signalAuthRequired) : Effect.void,
+    );
+  }),
+).pipe(Layer.provide(RuntimeHttpClient));
 
 /** A typed endpoint call's failure: the runtime-client failures, or no runtime URL to call. */
 export type RuntimeCallError<Endpoint> = RuntimeEndpointError<Endpoint> | RuntimeUrlUnavailable;
@@ -110,6 +131,15 @@ export type RuntimeContentCallError<Endpoint> =
  * restarting on a new port is picked up by the next call.
  */
 export interface RuntimeApiShape {
+  /** How this page's requests are admitted; also the events loop's auth probe after a close. */
+  readonly fetchAuthSession: () => Effect.Effect<
+    AuthSessionOutput,
+    RuntimeCallError<typeof apiEndpoints.auth.session>
+  >;
+  /** Checks the pair; on success the runtime sets this browser's session cookie. */
+  readonly signIn: (
+    input: AuthLoginInput,
+  ) => Effect.Effect<null, RuntimeCallError<typeof apiEndpoints.auth.login>>;
   readonly fetchClientSettings: () => Effect.Effect<
     ClientSettingsOutput,
     RuntimeCallError<typeof apiEndpoints.clientSettings>
@@ -518,7 +548,7 @@ export function makeRuntimeApi(
     currentRuntimeUrl.pipe(
       Effect.flatMap((runtimeUrl) => RuntimeHttpApi.make(runtimeUrl)),
       Effect.flatMap(use),
-      Effect.provide(RuntimeHttpClient),
+      Effect.provide(authAwareRuntimeHttpClient),
     );
   const request = <Endpoint extends AnyApiEndpoint>(
     endpoint: Endpoint,
@@ -540,6 +570,8 @@ export function makeRuntimeApi(
     );
 
   return {
+    fetchAuthSession: () => request(apiEndpoints.auth.session),
+    signIn: (input) => request(apiEndpoints.auth.login, input),
     fetchClientSettings: () => request(apiEndpoints.clientSettings),
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
     fetchDurableSessions: () => request(apiEndpoints.workspace.durableSessions),

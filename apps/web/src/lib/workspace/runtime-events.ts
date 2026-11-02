@@ -20,6 +20,7 @@ import {
   type WorktreeCommandsOutput,
 } from '@isagi/contracts';
 
+import { RuntimeApi } from '../runtime/client.js';
 import { keys } from '../state/keys.js';
 import { patch } from '../state/policy.js';
 import { appRuntime } from '../state/runtime.js';
@@ -193,8 +194,8 @@ const socketSignals = (open: OpenRuntimeEventsSocket, url: string) =>
 
 /**
  * The connection loop: connect, apply what arrives, and after a close (or a URL that cannot be
- * resolved) wait and reconnect with backoff (500 ms doubling to 20 s, reset by a successful open).
- * Runs until interrupted.
+ * resolved) probe the runtime's auth once, wait and reconnect with backoff (500 ms doubling to 20 s,
+ * reset by a successful open). Runs until interrupted.
  */
 export const connectRuntimeEvents = (open: OpenRuntimeEventsSocket) =>
   Effect.gen(function* () {
@@ -216,6 +217,10 @@ export const connectRuntimeEvents = (open: OpenRuntimeEventsSocket) =>
           Effect.ensuring(receiveWorkflowSignal({ type: 'disconnected' })),
         );
       }
+      // A browser cannot see why an upgrade was refused, so one small read asks over HTTP. Its
+      // result is ignored: only a 401, which the auth-aware client turns into the signed-out gate,
+      // matters. The gate then unmounts the workspace, which ends this loop.
+      yield* RuntimeApi.use((api) => api.fetchAuthSession()).pipe(Effect.ignore);
       yield* Effect.sleep(delay);
       delay = Duration.min(Duration.times(delay, 2), MAX_RECONNECT_DELAY);
     }

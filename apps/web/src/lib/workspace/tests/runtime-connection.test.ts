@@ -6,6 +6,7 @@ import { mock, test, type TestContext } from 'node:test';
 import { Effect } from 'effect';
 
 import type { RuntimeEvent } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
 import { appRuntime } from '../../state/runtime.js';
 import { flush, makeTestRegistry } from '../../state/testing.js';
@@ -53,7 +54,10 @@ class FakeSocket implements RuntimeEventsSocket {
   }
 }
 
-function connectionSession(t: TestContext, options: { readonly urlFails?: () => boolean } = {}) {
+function connectionSession(
+  t: TestContext,
+  options: { readonly urlFails?: () => boolean; readonly probeFails?: boolean } = {},
+) {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
   t.after(() => mock.timers.reset());
   const log: string[] = [];
@@ -66,6 +70,25 @@ function connectionSession(t: TestContext, options: { readonly urlFails?: () => 
             ? (Effect.fail(new Error('runtime url unavailable')) as never)
             : Effect.succeed('ws://runtime.test/events'),
         ),
+      // The auth probe after each close. Its result is ignored; the transport's 401 tap is what
+      // signs the page out, so here it only has to be counted and to fail harmlessly.
+      fetchAuthSession: () =>
+        Effect.suspend(() => {
+          log.push('probe');
+          return options.probeFails
+            ? Effect.fail(
+                new RuntimeApiError({
+                  endpointId: 'auth.session',
+                  apiError: {
+                    code: 'auth_required',
+                    status: 401,
+                    message: 'Sign in to use this runtime.',
+                    requestId: 'req-probe',
+                  },
+                }),
+              )
+            : Effect.succeed({ credential: 'cookie' as const });
+        }),
     },
   });
   t.after(() => registry.dispose());
@@ -103,7 +126,7 @@ test('socket: open, messages, close, 500 ms then 1 s backoff, reset by an open, 
 
   sockets[0]!.close();
   await flush();
-  assert.equal(log.at(-1), 'signal:disconnected');
+  assert.deepEqual(log.slice(-2), ['signal:disconnected', 'probe']);
   await tick(499);
   assert.equal(sockets.length, 1);
   await tick(1);
@@ -126,6 +149,25 @@ test('socket: open, messages, close, 500 ms then 1 s backoff, reset by an open, 
   assert.equal(sockets[3]!.closed, true, 'unmount closes the live socket');
   await tick(20_000);
   assert.equal(sockets.length, 4, 'and nothing reconnects after it');
+});
+
+test('socket: each close runs one auth probe before the backoff, and a refused probe keeps the loop going', async (t) => {
+  const { registry, connection, sockets, log } = connectionSession(t, { probeFails: true });
+  t.after(registry.mount(connection));
+  await flush();
+  assert.equal(log.filter((entry) => entry === 'probe').length, 0, 'no probe before a close');
+
+  sockets[0]!.close();
+  await flush();
+  assert.equal(log.filter((entry) => entry === 'probe').length, 1, 'one probe after the close');
+  assert.deepEqual(log.slice(-2), ['signal:disconnected', 'probe'], 'probe follows the disconnect');
+  await tick(500);
+  assert.equal(sockets.length, 2, 'the refused probe does not end the loop');
+
+  sockets[1]!.close();
+  await tick(1_000);
+  assert.equal(log.filter((entry) => entry === 'probe').length, 2, 'one probe per close');
+  assert.equal(sockets.length, 3);
 });
 
 test('socket: on open, the coordinator is told first, then attention, workflow, and the run snapshot', async (t) => {

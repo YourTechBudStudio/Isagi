@@ -2,8 +2,9 @@ import { Transport } from '@yourtechbudstudio/fluidcast-client';
 import { WorkerFeed, type FluidcastPlayerProps } from '@yourtechbudstudio/fluidcast-react';
 import { Layer, type Effect } from 'effect';
 
-import { RuntimeClient, RuntimeHttpClient } from '@isagi/runtime-client';
+import { RuntimeClient } from '@isagi/runtime-client';
 
+import { authAwareRuntimeHttpClient } from '../runtime/client.js';
 import { fluidcastTransport, fluidcastWorkerStreams } from './transport.js';
 
 /** What the player takes; the SDK does not export the alias itself. */
@@ -19,10 +20,14 @@ export interface FluidcastConnectionInput {
 
 /**
  * One Fluidcast session's player connection over its runtime routes. The player treats a new
- * connection object as a new instance, so callers memoize it on the session identity.
+ * connection object as a new instance, so callers memoize it on the session identity. Its requests
+ * go through the page's auth-aware client, so a 401 here signs the page out like any other.
  */
 export const fluidcastConnection = (input: FluidcastConnectionInput): PlayerConnection =>
   Layer.mergeAll(
     Layer.effect(Transport, fluidcastTransport(input)),
     Layer.effect(WorkerFeed, fluidcastWorkerStreams(input)),
-  ).pipe(Layer.provide(RuntimeClient.layer(input.runtimeUrl)), Layer.provide(RuntimeHttpClient));
+  ).pipe(
+    Layer.provide(RuntimeClient.layer(input.runtimeUrl)),
+    Layer.provide(authAwareRuntimeHttpClient),
+  );

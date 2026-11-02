@@ -20,6 +20,8 @@ import { runtimeApiLayerAtom } from './runtime.js';
 
 /** Every `RuntimeApiShape` member; the compiler keeps this list complete. */
 const runtimeApiMembers = {
+  fetchAuthSession: true,
+  signIn: true,
   fetchClientSettings: true,
   fetchWorkspace: true,
   fetchDurableSessions: true,

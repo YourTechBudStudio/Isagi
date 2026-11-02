@@ -115,6 +115,13 @@ export default defineConfig({
       name: 'sandboxed-html-preview',
       testMatch: /sandboxed-html-preview\.spec\.ts/,
     },
+    // The production startup gate and sign-in flow. The spec fakes the runtime with request and
+    // socket routing outside the page, so its state survives the reload a sign-in performs.
+    {
+      name: 'startup-sign-in',
+      testMatch: /startup-sign-in\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/test-support/startup/` },
+    },
     {
       name: 'command-palette',
       testMatch: /command-palette(-path)?\.spec\.ts/,

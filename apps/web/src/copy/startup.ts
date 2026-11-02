@@ -34,6 +34,29 @@ export const startupCopy = {
     diagnosticLabel: 'config.yaml',
     quit: 'Quit Isagi',
   },
+  // The sign-in view reads like a terminal session, so its strings stay lowercase on purpose.
+  // The `auth_login_failed` line comes from errors.ts; other failures print `error · ` and the
+  // runtime-error summary, except a transport failure, which has its own line here.
+  signIn: {
+    command: 'isagi login',
+    usernamePrompt: 'username:',
+    passwordPrompt: 'password:',
+    usernameLabel: 'Username',
+    passwordLabel: 'Password',
+    submit: 'sign in',
+    checking: '# checking…',
+    slow: '# taking a beat after the last miss…',
+    success: 'ok · reloading…',
+    errorPrefix: 'error',
+    unreachable: 'runtime unreachable. is it still running?',
+    whisper: "// it's a lock, not a vault",
+  },
+  // Shown instead of the sign-in view when the sign-in lapsed while the workbench was open.
+  sessionExpired: {
+    title: 'Your sign-in expired.',
+    body: "The runtime is still here, but it no longer accepts this browser's sign-in. Sign in again to get back to your workbench.",
+    signIn: 'Sign in',
+  },
 } as const;
 
 // Onboarding renders as "the boot manifest": mono config-file lines under the
