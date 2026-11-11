@@ -74,6 +74,11 @@ export function rendererRuntimeOrigins(input: {
  * `apps/runtime/src/web-ui/policy.ts`, the policy of the runtime-served web
  * UI: keep the directives in step, with `'self'` standing for the runtime there.
  *
+ * `frame-src` also admits `blob:`: it governs every navigation of the editor
+ * frame, and the workbench's Explorer → Download navigates the frame to a
+ * `blob:` URL in engines that treat an `<a download>` click as a navigation.
+ * Chromium does not, but the twins stay in step rather than lean on that.
+ *
  * External runtime origins reach `connect-src` in both forms, and `frame-src`
  * and `media-src` in their http(s) form only: the editor is framed from the
  * runtime's own origin, so an external runtime's editor needs that origin and
@@ -101,8 +106,8 @@ export function rendererContentSecurityPolicy(input: {
   ];
   const httpRuntimeOrigins = input.runtimeOrigins.filter((origin) => /^https?:/u.test(origin));
   // The editor frame loads from the runtime at `/editor/<id>/`: the loopback runtime, or a
-  // configured one.
-  const frameSources = [loopbackFrameSource, ...httpRuntimeOrigins];
+  // configured one. `blob:` is where the workbench navigates it to download a file.
+  const frameSources = [loopbackFrameSource, 'blob:', ...httpRuntimeOrigins];
   // An embedded Fluidcast player plays speech from blobs it buffered, or streams it progressively
   // from the runtime's speech URL: the loopback runtime, or a configured one.
   const mediaSources = ["'self'", 'blob:', loopbackFrameSource, ...httpRuntimeOrigins];

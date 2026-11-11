@@ -21,7 +21,7 @@ import { expect, test } from '@playwright/test';
 /** Exactly the directives `buildContentSecurityPolicy` emits for a packaged window. */
 const packagedPolicy = [
   "default-src 'self'",
-  'frame-src http://127.0.0.1:*',
+  'frame-src http://127.0.0.1:* blob:',
   "img-src 'self' data: blob:",
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",

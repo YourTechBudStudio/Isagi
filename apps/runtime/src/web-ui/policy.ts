@@ -4,12 +4,17 @@
  *
  * Twin of `rendererContentSecurityPolicy` in `apps/desktop/src/main/renderer-policy.ts`: the same directives, with
  * `'self'` standing for the runtime, because a runtime-served page's own origin is the runtime. Change both together.
- * The editor is framed at a runtime-relative path, so `frame-src 'self'` covers it, and `connect-src 'self'` admits
- * the same-host `ws:`/`wss:` sockets (CSP Level 3).
+ * The editor is framed at a runtime-relative path, so `'self'` in `frame-src` covers it, and `connect-src 'self'`
+ * admits the same-host `ws:`/`wss:` sockets (CSP Level 3).
+ *
+ * `frame-src` governs every navigation of the editor frame, not only its `src`. The workbench's Explorer → Download
+ * clicks an `<a download>` for a `blob:` URL inside the frame, which Firefox handles as a navigation of the frame, so
+ * `blob:` is admitted too. Pinned by `policy.test.ts` and reproduced in
+ * `apps/web/browser/specs/editor-frame-blob-navigation.spec.ts`.
  */
 export const webUiContentSecurityPolicy = [
   ['default-src', "'self'"],
-  ['frame-src', "'self'"],
+  ['frame-src', "'self' blob:"],
   ['img-src', "'self' data: blob:"],
   ['media-src', "'self' blob:"],
   ['font-src', "'self'"],
