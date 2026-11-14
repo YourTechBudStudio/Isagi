@@ -17,7 +17,11 @@ import { reconcilePersistedProcesses } from '../service.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from '../service/launch.js';
 import type { PtyPendingExits, PtyReservations } from '../service/lifecycle.js';
-import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
+import {
+  fakeBackendCatalog,
+  manualPtyPersistenceRetry,
+  ptyTestRuntimeConfigService,
+} from '../testing.js';
 import {
   PtyStartError,
   type BackendSessionRef,
@@ -115,6 +119,8 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             pendingExits,
             reservations,
             activeAttachments: new Map(),
+            config: ptyTestRuntimeConfigService(),
+            terminalQueryFilters: new Map(),
             runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
             launchEnvironment: {

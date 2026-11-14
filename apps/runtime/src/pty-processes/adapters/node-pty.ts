@@ -30,9 +30,10 @@ import {
   snapshotProcessTree,
 } from './process-tree.js';
 
-// node-pty is adapted here, once: its `onData`/`onExit` callbacks do only synchronous work (parse, append the log,
-// enqueue) and never run an Effect. Every fact about a launched process reaches the PTY service through the
-// `events` queue returned by `launch`; live output reaches an attachment through the queue it registered.
+// node-pty is adapted here, once: its `onData`/`onExit` callbacks do only synchronous work (parse, filter terminal
+// queries, append the log, enqueue) and never run an Effect. Every fact about a launched process reaches the PTY
+// service through the `events` queue returned by `launch`; live output reaches an attachment through the queue it
+// registered.
 interface LiveNodePtyProcess {
   readonly ptyProcessId: number;
   readonly process: nodePty.IPty;
@@ -304,9 +305,9 @@ function attachError(ptyProcessId: number | undefined, cause: unknown) {
 }
 
 /**
- * Spawns and wires the node-pty callbacks. They do only synchronous work: answer terminal probes while detached, parse
- * shell-integration markers, append the log (synchronously, which is what makes an attachment's `replayBytes` exact),
- * and enqueue. `events` ends after `Exited`, or without one when `kill`/`terminate` suppressed the exit callback.
+ * Spawns and wires the node-pty callbacks. They do only synchronous work: parse shell-integration markers, answer and
+ * strip terminal queries, append the log (synchronously, which is what makes an attachment's `replayBytes` exact), and
+ * enqueue. `events` ends after `Exited`, or without one when `kill`/`terminate` suppressed the exit callback.
  */
 function startNodePtyProcess(
   input: LaunchBackendSessionInput,
@@ -332,24 +333,26 @@ function startNodePtyProcess(
         state: foregroundStateFromEvent(event),
       }),
   });
-  const appendVisible = (visible: string) => {
-    const failure = appendBackendLog(input.logPath, visible);
+  const filter = input.terminalQueries;
+  // One parse: the shell-integration parser strips only Isagi's own markers (which the query filter passes through
+  // anyway), so its visible output goes through the filter, and the filter's `log` and `live` outputs go to the log and
+  // the attachment. The log is appended synchronously, which keeps an attachment's `replayBytes` exact.
+  const appendLog = (log: string) => {
+    if (log.length === 0) return;
+    const failure = appendBackendLog(input.logPath, log);
     if (failure !== null) Queue.offerUnsafe(events, { _tag: 'LogAppendFailed', cause: failure });
-    if (live.attachment)
-      Queue.offerUnsafe(live.attachment.output, { type: 'output', data: visible });
+  };
+  const deliverLive = (data: string) => {
+    if (data.length > 0 && live.attachment)
+      Queue.offerUnsafe(live.attachment.output, { type: 'output', data });
   };
   pty.onData((data) => {
-    if (live.attachment === null) {
-      for (const response of terminalProbeResponses(data, {
-        cols: input.cols,
-        rows: input.rows,
-      })) {
-        live.process.write(response);
-      }
-    }
     const visible = parser.push(data);
     if (visible.length === 0) return;
-    appendVisible(visible);
+    const output = filter.push(visible);
+    for (const reply of output.replies) live.process.write(reply);
+    appendLog(output.log);
+    deliverLive(output.live);
   });
   pty.onExit((event) => {
     Deferred.doneUnsafe(live.exited, Exit.void);
@@ -362,11 +365,13 @@ function startNodePtyProcess(
       return;
     }
     live.running = false;
-    // Release any bytes the parser was holding back as a potential partial
-    // marker prefix so a mid-escape exit doesn't drop them from the log/replay
-    // (mirrors tmux's push+flush on replay).
-    const trailing = parser.flush();
-    if (trailing.length > 0) appendVisible(trailing);
+    // Release any bytes the parser and then the filter were holding back as a potential partial
+    // marker or query prefix, so a mid-escape exit doesn't drop them from the log/replay
+    // (mirrors tmux's push+flush on replay). No reply is written: the process has exited.
+    const trailing = filter.push(parser.flush());
+    const released = filter.flush();
+    appendLog(trailing.log + released);
+    deliverLive(trailing.live + released);
     const exit = {
       exitCode: event.exitCode ?? null,
       signal: event.signal ? String(event.signal) : null,
@@ -404,50 +409,6 @@ export function nodePtyLaunchCommand(command: string, args: readonly string[]) {
     command,
     args: [...args],
   };
-}
-
-export function terminalProbeResponses(
-  data: string,
-  size: { readonly cols: number; readonly rows: number },
-) {
-  const responses: Array<{ readonly index: number; readonly data: string }> = [];
-  let offset = 0;
-  while (offset < data.length) {
-    const index = data.indexOf(ESC, offset);
-    if (index === -1) break;
-    const slice = data.slice(index);
-    const response = terminalProbeResponse(slice, size);
-    if (response) responses.push({ index, data: response });
-    offset = index + 1;
-  }
-  return responses.sort((left, right) => left.index - right.index).map((response) => response.data);
-}
-
-const ESC = '\x1b';
-const BEL = '\x07';
-const ST = `${ESC}\\`;
-
-function terminalProbeResponse(
-  data: string,
-  size: { readonly cols: number; readonly rows: number },
-) {
-  if (data.startsWith(`${ESC}[c`) || data.startsWith(`${ESC}[0c`)) return `${ESC}[?1;2c`;
-  if (data.startsWith(`${ESC}[>c`) || data.startsWith(`${ESC}[>0c`)) return `${ESC}[>0;276;0c`;
-  if (data.startsWith(`${ESC}[5n`)) return `${ESC}[0n`;
-  if (data.startsWith(`${ESC}[6n`)) return `${ESC}[1;1R`;
-  if (data.startsWith(`${ESC}[?6n`)) return `${ESC}[?1;1R`;
-  if (data.startsWith(`${ESC}[18t`)) return `${ESC}[8;${size.rows};${size.cols}t`;
-  if (data.startsWith(`${ESC}]10;?${BEL}`) || data.startsWith(`${ESC}]10;?${ST}`)) {
-    return `${ESC}]10;${defaultTerminalColor('10')}${ST}`;
-  }
-  if (data.startsWith(`${ESC}]11;?${BEL}`) || data.startsWith(`${ESC}]11;?${ST}`)) {
-    return `${ESC}]11;${defaultTerminalColor('11')}${ST}`;
-  }
-  return null;
-}
-
-function defaultTerminalColor(color: string) {
-  return color === '10' ? 'rgb:cdd6/cdd6/f4f4' : 'rgb:1e1e/1e1e/2e2e';
 }
 
 // Returns the failure, if any, so the caller can enqueue it: this runs inside a node-pty callback, where no Effect

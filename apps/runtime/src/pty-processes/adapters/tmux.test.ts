@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
+import { testTerminalQueries } from '../testing.js';
 import { TmuxBackend } from './tmux.js';
 
 test('tmux replay captures the full pane and marks replay output', async () => {
@@ -54,6 +55,7 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           cols: 80,
           rows: 24,
           logPath: null,
+          terminalQueries: testTerminalQueries(),
         });
       }).pipe(Effect.provide(TmuxBackend.layer)),
     );
@@ -125,6 +127,7 @@ test('tmux launch shell-quotes structured command arguments', async () => {
           cols: 80,
           rows: 24,
           logPath: null,
+          terminalQueries: testTerminalQueries(),
         });
       }).pipe(Effect.provide(TmuxBackend.layer)),
     );

@@ -19,7 +19,12 @@ import { worktrees } from '../projects/tables.js';
 import { LaunchEnvironment, PtyForegroundState, PtyService } from '../pty-processes/index.js';
 import type { PtyBackendShape as PtyBackend } from '../pty-processes/index.js';
 import { ptyProcesses } from '../pty-processes/tables.js';
-import { fakeBackendCatalog, PtyBackendCatalog, PtyRepository } from '../pty-processes/testing.js';
+import {
+  fakeBackendCatalog,
+  PtyBackendCatalog,
+  PtyRepository,
+  ptyTestRuntimeConfig,
+} from '../pty-processes/testing.js';
 import type { PtyBackendName } from '../pty-processes/testing.js';
 import { EditorReadinessProbe, type EditorProbeRunner } from './contexts/readiness.js';
 import { EditorContextRepository } from './contexts/repository.js';
@@ -299,6 +304,7 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
   );
   const pty = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
+    Layer.provide(ptyTestRuntimeConfig()),
     Layer.provide(CliAccessNone),
     Layer.provide(ptyRepository),
     Layer.provide(catalog),
