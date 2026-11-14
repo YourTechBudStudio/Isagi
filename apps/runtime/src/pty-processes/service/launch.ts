@@ -2,10 +2,13 @@ import { existsSync } from 'node:fs';
 
 import { Effect, FiberMap, Result, Stream } from 'effect';
 
+import { terminalPalette } from '@isagi/contracts';
+
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { InternalEvents } from '../../platform/events/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { shellLaunchCommand } from '../../platform/process/index.js';
+import type { RuntimeConfig } from '../../runtime-config/index.js';
 import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyForegroundState } from '../foreground-state.js';
 import type { LaunchEnvironment } from '../launch-environment.js';
@@ -34,6 +37,7 @@ import type { PtyPersistenceRetry } from './retry.js';
 import { spawnFailureMessage } from './runtime-namespace.js';
 import { prepareShellIntegration, refWithShellIntegrationToken } from './shell-integration.js';
 import type { ShellIntegrationConfig } from './shell-integration.js';
+import { createTerminalQueryFilter, type TerminalQueryFilter } from './terminal-queries.js';
 import { terminatePtyProcess } from './termination.js';
 
 const defaultCols = 100;
@@ -57,6 +61,14 @@ export interface PtyLaunchDependencies {
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly launchEnvironment: LaunchEnvironment['Service'];
+  /** Read per launch for the theme whose palette answers the new process's colour queries. */
+  readonly config: RuntimeConfig['Service'];
+  /**
+   * Each live process's terminal-query filter, which attach drives (state-query forwarding). Registered once the spawn
+   * succeeds and removed when the process's supervisor ends, so no filter outlives its incarnation. A tmux process's
+   * supervisor ends at once (tmux has no live event stream and ignores the filter), so it never has an entry.
+   */
+  readonly terminalQueryFilters: Map<number, TerminalQueryFilter>;
 }
 
 type PtyAllocationPhase = 'allocated' | 'starting' | 'settled' | 'abandoned';
@@ -198,7 +210,12 @@ function startAllocation(
         return yield* withPersistedLogPath(deps, metadata);
       }
 
-      const spawned = yield* restore(spawnBackendProcess(prepared.success, metadata)).pipe(
+      const terminalQueries = createTerminalQueryFilter(
+        terminalPalette[(yield* deps.config.get).appearance.theme],
+      );
+      const spawned = yield* restore(
+        spawnBackendProcess(prepared.success, metadata, terminalQueries),
+      ).pipe(
         Effect.result,
         Effect.onInterrupt(() => cleanupCancelledSpawn(deps, ptyProcessId)),
       );
@@ -207,8 +224,9 @@ function startAllocation(
         return yield* withPersistedLogPath(deps, metadata);
       }
 
-      // Uninterruptible since the spawn returned, so a live process always gets its supervisor. Events the process
-      // produced before this point wait in its queue.
+      // Uninterruptible since the spawn returned, so a live process always gets its supervisor, and the supervisor's
+      // end always removes the filter registered here. Events the process produced before this point wait in its queue.
+      deps.terminalQueryFilters.set(ptyProcessId, terminalQueries);
       yield* superviseProcess(deps, ptyProcessId, spawned.success.events);
 
       // Past this point nothing is load-bearing for ownership: the process is
@@ -338,6 +356,7 @@ interface PreparedLaunch {
 function spawnBackendProcess(
   prepared: PreparedLaunch,
   metadata: PtyProcessLaunchMetadata,
+  terminalQueries: TerminalQueryFilter,
 ): Effect.Effect<LaunchedBackendSession, PtyStartError> {
   return prepared.backend
     .launch({
@@ -351,6 +370,7 @@ function spawnBackendProcess(
       cols: defaultCols,
       rows: defaultRows,
       logPath: prepared.logPath,
+      terminalQueries,
     })
     .pipe(
       Effect.map((launched) => ({
@@ -399,7 +419,13 @@ function superviseProcess(
   return FiberMap.run(
     deps.pendingExits.supervisors,
     ptyProcessId,
-    events.pipe(Stream.runForEach(onProcessEvent), Effect.annotateLogs({ ptyProcessId })),
+    events.pipe(
+      Stream.runForEach(onProcessEvent),
+      // The stream ends after `Exited`, or without one when the process was killed; shutdown interrupts it. Each is
+      // the end of this incarnation, so its filter goes with it.
+      Effect.ensuring(Effect.sync(() => deps.terminalQueryFilters.delete(ptyProcessId))),
+      Effect.annotateLogs({ ptyProcessId }),
+    ),
   ).pipe(Effect.asVoid);
 }
 

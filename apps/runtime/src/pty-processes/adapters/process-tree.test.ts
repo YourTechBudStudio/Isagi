@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { Effect, Fiber } from 'effect';
 
+import { testTerminalQueries } from '../testing.js';
 import type { BackendSessionRef, PtyBackend } from '../types.js';
 import { NodePtyBackend } from './node-pty.js';
 import { leakyRootScript, leakyTreeFixture, waitUntilGone } from './process-tree-test-support.js';
@@ -176,6 +177,7 @@ function launchLeakyRoot(backend: PtyBackend, ptyProcessId: number, pidFile: str
       cols: 80,
       rows: 24,
       logPath: null,
+      terminalQueries: testTerminalQueries(),
     })
     .pipe(Effect.map((launched) => launched.ref));
 }

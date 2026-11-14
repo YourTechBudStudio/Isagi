@@ -7,13 +7,9 @@ import test from 'node:test';
 import { Effect, Exit, Queue, Scope, Stream } from 'effect';
 import type * as nodePty from 'node-pty';
 
+import { testTerminalQueries } from '../testing.js';
 import type { LaunchBackendSessionInput, PtyOutputMessage, PtyProcessEvent } from '../types.js';
-import {
-  NodePtyBackend,
-  nodePtyLaunchCommand,
-  spawnNodePty,
-  terminalProbeResponses,
-} from './node-pty.js';
+import { NodePtyBackend, nodePtyLaunchCommand, spawnNodePty } from './node-pty.js';
 
 test('node-pty backend preserves structured command arguments', () => {
   assert.deepEqual(nodePtyLaunchCommand('pi', ['-e', '/tmp/ext.ts', '--session', 'abc$(nope)']), {
@@ -53,6 +49,7 @@ test('node-pty backend launch boundary passes structured args to spawn', () => {
       cols: 80,
       rows: 24,
       logPath: null,
+      terminalQueries: testTerminalQueries(),
     },
     ((command, args, options) => {
       calls.push({ command, args: Array.isArray(args) ? args : [args], options });
@@ -74,26 +71,6 @@ test('node-pty backend launch boundary passes structured args to spawn', () => {
       },
     },
   ]);
-});
-
-test('node-pty terminal probe responder answers standard terminal queries', () => {
-  assert.deepEqual(
-    terminalProbeResponses('\x1b[c\x1b[>c\x1b[5n\x1b[6n\x1b[?6n\x1b[18t', {
-      cols: 100,
-      rows: 30,
-    }),
-    ['\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[0n', '\x1b[1;1R', '\x1b[?1;1R', '\x1b[8;30;100t'],
-  );
-});
-
-test('node-pty terminal probe responder answers OSC color queries', () => {
-  assert.deepEqual(
-    terminalProbeResponses('\x1b]10;?\x07\x1b]11;?\x1b\\', {
-      cols: 100,
-      rows: 30,
-    }),
-    ['\x1b]10;rgb:cdd6/cdd6/f4f4\x1b\\', '\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\'],
-  );
 });
 
 // Absence and signalling are different facts. A caller that binds a stop cause
@@ -146,6 +123,7 @@ test('node-pty terminate affirms a kill when it signalled a live handle', async 
         cols: 80,
         rows: 24,
         logPath: null,
+        terminalQueries: testTerminalQueries(),
       });
       const terminated = yield* backend.terminate({ ref, gracefulTimeoutMs: 20 });
       // The handle is gone afterwards, so a second attempt is honest absence.
@@ -174,6 +152,7 @@ test('node-pty terminate ends its grace as soon as the process tree honours SIGT
         cols: 80,
         rows: 24,
         logPath: null,
+        terminalQueries: testTerminalQueries(),
       });
       const startedAt = Date.now();
       const terminated = yield* backend.terminate({ ref, gracefulTimeoutMs: 10_000 });
@@ -204,6 +183,7 @@ function shellLaunch(
     cols: 80,
     rows: 24,
     logPath,
+    terminalQueries: testTerminalQueries(),
   };
 }
 
