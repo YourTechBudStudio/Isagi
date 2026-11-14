@@ -9,6 +9,7 @@ import type {
 
 import { coordinates, describeSafely, type SafeDiagnostic } from '../platform/diagnostics/index.js';
 import type { ShellLaunchMode } from '../platform/process/index.js';
+import type { TerminalQueryStream } from './service/terminal-queries.js';
 
 export type PtyBackendName = PtyProcessBackend;
 export type PtyProcessStatus = SessionStatus;
@@ -147,6 +148,14 @@ export interface LaunchBackendSessionInput {
   readonly cols: number;
   readonly rows: number;
   readonly logPath: string | null;
+  /**
+   * This process's terminal-query filter (`service/terminal-queries.ts`), which makes the runtime the program's
+   * terminal of record for queries. node-pty runs every output chunk through it after the shell-integration parser:
+   * it writes the returned replies back to the PTY, appends `log` to the log and delivers `live` to the attachment,
+   * then flushes it at exit. tmux ignores it: tmux is a real terminal emulator and answers the program's queries
+   * itself, so they never reach the runtime raw.
+   */
+  readonly terminalQueries: TerminalQueryStream;
 }
 
 export interface PtyExit {
