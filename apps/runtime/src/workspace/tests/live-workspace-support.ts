@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { Effect, Layer } from 'effect';
 
 import { CommandService } from '../../commands/index.js';
-import { AgentSessionService, SurfaceService } from '../../environment/index.js';
+import {
+  AgentSessionService,
+  EnvironmentDeletionParticipant,
+  SurfaceService,
+} from '../../environment/index.js';
 import { listDurableSessionInventory } from '../../environment/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
@@ -77,10 +81,14 @@ export interface LiveWorkspaceOptions {
   readonly databaseLayer?: Layer.Layer<RuntimeDatabase, unknown> | undefined;
   /**
    * The participant project deletion runs inside its transaction. Defaults to
-   * `NoProjectDeletionParticipant`; cross-module tests in `app/tests` pass the real workflow
+   * `NoDeletionParticipants`; cross-module tests in `app/tests` pass the real workflow
    * erasure, or a throwing one to observe the rollback.
    */
   readonly projectDeletionParticipant?: Layer.Layer<ProjectDeletionParticipant> | undefined;
+  /** What deleting a worktree ends in other modules; nothing by default. */
+  readonly environmentDeletionParticipant?:
+    | Layer.Layer<EnvironmentDeletionParticipant, never, RuntimeDatabase>
+    | undefined;
   /** Wraps the real worktree delete-diagnostics read, so a test can record or forbid it. */
   readonly decorateDeleteDiagnostics?:
     | ((
@@ -102,9 +110,13 @@ export interface LiveWorkspaceOptions {
 }
 
 /** A deletion participant with nothing to erase, for workspace tests that own no other module. */
-export const NoProjectDeletionParticipant = Layer.succeed(
-  ProjectDeletionParticipant,
-  ProjectDeletionParticipant.of({ eraseInTransaction: () => 0 }),
+/** Both deletion ports, with nothing to erase or end: for workspace tests with no workflow runs. */
+export const NoDeletionParticipants = Layer.mergeAll(
+  Layer.succeed(
+    ProjectDeletionParticipant,
+    ProjectDeletionParticipant.of({ eraseInTransaction: () => 0 }),
+  ),
+  EnvironmentDeletionParticipant.none,
 );
 
 const baseCommands = {
@@ -193,7 +205,14 @@ export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptio
   const workspace = WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
-        options.projectDeletionParticipant ?? NoProjectDeletionParticipant,
+        options.projectDeletionParticipant ??
+          Layer.succeed(
+            ProjectDeletionParticipant,
+            ProjectDeletionParticipant.of({ eraseInTransaction: () => 0 }),
+          ),
+        (options.environmentDeletionParticipant ?? EnvironmentDeletionParticipant.none).pipe(
+          Layer.provide(database),
+        ),
         repository,
         git,
         dataDirectoryLayer,

@@ -11,7 +11,7 @@ import type { DatabaseError } from '../../platform/persistence/index.js';
 import { WorkflowEngineError } from '../errors.js';
 import { checkSerializable, errorMessage } from '../state/pure.js';
 import { storedParameters, toJson, type RunPlacement } from '../store/rows.js';
-import { findRunOnSurface, insertRun, projectExists } from '../store/runs.js';
+import { findRunOnSurface, insertRun, projectExists, surfaceExists } from '../store/runs.js';
 import type { WorkflowCommandManifest, WorkflowOrigin } from '../types.js';
 import { projectContext, resolveLatestBuild } from './builds.js';
 import { resolvePlacement, type PlacementInfrastructureError } from './environment/placement.js';
@@ -123,6 +123,9 @@ export const launch = Effect.fn('workflows.launch')(function* (
     // A run exists only while its project does: project deletion erases runs in its own
     // transaction (workflows/erasure.ts), and this check refuses any launch that commits after it.
     if (!projectExists(db, project.id)) return { projectGone: true } as const;
+    // Likewise for the surface it attaches to: deleting a surface cancels its run in the delete's
+    // own transaction (`environment-deletion.ts`), and this refuses a launch that commits after it.
+    if (surfaceId !== null && !surfaceExists(db, surfaceId)) return { surfaceGone: true } as const;
     const occupant = surfaceId === null ? null : findRunOnSurface(db, surfaceId);
     if (occupant) return { busy: occupant.id } as const;
     const run = insertRun(db, {
@@ -160,6 +163,16 @@ export const launch = Effect.fn('workflows.launch')(function* (
         message: `Project ${project.id} no longer exists.`,
         workflowKey: input.workflowKey,
         worktreeId: origin.worktreeId,
+      }),
+    );
+  }
+  if ('surfaceGone' in created) {
+    return yield* Effect.fail(
+      new WorkflowEngineError({
+        code: 'surface_not_found',
+        message: `Surface ${surfaceId} was deleted before the run could attach to it.`,
+        workflowKey: input.workflowKey,
+        surfaceId: surfaceId ?? undefined,
       }),
     );
   }

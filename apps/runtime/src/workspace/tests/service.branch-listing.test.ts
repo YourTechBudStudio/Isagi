@@ -20,7 +20,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   project,
   repositoryWith,
@@ -77,7 +77,7 @@ test('project branch listing rejects a present project whose path disappeared be
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -126,7 +126,7 @@ test('project branch listing combines local branches with known open worktrees',
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),

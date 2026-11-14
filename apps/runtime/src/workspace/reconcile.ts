@@ -9,6 +9,7 @@ import type {
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
+import { EnvironmentDeletionParticipant } from '../environment/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { Git, type GitCommandError, listGitWorktrees } from '../platform/git/index.js';
 import {
@@ -34,6 +35,7 @@ export const reconciliation = Effect.gen(function* () {
   const repository = yield* ProjectRepository;
   const commands = yield* CommandService;
   const internalEvents = yield* InternalEvents;
+  const deletionParticipant = yield* EnvironmentDeletionParticipant;
   const git = yield* Git;
 
   /**
@@ -86,10 +88,18 @@ export const reconciliation = Effect.gen(function* () {
       );
       const current = yield* repository.findWorktree(worktree.id);
       if (current) {
-        yield* repository.deleteWorktree(worktree.id);
         // Reconciliation deletes a worktree just as deliberately as a person does, and a run placed
-        // in it is just as gone. Announcing it here too is what keeps the notification a property of
-        // the deletion rather than of which caller performed it.
+        // in it is just as gone: it is cancelled in the same transaction (ADR 0008). Announcing it
+        // here too is what keeps the notification a property of the deletion rather than of which
+        // caller performed it.
+        let participantFollowUp: Effect.Effect<void> = Effect.void;
+        yield* repository.deleteWorktree(worktree.id, (db) => {
+          participantFollowUp = deletionParticipant.endInTransaction(db, {
+            kind: 'worktrees',
+            worktreeIds: [worktree.id],
+          });
+        });
+        yield* participantFollowUp;
         yield* internalEvents.publish({
           type: 'worktree_deleted',
           worktreeId: worktree.id,

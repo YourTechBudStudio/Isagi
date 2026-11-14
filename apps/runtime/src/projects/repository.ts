@@ -124,12 +124,15 @@ const make = Effect.gen(function* () {
         });
       },
     ),
-    deleteWorktree: Effect.fn('ProjectRepository.deleteWorktree')(function* (worktreeId) {
-      return yield* database.use('delete_worktree', (db) => {
-        const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
-        return result.changes > 0;
-      });
-    }),
+    deleteWorktree: Effect.fn('ProjectRepository.deleteWorktree')(
+      function* (worktreeId, inTransaction) {
+        return yield* database.transaction('delete_worktree', (db) => {
+          inTransaction(db);
+          const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
+          return result.changes > 0;
+        });
+      },
+    ),
     createProject: Effect.fn('ProjectRepository.createProject')(function* (input) {
       // One transaction for the whole registration unit: the appended rank is
       // read from the same present-project set the insert then joins, and a
@@ -290,7 +293,16 @@ interface ProjectRepositoryShape {
      */
     inTransaction: (db: RuntimeDrizzleDatabase) => void,
   ) => Effect.Effect<boolean, DatabaseError>;
-  readonly deleteWorktree: (worktreeId: number) => Effect.Effect<boolean, DatabaseError>;
+  /** Deletes the worktree row; its surfaces and sessions cascade. True iff a row was deleted. */
+  readonly deleteWorktree: (
+    worktreeId: number,
+    /**
+     * Another domain's writes that must commit or roll back with this delete (today: cancelling the
+     * workflow runs living in the worktree). Synchronous; runs first, inside the same transaction,
+     * even when no worktree row matches. A throw rolls back both.
+     */
+    inTransaction: (db: RuntimeDrizzleDatabase) => void,
+  ) => Effect.Effect<boolean, DatabaseError>;
   /**
    * Creates a project and, for a folder project, its sole environment as one
    * durable unit. The caller supplies the classified kind; the repository never

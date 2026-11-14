@@ -4,7 +4,11 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { CommandError, CommandService } from '../../commands/index.js';
-import { AgentSessionService, SurfaceService } from '../../environment/index.js';
+import {
+  AgentSessionService,
+  EnvironmentDeletionParticipant,
+  SurfaceService,
+} from '../../environment/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
@@ -17,7 +21,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   deleteFixtures,
   recordingInternalEvents,
@@ -74,7 +78,7 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -125,12 +129,22 @@ test('delete worktree force removes checkout before deleting DB row and returns 
       project: fixtures.project,
       worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
     }),
-    deleteWorktree: (worktreeId: number) =>
+    deleteWorktree: (worktreeId, inTransaction) =>
       Effect.sync(() => {
         events.push(`db:${worktreeId}`);
+        inTransaction(null as never);
         return true;
       }),
   } satisfies ProjectRepository['Service'];
+  // Workflow runs end before any agent stops, and again inside the cascade (ADR 0008).
+  const workflows = EnvironmentDeletionParticipant.of({
+    endBeforeTeardown: (doomed) =>
+      Effect.sync(() => void events.push(`workflows:before-teardown:${JSON.stringify(doomed)}`)),
+    endInTransaction: (_db, doomed) => {
+      events.push(`workflows:in-transaction:${JSON.stringify(doomed)}`);
+      return Effect.sync(() => void events.push('workflows:follow-up'));
+    },
+  });
   const deleteGit = {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
@@ -172,7 +186,8 @@ test('delete worktree force removes checkout before deleting DB row and returns 
       });
     }).pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provideService(EnvironmentDeletionParticipant, workflows),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, commandService),
       Effect.provideService(PtyService, ptyService),
       Effect.provideService(InternalEvents, testInternalEvents),
@@ -201,11 +216,15 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     `commands:${fixtures.targetWorktree.id}`,
     // Held, then released, before anything else stops: workers end before the checkout goes.
     `hold:${fixtures.targetWorktree.id}`,
+    // Its workflow runs end before their agents stop, so the teardown cannot fail them first.
+    `workflows:before-teardown:{"kind":"worktrees","worktreeIds":[${fixtures.targetWorktree.id}]}`,
     'release:10',
     'pty:21:1000',
     'pty:22:1000',
     `git:-C ${fixtures.project.rootPath} worktree remove --force ${fixtures.targetWorktree.path}`,
     `db:${fixtures.targetWorktree.id}`,
+    `workflows:in-transaction:{"kind":"worktrees","worktreeIds":[${fixtures.targetWorktree.id}]}`,
+    'workflows:follow-up',
     // The hold lasts through the cascade.
     `unhold:${fixtures.targetWorktree.id}`,
   ]);
@@ -255,7 +274,7 @@ test('delete worktree announces every durable session it cascaded away', async (
       });
     }).pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalEvents, {
@@ -381,7 +400,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, ptyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -478,7 +497,7 @@ test('delete worktree refuses the cascade when command cleanup cannot account fo
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, commandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -542,7 +561,7 @@ test('delete worktree reports safe branch deletion failure as partial success', 
       });
     }).pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalEvents, testInternalEvents),
@@ -590,7 +609,7 @@ test('delete worktree rejects before destructive work when root fallback is miss
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { Duration, Effect, FiberMap } from 'effect';
+import { Cause, Duration, Effect, FiberMap } from 'effect';
 
 import {
   harnessDefinition,
@@ -228,6 +228,39 @@ export function stopRunHeadless(
       ([, entry]) => entry.runId === runId,
     );
     for (const [ptyProcessId] of tracked) yield* stopTracked(rt, ptyProcessId);
+  });
+}
+
+/**
+ * Stops every tracked process whose operation ended, or was erased, by a write outside the engine:
+ * deleting a surface or worktree cancels the runs living there, and deleting a project erases its
+ * runs, in the deleter's own transaction (ADR 0008). The engine reaches this from the
+ * notifications that follow those commits (`workflow_runs_ended_by_deletion`, `project_deleted`). A process whose end is being recorded is left to that.
+ */
+export function stopEndedHeadless(rt: EngineRuntime): Effect.Effect<void, DatabaseError> {
+  return Effect.gen(function* () {
+    if (rt.headlessProcesses.size === 0) return;
+    const ended = yield* rt.read('workflow_ended_headless', (db) =>
+      [...rt.headlessProcesses.entries()].flatMap(([ptyProcessId, entry]) =>
+        !entry.settling && getOperation(db, entry.operationId)?.status !== 'running'
+          ? [ptyProcessId]
+          : [],
+      ),
+    );
+    for (const ptyProcessId of ended) {
+      // One process that will not stop must not keep the others running. Its `stop_failed` event
+      // cannot be written when its run was erased with its project; the process stays tracked, so
+      // its exit still releases it.
+      yield* stopTracked(rt, ptyProcessId).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.logWarning('Stopping an ended workflow headless process failed', cause).pipe(
+                Effect.annotateLogs({ ptyProcessId }),
+              ),
+        ),
+      );
+    }
   });
 }
 

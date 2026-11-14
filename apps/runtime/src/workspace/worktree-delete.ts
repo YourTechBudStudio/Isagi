@@ -8,7 +8,11 @@ import type {
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
-import { AgentSessionService, SurfaceService } from '../environment/index.js';
+import {
+  AgentSessionService,
+  EnvironmentDeletionParticipant,
+  SurfaceService,
+} from '../environment/index.js';
 import { diagnosticPhase } from '../platform/diagnostics/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { Git, type GitCommandError } from '../platform/git/index.js';
@@ -41,6 +45,7 @@ export const worktreeDelete = Effect.gen(function* () {
   const agents = yield* AgentSessionService;
   const deleteDiagnostics = yield* WorktreeDeleteDiagnosticsReader;
   const internalEvents = yield* InternalEvents;
+  const deletionParticipant = yield* EnvironmentDeletionParticipant;
   const sessionDeletions = yield* durableSessionDeletions;
 
   return {
@@ -137,6 +142,17 @@ export const worktreeDelete = Effect.gen(function* () {
         yield* Effect.scoped(
           Effect.gen(function* () {
             yield* agents.holdWorktreesForDeletion([worktree.id]);
+            // The workflow runs living here end before any of their agents are stopped, so the
+            // teardown below cannot fail them first (ADR 0008). A run launched after this point
+            // is still ended in the cascade's transaction.
+            yield* diagnosticPhase(
+              'workspace.delete_worktree.workflow_end',
+              context,
+              deletionParticipant.endBeforeTeardown({
+                kind: 'worktrees',
+                worktreeIds: [worktree.id],
+              }),
+            );
             const held = yield* deleteDiagnostics.read(worktree.id);
             yield* diagnosticPhase(
               'workspace.delete_worktree.agent_release',
@@ -162,11 +178,20 @@ export const worktreeDelete = Effect.gen(function* () {
                   : ['-C', project.rootPath, 'worktree', 'remove', worktree.path],
               ),
             );
+            // And again in the cascade's own transaction, for a run launched into the worktree
+            // during the teardown: nothing can launch into it between this and the delete.
+            let participantFollowUp: Effect.Effect<void> = Effect.void;
             yield* diagnosticPhase(
               'workspace.delete_worktree.db_delete',
               context,
-              repository.deleteWorktree(worktree.id),
+              repository.deleteWorktree(worktree.id, (db) => {
+                participantFollowUp = deletionParticipant.endInTransaction(db, {
+                  kind: 'worktrees',
+                  worktreeIds: [worktree.id],
+                });
+              }),
             );
+            yield* participantFollowUp;
           }),
         );
         // Announced only after the cascade commits: every connected client — not just

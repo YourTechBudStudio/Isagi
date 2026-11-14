@@ -90,6 +90,14 @@ export function useRuntimeIdentity(): string | null {
  */
 export const attachedRunsAtom = Atom.make<AttachedRuns | undefined>(undefined).pipe(Atom.keepAlive);
 
+/**
+ * Whether `attachedRunsAtom` is the runtime's current answer: true once this connection's snapshot
+ * has arrived, false before it and from the moment the connection drops. While false, the list is
+ * kept (the bar keeps showing what it last knew) but nothing may conclude from it that a surface
+ * has no run; deletes still reach the runtime over HTTP while the event socket is down.
+ */
+export const attachedRunsCurrentAtom = Atom.make(false).pipe(Atom.keepAlive);
+
 export function useAttachedWorkflowRuns(): AttachedRuns | undefined {
   return useAtomValue(attachedRunsAtom);
 }

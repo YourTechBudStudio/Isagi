@@ -44,6 +44,7 @@ import { PtyService } from '../../pty-processes/index.js';
 import type { PtyLaunchError } from '../../pty-processes/index.js';
 import { AgentSessionInteraction, type AgentControl } from '../agent-sessions/interaction.js';
 import { AgentSessionService } from '../agent-sessions/service.js';
+import { EnvironmentDeletionParticipant } from '../deletion-participant.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { restorePaneBoundSessions } from '../sessions/restore.js';
 import {
@@ -100,6 +101,7 @@ const make = Effect.gen(function* () {
   // `EditorContextService` are built on, so placement and the editor's own
   // lifecycle genuinely serialize against each other.
   const entityLock = yield* EntityLock;
+  const deletionParticipant = yield* EnvironmentDeletionParticipant;
   const sessionDeps: PaneSessionDependencies = {
     repository,
     agents,
@@ -238,7 +240,7 @@ const make = Effect.gen(function* () {
     }),
     deleteSurface: Effect.fn('SurfaceService.deleteSurface')(function* (surfaceId) {
       const target = yield* loadDeleteTarget(repository, surfaceId);
-      const deps = { repository, pty, eventBus, editors, entityLock, agents };
+      const deps = { repository, pty, eventBus, editors, entityLock, agents, deletionParticipant };
       // Deleting this surface removes every one of its panes, so the whole
       // capture is what the lock decision inspects.
       if (editorContextIdsOfPanes(target.panes.map(({ pane }) => pane)).length === 0)
@@ -978,6 +980,11 @@ interface SurfaceDeleteDependencies {
   readonly agents: AgentSessionService['Service'];
 }
 
+/** A whole-surface delete also ends the work other modules run on that surface. */
+interface WholeSurfaceDeleteDependencies extends SurfaceDeleteDependencies {
+  readonly deletionParticipant: EnvironmentDeletionParticipant['Service'];
+}
+
 function loadDeleteTargetOrNull(repository: SurfaceRepository['Service'], surfaceId: number) {
   return loadDeleteTarget(repository, surfaceId).pipe(
     Effect.catchTag('SurfaceError', (error) =>
@@ -1005,16 +1012,27 @@ function panesForPlan(target: SurfaceDeleteTarget, plan: SurfacePaneDeletePlan) 
  * unrepresentable rather than merely discouraged.
  */
 const deleteWholeSurface = Effect.fnUntraced(function* (
-  deps: SurfaceDeleteDependencies,
+  deps: WholeSurfaceDeleteDependencies,
   target: SurfaceDeleteTarget,
   held: EntityLockHeld | null,
 ) {
+  // The work other modules run on this surface (a workflow run attached to it) ends in the
+  // delete's own transaction, before its agents' processes are torn down below, so nothing reads
+  // their deaths as the work failing. Its follow-up announces that once the delete commits.
+  let participantFollowUp: Effect.Effect<void> = Effect.void;
   // Cleanup acts on the panes the delete actually removed, read inside its
   // transaction: a first pane whose session was bound after `target` was
   // read still has that session stopped.
   const deleted = yield* commitAndFinish(
     deps,
-    deps.repository.deleteSurface(target.surface.id),
+    deps.repository
+      .deleteSurface(target.surface.id, (db) => {
+        participantFollowUp = deps.deletionParticipant.endInTransaction(db, {
+          kind: 'surface',
+          surfaceId: target.surface.id,
+        });
+      })
+      .pipe(Effect.tap(() => participantFollowUp)),
     (rows) =>
       rows.deletedSurfaceId === null
         ? null
