@@ -56,8 +56,8 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
       label: command.label,
       icon: command.icon,
       group: 'global',
+      command,
       run: () => command.run({}, ctx),
-      ...(command.args?.length ? { command } : {}),
     });
   }
 

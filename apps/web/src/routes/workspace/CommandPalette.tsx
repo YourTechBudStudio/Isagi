@@ -44,7 +44,7 @@ import {
   inlineError,
   isBusy,
   paletteReducer,
-  callerRunningCopy,
+  runningCopy,
   type PaletteEvent,
 } from '../../lib/palette/machine.js';
 import {
@@ -407,13 +407,10 @@ export function CommandPalette() {
 
   const view = useMemo(() => {
     if (running) {
-      // Three sources, in the order that knows most about the work: a run the
-      // caller started with its own status copy, the command's declared copy,
-      // then the generic fallback.
+      // The run's own status copy (stored when it started), else the generic one.
       return {
         kind: 'running' as const,
-        content: callerRunningCopy(machine) ??
-          command?.running ?? { title: paletteCopy.running.title },
+        content: runningCopy(machine) ?? { title: paletteCopy.running.title },
       };
     }
     if (machine.kind === 'result') {
