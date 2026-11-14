@@ -16,6 +16,7 @@ import {
   RuntimeDatabase,
   compactedRankChanges,
   moveBefore,
+  type RuntimeDrizzleDatabase,
 } from '../../platform/persistence/index.js';
 import { worktrees } from '../../projects/tables.js';
 import { ptyProcesses } from '../../pty-processes/tables.js';
@@ -233,8 +234,9 @@ const make = Effect.gen(function* () {
           .run();
         return { surfaceId: input.surfaceId, title: input.title };
       }),
-    deleteSurface: (surfaceId) =>
+    deleteSurface: (surfaceId, inTransaction) =>
       database.transaction('delete_surface', (db) => {
+        inTransaction(db);
         const deletedPanes = db
           .select()
           .from(surfacePanes)
@@ -575,8 +577,14 @@ interface SurfaceRepositoryShape {
     readonly surfaceId: number;
     readonly title: string;
   }) => Effect.Effect<RenameSurfaceOutput, DatabaseError>;
+  /**
+   * Deletes the surface; its panes cascade. `inTransaction` is another domain's writes that must
+   * commit or roll back with this delete (the `EnvironmentDeletionParticipant`). Synchronous; runs
+   * first, inside the same transaction, even when no surface row matches. A throw rolls back both.
+   */
   readonly deleteSurface: (
     surfaceId: number,
+    inTransaction: (db: RuntimeDrizzleDatabase) => void,
   ) => Effect.Effect<DeleteSurfaceRowsOutput, DatabaseError>;
   /**
    * Removes a pane, planning from the rows as they are inside the transaction,

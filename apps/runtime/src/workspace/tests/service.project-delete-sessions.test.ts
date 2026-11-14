@@ -17,7 +17,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   featureWorktree,
   git,
@@ -108,7 +108,7 @@ function deleteProjectWith(input: {
     return yield* workspace.deleteProject(project.id);
   }).pipe(
     Effect.provide(WorkspaceService.layerNoDeps),
-    Effect.provide(NoProjectDeletionParticipant),
+    Effect.provide(NoDeletionParticipants),
     Effect.provideService(CommandService, commandService),
     Effect.provideService(PtyService, ptyService),
     Effect.provideService(InternalEvents, testInternalEvents),

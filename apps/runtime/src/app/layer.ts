@@ -18,7 +18,11 @@ import { UserShell } from '../platform/process/index.js';
 import { ProjectsLayer } from '../projects/index.js';
 import { PtyProcessesLayer } from '../pty-processes/index.js';
 import { RuntimeConfig } from '../runtime-config/index.js';
-import { WorkflowProjectErasure, WorkflowsLayer } from '../workflows/index.js';
+import {
+  WorkflowEnvironmentDeletion,
+  WorkflowProjectErasure,
+  WorkflowsLayer,
+} from '../workflows/index.js';
 import { StateFile, WorkspaceLayer } from '../workspace/index.js';
 
 /**
@@ -54,10 +58,15 @@ export const ModulesLayer = Layer.mergeAll(
 );
 
 /**
- * The two ports a lower module owns and a higher module implements: project deletion erases workflow runs inside the
- * workspace's transaction, and the harness observer reads its targets from the environment's agent sessions.
+ * The ports a lower module owns and a higher module implements: project deletion erases workflow runs inside the
+ * workspace's transaction, surface and worktree deletion cancel the workflow runs living there inside theirs (ADR
+ * 0008), and the harness observer reads its targets from the environment's agent sessions.
  */
-export const PortsLayer = Layer.mergeAll(WorkflowProjectErasure, HarnessObservationTargetsLayer);
+export const PortsLayer = Layer.mergeAll(
+  WorkflowProjectErasure,
+  WorkflowEnvironmentDeletion,
+  HarnessObservationTargetsLayer,
+);
 
 /**
  * The whole runtime service graph. The `satisfies` proves it closed apart from the three launch inputs a lower module

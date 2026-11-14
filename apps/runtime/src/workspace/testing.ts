@@ -4,7 +4,7 @@
  */
 export {
   liveWorkspaceLayer,
-  NoProjectDeletionParticipant,
+  NoDeletionParticipants,
   runWithLiveWorkspace,
   type LiveWorkspaceOptions,
 } from './tests/live-workspace-support.js';

@@ -160,6 +160,28 @@ export const surfaceActionsCopy = {
     emptyTitle: 'Surface title cannot be empty.',
     titleTooLong: 'Surface title must be 80 characters or fewer.',
   },
+  // Asked only when an unfinished workflow is on the surface: deleting it cancels the run. A
+  // destructive confirm, so it states both halves plainly and keeps the humour out.
+  deleteSurface: {
+    running: 'Deleting surface…',
+    gone: 'This surface is no longer open.',
+    review: {
+      stepLabel: 'Confirm surface deletion',
+      title: 'A workflow is still running on this surface.',
+      body: 'Deleting the surface cancels the workflow and closes its agents. Its history stays.',
+      workflowLabel: 'Workflow',
+      confirm: 'Delete surface and cancel workflow',
+      cancel: 'Cancel',
+    },
+    // Before the runtime has said which workflows are on which surface, or while its event
+    // connection is down, Isagi can't tell.
+    unknownReview: {
+      title: "Isagi can't confirm this surface's workflows right now.",
+      body: 'If a workflow is running here, deleting the surface cancels it and closes its agents.',
+      confirm: 'Delete surface',
+      cancel: 'Cancel',
+    },
+  },
 } as const;
 
 // Canonical session-action labels, shared by the command palette command

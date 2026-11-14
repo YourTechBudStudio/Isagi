@@ -20,7 +20,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   git,
   project,
@@ -59,7 +59,7 @@ test('project deletion does not touch frontend-owned active context persistence'
       return yield* workspace.deleteProject(project.id);
     }).pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalEvents, testInternalEvents),
@@ -99,7 +99,7 @@ test('project relocation rejects projects that are not missing before touching g
         return yield* workspace.relocateProject({ projectId: project.id, path: '/repo/elsewhere' });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -174,7 +174,7 @@ test('project relocation restores the same project id and reconciles discovered 
         return yield* workspace.relocateProject({ projectId: project.id, path: projectRoot });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -264,7 +264,7 @@ test('registering a new project reconciles the created row without a follow-up l
         return yield* workspace.registerProject({ path: projectRoot });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),

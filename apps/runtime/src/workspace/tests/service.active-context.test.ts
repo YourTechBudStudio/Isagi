@@ -15,7 +15,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile, stateFromActiveContext } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   featureWorktree,
   git,
@@ -52,7 +52,7 @@ test('active context persistence validates before writing state', async () => {
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -88,7 +88,7 @@ test('valid active context persistence writes after validation', async () => {
       });
     }).pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalEvents, testInternalEvents),
@@ -136,7 +136,7 @@ test('active context persistence publishes internal activation changes for accep
       });
     }).pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalEvents, internalEvents),

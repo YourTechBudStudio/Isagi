@@ -27,11 +27,7 @@ import {
   AgentSessionArtifacts,
   HarnessLedgerObserver,
 } from '../../harnesses/index.js';
-import {
-  InternalEvents,
-  nextRuntimeEventEnvelope,
-  RuntimeEvents,
-} from '../../platform/events/index.js';
+import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
 import { Git, type GitCommandError } from '../../platform/git/index.js';
 import { RuntimeDatabase, type DatabaseError } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
@@ -42,8 +38,8 @@ import { openCheckpointFile, type CheckpointFileContent } from '../checkpoints/f
 import { makeCheckpointsPort } from '../checkpoints/port.js';
 import { WorkflowEngineError } from '../errors.js';
 import { makeAgentPort } from '../operations/agents.js';
-import { makeHeadlessPort, settleHeadless } from '../operations/headless.js';
-import { eventDto, runSummaryById } from '../read/mappers.js';
+import { makeHeadlessPort, settleHeadless, stopEndedHeadless } from '../operations/headless.js';
+import { runSummaryById } from '../read/mappers.js';
 import {
   getCheckpointDetail,
   getExecutionDetail,
@@ -75,6 +71,7 @@ import {
   type DescriptorListing,
   type LaunchInput,
 } from './launch.js';
+import { publishCommitted } from './publish.js';
 import { recoverAtStartup } from './restart.js';
 import type {
   Abort,
@@ -259,27 +256,7 @@ export function startEngine(input: {
     const drivers = new Map<number, { again: boolean }>();
 
     const publish = (rows: readonly EventRow[], changedRuns: ReadonlySet<number>) =>
-      Effect.gen(function* () {
-        for (const row of rows) {
-          yield* events.publish({
-            ...nextRuntimeEventEnvelope(),
-            type: 'workflow_run_event',
-            payload: eventDto(row),
-          });
-        }
-        for (const runId of new Set([...rows.map((row) => row.runId), ...changedRuns])) {
-          const summary = yield* database.use('workflow_read_summary', (db) =>
-            runSummaryById(db, runId),
-          );
-          if (summary) {
-            yield* events.publish({
-              ...nextRuntimeEventEnvelope(),
-              type: 'workflow_run_changed',
-              payload: summary,
-            });
-          }
-        }
-      });
+      publishCommitted(database, events, rows, changedRuns);
 
     const rt: EngineRuntime = {
       deps,
@@ -379,7 +356,8 @@ export function startEngine(input: {
             });
     }
 
-    // Triggers: a turn edge may answer an agent wait; a PTY exit may settle a headless job. The
+    // Triggers: a turn edge may answer an agent wait; a PTY exit may settle a headless job; a
+    // deletion may have ended runs, or erased a project's runs, whose headless jobs still run. The
     // subscription is taken here, before the consumer is forked, so no event published from now on
     // is missed.
     const triggers = yield* deps.internalEvents.subscribe([
@@ -389,10 +367,19 @@ export function startEngine(input: {
       'pty_process_exited',
       'pty_process_failed',
       'pty_process_killed',
+      'workflow_runs_ended_by_deletion',
+      'project_deleted',
     ]);
     yield* triggers.pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
+          if (
+            event.type === 'workflow_runs_ended_by_deletion' ||
+            event.type === 'project_deleted'
+          ) {
+            yield* stopEndedHeadless(rt);
+            return;
+          }
           if (
             event.type === 'turn_started' ||
             event.type === 'turn_ended' ||

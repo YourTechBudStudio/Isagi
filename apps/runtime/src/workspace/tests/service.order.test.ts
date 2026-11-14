@@ -20,7 +20,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   git,
   project,
@@ -55,7 +55,7 @@ function runWithRepository<A, E>(
   return Effect.runPromise(
     build.pipe(
       Effect.provide(WorkspaceService.layerNoDeps),
-      Effect.provide(NoProjectDeletionParticipant),
+      Effect.provide(NoDeletionParticipants),
       Effect.provideService(CommandService, testCommandService),
       Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalEvents, testInternalEvents),

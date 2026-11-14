@@ -449,7 +449,7 @@ test('a delete cleans up the sessions bound when it commits, not when it was pla
           logPath: null,
           status: 'running',
         });
-        const deleted = yield* repository.deleteSurface(surface.surfaceId);
+        const deleted = yield* repository.deleteSurface(surface.surfaceId, () => {});
         const sessions = yield* repository.listSessionsBoundTo(deleted.deletedPanes);
         return { stale, deleted, sessions, ptyProcessId };
       }).pipe(Effect.provide(withTerminals(dataRoot))),

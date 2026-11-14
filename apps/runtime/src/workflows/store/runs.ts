@@ -1,7 +1,9 @@
-import { and, asc, eq, gt, inArray, isNotNull, notInArray } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, notInArray, or } from 'drizzle-orm';
 
 import type { WorkflowRunStatus } from '@isagi/contracts';
 
+import type { DoomedEnvironment } from '../../environment/index.js';
+import { worktreeSurfaces } from '../../environment/tables.js';
 import { projects } from '../../projects/tables.js';
 import { workflowArtifacts, workflowRuns } from '../tables.js';
 import { now, type ArtifactRow, type Db, type RunRow } from './rows.js';
@@ -53,6 +55,45 @@ export function projectExists(db: Db, projectId: number): boolean {
     db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).get() !==
     undefined
   );
+}
+
+/**
+ * Whether the surface row exists. A read of an environment-owned table inside the engine's own
+ * transaction (ADR 0008 permits cross-domain reads); used only for launch admission.
+ */
+export function surfaceExists(db: Db, surfaceId: number): boolean {
+  return (
+    db
+      .select({ id: worktreeSurfaces.id })
+      .from(worktreeSurfaces)
+      .where(eq(worktreeSurfaces.id, surfaceId))
+      .get() !== undefined
+  );
+}
+
+/**
+ * The runs living in what a delete is about to remove, finished or not: attached to the surface,
+ * or, for worktrees, placed in one of them or attached to any of their surfaces. Read inside the
+ * deleting transaction, before the delete nulls `surface_id`.
+ */
+export function listRunsIn(db: Db, doomed: DoomedEnvironment): readonly RunRow[] {
+  const placed =
+    doomed.kind === 'surface'
+      ? eq(workflowRuns.surfaceId, doomed.surfaceId)
+      : doomed.worktreeIds.length === 0
+        ? undefined
+        : or(
+            inArray(workflowRuns.worktreeId, [...doomed.worktreeIds]),
+            inArray(
+              workflowRuns.surfaceId,
+              db
+                .select({ id: worktreeSurfaces.id })
+                .from(worktreeSurfaces)
+                .where(inArray(worktreeSurfaces.worktreeId, [...doomed.worktreeIds])),
+            ),
+          );
+  if (placed === undefined) return [];
+  return db.select().from(workflowRuns).where(placed).orderBy(asc(workflowRuns.id)).all();
 }
 
 export function getRun(db: Db, runId: number): RunRow | null {

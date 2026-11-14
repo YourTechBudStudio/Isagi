@@ -23,7 +23,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import { withWorkspaceApi } from './api-test-support.js';
 import {
   project,
@@ -137,7 +137,7 @@ function workspaceLayerWith(repository: ProjectRepository['Service']) {
   return WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
-        NoProjectDeletionParticipant,
+        NoDeletionParticipants,
         Layer.succeed(ProjectRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
@@ -387,7 +387,7 @@ test('a Git project still reaches the work the guard refuses for folders', async
   const layer = WorkspaceService.layerNoDeps.pipe(
     Layer.provide(
       Layer.mergeAll(
-        NoProjectDeletionParticipant,
+        NoDeletionParticipants,
         Layer.succeed(ProjectRepository, repository),
         Layer.succeed(CommandService, forbiddenCommands),
         Layer.succeed(PtyService, forbiddenPty),
