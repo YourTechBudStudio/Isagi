@@ -25,6 +25,7 @@ export {
   type PtySocketErrorReason,
 } from './errors.js';
 export {
+  harnessRefreshCopy,
   paletteCopy,
   projectActionsCopy,
   surfaceActionsCopy,

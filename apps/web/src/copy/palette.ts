@@ -234,6 +234,40 @@ export const projectActionsCopy = {
   },
 } as const;
 
+/**
+ * Rechecking which agent binaries the runtime can see. Working chrome and status
+ * copy, so it stays dry: say what was checked and what is ready now. Unready
+ * harnesses reuse the pane's launch-block status labels so the two never disagree.
+ */
+export const harnessRefreshCopy = {
+  label: 'Refresh agent harnesses',
+  running: {
+    title: 'Checking agent harnesses…',
+    hint: 'Looking for claude, codex, pi and opencode.',
+  },
+  ready: {
+    title: 'Agent harnesses rechecked.',
+    body: (ready: string) => `Ready to start: ${ready}.`,
+  },
+  noneReady: {
+    title: 'No agent harness is ready to start.',
+  },
+  unready: (entries: string) => `Not ready: ${entries}.`,
+  // The recheck also re-runs isagi-docs installation. A failure there is a
+  // partial success: the harness list is fresh, the docs are not everywhere.
+  docsFailed: {
+    title: "Harnesses rechecked, but isagi-docs didn't install everywhere.",
+    body: (harnesses: string) => `isagi-docs failed for ${harnesses}.`,
+    diagnosticLabel: 'Docs install detail',
+  },
+  refreshFailed: {
+    title: "Couldn't recheck agent harnesses.",
+  },
+  readFailed: {
+    title: "Harnesses rechecked, but the new list didn't load.",
+  },
+} as const;
+
 export const worktreeSetupReviewCopy = {
   title: "This project has setup hooks Isagi hasn't run yet.",
   body: "They're defined in .isagi/config.yaml and run right after the worktree is created. Worth a look before you let them touch your machine.",

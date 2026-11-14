@@ -357,7 +357,12 @@ export interface PaletteEntry {
   readonly values?: ArgValues;
   readonly disabled?: { readonly reason: string } | undefined;
   readonly workflow?: Extract<WorkflowDescriptorResult, { ok: true }> | undefined;
-  /** Global commands with args open the wizard instead of running immediately. */
+  /**
+   * The command this entry runs, when it is one. The palette runs it through
+   * its wizard when it has args, or immediately when it has none, and reads its
+   * `running` copy either way. Entries without one (workflow rows, worktree
+   * switches, configured commands) run through `run` alone.
+   */
   readonly command?: PaletteCommand;
   readonly run: () => MaybePromise<CommandOutcome | void>;
 }

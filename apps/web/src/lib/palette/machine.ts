@@ -539,7 +539,7 @@ function activateEntry(
     return startFlow(state, entry.id, entry.command, ctx, values, {});
   }
 
-  return startRun(state, entry.id, entry.command.id, {}, {});
+  return startRun(state, entry.id, entry.command, {}, {});
 }
 
 function preflightSucceeded(
@@ -568,7 +568,7 @@ function preflightSucceeded(
   return startRun(
     { ...state, preflightAttemptId: null },
     event.entryId,
-    event.command.id,
+    event.command,
     event.result.values ?? {},
     event.result.payloads ?? {},
   );
@@ -778,7 +778,7 @@ function acceptValue(
   };
 
   if (finishOnAccept || nextStepIndex >= args.length) {
-    return startRun(state, state.flow.entryId, command.id, nextValues, nextPayloads);
+    return startRun(state, state.flow.entryId, command, nextValues, nextPayloads);
   }
 
   return enterStep(state, nextFlow, args[nextStepIndex], '', null);
@@ -940,7 +940,7 @@ function back(
 function startRun(
   state: PaletteState,
   entryId: string,
-  commandId: string | undefined,
+  command: PaletteCommand | undefined,
   values: ArgValues,
   payloads: ArgPayloads,
 ): PaletteState {
@@ -953,13 +953,16 @@ function startRun(
     nextAttemptId,
     inlineError: null,
     runAttemptId: attemptId,
-    running: null,
+    // The one moment a command's status copy is read: every run of a command
+    // starts here, from search or from its wizard, so the view never has to
+    // resolve the command again to name the work.
+    running: command?.running ?? null,
   };
   return enqueue(next, {
     kind: 'run',
     attemptId,
     entryId,
-    commandId,
+    commandId: command?.id,
     values,
     payloads,
   });
@@ -1122,13 +1125,7 @@ function reviewLoaded(
       state.flow.payloads,
     );
     if (nextStepIndex >= args.length) {
-      return startRun(
-        state,
-        state.flow.entryId,
-        state.flow.commandId,
-        state.flow.values,
-        state.flow.payloads,
-      );
+      return startRun(state, state.flow.entryId, command, state.flow.values, state.flow.payloads);
     }
     const nextFlow = { ...state.flow, stepIndex: nextStepIndex };
     return enterStep(state, nextFlow, args[nextStepIndex], '', null);
@@ -1204,13 +1201,11 @@ export function isBusy(state: PaletteState) {
 }
 
 /**
- * The status copy a caller handed in with its run, if it did.
- *
- * Named for its one source rather than for the panel: a command's declared `running` and the
- * generic fallback are the view's other two, and the chain lives there. Widening this to answer for
- * all three would mean the machine resolving commands, which is the one thing it does not do.
+ * The status copy for the run in flight, if it has any: a command's declared `running` (stored
+ * when the run started) or the copy a caller or outcome action handed in with its run. The view
+ * falls back to the generic status when this is null.
  */
-export function callerRunningCopy(state: PaletteState): PaletteRunningCopy | null {
+export function runningCopy(state: PaletteState): PaletteRunningCopy | null {
   return holdsRun(state) ? state.running : null;
 }
 
