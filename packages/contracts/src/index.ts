@@ -99,6 +99,7 @@ export {
   appearanceThemeSchema,
   clientSettingsOutputSchema,
   terminalCacheSettingsSchema,
+  terminalPalette,
   terminalSettingsBounds,
   terminalSettingsDefaults,
   terminalSettingsSchema,
@@ -108,6 +109,7 @@ export type {
   AppearanceTheme,
   ClientSettingsOutput,
   TerminalCacheSettings,
+  TerminalPaletteEntry,
   TerminalSettings,
 } from './client-settings/types.js';
 

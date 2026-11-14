@@ -48,6 +48,22 @@ export const terminalSettingsSchema = Schema.Struct({
 /** The Catppuccin flavor the client paints with: Macchiato for `dark`, Latte for `light`. */
 export const appearanceThemeSchema = Schema.Literals(['dark', 'light']);
 
+/**
+ * The default foreground and background each appearance theme paints a terminal with, as `#rrggbb`.
+ * The web terminal reads them from `--color-fg` and `--color-terminal-surface` in `apps/web/src/styles.css`
+ * (a web test keeps the two equal); the runtime uses them to answer a program's colour queries
+ * (OSC 10/11) itself, so the answer is the same whether or not a terminal pane is attached.
+ */
+export const terminalPalette = {
+  dark: { foreground: '#cad3f5', background: '#2d3145' },
+  light: { foreground: '#4c4f69', background: '#eff1f5' },
+} as const satisfies Record<typeof appearanceThemeSchema.Type, TerminalPaletteEntry>;
+
+export interface TerminalPaletteEntry {
+  readonly foreground: string;
+  readonly background: string;
+}
+
 export const appearanceSettingsDefaults = { theme: 'light' } as const;
 
 export const appearanceSettingsSchema = Schema.Struct({
