@@ -8,12 +8,19 @@ Use interactive agent sessions (`spawnAgentSession`, `sendAgentPrompt`, then `wa
 
 Use `runHeadlessAgent` only for classification: a short, unattended judgment over text the workflow hands it, such as routing a reply as `approved`, `revise` or `needs-human`. A headless agent should not change files or run tools with external effects. When a check can be deterministic (a file exists, a schema validates), check it in an operation instead of asking a model.
 
+## Choosing an agent per task
+
+Give each prompt one objective, then decide whether it goes to an existing session or a fresh one by asking whether the next task gains from what the session already holds.
+
+- **Existing session** when the task builds on context no file holds: bouncing between a planner and an implementer within a phase, a reviewer re-checking the fixes it asked for, turning decisions made with the person into documents, or asking the agent that did the work to explain or correct it.
+- **Fresh session** when the task's inputs live in files or should be judged independently: moving from one artifact to the next, such as architecture to program design, each phase of a plan, independent items, or a review that should not share the author's reasoning. A clean context stays focused, carries no stale assumptions and does not run out of room on long workflows.
+
 ## Sessions
 
 | Need | Do |
 | --- | --- |
 | A new agent | `spawnAgentSession` with a harness, an optional model and effort, and the first prompt. Persist the returned `agentSessionId` and `paneId`. |
-| Further turns in the same context | `sendAgentPrompt` to the stored `agentSessionId`. Reuse a session across loop rounds so each role keeps its context and the person sees one pane per role. |
+| Further turns in the same context | `sendAgentPrompt` to the stored `agentSessionId` when the session's context helps the next turn ([Choosing an agent per task](#choosing-an-agent-per-task)), such as loop rounds where each role keeps its context and the person sees one pane per role. |
 | Clean context per item | Spawn a fresh session per item and close its pane once its result checks out. |
 | The agent the workflow was launched from | Read `origin.agentSessionId` in `parse`. The workflow does not own its pane; never close it. |
 | A step the person drives | Spawn the session, then `wait.userContinue` while the person works with it. |
@@ -30,7 +37,7 @@ Isagi records every spawn, prompt, headless launch and pane close with its full 
 
 ## Prompts
 
-Give each agent a goal, its inputs (paths, prior review), constraints, acceptance criteria and a closing signal you can classify, such as an exact final line. Tell unattended or long-running agents to finish and state any blocking question in their reply rather than asking mid-turn; put the human decision in a graph wait. Keep authorization boundaries explicit when work can have external effects.
+Before writing a prompt, read the provider's current prompting guide for the model that agent runs; models differ in what they need spelled out. Give each agent a goal, its inputs (paths, prior review), constraints, acceptance criteria and a closing signal you can classify, such as an exact final line. Tell unattended or long-running agents to finish and state any blocking question in their reply rather than asking mid-turn; put the human decision in a graph wait. Keep authorization boundaries explicit when work can have external effects.
 
 A classification prompt states that it is an unattended routing judgment, includes the text to judge, lists the routes in precedence order, and asks for an exact JSON shape. Classify what the reply says rather than the stage you expect: agents skip ahead, repeat work or raise a decision early, so every route stays valid on every call. Use one classifier with one route set for a role wherever its replies are judged, and route every outcome from every point; don't build a narrower classifier for an early stage. Parse it strictly (exact keys and allowed values), log parse failures with context, and treat an unparseable or failed judgment as a routable result. Read the text to judge in an earlier node with [`latestAssistantTurn`](workflow-recipes.md#read-a-reply); no reply is a failure, not success.
 
