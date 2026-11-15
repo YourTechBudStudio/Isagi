@@ -1,8 +1,13 @@
-import { Effect, Exit } from 'effect';
+import { Effect, Exit, Layer } from 'effect';
 
+import { terminalPalette, type AppearanceTheme } from '@isagi/contracts';
+
+import { RuntimeConfig } from '../runtime-config/index.js';
+import { defaultRuntimeConfig } from '../runtime-config/testing.js';
 import { resolveRegisteredBackend, type PtyBackendCatalog } from './backend.js';
 import type { PtyService } from './service.js';
 import type { PtyPersistenceRetry } from './service/retry.js';
+import { createTerminalQueryFilter, type TerminalQueryFilter } from './service/terminal-queries.js';
 import { terminatePtyProcesses } from './service/termination.js';
 import type {
   PtyBackendName,
@@ -32,6 +37,31 @@ export function fakeBackendCatalog(input: {
     configured: backends[input.configured],
     forBackend: (name) => resolveRegisteredBackend(backends, name),
     all: Object.values(backends),
+  };
+}
+
+/**
+ * A terminal-query filter for a test that calls a backend's `launch` directly, where the PTY service would otherwise
+ * build one from the configured theme.
+ */
+export function testTerminalQueries(theme: AppearanceTheme = 'light'): TerminalQueryFilter {
+  return createTerminalQueryFilter(terminalPalette[theme]);
+}
+
+/**
+ * The `RuntimeConfig` a test PTY service reads at launch: the defaults, with the given appearance theme. Changing
+ * config is not something the PTY service does, so it dies.
+ */
+export function ptyTestRuntimeConfig(theme: AppearanceTheme = 'light') {
+  return Layer.succeed(RuntimeConfig, ptyTestRuntimeConfigService(theme));
+}
+
+export function ptyTestRuntimeConfigService(
+  theme: AppearanceTheme = 'light',
+): RuntimeConfig['Service'] {
+  return {
+    get: Effect.succeed({ ...defaultRuntimeConfig, appearance: { theme } }),
+    acceptHarnessPolicy: () => Effect.die('PTY service tests change no config'),
   };
 }
 

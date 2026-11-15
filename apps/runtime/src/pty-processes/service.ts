@@ -18,6 +18,7 @@ import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 import { InternalEvents } from '../platform/events/index.js';
 import { runPeriodically } from '../platform/fibers/index.js';
 import { DataDirectory, DatabaseError } from '../platform/persistence/index.js';
+import { RuntimeConfig } from '../runtime-config/index.js';
 import { PtyBackendCatalog } from './backend.js';
 import { PtyForegroundState } from './foreground-state.js';
 import { LaunchEnvironment } from './launch-environment.js';
@@ -50,6 +51,7 @@ import {
 } from './service/logs.js';
 import { makePersistenceRetry } from './service/retry.js';
 import { runtimeNamespace } from './service/runtime-namespace.js';
+import type { TerminalQueryFilter } from './service/terminal-queries.js';
 import {
   terminatePtyProcess,
   terminatePtyProcesses,
@@ -122,7 +124,11 @@ const make = Effect.gen(function* () {
   const eventBus = yield* InternalEvents;
   const launchEnvironment = yield* LaunchEnvironment;
   const settings = yield* PtyProcessSettings;
+  const config = yield* RuntimeConfig;
   const activeAttachments = new Map<number, ActiveAttachment>();
+  // Each live process's terminal-query filter: launch registers it, the process's supervisor removes it when the
+  // incarnation ends, and attach switches its state-query forwarding (see `service/terminal-queries.ts`).
+  const terminalQueryFilters = new Map<number, TerminalQueryFilter>();
   const pendingAttachments = new Set<number>();
   const pinnedPtyProcessIds = new Set<number>();
   // Two windows, one bundle: a termination attempt and a pending launch can
@@ -177,6 +183,8 @@ const make = Effect.gen(function* () {
     runtimeNamespace: namespace,
     sessionsPath: directory.paths.sessionsPath,
     launchEnvironment,
+    config,
+    terminalQueryFilters,
   };
 
   const terminateWithReason = (
@@ -275,6 +283,7 @@ const make = Effect.gen(function* () {
         foreground,
         activeAttachments,
         pendingAttachments,
+        terminalQueryFilters,
         reservations,
         pendingExits,
         input,
@@ -487,6 +496,7 @@ function attachToProcess(
   foreground: PtyForegroundState['Service'],
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
+  terminalQueryFilters: ReadonlyMap<number, TerminalQueryFilter>,
   reservations: PtyReservations,
   pendingExits: PtyPendingExits,
   input: {
@@ -598,6 +608,11 @@ function attachToProcess(
         release,
         displace: input.displace?.(ptyAttachment),
       });
+      // Only an interactive attachment can answer the program's state queries (cursor position); while none exists the
+      // runtime answers them itself. Switched with the `activeAttachments` entry, and switched back only by the
+      // finalizer of the attachment that is still current, so a displaced attachment's late finalizer can't turn
+      // forwarding off under its replacement. tmux processes have no filter (they answer their own queries).
+      terminalQueryFilters.get(session.id)?.setStateQueryForwarding(input.mode === 'interactive');
       // Registered last, so it runs first when the attachment scope closes: the entry stops routing writes before the
       // backend detaches.
       yield* Scope.addFinalizer(
@@ -605,6 +620,7 @@ function attachToProcess(
         Effect.suspend(() => {
           if (activeAttachments.get(session.id)?.attachmentId !== attachmentId) return Effect.void;
           activeAttachments.delete(session.id);
+          terminalQueryFilters.get(session.id)?.setStateQueryForwarding(false);
           return Effect.logInfo('PTY websocket detach').pipe(
             Effect.annotateLogs({ ptyProcessId: session.id }),
           );

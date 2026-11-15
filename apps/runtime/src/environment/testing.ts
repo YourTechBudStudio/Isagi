@@ -31,6 +31,7 @@ import { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
 import { AgentSessionInteraction } from './agent-sessions/interaction.js';
 import { HarnessObservationTargetsLayerNoDeps } from './agent-sessions/observation-targets.js';
 import { AgentSessionService } from './agent-sessions/service.js';
+import { EnvironmentDeletionParticipant } from './deletion-participant.js';
 import { SurfaceService } from './index.js';
 import { SessionLifecycle } from './sessions/lifecycle.js';
 import type { AgentSessionRow } from './sessions/types.js';
@@ -281,13 +282,27 @@ export function testLayer(
       | undefined;
     /** The Fluidcast sessions behind the agents' interaction; disabled by default. */
     readonly fluidcast?: FakeFluidcastSessions | undefined;
+    /**
+     * What ends other modules' work when a surface is deleted. None by default; a test of that
+     * behavior hands over the real implementation built over this harness's database.
+     */
+    readonly deletionParticipant?:
+      | Layer.Layer<EnvironmentDeletionParticipant, never, RuntimeDatabase | InternalEvents>
+      | undefined;
+    /**
+     * The internal event bus, when the test shares it with another harness (the workflow engine's)
+     * so that harness sees what these surfaces publish. A fresh bus by default.
+     */
+    readonly internalEvents?: InternalEvents['Service'] | undefined;
   } = {},
 ) {
   mkdirSync(testSessionSocketDirectory(dataRoot), { recursive: true });
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
-  const internalEventsLayer = InternalEvents.layer;
+  const internalEventsLayer = options.internalEvents
+    ? Layer.succeed(InternalEvents, options.internalEvents)
+    : InternalEvents.layer;
   const agentSessionArtifacts = AgentSessionArtifacts.layer.pipe(Layer.provide(dataDirectoryLayer));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(dataDirectoryLayer));
   const fluidcast = (options.fluidcast ?? makeFakeFluidcastSessions({ availability: 'disabled' }))
@@ -388,6 +403,12 @@ export function testLayer(
       )
     : baseEditorService;
   const surfaceService = SurfaceService.layerNoDeps.pipe(
+    Layer.provide(
+      (options.deletionParticipant ?? EnvironmentDeletionParticipant.none).pipe(
+        Layer.provide(database),
+        Layer.provide(internalEventsLayer),
+      ),
+    ),
     Layer.provide(surfaceRepository),
     Layer.provide(agentService),
     Layer.provide(terminalService),

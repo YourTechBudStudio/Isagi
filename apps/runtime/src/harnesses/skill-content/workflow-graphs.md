@@ -42,6 +42,15 @@ Name graphs and nodes for the person watching the run: `title` says what happens
 
 For each wait, ask "if this fails, what happens next, and what must not be repeated?" Route every failure and interruption somewhere deliberate: recovery, an alternative, the person, or a failure outcome. An ended agent turn does not by itself mean the task succeeded. Bound automatic retries with a counter in state and an exhausted-budget route to the person; loops that a reviewer closes may instead escalate to the person rather than count. Ask the user when the recovery policy changes their intended workflow and cannot be inferred.
 
+## Design for reruns
+
+Consider whether a new run, started with roughly the same parameters, should find the work an earlier unfinished run already did and continue from there. Not every workflow needs this; it pays off when runs are long or often abandoned midway. It is separate from Resume and Retry, which continue the same run ([Run recovery](run-recovery.md)). Detect progress from what the work already produces rather than adding files only for tracking. Two mechanisms, often mixed in one workflow:
+
+- **Deterministic checks.** An operation looks for a file at a path derived from the parameters, or a commit. It is cheap, exact and visible in the log. Fits workflows that move between stages, where each stage naturally writes its own file. A file means done only if it is written or committed when its task finishes, and an artifact whose inputs may have changed should be redone rather than reused.
+- **Agent checks.** A visible agent inspects the work, or a headless judgment reads text an operation hands it, such as an append-only log or a plan's progress, and says what is done. Fits loops like implementer and reviewer that refine the same files instead of producing new ones. It costs a model call and can misjudge, so route its answer like any other [judgment](workflow-agents.md#prompts).
+
+How you lay out artifacts decides which checks are available: for example, one decisions file per phase instead of one shared file.
+
 ## State
 
 Keep parameters, state, updates and outputs JSON-serializable. Store durable domain facts, handles later nodes need and retry budgets; graph structure already owns execution position. Keep child-only data in the child. Every field has a reducer; start with `reduce.replace` and pick another only for accumulated facts. `createGraph`'s second type argument overrides a field's update type:

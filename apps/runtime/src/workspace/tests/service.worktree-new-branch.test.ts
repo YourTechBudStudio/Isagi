@@ -21,7 +21,7 @@ import { WorkspaceService } from '../service.js';
 import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { StateFile } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import {
   project,
   repositoryWith,
@@ -79,7 +79,7 @@ test('opening a missing branch without a base asks the client for base selection
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceService.layerNoDeps),
-          Effect.provide(NoProjectDeletionParticipant),
+          Effect.provide(NoDeletionParticipants),
           Effect.provideService(CommandService, testCommandService),
           Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalEvents, testInternalEvents),
@@ -187,7 +187,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -294,7 +294,7 @@ test('opening a missing branch can create it from the current detached worktree'
         });
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),
@@ -411,7 +411,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             });
           }).pipe(
             Effect.provide(WorkspaceService.layerNoDeps),
-            Effect.provide(NoProjectDeletionParticipant),
+            Effect.provide(NoDeletionParticipants),
             Effect.provideService(CommandService, testCommandService),
             Effect.provideService(PtyService, testPtyService),
             Effect.provideService(InternalEvents, testInternalEvents),

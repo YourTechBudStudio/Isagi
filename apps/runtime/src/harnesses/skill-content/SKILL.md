@@ -37,8 +37,8 @@ The project root is the project's main checkout; from inside an Isagi worktree, 
 | Task | Read |
 | --- | --- |
 | Create, modify, build or verify a workflow package | [Workflow package](references/workflow-package.md) |
-| Graphs, nodes, waits, routing, state and failure design | [Graphs](references/workflow-graphs.md) |
-| Agent sessions, headless classification, prompts and modifiers | [Agents](references/workflow-agents.md) |
+| Graphs, nodes, waits, routing, state, failure design and resuming from an earlier run's work | [Graphs](references/workflow-graphs.md) |
+| Agent sessions, choosing an existing or fresh agent per task, headless classification, prompts and modifiers | [Agents](references/workflow-agents.md) |
 | Ready-made shapes: agent turn, reading a reply, classifier, review loop, human-led step | [Recipes](references/workflow-recipes.md) |
 | Which worktree and surface a run uses (`placement`) and preparation failures | [Environments](references/workflow-environments.md) |
 | Saving files at a boundary (`checkpoint`) | [Checkpoints](references/workflow-checkpoints.md) |

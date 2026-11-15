@@ -17,7 +17,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog } from '../testing.js';
+import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
 import {
   PtyStartError,
   type PtyBackend as PtyBackendShape,
@@ -84,6 +84,7 @@ function withPty(
   const tokens = ProcessTokens.layerNoDeps;
   const service = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
+    Layer.provide(ptyTestRuntimeConfig()),
     Layer.provide(tokenOnlyCliAccess),
     Layer.provideMerge(tokens),
     Layer.provideMerge(repository),

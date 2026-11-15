@@ -16,7 +16,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog } from '../testing.js';
+import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
@@ -42,6 +42,7 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const userShellLayer = testUserShellLayer({ environment: loginShellEnvironment });
   const service = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
+    Layer.provide(ptyTestRuntimeConfig()),
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(backendLayer),

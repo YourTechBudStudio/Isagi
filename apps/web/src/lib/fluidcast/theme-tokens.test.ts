@@ -2,33 +2,19 @@
 // (`data-theme` on the root, which the player follows). This keeps the two copies equal, token by
 // token and theme by theme, so the player never drifts from the app around it.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-type Tokens = ReadonlyMap<string, string>;
+import {
+  after,
+  colorsAt,
+  isagiStylesUrl,
+  isagiThemeBlocks,
+  read,
+  type Tokens,
+} from '../css-tokens/test-support.js';
 
-const read = (url: string | URL): string =>
-  readFileSync(url, 'utf8').replaceAll(/\/\*[\s\S]*?\*\//g, '');
-
-/** The `--color-*` declarations of the block around `at`; blocks holding tokens nest nothing. */
-const colorsAt = (css: string, at: number): Tokens =>
-  new Map(
-    [
-      ...css
-        .slice(css.lastIndexOf('{', at) + 1, css.indexOf('}', at))
-        .matchAll(/(--color-[\w-]+):\s*([^;]+);/g),
-    ].map(([, name, value]) => [name!, value!.trim().toLowerCase()]),
-  );
-
-/** The index just past the first `text`, which must be there. */
-const after = (css: string, text: string): number => {
-  const at = css.indexOf(text);
-  assert.notEqual(at, -1, `no "${text}"`);
-  return at + text.length;
-};
-
-const isagi = read(new URL('../../styles.css', import.meta.url));
+const isagi = read(isagiStylesUrl);
 const player = read(
   fileURLToPath(import.meta.resolve('@yourtechbudstudio/fluidcast-react/styles.css')),
 );
@@ -37,12 +23,12 @@ const THEMES: ReadonlyArray<readonly [string, Tokens, Tokens]> = [
   // The player's compiled theme is the block Tailwind emits for its scope root, the first to set the canvas.
   [
     'dark',
-    colorsAt(isagi, after(isagi, '@theme {')),
+    colorsAt(isagi, after(isagi, isagiThemeBlocks.dark)),
     colorsAt(player, after(player, '--color-canvas:')),
   ],
   [
     'light',
-    colorsAt(isagi, after(isagi, ":root[data-theme='light'] {")),
+    colorsAt(isagi, after(isagi, isagiThemeBlocks.light)),
     colorsAt(player, after(player, "[data-theme='light'] :scope {")),
   ],
 ];

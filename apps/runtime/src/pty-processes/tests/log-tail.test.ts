@@ -17,7 +17,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog } from '../testing.js';
+import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js';
 
 /**
@@ -51,6 +51,7 @@ function serviceLayer(dataRoot: string) {
   const repository = PtyRepository.layer.pipe(Layer.provide(database));
   const service = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
+    Layer.provide(ptyTestRuntimeConfig()),
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(

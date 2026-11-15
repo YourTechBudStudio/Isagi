@@ -20,7 +20,7 @@ import { fakeTerminateMany } from '../../pty-processes/testing.js';
 import { AgentSessionInteraction } from '../agent-sessions/interaction.js';
 import { AgentSessionRepository } from '../agent-sessions/repository.js';
 import { AgentSessionService } from '../agent-sessions/service.js';
-import { SurfaceService } from '../index.js';
+import { EnvironmentDeletionParticipant, SurfaceService } from '../index.js';
 import { SessionLifecycle } from '../sessions/lifecycle.js';
 import { restorePaneBoundSessions } from '../sessions/restore.js';
 import { SurfaceRepository } from '../surfaces/repository.js';
@@ -202,6 +202,7 @@ export function realSessionCreationLayer(dataRoot: string, options: SessionWorld
  */
 export function sessionCreationLayerFor(world: ReturnType<typeof sessionWorldLayers>) {
   const surfaceService = SurfaceService.layerNoDeps.pipe(
+    Layer.provide(EnvironmentDeletionParticipant.none),
     Layer.provide(world.surfaceRepository),
     Layer.provide(world.agentService),
     Layer.provide(world.terminalService),

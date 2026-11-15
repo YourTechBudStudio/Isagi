@@ -32,7 +32,7 @@ import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { testUserShellLayer } from '../../platform/process/testing.js';
 import { ProjectRepository } from '../../projects/index.js';
 import { RuntimeConfig } from '../../runtime-config/index.js';
-import { WorkflowProjectErasure } from '../../workflows/index.js';
+import { WorkflowEnvironmentDeletion, WorkflowProjectErasure } from '../../workflows/index.js';
 import { StateFile, WorkspaceService } from '../../workspace/index.js';
 import {
   createGitProjectFixture,
@@ -437,7 +437,11 @@ test('every production consumer shares the one AgentSessionInteraction instance'
     AgentSessionInteraction.layer,
     HarnessObservationTargetsLayer,
   ).pipe(
-    Layer.provide([WorkflowProjectErasure, HarnessObservationTargetsLayer]),
+    Layer.provide([
+      WorkflowProjectErasure,
+      WorkflowEnvironmentDeletion,
+      HarnessObservationTargetsLayer,
+    ]),
     Layer.provideMerge(platform),
     Layer.provide(testCliEntry),
   );

@@ -108,8 +108,8 @@ export type InternalEvent =
        * A worktree row and everything cascading from it are gone.
        *
        * Published after the delete commits, like every other deletion notification here, which is
-       * why a consumer cannot find affected work through anything that cascaded: workflow runs are
-       * matched by their retained destination identity instead.
+       * why a consumer cannot find affected work through anything that cascaded: durable work that
+       * lives in the worktree is ended inside the delete's transaction instead (ADR 0008).
        *
        * publishers: workspace; subscribers: none (kept; asserted by workspace tests).
        */
@@ -124,11 +124,22 @@ export type InternalEvent =
        * `worktreeIds` is read **before** the cascade, because `worktrees.project_id` cascades from
        * `projects` and those rows cannot be enumerated afterwards.
        *
-       * publishers: workspace; subscribers: none (kept; asserted by workspace tests).
+       * publishers: workspace; subscribers: workflows (stops headless jobs of the erased runs).
        */
       readonly type: 'project_deleted';
       readonly projectId: number;
       readonly worktreeIds: readonly number[];
+    }
+  | {
+      /**
+       * Deleting a surface or worktree ended these runs' work in a transaction outside the engine
+       * (ADR 0008): unfinished runs were cancelled, and finished runs' running headless jobs were
+       * interrupted. Published once that transaction commits, so the engine stops the processes.
+       *
+       * publishers: workflows (deletion participant); subscribers: workflows (engine).
+       */
+      readonly type: 'workflow_runs_ended_by_deletion';
+      readonly workflowRunIds: readonly number[];
     }
   | {
       /** publishers: pty-processes; subscribers: editor, commands, harnesses (observer), workflows, environment (projection). */

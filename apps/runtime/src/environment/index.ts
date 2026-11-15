@@ -31,3 +31,6 @@ export { HarnessObservationTargetsLayer } from './agent-sessions/observation-tar
 export { AgentSessionAttentionProjection } from './agent-sessions/attention.js';
 export { AgentSessionService } from './agent-sessions/service.js';
 export { EnvironmentLayer } from './layer.js';
+// The port through which deleting a surface or worktree ends the work other modules run there.
+// Only the composition root wires its implementation.
+export { EnvironmentDeletionParticipant, type DoomedEnvironment } from './deletion-participant.js';

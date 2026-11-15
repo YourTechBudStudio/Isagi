@@ -31,7 +31,7 @@ import {
 import { projectContext, resolveLatestBuild } from './builds.js';
 import { prepareAndStart } from './prepare.js';
 import type { SavedResult } from './results.js';
-import type { Abort, EngineRuntime } from './runtime.js';
+import type { Abort, Emit, EngineRuntime } from './runtime.js';
 
 /**
  * The run controls. Each one checks the run's status, changes the rows it owns in one transaction,
@@ -181,30 +181,56 @@ export const cancel = Effect.fn('workflows.cancel')(function* (
     if (!['preparing', 'running', 'waiting', 'paused', 'failed'].includes(run.status)) {
       abort(unavailable(run, 'cancel'));
     }
-    const endedAt = now();
-    for (const execution of listExecutions(db, runId)) {
-      if (execution.status === 'running' || execution.status === 'waiting') {
-        updateExecution(db, execution.id, { status: 'cancelled', endedAt });
-      }
-    }
-    for (const invocation of listInvocations(db, runId)) {
-      if (invocation.status === 'running') {
-        updateInvocation(db, invocation.id, { status: 'cancelled', endedAt });
-      }
-    }
-    // Its running headless jobs end here too, so the run and its operations never disagree;
-    // stopping their processes comes after, and writes nothing but a failed stop.
-    for (const operation of listOperations(db, { runId, status: 'running' })) {
-      if (operation.kind !== 'run_headless') continue;
-      settleOperation(db, emit, operation.id, 'interrupted', {
-        resultJson: toJson({ error: 'cancelled' } satisfies HeadlessOperationRecord),
-      });
-    }
-    updateRun(db, runId, { status: 'cancelled', endedAt });
-    emit({ runId, category: 'run', kind: 'run_cancelled', message: 'Cancelled' });
+    cancelInTransaction(db, emit, runId, { message: 'Cancelled' });
   });
   yield* stopRunHeadless(rt, runId);
 });
+
+/**
+ * Ends the run's running headless jobs as interrupted, inside the caller's transaction, and returns
+ * how many it ended. A run that failed after starting one still has it running, so a deletion ends
+ * those too while leaving the failure as the run's outcome.
+ */
+export function interruptRunningHeadless(db: Db, emit: Emit, runId: number): number {
+  let ended = 0;
+  for (const operation of listOperations(db, { runId, status: 'running' })) {
+    if (operation.kind !== 'run_headless') continue;
+    settleOperation(db, emit, operation.id, 'interrupted', {
+      resultJson: toJson({ error: 'cancelled' } satisfies HeadlessOperationRecord),
+    });
+    ended += 1;
+  }
+  return ended;
+}
+
+/**
+ * Cancel's write, inside the caller's transaction: the run, its open executions, graph invocations
+ * and running headless jobs all end in it. Stopping the jobs' processes is the caller's to do once
+ * it commits. Shared with the deletion of the run's surface or worktree (`environment-deletion.ts`).
+ */
+export function cancelInTransaction(
+  db: Db,
+  emit: Emit,
+  runId: number,
+  event: { readonly message: string; readonly data?: unknown },
+): void {
+  const endedAt = now();
+  for (const execution of listExecutions(db, runId)) {
+    if (execution.status === 'running' || execution.status === 'waiting') {
+      updateExecution(db, execution.id, { status: 'cancelled', endedAt });
+    }
+  }
+  for (const invocation of listInvocations(db, runId)) {
+    if (invocation.status === 'running') {
+      updateInvocation(db, invocation.id, { status: 'cancelled', endedAt });
+    }
+  }
+  // Its running headless jobs end here too, so the run and its operations never disagree;
+  // stopping their processes comes after, and writes nothing but a failed stop.
+  interruptRunningHeadless(db, emit, runId);
+  updateRun(db, runId, { status: 'cancelled', endedAt });
+  emit({ runId, category: 'run', kind: 'run_cancelled', message: event.message, data: event.data });
+}
 
 /** Detaches a finished run from its surface so another run can use it. */
 export function dismiss(rt: EngineRuntime, runId: number) {

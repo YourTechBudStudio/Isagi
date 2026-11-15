@@ -25,21 +25,30 @@ import {
   type WorkflowLive,
   type WorkflowSignal,
 } from './live.js';
-import { attachedRunsAtom, workflowEventsAtom, workflowRunAtom } from './queries.js';
+import {
+  attachedRunsAtom,
+  attachedRunsCurrentAtom,
+  workflowEventsAtom,
+  workflowRunAtom,
+} from './queries.js';
 
 export const receiveWorkflowSignal = Effect.fn('receiveWorkflowSignal')(function* (
   signal: WorkflowSignal,
 ) {
   const registry = yield* AtomRegistry.AtomRegistry;
   if (signal.type === 'disconnected') {
-    // The phase is all a dropped connection changes; what was missed is re-read on `connected`.
+    // The phase, and that the attached runs are no longer current, is all a dropped connection
+    // changes; what was missed is re-read on `connected`.
     registry.set(runtimeConnectionPhaseAtom, 'disconnected');
+    registry.set(attachedRunsCurrentAtom, false);
     return;
   }
   const live = yield* workflowLive;
   switch (signal.type) {
     case 'connected':
       registry.set(runtimeConnectionPhaseAtom, 'connected');
+      // Not current until this connection's snapshot arrives: runs may have changed meanwhile.
+      registry.set(attachedRunsCurrentAtom, false);
       // A reconnect cannot prove nothing was missed while the socket was down, so every live read
       // re-reads (the ones on screen now, the others when next shown). Structures and saved
       // checkpoints are immutable, and the connection's snapshot refreshes the attached runs.
@@ -48,6 +57,7 @@ export const receiveWorkflowSignal = Effect.fn('receiveWorkflowSignal')(function
     case 'snapshot':
       // The runtime's complete answer to "which runs occupy a surface right now".
       registry.set(attachedRunsAtom, replaceAttached(signal.summaries));
+      registry.set(attachedRunsCurrentAtom, true);
       break;
     case 'run_changed':
       yield* applySummary(registry, live, signal.summary);
