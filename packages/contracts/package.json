@@ -9,9 +9,11 @@
   },
   "scripts": {
     "build": "vite build && tsc -b tsconfig.json --force",
-    "check": "pnpm typecheck && pnpm test",
-    "test": "pnpm build && node --import tsx --test \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json"
+    "check": "pnpm build && pnpm typecheck && pnpm test:built",
+    "test": "pnpm build && pnpm test:built",
+    "test:built": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@yourtechbudstudio/isagi-workflow-sdk": "workspace:*",

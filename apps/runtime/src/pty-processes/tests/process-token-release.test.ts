@@ -11,7 +11,7 @@ import { CliAccess } from '../../cli-access/index.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
@@ -42,10 +42,9 @@ const tokenOnlyCliAccess = Layer.effect(
   }),
 );
 
-const userShell: UserShell['Service'] = {
-  environment: { _tag: 'Available', values: { HOME: '/home/developer', PATH: '/usr/bin' } },
-  run: () => Effect.die('not used'),
-};
+const userShell = testUserShellLayer({
+  environment: { HOME: '/home/developer', PATH: '/usr/bin' },
+});
 
 function backend(overrides: Partial<PtyBackendShape>): PtyBackendShape {
   return {
@@ -99,7 +98,7 @@ function withPty(
     Layer.provide(directory),
     // One bus: the PTY service publishes on it and `ProcessTokens` subscribes to it.
     Layer.provide(InternalEvents.layer),
-    Layer.provide(Layer.succeed(UserShell, userShell)),
+    Layer.provide(userShell),
   );
   return Effect.runPromise(Effect.scoped(body(dataRoot).pipe(Effect.provide(service)))).finally(
     () => rmSync(dataRoot, { recursive: true, force: true }),

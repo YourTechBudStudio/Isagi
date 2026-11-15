@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Fiber, Result } from 'effect';
+import { Duration, Effect, Fiber, Result } from 'effect';
 
 import { PtyKillError } from '../types.js';
 import { leakyRootScript, leakyTreeFixture, waitUntilGone } from './process-tree-test-support.js';
-import { TmuxBackend } from './tmux.js';
+import { TmuxBackend, TmuxTimings } from './tmux.js';
 
 // tmux reports an already-gone session on stderr rather than through a
 // distinguishable exit code, so these message shapes are the whole classifier.
@@ -192,8 +192,8 @@ test(
 
 // A timeout is a control failure that says nothing about whether the server
 // acted. Here it did: the pane is dead, so its descendants are swept even
-// though the kill is still reported as a failure rather than affirmed. This
-// waits out the adapter's real five-second kill timeout.
+// though the kill is still reported as a failure rather than affirmed. The
+// kill deadline is shortened so the hung command times out quickly.
 test(
   'a tmux kill that times out after the server acted still sweeps the pane descendants',
   { skip: process.platform === 'win32' },
@@ -203,7 +203,10 @@ test(
         Effect.gen(function* () {
           const backend = yield* TmuxBackend;
           return yield* backend.kill(ref).pipe(Effect.result);
-        }).pipe(Effect.provide(TmuxBackend.layer)),
+        }).pipe(
+          Effect.provide(TmuxBackend.layer),
+          Effect.provideService(TmuxTimings, { killTimeout: Duration.seconds(1) }),
+        ),
       );
 
       assert.ok(Result.isFailure(result) && result.failure instanceof PtyKillError);

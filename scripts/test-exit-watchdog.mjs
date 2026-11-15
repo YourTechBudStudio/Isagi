@@ -31,8 +31,12 @@ const timer = setTimeout(() => {
 }, seconds * 1_000);
 
 // A terminal Ctrl-C reaches the whole foreground process group, but a supervisor that
-// terminates only this process must not orphan the test run.
-process.on('SIGTERM', () => child.kill('SIGTERM'));
+// signals only this process (such as `apps/runtime/scripts/test-shards.mjs`) must not
+// orphan the test run. The signal is forwarded, and this process exits once the command
+// does, so the deadline above still bounds a command that ignores it.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => child.kill(signal));
+}
 
 child.on('error', (error) => {
   clearTimeout(timer);

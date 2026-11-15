@@ -8,9 +8,11 @@
     "check": "pnpm typecheck && pnpm build",
     "dev": "node scripts/vite-launcher.mjs dev",
     "preview": "pnpm build && node scripts/vite-launcher.mjs preview",
-    "test": "tsx --expose-gc --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "test": "pnpm test:built",
     "test:browser": "node browser/check-chromium.mjs && pnpm build && playwright test -c browser/playwright.config.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test:built": "tsx --expose-gc --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "typecheck": "pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

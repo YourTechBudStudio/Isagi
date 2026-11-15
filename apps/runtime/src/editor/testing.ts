@@ -12,7 +12,7 @@ import { EntityLock } from '../platform/locks/index.js';
 import { LoopbackPortProbe } from '../platform/net/index.js';
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
-import { UserShell } from '../platform/process/index.js';
+import { testUserShellLayer } from '../platform/process/testing.js';
 import { ProjectRepository } from '../projects/index.js';
 import type { WorktreeRow } from '../projects/index.js';
 import { worktrees } from '../projects/tables.js';
@@ -163,20 +163,6 @@ export function testSessionSocketDirectory(root: string) {
   return join('/tmp', basename(root));
 }
 
-function testUserShell(): UserShell['Service'] {
-  return {
-    environment: {
-      _tag: 'Available' as const,
-      values: {
-        HOME: '/home/developer',
-        PATH: '/usr/bin:/bin',
-        SHELL: '/bin/zsh',
-      },
-    },
-    run: () => Effect.die('editor tests do not run user-shell commands.'),
-  };
-}
-
 export function editorBackendStub(
   name: PtyBackendName,
   overrides: Partial<PtyBackend> = {},
@@ -311,7 +297,7 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
     Layer.provide(bus),
-    Layer.provide(Layer.succeed(UserShell, testUserShell())),
+    Layer.provide(testUserShellLayer()),
   );
   const provisioning = readyEditorProvisioningLayer(
     input.installation ?? testInstallation(input.dataRoot),

@@ -2,12 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import websocket from '@fastify/websocket';
 import { Cause, Effect, Layer, Logger, References } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import { InternalEvents, RuntimeEvents } from '../../platform/events/index.js';
-import { withApiServer } from '../../platform/http/testing.js';
+import { registerInjectedWebsocket, withApiServer } from '../../platform/http/testing.js';
 import { EntityLock } from '../../platform/locks/index.js';
 import { LoopbackPortProbe, LoopbackPortUnavailable } from '../../platform/net/index.js';
 import { DatabaseError, DataDirectory } from '../../platform/persistence/index.js';
@@ -57,7 +56,7 @@ export function withCommandsApi<A>(
       Layer.mock(PtyService)(options.pty ?? fakeCommandLogPtyService()),
     ),
     async (fastify, runtime) => {
-      await fastify.register(websocket);
+      await registerInjectedWebsocket(fastify);
       registerCommandsRoutes(fastify, runtime);
     },
     run,

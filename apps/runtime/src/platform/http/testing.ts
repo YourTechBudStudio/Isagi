@@ -1,4 +1,5 @@
 import cors from '@fastify/cors';
+import websocket from '@fastify/websocket';
 import { Effect, Exit, FiberSet, Layer, ManagedRuntime, Scope } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
@@ -20,6 +21,15 @@ export const serviceFreeRouteRuntime: RouteRuntime<never> = {
   runPromise: (effect, options) => Effect.runPromise(effect, options),
   runFork: (effect) => void Effect.runFork(effect),
 };
+
+/**
+ * Registers `@fastify/websocket` for routes a test drives with `injectWS`. The injected transport never ends its stream
+ * after a closing handshake, so with `ws`'s default 30-second close timeout every closed socket would hold a timer
+ * (and the test process) open; the handshake itself has already completed, so a short timeout changes nothing else.
+ */
+export function registerInjectedWebsocket(fastify: FastifyInstance) {
+  return fastify.register(websocket, { options: { closeTimeout: 50 } });
+}
 
 /**
  * Runs `run` against a Fastify instance whose routes `register` added over `layer`'s services, then closes Fastify and

@@ -8,12 +8,14 @@
   },
   "scripts": {
     "build": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && vite build && node scripts/sync-runtime-assets.mjs --dist",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm build && pnpm typecheck:built && pnpm test:built",
     "db:generate": "cross-env NODE_OPTIONS=--conditions=import drizzle-kit generate",
     "dev": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_RUNTIME_DEBUG=1 tsx scripts/serve-from-source.ts --data-dir ../../data/.isagi",
     "start": "node dist/isagi.mjs serve",
-    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node ../../scripts/test-exit-watchdog.mjs 240 -- node --import tsx --import ./test/dump-handles-on-signal.mjs --test --experimental-test-isolation=none \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
-    "typecheck": "pnpm workspace-deps && tsc --noEmit -p tsconfig.json",
+    "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && pnpm test:built",
+    "test:built": "node scripts/test-shards.mjs",
+    "typecheck": "pnpm workspace-deps && pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json",
     "workspace-deps": "pnpm -C ../../packages/workflow-sdk build && pnpm -C ../../packages/workflow-verifier build && pnpm -C ../cli build"
   },
   "dependencies": {

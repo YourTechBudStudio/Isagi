@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import websocket from '@fastify/websocket';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import Fastify from 'fastify';
 
@@ -11,6 +10,7 @@ import { makeLogCapture } from '../../test/test-support.js';
 import { AgentSessionAttentionProjection } from '../environment/index.js';
 import { RuntimeEvents } from '../platform/events/index.js';
 import { installAllowedOrigins } from '../platform/http/index.js';
+import { registerInjectedWebsocket } from '../platform/http/testing.js';
 import { registerRuntimeEventsRoutes } from './api.js';
 
 test('runtime events websocket streams published events through the contract path', async () => {
@@ -19,7 +19,7 @@ test('runtime events websocket streams published events through the contract pat
   const runtime = ManagedRuntime.make(RuntimeEvents.layer);
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -65,7 +65,7 @@ test('runtime events websocket answers explicit attention snapshot requests', as
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -106,7 +106,7 @@ test('runtime events websocket rejects disallowed origins before upgrade', async
   const runtime = ManagedRuntime.make(Layer.succeed(RuntimeEvents, fakeEventBus()));
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -127,7 +127,7 @@ test('runtime events websocket accepts the explicitly configured packaged file o
   const runtime = ManagedRuntime.make(RuntimeEvents.layer);
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -147,7 +147,7 @@ test('runtime events websocket admits a page served from the same host, whatever
   const runtime = ManagedRuntime.make(RuntimeEvents.layer);
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -174,7 +174,7 @@ test('unsubscribing on socket close removes the subscriber; publish after shutdo
   const runtime = ManagedRuntime.make(countingRuntimeEvents(subscribers));
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -205,9 +205,7 @@ test('server shutdown with an open events socket closes it without failure logs'
   );
 
   try {
-    // An injected socket never ends its stream after a server-initiated closing handshake, so the server would hold
-    // its 30-second close timer (and the test process) open; the handshake itself completes immediately.
-    await fastify.register(websocket, { options: { closeTimeout: 50 } });
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -248,7 +246,7 @@ test('a defect answering a snapshot request is logged and closes the socket so t
 
   try {
     // The server closes this socket; a short close timeout ends the injected stream after the handshake.
-    await fastify.register(websocket, { options: { closeTimeout: 50 } });
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -291,7 +289,7 @@ test('a defect delivering an event is logged and closes the socket so the client
   const runtime = ManagedRuntime.make(Layer.mergeAll(dyingRuntimeEvents, logs.layer));
 
   try {
-    await fastify.register(websocket, { options: { closeTimeout: 50 } });
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 
@@ -333,7 +331,7 @@ test('runtime events websocket streams a suspended command_changed through the c
   const runtime = ManagedRuntime.make(RuntimeEvents.layer);
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerRuntimeEventsRoutes(fastify, runtime as never);
     await fastify.ready();
 

@@ -16,8 +16,12 @@ import { noCliAccess } from '../../cli-access/testing.js';
 import { WebRootUnusable, webUiContentSecurityPolicy } from '../../web-ui/index.js';
 import { HttpServerLayer } from '../http-server.js';
 import { launchInputsLayer } from '../launch.js';
-import { AppLayer } from '../layer.js';
-import { bootRuntime, testRuntimeLaunch, type BootedRuntime } from './runtime-harness.js';
+import {
+  bootRuntime,
+  testAppLayer,
+  testRuntimeLaunch,
+  type BootedRuntime,
+} from './runtime-harness.js';
 
 test('runtime server registers PTY routes after the websocket plugin is ready', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-ws-'));
@@ -445,7 +449,7 @@ test('startup failure after listen closes Fastify and disposes the runtime', asy
   );
   const server = HttpServerLayer.pipe(
     Layer.provide(failingStartupStep),
-    Layer.provide(AppLayer),
+    Layer.provide(testAppLayer()),
     Layer.provide(launchInputsLayer(testRuntimeLaunch({ dataDirectory: dataRoot }))),
   );
   const logs = makeLogCapture();

@@ -24,9 +24,11 @@ interface RuntimeProcessRun {
   readonly dataDir: string;
 }
 
+// The cases run concurrently: each is its own child runtime with its own scratch directory and port, and none uses the
+// process-wide leak probes, so they only share wall time.
 describe(
   'runtime process entry',
-  { skip: process.platform === 'win32' ? 'POSIX signals' : false },
+  { concurrency: true, skip: process.platform === 'win32' ? 'POSIX signals' : false },
   () => {
     let scratch: string;
 

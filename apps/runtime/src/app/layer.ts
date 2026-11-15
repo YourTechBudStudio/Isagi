@@ -28,13 +28,20 @@ import { StateFile, WorkspaceLayer } from '../workspace/index.js';
 /**
  * The services every module layer leaves open: they own a process-wide handle or the data root, and tests always
  * replace them. Provided exactly once, here; the data root itself comes from the launch (`DataDirectoryRoot`).
+ *
+ * `userShell` is the one platform service a booted test runtime swaps: the live layer runs the developer's login shell
+ * (`platform/process/testing.ts` has the stand-in).
  */
-export const PlatformLayer = Layer.mergeAll(
-  RuntimeDatabase.layer,
-  StateFile.layer,
-  RuntimeConfig.layer,
-  UserShell.layer,
-).pipe(Layer.provideMerge(DataDirectory.layer));
+export function platformLayer(userShell: Layer.Layer<UserShell>) {
+  return Layer.mergeAll(
+    RuntimeDatabase.layer,
+    StateFile.layer,
+    RuntimeConfig.layer,
+    userShell,
+  ).pipe(Layer.provideMerge(DataDirectory.layer));
+}
+
+export const PlatformLayer = platformLayer(UserShell.layer);
 
 /**
  * Every module's layer, merged. Each service's own `layer` wires its module dependencies by reference, and a layer is
@@ -73,10 +80,16 @@ export const PortsLayer = Layer.mergeAll(
  * reads (`launchInputsLayer` provides them): a module service whose requirement is neither wired by its own `layer`,
  * a platform service, a port nor a launch input is a compile error here.
  */
-export const AppLayer = ModulesLayer.pipe(
-  Layer.provide(PortsLayer),
-  Layer.provideMerge(PlatformLayer),
-) satisfies Layer.Layer<never, unknown, DataDirectoryRoot | CliEntry | LauncherToken>;
+export const AppLayer = appLayer(PlatformLayer) satisfies Layer.Layer<
+  never,
+  unknown,
+  DataDirectoryRoot | CliEntry | LauncherToken
+>;
+
+/** Every module over `platform`: `AppLayer` with the live platform, or a test runtime's `platformLayer(...)`. */
+export function appLayer(platform: ReturnType<typeof platformLayer>) {
+  return ModulesLayer.pipe(Layer.provide(PortsLayer), Layer.provideMerge(platform));
+}
 
 /** Every service the routes and startup can use. */
 export type RuntimeServices = Layer.Success<typeof AppLayer>;
