@@ -115,6 +115,11 @@ export default defineConfig({
       name: 'sandboxed-html-preview',
       testMatch: /sandboxed-html-preview\.spec\.ts/,
     },
+    // Like the preview above: its own documents and headers through `page.route`, no fixture page.
+    {
+      name: 'editor-frame-blob-navigation',
+      testMatch: /editor-frame-blob-navigation\.spec\.ts/,
+    },
     // The production startup gate and sign-in flow. The spec fakes the runtime with request and
     // socket routing outside the page, so its state survives the reload a sign-in performs.
     {

@@ -3,18 +3,28 @@ import test, { type TestContext } from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { AgentSessionInteraction, SessionStatus, SurfaceDetail } from '@isagi/contracts';
+import type {
+  AgentSessionInteraction,
+  SessionStatus,
+  SurfaceDetail,
+  WorkflowRunSummary,
+} from '@isagi/contracts';
 import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { fluidcastCopy, runtimeErrorCopy } from '../../../copy/index.js';
+import { fluidcastCopy, runtimeErrorCopy, surfaceActionsCopy } from '../../../copy/index.js';
+import { runApp } from '../../state/runtime.js';
 import { makeTestRegistry } from '../../state/testing.js';
 import { formatRuntimeError, formatRuntimeErrorSummary } from '../../workspace/runtime-data.js';
 import type { Surface } from '../../workspace/types.js';
+import type { WorkflowSignal } from '../../workspace/workflow/live.js';
+import { receiveWorkflowSignal } from '../../workspace/workflow/sync.js';
+import { workflowSummaryFixture } from '../../workspace/workflow/test-support.js';
 import { paletteTestSession } from '../test-support.js';
 import type { PaletteContext } from '../types.js';
 import {
   deleteActivePaneCommand,
   deleteActiveSurfaceCommand,
+  deleteSurfaceReview,
   renameActiveSurfaceCommand,
   togglePaneInteractionCommand,
 } from './surface-actions.js';
@@ -149,6 +159,9 @@ test('delete-active-surface preflight runs directly without loading session stat
     },
   });
   t.after(() => registry.dispose());
+  // The runtime's snapshot says no workflow is on any surface.
+  await runApp(registry, receiveWorkflowSignal({ type: 'connected' }));
+  await runApp(registry, receiveWorkflowSignal({ type: 'snapshot', summaries: [] }));
 
   const preflight = await deleteActiveSurfaceCommand.preflight?.(
     {
@@ -187,6 +200,138 @@ test('delete-active-surface preflight runs directly without loading session stat
     mode: 'run',
     values: { worktreeId: '10', surfaceId: '501' },
   });
+});
+
+/**
+ * A palette context targeting surface 501 on worktree 10. With `runs`, the event connection opened
+ * and its snapshot reported them, through the real live sync; without, no snapshot has arrived.
+ */
+async function deleteSurfaceContext(
+  t: TestContext,
+  runs: readonly WorkflowRunSummary[] | undefined,
+): Promise<PaletteContext & { readonly send: (signal: WorkflowSignal) => Promise<void> }> {
+  const registry = makeTestRegistry({ api: {} });
+  t.after(() => registry.dispose());
+  const send = (signal: WorkflowSignal) => runApp(registry, receiveWorkflowSignal(signal));
+  if (runs !== undefined) {
+    await send({ type: 'connected' });
+    await send({ type: 'snapshot', summaries: runs });
+  }
+  return {
+    projects: [],
+    ...paletteTestSession(registry),
+    launchableHarnesses: [],
+    editorAvailable: false,
+    activeProject: null,
+    activeWorktree: null,
+    activeSurface: null,
+    activePaneId: null,
+    send,
+  };
+}
+
+const surface501 = { worktreeId: '10', surfaceId: '501' };
+
+test('delete-active-surface confirms conservatively before the attached runs are known', async (t) => {
+  const ctx = await deleteSurfaceContext(t, undefined);
+
+  assert.deepEqual(await deleteActiveSurfaceCommand.preflight?.(ctx, surface501), {
+    mode: 'palette',
+    values: surface501,
+  });
+  const review = await deleteSurfaceReview(ctx, { surfaceId: 501 });
+  const copy = surfaceActionsCopy.deleteSurface.unknownReview;
+  assert.equal(review?.title, copy.title);
+  assert.deepEqual(review?.items, []);
+  assert.deepEqual(
+    review?.choices.map((choice) => [choice.label, choice.intent]),
+    [
+      [copy.confirm, 'danger'],
+      [copy.cancel, 'cancel'],
+    ],
+  );
+});
+
+test('delete-active-surface confirms conservatively while the event connection is down', async (t) => {
+  // The last snapshot said the surface was empty; a workflow may have started since.
+  const ctx = await deleteSurfaceContext(t, []);
+  await ctx.send({ type: 'disconnected' });
+
+  assert.deepEqual(await deleteActiveSurfaceCommand.preflight?.(ctx, surface501), {
+    mode: 'palette',
+    values: surface501,
+  });
+  assert.equal(
+    (await deleteSurfaceReview(ctx, { surfaceId: 501 }))?.title,
+    surfaceActionsCopy.deleteSurface.unknownReview.title,
+  );
+});
+
+test('delete-active-surface confirms conservatively after a reconnect until its snapshot arrives', async (t) => {
+  const ctx = await deleteSurfaceContext(t, []);
+  await ctx.send({ type: 'disconnected' });
+  await ctx.send({ type: 'connected' });
+  // A changed summary before the snapshot is not the complete answer either.
+  await ctx.send({
+    type: 'run_changed',
+    summary: workflowSummaryFixture({ runId: 3, status: 'running', surfaceId: 502 }),
+  });
+
+  assert.deepEqual(await deleteActiveSurfaceCommand.preflight?.(ctx, surface501), {
+    mode: 'palette',
+    values: surface501,
+  });
+
+  await ctx.send({ type: 'snapshot', summaries: [] });
+  assert.deepEqual(await deleteActiveSurfaceCommand.preflight?.(ctx, surface501), {
+    mode: 'run',
+    values: surface501,
+  });
+});
+
+test('delete-active-surface opens a review when an unfinished workflow is on the surface', async (t) => {
+  for (const status of ['preparing', 'running', 'waiting', 'paused'] as const) {
+    const ctx = await deleteSurfaceContext(t, [
+      workflowSummaryFixture({ runId: 7, title: 'Review', status, surfaceId: 501 }),
+    ]);
+
+    assert.deepEqual(await deleteActiveSurfaceCommand.preflight?.(ctx, surface501), {
+      mode: 'palette',
+      values: surface501,
+    });
+    const review = await deleteSurfaceReview(ctx, { surfaceId: 501 });
+    const copy = surfaceActionsCopy.deleteSurface.review;
+    assert.equal(review?.title, copy.title);
+    assert.deepEqual(review?.items, [{ label: copy.workflowLabel, detail: 'Review' }]);
+    assert.deepEqual(
+      review?.choices.map((choice) => [choice.label, choice.intent]),
+      [
+        [copy.confirm, 'danger'],
+        [copy.cancel, 'cancel'],
+      ],
+    );
+  }
+});
+
+test('delete-active-surface deletes at once when nothing unfinished is on the surface', async (t) => {
+  const cases: (readonly WorkflowRunSummary[])[] = [
+    [],
+    // A finished run is only detached by the delete, so there is nothing to confirm.
+    [workflowSummaryFixture({ status: 'completed', surfaceId: 501 })],
+    [workflowSummaryFixture({ status: 'cancelled', surfaceId: 501 })],
+    [workflowSummaryFixture({ status: 'failed', surfaceId: 501 })],
+    // Another surface's run is not this delete's business.
+    [workflowSummaryFixture({ status: 'running', surfaceId: 502 })],
+  ];
+  for (const runs of cases) {
+    const ctx = await deleteSurfaceContext(t, runs);
+    assert.deepEqual(await deleteActiveSurfaceCommand.preflight?.(ctx, surface501), {
+      mode: 'run',
+      values: surface501,
+    });
+    // The review is skipped too, should the run end while the palette is open.
+    assert.equal(await deleteSurfaceReview(ctx, { surfaceId: 501 }), null);
+  }
 });
 
 /** A palette session whose runtime answers surface 501's detail with `data`. */

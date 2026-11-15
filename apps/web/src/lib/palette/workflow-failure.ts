@@ -122,7 +122,12 @@ export function workflowStartFailureContent(error: unknown): CommandErrorContent
   return classifiedFailureContent(classified, title);
 }
 
-function runtimeFailureContent(error: unknown, title: string): CommandErrorContent {
+/**
+ * Palette error content for any runtime-client failure under a caller-owned
+ * title: the classified summary as body, framed runtime detail as diagnostic.
+ * Shared with non-workflow commands so runtime failures read the same everywhere.
+ */
+export function runtimeFailureContent(error: unknown, title: string): CommandErrorContent {
   return classifiedFailureContent(classifyRuntimeFailure(error), title);
 }
 

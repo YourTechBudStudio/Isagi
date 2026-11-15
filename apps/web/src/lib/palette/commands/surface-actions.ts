@@ -6,6 +6,7 @@ import {
   type SplitPaneDirection,
   type SurfaceDetail,
   type SurfacePane,
+  type WorkflowRunSummary,
 } from '@isagi/contracts';
 
 import { fluidcastCopy, surfaceActionsCopy } from '../../../copy/index.js';
@@ -20,7 +21,9 @@ import {
 import { resolveActivePaneId } from '../../workspace/model.js';
 import { readFresh, surfaceDetailAtom } from '../../workspace/queries.js';
 import { UserVisibleError } from '../../workspace/runtime-data.js';
-import type { ArgValues, PaletteCommand, PaletteContext } from '../types.js';
+import { attachedRunForSurface } from '../../workspace/workflow/attached.js';
+import { attachedRunsAtom, attachedRunsCurrentAtom } from '../../workspace/workflow/queries.js';
+import type { ArgValues, PaletteCommand, PaletteContext, ReviewContent } from '../types.js';
 import { harnessSelectArg } from './session-actions.js';
 
 const TITLE_MAX_LENGTH = 80;
@@ -76,24 +79,39 @@ export const renameActiveSurfaceCommand: PaletteCommand = {
   },
 };
 
+/**
+ * Deleting a surface also cancels the workflow run still going on it (the runtime does that in the
+ * same delete). That is never silent: with an unfinished run attached, or while Isagi can't be sure
+ * which runs are attached, the command opens on a review in the palette, wherever it was
+ * triggered from; otherwise it deletes at once.
+ */
 export const deleteActiveSurfaceCommand: PaletteCommand = {
   id: 'delete-active-surface',
   label: 'Delete active surface',
   icon: Trash2,
   group: 'worktree-actions',
+  running: { title: surfaceActionsCopy.deleteSurface.running },
   available: (ctx) => Boolean(ctx.activeSurface),
+  args: [
+    {
+      kind: 'review',
+      key: 'confirm',
+      label: surfaceActionsCopy.deleteSurface.review.stepLabel,
+      load: (ctx, values) => deleteSurfaceReview(ctx, activeSurfaceTargetFromValues(values, ctx)),
+    },
+  ],
   preflight: (ctx, values) => {
     const target = activeSurfaceTargetFromValues(values, ctx);
     if (!target) {
       return { mode: 'unavailable' };
     }
-    return {
-      mode: 'run',
-      values: {
-        surfaceId: String(target.surfaceId),
-        worktreeId: String(target.worktreeId),
-      },
+    const targetValues = {
+      surfaceId: String(target.surfaceId),
+      worktreeId: String(target.worktreeId),
     };
+    return workflowOn(ctx, target.surfaceId).kind === 'none'
+      ? { mode: 'run', values: targetValues }
+      : { mode: 'palette', values: targetValues };
   },
   run: async (values, ctx) => {
     const target = activeSurfaceTargetFromValues(values, ctx);
@@ -101,8 +119,76 @@ export const deleteActiveSurfaceCommand: PaletteCommand = {
       return;
     }
     await ctx.app(deleteSurfaceFromPalette(target));
+    return { kind: 'close' };
   },
 };
+
+/**
+ * What deleting the surface would cancel: its unfinished run, nothing (no run, or a finished one,
+ * which is only detached), or unknown while the attached runs are not the runtime's current answer
+ * (before this connection's snapshot, or while the event socket is down).
+ */
+function workflowOn(
+  ctx: PaletteContext,
+  surfaceId: number,
+):
+  | { readonly kind: 'unfinished'; readonly run: WorkflowRunSummary }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unknown' } {
+  const runs = ctx.registry.get(attachedRunsAtom);
+  if (runs === undefined || !ctx.registry.get(attachedRunsCurrentAtom)) return { kind: 'unknown' };
+  const run = attachedRunForSurface(runs, surfaceId);
+  return run && unfinishedRunStatuses.has(run.status)
+    ? { kind: 'unfinished', run }
+    : { kind: 'none' };
+}
+
+const unfinishedRunStatuses: ReadonlySet<WorkflowRunSummary['status']> = new Set([
+  'preparing',
+  'running',
+  'waiting',
+  'paused',
+]);
+
+/**
+ * Names the workflow the delete cancels, or says plainly that Isagi can't tell yet. Nothing to
+ * review once the surface is known to hold no unfinished run (it ended while the palette was
+ * open), so the delete just runs.
+ */
+export function deleteSurfaceReview(
+  ctx: PaletteContext,
+  target: { readonly surfaceId: number } | null,
+): ReviewContent | null {
+  if (!target) {
+    throw new Error(surfaceActionsCopy.deleteSurface.gone);
+  }
+  const workflow = workflowOn(ctx, target.surfaceId);
+  if (workflow.kind === 'none') {
+    return null;
+  }
+  if (workflow.kind === 'unknown') {
+    const copy = surfaceActionsCopy.deleteSurface.unknownReview;
+    return {
+      title: copy.title,
+      body: copy.body,
+      items: [],
+      choices: [
+        { value: 'delete', label: copy.confirm, intent: 'danger' },
+        { value: 'cancel', label: copy.cancel, intent: 'cancel' },
+      ],
+    };
+  }
+  const copy = surfaceActionsCopy.deleteSurface.review;
+  return {
+    title: copy.title,
+    body: copy.body,
+    items: [{ label: copy.workflowLabel, detail: workflow.run.title }],
+    choices: [
+      { value: 'delete', label: copy.confirm, intent: 'danger' },
+      { value: 'cancel', label: copy.cancel, intent: 'cancel' },
+    ],
+  };
+}
 
 export const deleteActivePaneCommand: PaletteCommand = {
   id: 'delete-active-pane',

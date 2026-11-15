@@ -24,7 +24,7 @@ import { WorktreeSetupRepository } from '../setup/repository.js';
 import { WorktreeSetupService } from '../setup/service.js';
 import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../snapshot.js';
 import { StateFile, stateFromActiveContext, type WorkspaceState } from '../state-file.js';
-import { NoProjectDeletionParticipant } from '../testing.js';
+import { NoDeletionParticipants } from '../testing.js';
 import { testAgentSessionService, testWorktreeDeleteDiagnostics } from './test-support.js';
 
 const testWorktreeSetup = {
@@ -474,7 +474,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         return yield* service.get;
       }).pipe(
         Effect.provide(WorkspaceService.layerNoDeps),
-        Effect.provide(NoProjectDeletionParticipant),
+        Effect.provide(NoDeletionParticipants),
         Effect.provideService(CommandService, testCommandService),
         Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalEvents, testInternalEvents),

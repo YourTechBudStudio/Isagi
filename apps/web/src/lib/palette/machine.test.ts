@@ -8,7 +8,7 @@ import {
   inlineError,
   isBusy,
   paletteReducer,
-  callerRunningCopy,
+  runningCopy,
   type PaletteState,
 } from './machine.js';
 import { paletteTestSession } from './test-support.js';
@@ -1024,7 +1024,7 @@ test('an outcome action with a run starts a follow-up and renders what it return
   // outcome at all comes back to what was already on screen.
   assert.equal(state.kind, 'error');
   assert.equal(isBusy(state), true);
-  assert.deepEqual(callerRunningCopy(state), { title: 'Trying again…', hint: 'on the same thing' });
+  assert.deepEqual(runningCopy(state), { title: 'Trying again…', hint: 'on the same thing' });
 
   const effect = state.effects.at(-1);
   assert.equal(effect?.kind, 'callbackRun');
@@ -1098,6 +1098,46 @@ test('a follow-up that fails outright releases the palette and says so', () => {
   assert.equal(state.kind === 'error' && state.content.title, 'Broke');
 });
 
+test('a command run straight from search names its work with its declared copy', () => {
+  const command = fakeCommand({ running: { title: 'Checking…' } });
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(command), ctx });
+
+  assert.equal(isBusy(state), true);
+  assert.deepEqual(runningCopy(state), { title: 'Checking…' });
+});
+
+test('a command run from its wizard names its work the same way', () => {
+  const command = fakeCommand({
+    running: { title: 'Creating…' },
+    args: [{ kind: 'text', key: 'name', label: 'Name' }],
+  });
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(command), ctx });
+  assert.equal(state.kind, 'step');
+  state = paletteReducer(state, {
+    type: 'accept-value',
+    command,
+    ctx,
+    value: 'api',
+    label: 'api',
+  });
+
+  assert.equal(isBusy(state), true);
+  assert.deepEqual(runningCopy(state), { title: 'Creating…' });
+});
+
+test('an entry without a command runs with no status copy of its own', () => {
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(null), ctx });
+
+  assert.equal(isBusy(state), true);
+  assert.equal(runningCopy(state), null);
+});
+
 test('a caller-supplied run starts from search and reports through the ordinary cycle', () => {
   let state = paletteReducer(initialPaletteState, { type: 'opened' });
 
@@ -1108,7 +1148,7 @@ test('a caller-supplied run starts from search and reports through the ordinary 
   });
 
   assert.equal(isBusy(state), true);
-  assert.deepEqual(callerRunningCopy(state), { title: 'Preparing…' });
+  assert.deepEqual(runningCopy(state), { title: 'Preparing…' });
   const effect = state.effects.at(-1);
   assert.equal(effect?.kind, 'callbackRun');
 

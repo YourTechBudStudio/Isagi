@@ -16,7 +16,7 @@ import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { UserShell } from '../../platform/process/index.js';
 import { RuntimeConfig } from '../../runtime-config/index.js';
-import { WorkflowProjectErasure } from '../../workflows/index.js';
+import { WorkflowEnvironmentDeletion, WorkflowProjectErasure } from '../../workflows/index.js';
 import { StateFile } from '../../workspace/index.js';
 import { ModulesLayer } from '../layer.js';
 
@@ -81,7 +81,7 @@ test('the app layer builds the database and the harness observer once and releas
     }),
   ).pipe(Layer.provide(HarnessObservationTargetsLayer));
   const app = ModulesLayer.pipe(
-    Layer.provide([WorkflowProjectErasure, observationTargets]),
+    Layer.provide([WorkflowProjectErasure, WorkflowEnvironmentDeletion, observationTargets]),
     Layer.provideMerge(platform),
     Layer.provide(testCliEntry),
   );
@@ -121,7 +121,11 @@ async function buildWithConfig(configYaml: string | null) {
     userShell,
   ).pipe(Layer.provideMerge(Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot))));
   const app = ModulesLayer.pipe(
-    Layer.provide([WorkflowProjectErasure, HarnessObservationTargetsLayer]),
+    Layer.provide([
+      WorkflowProjectErasure,
+      WorkflowEnvironmentDeletion,
+      HarnessObservationTargetsLayer,
+    ]),
     Layer.provideMerge(platform),
     Layer.provide(testCliEntry),
   );

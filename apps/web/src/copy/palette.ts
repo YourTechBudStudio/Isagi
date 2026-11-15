@@ -160,6 +160,28 @@ export const surfaceActionsCopy = {
     emptyTitle: 'Surface title cannot be empty.',
     titleTooLong: 'Surface title must be 80 characters or fewer.',
   },
+  // Asked only when an unfinished workflow is on the surface: deleting it cancels the run. A
+  // destructive confirm, so it states both halves plainly and keeps the humour out.
+  deleteSurface: {
+    running: 'Deleting surface…',
+    gone: 'This surface is no longer open.',
+    review: {
+      stepLabel: 'Confirm surface deletion',
+      title: 'A workflow is still running on this surface.',
+      body: 'Deleting the surface cancels the workflow and closes its agents. Its history stays.',
+      workflowLabel: 'Workflow',
+      confirm: 'Delete surface and cancel workflow',
+      cancel: 'Cancel',
+    },
+    // Before the runtime has said which workflows are on which surface, or while its event
+    // connection is down, Isagi can't tell.
+    unknownReview: {
+      title: "Isagi can't confirm this surface's workflows right now.",
+      body: 'If a workflow is running here, deleting the surface cancels it and closes its agents.',
+      confirm: 'Delete surface',
+      cancel: 'Cancel',
+    },
+  },
 } as const;
 
 // Canonical session-action labels, shared by the command palette command
@@ -231,6 +253,40 @@ export const projectActionsCopy = {
       confirm: 'Delete project',
       cancel: 'Cancel',
     },
+  },
+} as const;
+
+/**
+ * Rechecking which agent binaries the runtime can see. Working chrome and status
+ * copy, so it stays dry: say what was checked and what is ready now. Unready
+ * harnesses reuse the pane's launch-block status labels so the two never disagree.
+ */
+export const harnessRefreshCopy = {
+  label: 'Refresh agent harnesses',
+  running: {
+    title: 'Checking agent harnesses…',
+    hint: 'Looking for claude, codex, pi and opencode.',
+  },
+  ready: {
+    title: 'Agent harnesses rechecked.',
+    body: (ready: string) => `Ready to start: ${ready}.`,
+  },
+  noneReady: {
+    title: 'No agent harness is ready to start.',
+  },
+  unready: (entries: string) => `Not ready: ${entries}.`,
+  // The recheck also re-runs isagi-docs installation. A failure there is a
+  // partial success: the harness list is fresh, the docs are not everywhere.
+  docsFailed: {
+    title: "Harnesses rechecked, but isagi-docs didn't install everywhere.",
+    body: (harnesses: string) => `isagi-docs failed for ${harnesses}.`,
+    diagnosticLabel: 'Docs install detail',
+  },
+  refreshFailed: {
+    title: "Couldn't recheck agent harnesses.",
+  },
+  readFailed: {
+    title: "Harnesses rechecked, but the new list didn't load.",
   },
 } as const;
 

@@ -46,7 +46,7 @@ test('the canonical renderer document URL is the URL the window is asked to load
 
 test('the packaged policy frames loopback and denies the ambient directives', () => {
   const policy = policyFor(packagedTarget);
-  assert.equal(policy.get('frame-src'), 'http://127.0.0.1:*');
+  assert.equal(policy.get('frame-src'), 'http://127.0.0.1:* blob:');
   assert.equal(policy.get('default-src'), "'self'");
   assert.equal(policy.get('script-src'), "'self'");
   assert.equal(policy.get('font-src'), "'self'");
@@ -71,7 +71,7 @@ test('the packaged policy frames loopback and denies the ambient directives', ()
  * ever changes, re-run that spec: the preview's real control is its empty
  * `sandbox` attribute, which must not be weakened to compensate.
  */
-test('frame-src admits loopback and an external runtime in its https form, nothing broader', () => {
+test('frame-src admits loopback, blob: downloads and an external runtime in its https form, nothing broader', () => {
   const policy = policyFor(developmentTarget, ['https://runtime.example', 'wss://runtime.example']);
   const sources = (policy.get('frame-src') ?? '').split(' ');
   // A wildcard *port* is the point; a wildcard *source* would defeat it.
@@ -79,10 +79,11 @@ test('frame-src admits loopback and an external runtime in its https form, nothi
   assert.ok(!sources.some((source) => source.includes('localhost')));
   assert.ok(!sources.some((source) => /^[a-z]+:\/\/\*/u.test(source)));
   assert.ok(!sources.includes('wss://runtime.example'));
-  assert.deepEqual(sources, ['http://127.0.0.1:*', 'https://runtime.example']);
-  // With no external runtime, loopback only.
+  assert.deepEqual(sources, ['http://127.0.0.1:*', 'blob:', 'https://runtime.example']);
+  // With no external runtime, loopback and workbench downloads only.
   assert.deepEqual((policyFor(developmentTarget).get('frame-src') ?? '').split(' '), [
     'http://127.0.0.1:*',
+    'blob:',
   ]);
 });
 
@@ -140,7 +141,7 @@ test('external runtime origins reach connect-src in http and ws form', () => {
     policy.get('connect-src'),
     "'self' http://127.0.0.1:* ws://127.0.0.1:* https://runtime.test:8443 wss://runtime.test:8443",
   );
-  assert.equal(policy.get('frame-src'), 'http://127.0.0.1:* https://runtime.test:8443');
+  assert.equal(policy.get('frame-src'), 'http://127.0.0.1:* blob: https://runtime.test:8443');
 });
 
 test('a plain http external runtime contributes its ws form', () => {
