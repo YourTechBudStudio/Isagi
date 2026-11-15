@@ -19,8 +19,10 @@
     "pack:dir": "node scripts/run-electron-builder.mjs --dir --publish never",
     "smoke:runtime-stage": "node scripts/smoke-runtime-stage.mjs",
     "stage:runtime": "node scripts/stage-runtime.mjs",
-    "test": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/*.test.mjs\" \"scripts/runtime-stage/*.test.mjs\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm test:built",
+    "test:built": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/*.test.mjs\" \"scripts/runtime-stage/*.test.mjs\"",
+    "typecheck": "pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json",
     "verify:linux-release": "node scripts/verify-linux-release.mjs"
   },
   "dependencies": {

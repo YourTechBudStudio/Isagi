@@ -12,7 +12,7 @@ import {
   guidedWalkthroughSummaryPrompt,
 } from '@yourtechbudstudio/fluidcast-presets';
 import type { TranscriptEntry } from '@yourtechbudstudio/fluidcast-tool-agent';
-import { Effect, Exit, Layer, Option, Stream } from 'effect';
+import { Effect, Exit, Layer, Option, Schedule, Stream } from 'effect';
 
 import type { FluidcastConfig } from '../../runtime-config/index.js';
 import { continueCallLabel, continueMessage } from '../continuation.js';
@@ -21,6 +21,7 @@ import type { FluidcastSessionId } from '../ids.js';
 import { buildFluidcastModels, type FluidcastModels } from '../models.js';
 import {
   buildFluidcastSession,
+  FluidcastSessionSettings,
   type BuiltFluidcastSession,
   type FluidcastSessionInput,
 } from '../session-factory.js';
@@ -337,6 +338,8 @@ interface RoleScenario {
   readonly worker: FakeWorkerOptions;
   /** The voice's replies, by call. */
   readonly voice: (call: number) => FakeReply;
+  /** The Forward tool's progress schedule. Default the SDK's. */
+  readonly progressSchedule?: Schedule.Schedule<unknown>;
 }
 
 /** Each role's prompts so far, flattened to text. */
@@ -415,7 +418,14 @@ async function roleScenario<A>(
           const prompts = { voice: voice.prompts, base: base.prompts, summary: summary.prompts };
           return { value: yield* body({ built, prompts, stateWhere }), prompts };
         }),
-      ).pipe(Effect.provide(Layer.mergeAll(launchEnvironment, stubRegistry()))),
+      ).pipe(
+        Effect.provide(Layer.mergeAll(launchEnvironment, stubRegistry())),
+        options.progressSchedule === undefined
+          ? (effect) => effect
+          : Effect.provideService(FluidcastSessionSettings, {
+              progressSchedule: options.progressSchedule,
+            }),
+      ),
     ),
   );
 }
@@ -485,16 +495,20 @@ test('without compaction enabled, no summary is written', async () => {
 });
 
 test("the Forward tool's progress sentences come from the summary model, not the voice's", async () => {
-  // The SDK's first progress tick is at 10 seconds; the worker stays busy past it.
+  // The first progress tick is at 100 milliseconds; the worker stays busy past it.
   const { prompts } = await roleScenario(
-    { worker: { answer: { after: '11 seconds' } }, voice: () => forward },
+    {
+      worker: { answer: { after: '2 seconds' } },
+      voice: () => forward,
+      progressSchedule: Schedule.spaced('100 millis'),
+    },
     (session) =>
       Effect.gen(function* () {
         yield* Effect.orDie(
           session.built.session.command({ _tag: 'SendMessage', text: 'Explain.' }),
         );
         for (let waited = 0; !session.prompts.summary.some(isProgress); waited += 50) {
-          if (waited >= 15_000) return yield* Effect.die(new Error('no progress was written'));
+          if (waited >= 1_500) return yield* Effect.die(new Error('no progress was written'));
           yield* Effect.sleep('50 millis');
         }
       }),

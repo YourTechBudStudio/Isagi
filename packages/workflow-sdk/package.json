@@ -27,9 +27,11 @@
   },
   "scripts": {
     "build": "vite build && tsc -b tsconfig.json --force",
-    "check": "pnpm typecheck && pnpm test && pnpm pack --dry-run",
-    "test": "pnpm build && node --import tsx --test \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.type-tests.json"
+    "check": "pnpm build && pnpm typecheck && pnpm test:built && pnpm pack --dry-run",
+    "test": "pnpm build && pnpm test:built",
+    "test:built": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.type-tests.json"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

@@ -10,7 +10,7 @@ import { CliAccessNone } from '../../cli-access/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
@@ -39,7 +39,7 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
     PtyBackendCatalog,
     fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
   );
-  const userShellLayer = Layer.succeed(UserShell, testUserShell());
+  const userShellLayer = testUserShellLayer({ environment: loginShellEnvironment });
   const service = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
     Layer.provide(CliAccessNone),
@@ -70,25 +70,17 @@ function unusedTmuxBackend(): PtyBackendShape {
   };
 }
 
-function testUserShell(): UserShell['Service'] {
-  const environment = {
-    _tag: 'Available' as const,
-    values: {
-      HOME: '/home/developer',
-      USER: 'developer',
-      SHELL: '/bin/zsh',
-      PATH: '/login-shell/bin:/usr/bin:/bin',
-      HOST: '127.0.0.1',
-      PORT: '0',
-      ELECTRON_RUN_AS_NODE: '1',
-      ISAGI_ALLOWED_ORIGINS: 'file://',
-    },
-  };
-  return {
-    environment,
-    run: () => Effect.die('PTY service tests do not run user-shell commands.'),
-  };
-}
+/** A login-shell environment carrying the runtime controls the launch environment must strip. */
+const loginShellEnvironment = {
+  HOME: '/home/developer',
+  USER: 'developer',
+  SHELL: '/bin/zsh',
+  PATH: '/login-shell/bin:/usr/bin:/bin',
+  HOST: '127.0.0.1',
+  PORT: '0',
+  ELECTRON_RUN_AS_NODE: '1',
+  ISAGI_ALLOWED_ORIGINS: 'file://',
+};
 
 test('PTY process repository creates owner-unaware process metadata', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-repository-'));

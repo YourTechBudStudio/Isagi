@@ -11,7 +11,7 @@ import { CliAccessNone } from '../../cli-access/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
@@ -28,16 +28,6 @@ import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js
  * could not be read" is a failure. A third — "no such process" — is neither,
  * and must not be answered as if the process had simply kept no output.
  */
-
-function testUserShell(): UserShell['Service'] {
-  return {
-    environment: {
-      _tag: 'Available' as const,
-      values: { HOME: '/home/developer', PATH: '/usr/bin:/bin', SHELL: '/bin/zsh' },
-    },
-    run: () => Effect.die('log-tail tests do not run user-shell commands.'),
-  };
-}
 
 // The tail reads a row and a file. No adapter is ever consulted, which is the
 // point: it works for an incarnation whose process is long gone.
@@ -76,7 +66,7 @@ function serviceLayer(dataRoot: string) {
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
     Layer.provide(InternalEvents.layer),
-    Layer.provide(Layer.succeed(UserShell, testUserShell())),
+    Layer.provide(testUserShellLayer()),
   );
   return Layer.mergeAll(database, repository, service);
 }

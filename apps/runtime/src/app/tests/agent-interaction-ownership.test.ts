@@ -29,7 +29,7 @@ import { HarnessObservationTargets } from '../../harnesses/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { ProjectRepository } from '../../projects/index.js';
 import { RuntimeConfig } from '../../runtime-config/index.js';
 import { WorkflowProjectErasure } from '../../workflows/index.js';
@@ -423,13 +423,7 @@ test('every production consumer shares the one AgentSessionInteraction instance'
     ].join('\n'),
     'utf8',
   );
-  const userShell = Layer.succeed(
-    UserShell,
-    UserShell.of({
-      environment: { _tag: 'Available', values: { HOME: dataRoot, PATH: '/usr/bin:/bin' } },
-      run: () => Effect.die('this test runs no user-shell command'),
-    }),
-  );
+  const userShell = testUserShellLayer({ environment: { HOME: dataRoot, PATH: '/usr/bin:/bin' } });
   const platform = Layer.mergeAll(
     RuntimeDatabase.layer,
     StateFile.layer,

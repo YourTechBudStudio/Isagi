@@ -6,7 +6,7 @@ import { TestClock } from 'effect/testing';
 
 import { makeLogCapture } from '../../test/test-support.js';
 import { InternalEvents } from '../platform/events/index.js';
-import { UserShell } from '../platform/process/index.js';
+import { testUserShellLayer } from '../platform/process/testing.js';
 import { RuntimeConfig, type RuntimeAuthSettings } from '../runtime-config/index.js';
 import { defaultRuntimeConfig } from '../runtime-config/testing.js';
 import { AccessConfigInvalid } from './config.js';
@@ -40,15 +40,7 @@ function accessLayer(
         acceptHarnessPolicy: () => Effect.die('access tests change no config'),
       }),
     ),
-    Layer.provide(
-      Layer.succeed(
-        UserShell,
-        UserShell.of({
-          environment: { _tag: 'Available', values: options.environment ?? shellEnvironment },
-          run: () => Effect.die('access tests run no shell command'),
-        }),
-      ),
-    ),
+    Layer.provide(testUserShellLayer({ environment: options.environment ?? shellEnvironment })),
     Layer.provide(
       Layer.succeed(LauncherToken, {
         token:

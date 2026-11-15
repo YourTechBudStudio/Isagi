@@ -31,7 +31,7 @@ import { CliAccessNone } from '../../cli-access/testing.js';
 import { publishOnlyRecordingEventBus } from '../../platform/events/testing.js';
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { NodePtyBackend } from '../adapters/node-pty.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
@@ -54,15 +54,9 @@ const runWithTestClock = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
 // attachment's forwarders, two periodic loops, and the persistence retry. These
 // tests close the service scope and assert what that scope guarantees.
 
-function testUserShell(): UserShell['Service'] {
-  return {
-    environment: {
-      _tag: 'Available' as const,
-      values: { HOME: process.env.HOME ?? '/tmp', PATH: process.env.PATH ?? '/usr/bin:/bin' },
-    },
-    run: () => Effect.die('PTY lifecycle tests do not run user-shell commands.'),
-  };
-}
+const lifecycleUserShell = testUserShellLayer({
+  environment: { HOME: process.env.HOME ?? '/tmp', PATH: process.env.PATH ?? '/usr/bin:/bin' },
+});
 
 function unavailableTmux(): PtyBackendShape {
   return {
@@ -125,12 +119,10 @@ function ptyServiceLayer(catalog: Layer.Layer<PtyBackendCatalog>) {
   return PtyService.layerNoDeps.pipe(
     Layer.provide([
       catalog,
-      LaunchEnvironment.layerNoDeps.pipe(
-        Layer.provide([CliAccessNone, Layer.succeed(UserShell, testUserShell())]),
-      ),
+      LaunchEnvironment.layerNoDeps.pipe(Layer.provide([CliAccessNone, lifecycleUserShell])),
       PtyForegroundState.layer,
       publishOnlyRecordingEventBus('the PTY service does not subscribe').layer,
-      Layer.succeed(UserShell, testUserShell()),
+      lifecycleUserShell,
     ]),
   );
 }
@@ -414,11 +406,11 @@ test('a process supervisor records foreground changes and persists the exit it r
             Layer.provide([
               fakeCatalog(backend),
               LaunchEnvironment.layerNoDeps.pipe(
-                Layer.provide([CliAccessNone, Layer.succeed(UserShell, testUserShell())]),
+                Layer.provide([CliAccessNone, lifecycleUserShell]),
               ),
               PtyForegroundState.layer,
               bus.layer,
-              Layer.succeed(UserShell, testUserShell()),
+              lifecycleUserShell,
             ]),
           );
           const service = yield* buildInScope(layer);

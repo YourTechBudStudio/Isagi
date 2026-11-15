@@ -14,7 +14,7 @@ import { FluidcastSessions } from '../../fluidcast/index.js';
 import { HarnessObservationTargets } from '../../harnesses/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { RuntimeConfig } from '../../runtime-config/index.js';
 import { WorkflowProjectErasure } from '../../workflows/index.js';
 import { StateFile } from '../../workspace/index.js';
@@ -57,13 +57,7 @@ test('the app layer builds the database and the harness observer once and releas
     }),
   ).pipe(Layer.provide(RuntimeDatabase.layer));
   // Never spawns the login shell: nothing in construction runs a user-shell command.
-  const userShell = Layer.succeed(
-    UserShell,
-    UserShell.of({
-      environment: { _tag: 'Available', values: { HOME: dataRoot, PATH: '/usr/bin:/bin' } },
-      run: () => Effect.die('composition test runs no user-shell command'),
-    }),
-  );
+  const userShell = testUserShellLayer({ environment: { HOME: dataRoot, PATH: '/usr/bin:/bin' } });
   const platform = Layer.mergeAll(database, StateFile.layer, RuntimeConfig.layer, userShell).pipe(
     Layer.provideMerge(dataDirectory),
   );
@@ -107,13 +101,7 @@ async function buildWithConfig(configYaml: string | null) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-composition-fluidcast-'));
   if (configYaml !== null) writeFileSync(join(dataRoot, 'config.yaml'), configYaml, 'utf8');
   const capture = makeLogCapture();
-  const userShell = Layer.succeed(
-    UserShell,
-    UserShell.of({
-      environment: { _tag: 'Available', values: { HOME: dataRoot, PATH: '/usr/bin:/bin' } },
-      run: () => Effect.die('composition test runs no user-shell command'),
-    }),
-  );
+  const userShell = testUserShellLayer({ environment: { HOME: dataRoot, PATH: '/usr/bin:/bin' } });
   const platform = Layer.mergeAll(
     RuntimeDatabase.layer,
     StateFile.layer,

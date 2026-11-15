@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import test, { describe } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test, { after, describe } from 'node:test';
 
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
@@ -11,7 +14,11 @@ import {
   type UserShellCommandResult,
 } from './user-shell.js';
 
-const environment = { SHELL: '/bin/zsh', PATH: '/bin:/usr/bin' };
+// An empty home, so the login shell these tests start reads no rc files of the developer's: they are slow and would
+// make the results depend on the machine.
+const home = mkdtempSync(join(tmpdir(), 'isagi-user-shell-home-'));
+after(() => rmSync(home, { recursive: true, force: true }));
+const environment = { HOME: home, SHELL: '/bin/zsh', PATH: '/bin:/usr/bin' };
 
 test('user-shell runner preserves arguments containing spaces', async () => {
   const result = await Effect.runPromise(
@@ -152,7 +159,7 @@ test('login-shell environment resolution falls back to its sanitized base enviro
  */
 const posixOnly = process.platform === 'win32' ? 'process groups are POSIX-only' : false;
 const uniqueSleep = () => `30.${process.pid}${Math.floor(Math.random() * 1_000_000)}`;
-const shellEnvironment = { ...process.env, SHELL: '/bin/sh' };
+const shellEnvironment = { ...process.env, HOME: home, SHELL: '/bin/sh' };
 
 const processRunning = (marker: string) => {
   try {

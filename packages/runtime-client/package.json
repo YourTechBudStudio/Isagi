@@ -9,8 +9,10 @@
   },
   "scripts": {
     "check": "pnpm typecheck && pnpm test",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "test": "pnpm test:built",
+    "test:built": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@isagi/contracts": "workspace:*",

@@ -5,7 +5,7 @@ import { Effect, Layer, Ref } from 'effect';
 
 import type { ProcessTokenHolder } from '../../access/index.js';
 import { CliAccess } from '../../cli-access/index.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 
 function fixture() {
@@ -23,15 +23,11 @@ function fixture() {
         };
       }),
   };
-  const userShell: UserShell['Service'] = {
-    environment: {
-      _tag: 'Available',
-      values: { HOME: '/home/developer', PATH: '/usr/bin', PORT: '5173', ISAGI_DEBUG: '1' },
-    },
-    run: () => Effect.die('not used'),
-  };
+  const userShell = testUserShellLayer({
+    environment: { HOME: '/home/developer', PATH: '/usr/bin', PORT: '5173', ISAGI_DEBUG: '1' },
+  });
   const layer = LaunchEnvironment.layerNoDeps.pipe(
-    Layer.provide([Layer.succeed(CliAccess, cliAccess), Layer.succeed(UserShell, userShell)]),
+    Layer.provide([Layer.succeed(CliAccess, cliAccess), userShell]),
   );
   return { cliAccess, holders, layer };
 }

@@ -10,7 +10,7 @@ import { CliAccessNone } from '../../cli-access/testing.js';
 import { InternalEvents } from '../../platform/events/index.js';
 import { DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
-import { UserShell } from '../../platform/process/index.js';
+import { testUserShellLayer } from '../../platform/process/testing.js';
 import { PtyBackendCatalog } from '../backend.js';
 import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
@@ -30,16 +30,6 @@ import {
 // Every case where process truth could not be established has to reach the
 // caller as a failure, because both callers make irreversible decisions — one
 // writes a command's terminal outcome, the other cascades a worktree away.
-
-function testUserShell(): UserShell['Service'] {
-  return {
-    environment: {
-      _tag: 'Available' as const,
-      values: { HOME: '/home/developer', PATH: '/usr/bin:/bin', SHELL: '/bin/zsh' },
-    },
-    run: () => Effect.die('cleanup tests do not run user-shell commands.'),
-  };
-}
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
   return {
@@ -80,7 +70,7 @@ function serviceLayer(dataRoot: string, catalog: ReturnType<typeof fakeBackendCa
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
     Layer.provide(InternalEvents.layer),
-    Layer.provide(Layer.succeed(UserShell, testUserShell())),
+    Layer.provide(testUserShellLayer()),
   );
   return Layer.mergeAll(database, repository, service);
 }

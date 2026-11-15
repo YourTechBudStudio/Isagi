@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import websocket from '@fastify/websocket';
 import { Deferred, Effect, Layer, ManagedRuntime } from 'effect';
 import Fastify from 'fastify';
 
@@ -14,6 +13,7 @@ import {
 import { makeFiberProbe } from '../../../test/test-support.js';
 import { HarnessAdapterError } from '../../harnesses/index.js';
 import { installAllowedOrigins } from '../../platform/http/index.js';
+import { registerInjectedWebsocket } from '../../platform/http/testing.js';
 import { EntityLock } from '../../platform/locks/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import type { PtyAttachment } from '../../pty-processes/testing.js';
@@ -51,7 +51,7 @@ test('PTY websocket API rejects a different loopback origin before resolving a s
   const fastify = Fastify({ logger: false });
   installAllowedOrigins(fastify, ['http://127.0.0.1:43129']);
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, {
       runPromise: () => Promise.reject(new Error('must not run')),
     } as never);
@@ -96,7 +96,7 @@ test('PTY websocket API reports unsupported harness adapter failures with stable
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await runtime.runPromise(
@@ -144,7 +144,7 @@ test('PTY websocket API reports invalid harness metadata with stable protocol co
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10);
@@ -193,7 +193,7 @@ test('PTY websocket API joins only the incarnation an automatic re-attach token 
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await runtime.runPromise(
@@ -240,7 +240,7 @@ test('PTY websocket API lets a pending explicit attach land after an automatic r
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     // A Reconnect has claimed; before its socket arrives, a background rejoin claims and attaches.
@@ -309,7 +309,7 @@ test('PTY websocket API refuses a rejoin whose process was replaced while it rep
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const rejoin = await runtime.runPromise(
@@ -381,7 +381,7 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await runtime.runPromise(
@@ -439,7 +439,7 @@ test('PTY websocket API preserves session replay before live output ordering', a
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10);
@@ -511,7 +511,7 @@ test('PTY websocket API buffers client input until live attach completes', async
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10);
@@ -567,7 +567,7 @@ test('PTY websocket API supersede detaches the displaced viewer before the repla
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const firstToken = await issueAgentAttachToken(runtime, 10);
@@ -637,7 +637,7 @@ test('closing an attach socket mid-replay releases its subscription and replay f
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10);
@@ -705,7 +705,7 @@ test('input sent before replay ends is applied after replay, in order', async ()
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10);
@@ -780,7 +780,7 @@ test('PTY websocket API refuses a token issued before the agent changed controll
   );
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10, {
@@ -834,7 +834,7 @@ test('PTY websocket API refuses at final admission an attach whose controller ch
   const agentKey = { kind: 'agent_session', sessionId: 10 } as const;
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     // An earlier viewer holds the session; the refused attach must leave it be.
@@ -923,7 +923,7 @@ test('PTY websocket API runs a switch queued behind final admission after regist
   const agentKey = { kind: 'agent_session', sessionId: 10 } as const;
 
   try {
-    await fastify.register(websocket);
+    await registerInjectedWebsocket(fastify);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
     const token = await issueAgentAttachToken(runtime, 10, {

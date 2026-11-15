@@ -52,7 +52,7 @@ const make = Effect.gen(function* () {
  * The user's login-shell environment, probed once at startup, and a runner for short commands in that shell.
  *
  * A platform layer service: its live layer spawns the user's shell while the runtime starts, so tests always replace
- * it (`Layer.succeed(UserShell, UserShell.of({...}))`).
+ * it (`testUserShellLayer` in `./testing.ts`).
  */
 export class UserShell extends Context.Service<
   UserShell,

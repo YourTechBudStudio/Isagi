@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Queue, Stream } from 'effect';
+import { Context, Duration, Effect, Layer, Queue, Stream } from 'effect';
 import * as nodePty from 'node-pty';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
@@ -43,7 +43,16 @@ const isagiTmuxOptions = [
   ['set-option', '-gqu', 'terminal-overrides[99]'],
 ] as const;
 
-const tmuxKillTimeoutMs = 5_000;
+/**
+ * The tmux adapter's timings. Production uses the defaults; a test that waits out a deadline provides a shorter one
+ * (`Effect.provideService(TmuxTimings, {...})`) instead of waiting in real time.
+ */
+export const TmuxTimings = Context.Reference<{
+  /** How long `kill-session` may run before the kill is reported as a control failure. */
+  readonly killTimeout: Duration.Duration;
+}>('isagi/runtime/pty-processes/TmuxTimings', {
+  defaultValue: () => ({ killTimeout: Duration.seconds(5) }),
+});
 
 const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
   Effect.map(({ stdout }) =>
@@ -266,10 +275,11 @@ function killTmuxSession(sessionName: string, gracefulTimeoutMs: number | null) 
     const trees = yield* Effect.forEach(panePids, (rootPid) =>
       snapshotProcessTree({ ptyProcessId, rootPid }),
     );
+    const { killTimeout } = yield* TmuxTimings;
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const result = yield* runTmux(['kill-session', '-t', sessionName], {
-          timeoutMs: tmuxKillTimeoutMs,
+          timeoutMs: Duration.toMillis(killTimeout),
         }).pipe(
           Effect.as({ terminated: true } satisfies BackendTerminateResult),
           Effect.catch((cause) =>

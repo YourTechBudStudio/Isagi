@@ -12,6 +12,7 @@ import {
   guidedWalkthroughSummaryPrompt,
 } from '@yourtechbudstudio/fluidcast-presets';
 import {
+  defaultProgressSchedule,
   forwardAgentTool,
   type WorkerHandle,
   type WorkerType,
@@ -26,7 +27,7 @@ import {
 } from '@yourtechbudstudio/fluidcast-tool-agent/codex';
 import { askTool } from '@yourtechbudstudio/fluidcast-tool-ask';
 import { showTool } from '@yourtechbudstudio/fluidcast-tool-show';
-import { Context, Effect, Layer, Option, type Scope, Stream } from 'effect';
+import { Context, Effect, Layer, Option, type Schedule, type Scope, Stream } from 'effect';
 import { LanguageModel } from 'effect/ai';
 
 import { ProcessTokens } from '../access/index.js';
@@ -69,6 +70,18 @@ export interface FluidcastWorkers {
 }
 
 export const sdkWorkers: FluidcastWorkers = { claude: claudeWorker, codex: codexWorker };
+
+/**
+ * A Fluidcast session's timings. Production uses the SDK's defaults; a test that waits for a progress sentence
+ * provides a quicker schedule (`Effect.provideService(FluidcastSessionSettings, {...})`) instead of waiting in real
+ * time.
+ */
+export const FluidcastSessionSettings = Context.Reference<{
+  /** When the Forward tool writes a progress sentence while the worker is busy. */
+  readonly progressSchedule: Schedule.Schedule<unknown>;
+}>('isagi/runtime/fluidcast/FluidcastSessionSettings', {
+  defaultValue: () => ({ progressSchedule: defaultProgressSchedule }),
+});
 
 export interface FluidcastSessionDependencies {
   readonly config: FluidcastConfig;
@@ -129,7 +142,10 @@ export const buildFluidcastSession = (
       ...(input.harnessSessionId === null
         ? {}
         : { session: { sessionId: input.harnessSessionId } }),
-      progress: { prompt: guidedWalkthroughProgressPrompt },
+      progress: {
+        schedule: (yield* FluidcastSessionSettings).progressSchedule,
+        prompt: guidedWalkthroughProgressPrompt,
+      },
     }).pipe(
       // Progress sentences come from the summary model, read through the SDK's `summaryModel`.
       Effect.provideService(LanguageModel.LanguageModel, models.base),
