@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 
 import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 
@@ -11,7 +11,7 @@ import {
   type AgentSessionArtifacts,
 } from '../../harnesses/index.js';
 import type { HarnessConversationTurn } from '../../harnesses/index.js';
-import { diagnosticPhase } from '../../platform/diagnostics/index.js';
+import { describeOperationalCause, diagnosticPhase } from '../../platform/diagnostics/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { PtyService } from '../../pty-processes/index.js';
 import type {
@@ -29,8 +29,8 @@ import { hasInFlightTurn } from '../waits/latest-turn.js';
  * The agent-session side effects a node function can perform: spawn a session in a new pane, send
  * it a prompt, close a pane, read its conversation.
  *
- * Owner calls only. The operation log around them lives in `context.ts`. The timing constants are
- * load-bearing against real harness TUIs and are unchanged from the original implementation.
+ * Owner calls only. The operation log around them lives in `context.ts`. The seed timing constants
+ * are load-bearing against real harness TUIs and are unchanged from the original implementation.
  */
 
 export interface AgentDeps {
@@ -41,7 +41,8 @@ export interface AgentDeps {
   readonly observer: HarnessLedgerObserver['Service'];
 }
 
-export const spawnTimeoutMs = 10_000;
+/** How long a spawn may take from launching its agent to the harness accepting the seed prompt. */
+export const spawnStartupTimeoutMs = 30_000;
 const metadataInitialDelayMs = 100;
 const metadataMaxDelayMs = 1_000;
 // Seed-prompt timing uses fixed delays rather than waiting for the TUI to quiesce: animated harness
@@ -75,7 +76,8 @@ export function makeAgentPort(deps: AgentDeps): AgentPort {
 
 /**
  * Adds a new agent pane to the run's surface — its first pane when the surface is empty, otherwise a
- * split — starts it, and sends the seed prompt.
+ * split — starts it, and sends the seed prompt. A spawn that fails once its pane exists closes that
+ * pane again, and its failure says so.
  */
 export function spawnAgentSession(
   deps: AgentDeps,
@@ -114,14 +116,25 @@ export function spawnAgentSession(
       ? diagnosticPhase(
           'workflow.spawn.start_pane',
           phase,
-          deps.surfaces.startPane({ surfaceId: input.surfaceId, start: { newPane } }),
+          deps.surfaces.startPane({
+            surfaceId: input.surfaceId,
+            start: { newPane },
+          }),
         )
       : diagnosticPhase(
           'workflow.spawn.split_pane',
-          { ...phase, sourcePaneId: split.sourcePaneId, direction: split.direction },
+          {
+            ...phase,
+            sourcePaneId: split.sourcePaneId,
+            direction: split.direction,
+          },
           deps.surfaces.splitPane({
             worktreeId: input.worktreeId,
-            split: { paneId: split.sourcePaneId, direction: split.direction, newPane },
+            split: {
+              paneId: split.sourcePaneId,
+              direction: split.direction,
+              newPane,
+            },
           }),
         );
     const detail = yield* deps.surfaces.getSurfaceDetail(created.surfaceId);
@@ -133,50 +146,115 @@ export function spawnAgentSession(
         }),
       );
     }
-    const agentSessionId = pane.session.agentSession.id;
-    yield* input.onCreated({ paneId: created.paneId, agentSessionId });
+    const spawned = {
+      surfaceId: created.surfaceId,
+      paneId: created.paneId,
+      agentSessionId: pane.session.agentSession.id,
+    };
+    // From here until it returns, this spawn alone owns the pane, the session and (once launched)
+    // the process. A failure of any kind releases them, so a failed spawn never leaves a live agent
+    // behind for a Retry to start a second one next to.
+    const ownership: SpawnOwnership = {
+      state: 'held',
+      phase: 'record_session',
+      ptyProcessId: null,
+    };
+    const release = releaseFailedSpawn(deps, spawned, ownership);
+    return yield* startSpawnedSession(deps, input, { ...phase, ...spawned }, ownership).pipe(
+      // One budget for the whole start: a slow machine can spend it in any phase.
+      Effect.timeoutOrElse({
+        duration: `${spawnStartupTimeoutMs} millis`,
+        orElse: () =>
+          Effect.fail(
+            new WorkflowOperationFailed({
+              message: `Timed out after ${spawnStartupTimeoutMs / 1_000}s waiting for agent session ${spawned.agentSessionId} ${spawnPhaseWait[ownership.phase]}.`,
+            }),
+          ),
+      }),
+      Effect.catch((error) =>
+        Effect.flatMap(release, (cleanup) => Effect.fail(withCleanup(error, cleanup))),
+      ),
+      // Defects and interruption release too; after the branch above this is a no-op.
+      Effect.onError(() => Effect.asVoid(release)),
+    );
+  });
+}
 
-    const session = { ...phase, agentSessionId, paneId: created.paneId };
+type SpawnPhase =
+  | 'record_session'
+  | 'launch'
+  | 'observer'
+  | 'startup_output'
+  | 'seed'
+  | 'harness_session_id';
+
+const spawnPhaseWait: Record<SpawnPhase, string> = {
+  record_session: 'to be recorded',
+  launch: 'to start',
+  observer: 'to be observed',
+  startup_output: 'startup output',
+  seed: 'to receive its prompt',
+  harness_session_id: 'to accept its prompt',
+};
+
+/**
+ * What a spawn in progress holds. `held` until the spawn hands its resources on: `decided` once the
+ * placement check has stopped the process or found it serving another pane, `released` once a
+ * failure has given them back. Local to one spawn and only touched by its own fiber.
+ */
+interface SpawnOwnership {
+  state: 'held' | 'decided' | 'released';
+  phase: SpawnPhase;
+  ptyProcessId: number | null;
+}
+
+type SpawnedPane = {
+  readonly surfaceId: number;
+  readonly paneId: number;
+  readonly agentSessionId: number;
+};
+
+/** The start of a spawn once its pane and session exist: launch, check placement, seed. */
+function startSpawnedSession(
+  deps: AgentDeps,
+  input: Parameters<typeof spawnAgentSession>[1],
+  session: SpawnedPane & { readonly harness: WorkflowAgentHarness },
+  ownership: SpawnOwnership,
+) {
+  return Effect.gen(function* () {
+    const { agentSessionId, paneId } = session;
+    yield* input.onCreated({ paneId, agentSessionId });
+
+    ownership.phase = 'launch';
     const ptyProcessId = yield* diagnosticPhase(
       'workflow.spawn.ensure_pty',
       session,
-      deps.agents
-        .ensureActivePtyProcess(agentSessionId, { model: input.model, effort: input.effort })
-        .pipe(
-          Effect.timeoutOrElse({
-            duration: `${spawnTimeoutMs} millis`,
-            orElse: () =>
-              Effect.fail(
-                new WorkflowOperationFailed({
-                  message: `Timed out waiting for agent session ${agentSessionId} to start.`,
-                }),
-              ),
-          }),
-        ),
+      deps.agents.ensureActivePtyProcess(agentSessionId, {
+        model: input.model,
+        effort: input.effort,
+      }),
     );
+    ownership.ptyProcessId = ptyProcessId;
     // A launch starts a process by session id, so a pane closed after the read
     // above (the person closing the run's surface while its agent starts) would
     // leave this process running with nowhere to show. Checked after the launch
     // has recorded the process on the session: a close that commits later sees
     // that process in its own cleanup, and one that committed earlier is caught
-    // here.
-    yield* requireSpawnPlacement(deps, { ...session, ptyProcessId });
+    // here. Once it reaches a decision other than "still in this pane", that
+    // decision owns the process, so a failure after it releases nothing.
+    yield* requireSpawnPlacement(deps, { ...session, ptyProcessId }, () => {
+      ownership.state = 'decided';
+    });
+
+    ownership.phase = 'observer';
     yield* waitForObserverInitialization(deps.observer, agentSessionId);
+    ownership.phase = 'startup_output';
     yield* diagnosticPhase(
       'workflow.spawn.await_startup_output',
       { ...session, ptyProcessId },
-      waitForPtyStartupOutput(deps.pty, ptyProcessId).pipe(
-        Effect.timeoutOrElse({
-          duration: `${spawnTimeoutMs} millis`,
-          orElse: () =>
-            Effect.fail(
-              new WorkflowOperationFailed({
-                message: `Timed out waiting for agent session ${agentSessionId} startup output.`,
-              }),
-            ),
-        }),
-      ),
+      waitForPtyStartupOutput(deps.pty, ptyProcessId),
     );
+    ownership.phase = 'seed';
     yield* Effect.sleep(`${spawnSeedPromptDelayMs} millis`);
     if (yield* isTurnInFlight(deps.observer, agentSessionId)) {
       return yield* Effect.fail(
@@ -193,22 +271,74 @@ export function spawnAgentSession(
       { ...session, ptyProcessId },
       writePromptToPty(deps.pty, ptyProcessId, input.prompt),
     );
+    ownership.phase = 'harness_session_id';
     const harnessSessionId = yield* diagnosticPhase(
       'workflow.spawn.await_harness_session_id',
       { ...session, ptyProcessId },
-      waitForHarnessSessionId(deps, { ptyProcessId, agentSessionId }).pipe(
-        Effect.timeoutOrElse({
-          duration: `${spawnTimeoutMs} millis`,
-          orElse: () =>
-            Effect.fail(
-              new WorkflowOperationFailed({
-                message: `Timed out waiting for agent session ${agentSessionId} to accept its prompt.`,
-              }),
-            ),
-        }),
-      ),
+      waitForHarnessSessionId(deps, { ptyProcessId, agentSessionId }),
     );
-    return { agentSessionId, paneId: created.paneId, sentAt, harnessSessionId };
+    return { agentSessionId, paneId, sentAt, harnessSessionId };
+  });
+}
+
+/**
+ * Gives back what a failed spawn created, at most once. The pane is closed only if it still holds
+ * the spawned session when the delete commits. The session domain then stops the process unless
+ * another pane now holds the session, so the report rests on that stop's own outcome rather than
+ * on the pane delete's best-effort teardown. Never fails and cannot be interrupted: the spawn's own
+ * failure is the one reported, and this returns the sentence that says what cleanup did.
+ */
+function releaseFailedSpawn(
+  deps: AgentDeps,
+  spawned: SpawnedPane,
+  ownership: SpawnOwnership,
+): Effect.Effect<string | null> {
+  return Effect.suspend(() => {
+    if (ownership.state !== 'held') return Effect.succeed(null);
+    ownership.state = 'released';
+    const { surfaceId, paneId, agentSessionId } = spawned;
+    return Effect.gen(function* () {
+      const deleted = yield* deps.surfaces.deleteSurfacePane({
+        surfaceId,
+        paneId,
+        ifAgentSessionId: agentSessionId,
+      });
+      const closed = deleted.deletedPaneIds.includes(paneId);
+      const { ptyProcessId } = ownership;
+      // No launch returned a process, so the pane delete's own teardown is all there is.
+      if (ptyProcessId === null) return closed ? `Its pane ${paneId} was closed.` : null;
+      const outcome = yield* deps.agents.stopUnlessPlaced({ agentSessionId, ptyProcessId });
+      switch (outcome.kind) {
+        case 'placed':
+          return `It was left running in pane ${outcome.paneId} on surface ${outcome.surfaceId}.`;
+        case 'stopped':
+          return closed
+            ? `Its pane ${paneId} was closed and its agent stopped.`
+            : `Its process ${ptyProcessId} was stopped.`;
+        case 'stop_failed':
+          return `${closed ? `Its pane ${paneId} was closed, but its` : 'Its'} process ${ptyProcessId} could not be stopped: ${errorMessage(outcome.cause)}`;
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning('Could not release a workflow agent spawn that failed').pipe(
+          Effect.annotateLogs({
+            ...spawned,
+            cause: describeOperationalCause(Cause.squash(cause)),
+          }),
+          Effect.as(`Its pane ${paneId} could not be closed and its agent may still be running.`),
+        ),
+      ),
+      Effect.uninterruptible,
+    );
+  });
+}
+
+/** Adds what cleanup did to a spawn failure the author will read. */
+function withCleanup<E>(error: E, cleanup: string | null): E | WorkflowOperationFailed {
+  if (cleanup === null || !(error instanceof WorkflowOperationFailed)) return error;
+  return new WorkflowOperationFailed({
+    message: `${error.message} ${cleanup}`,
+    cause: error.cause,
   });
 }
 
@@ -229,12 +359,15 @@ function requireSpawnPlacement(
     readonly agentSessionId: number;
     readonly ptyProcessId: number;
   },
+  /** Called once a decision other than "still in this pane" owns the process. */
+  onDecided: () => void,
 ) {
   return Effect.gen(function* () {
     const outcome = yield* deps.agents.stopUnlessPlaced({
       agentSessionId: spawned.agentSessionId,
       ptyProcessId: spawned.ptyProcessId,
     });
+    if (outcome.kind !== 'placed' || outcome.paneId !== spawned.paneId) onDecided();
     switch (outcome.kind) {
       case 'placed':
         if (outcome.paneId === spawned.paneId) return;
@@ -350,7 +483,10 @@ function lastLeafPaneId(layout: SurfaceLayoutNode): number {
 function writePromptToPty(pty: PtyService['Service'], ptyProcessId: number, text: string) {
   return Effect.gen(function* () {
     const normalized = text.replace(/\r\n/g, '\n');
-    yield* pty.writeInput({ ptyProcessId, data: `\x1b[200~${normalized}\x1b[201~` });
+    yield* pty.writeInput({
+      ptyProcessId,
+      data: `\x1b[200~${normalized}\x1b[201~`,
+    });
     yield* Effect.sleep(`${promptSubmitDelayMs} millis`);
     yield* pty.writeInput({ ptyProcessId, data: '\r' });
   });
@@ -425,7 +561,11 @@ function waitForHarnessSessionId(
     yield* Effect.sleep(`${delayMs} millis`);
     const elapsed = elapsedMs + delayMs;
     const retry = retries < submitRetryLimit && elapsed >= (retries + 1) * submitRetryIntervalMs;
-    if (retry) yield* deps.pty.writeInput({ ptyProcessId: input.ptyProcessId, data: '\r' });
+    if (retry)
+      yield* deps.pty.writeInput({
+        ptyProcessId: input.ptyProcessId,
+        data: '\r',
+      });
     return yield* waitForHarnessSessionId(
       deps,
       input,

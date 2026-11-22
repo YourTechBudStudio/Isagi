@@ -266,6 +266,11 @@ const make = Effect.gen(function* () {
           .where(eq(surfacePanes.surfaceId, input.surfaceId))
           .all()
           .map(paneRow);
+        if (
+          input.ifAgentSessionId !== undefined &&
+          !holdsAgentSession(panes, input.paneId, input.ifAgentSessionId)
+        )
+          return { deletedPanes: [] };
         const plan = planSurfacePaneDelete(deleteTarget(surfaceRow(surface), panes), input.paneId);
         if (plan.deletedPaneIds.length === 0) return { deletedPanes: [] };
         db.delete(surfacePanes)
@@ -591,9 +596,11 @@ interface SurfaceRepositoryShape {
    * so two concurrent deletes can never each write a layout the other made
    * stale. Removes nothing when the pane is already gone.
    */
+  /** With `ifAgentSessionId`, deletes nothing unless the pane holds that agent session. */
   readonly deleteSurfacePane: (input: {
     readonly surfaceId: number;
     readonly paneId: number;
+    readonly ifAgentSessionId?: number | undefined;
   }) => Effect.Effect<DeletePaneRowsOutput, DatabaseError>;
   /** Refused with `worktree_not_found`, with nothing written, when the worktree is gone. */
   readonly createSinglePaneSurface: (
@@ -1081,3 +1088,12 @@ function timestamp() {
 type RuntimeDatabaseConnection = Parameters<
   Parameters<RuntimeDatabase['Service']['transaction']>[1]
 >[0];
+
+function holdsAgentSession(
+  panes: readonly SurfacePaneRow[],
+  paneId: number,
+  agentSessionId: number,
+): boolean {
+  const pane = panes.find((candidate) => candidate.id === paneId);
+  return pane?.sessionKind === 'agent_session' && pane.sessionId === agentSessionId;
+}
