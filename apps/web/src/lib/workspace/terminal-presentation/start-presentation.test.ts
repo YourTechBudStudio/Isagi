@@ -88,6 +88,7 @@ function begin(t: TestContext) {
       onViewport: () => undefined,
       onEvent: () => undefined,
       paneFocusAllowed: () => true,
+      onClipboardWriteFailed: () => undefined,
       resolveUrl: async () => 'ws://runtime.test/pty/7',
       isCancelled,
     });

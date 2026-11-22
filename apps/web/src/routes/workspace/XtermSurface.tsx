@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ptyCopy } from '../../copy/index.js';
+import { useRegistry } from '../../lib/state/registry.js';
 import type {
   PtyStreamSink,
   PtyStreamSurfaceTransport,
@@ -12,6 +13,11 @@ import {
   clearTerminalRenderCache,
   measureTerminalFit,
 } from '../../lib/workspace/terminal-geometry.js';
+import {
+  browserClipboardWriter,
+  clipboardWriteFailedToast,
+  installTerminalSelectionCopy,
+} from '../../lib/workspace/terminal-host-integration/index.js';
 
 type TerminalFitResult = 'fit' | 'unready';
 
@@ -47,6 +53,7 @@ export function XtermSurface({
   readonly onRendererWarning: (message: string | null) => void;
   readonly onCustomKey?: XtermSurfaceKeyHandler | undefined;
 }) {
+  const registry = useRegistry();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const interactiveRef = useRef(initiallyInteractive);
@@ -165,33 +172,16 @@ export function XtermSurface({
 
       const inputDisposable = terminal.onData(sendInput);
 
-      const handleTerminalKeyDown = (event: KeyboardEvent) => {
-        if (isCopyShortcut(event)) {
-          const selection = terminal.getSelection();
-          if (selection) {
-            event.preventDefault();
-            event.stopPropagation();
-            void navigator.clipboard?.writeText(selection).catch(() => {
-              // The copy event handler covers the normal browser path; this is a best-effort fallback.
-            });
-            return;
-          }
-        }
-        if (onCustomKey?.(event, { sendInput })) {
-          return;
-        }
-      };
-      container.addEventListener('keydown', handleTerminalKeyDown, true);
-
-      const handleTerminalCopy = (event: ClipboardEvent) => {
-        const selection = terminal.getSelection();
-        if (!selection) {
-          return;
-        }
-        event.clipboardData?.setData('text/plain', selection);
-        event.preventDefault();
-      };
-      container.addEventListener('copy', handleTerminalCopy);
+      // Selection copy only. OSC 52 is deliberately not installed: this stream replays its full
+      // history on every open with no replay gate, so a program's old copies would fire again.
+      // Protect replays first if this surface ever needs OSC 52.
+      const uninstallSelectionCopy = installTerminalSelectionCopy({
+        host: container,
+        terminal,
+        writeText: browserClipboardWriter,
+        onWriteFailed: () => clipboardWriteFailedToast(registry),
+        onKeyDown: (event) => onCustomKey?.(event, { sendInput }),
+      });
 
       fit();
       const sink: PtyStreamSink = {
@@ -215,14 +205,14 @@ export function XtermSurface({
         }
         resizeObserver?.disconnect();
         inputDisposable.dispose();
-        container.removeEventListener('keydown', handleTerminalKeyDown, true);
-        container.removeEventListener('copy', handleTerminalCopy);
+        uninstallSelectionCopy();
         terminalRef.current = null;
         onFocusHandleChange?.(null);
         terminal.dispose();
       };
     }
   }, [
+    registry,
     transport,
     initiallyInteractive,
     disableScrollback,
@@ -236,20 +226,6 @@ export function XtermSurface({
   ]);
 
   return <div ref={containerRef} className={className} data-ready={ready ? 'true' : 'false'} />;
-}
-
-function isCopyShortcut(event: KeyboardEvent) {
-  if (event.type !== 'keydown' || event.key.toLowerCase() !== 'c') {
-    return false;
-  }
-  if (isMacPlatform()) {
-    return event.metaKey && !event.altKey;
-  }
-  return event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
-}
-
-function isMacPlatform() {
-  return /mac/i.test(navigator.platform);
 }
 
 function fitTerminalToHost(terminal: Terminal, host: HTMLElement): TerminalFitResult {

@@ -9,6 +9,7 @@ import {
   type TerminalSessionIdentity,
   type TerminalVisibilityAcquisition,
 } from '../terminal-cache/index.js';
+import { clipboardWriteFailedToast } from '../terminal-host-integration/index.js';
 import {
   decideTerminalAttachment,
   presentationOutlivedIncarnation,
@@ -273,6 +274,7 @@ export function useTerminalAttachmentResource(input: {
         // enforcement points (the focus scheduler and this controller) read the
         // identical owner rule and cannot drift.
         paneFocusAllowed: () => paneFocusAllowed(registry),
+        onClipboardWriteFailed: () => clipboardWriteFailedToast(registry),
         isCancelled,
       }).then((result) => {
         if (result.status === 'started') {
