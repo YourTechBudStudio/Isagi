@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Isagi</title>
+    <link rel="stylesheet" href="./loader.css" />
+  </head>
+  <body>
+    <!--
+      Desktop loader — the approved phase 02 mock. Presentation only: phase 03 replaces the URL
+      fixtures with the real loader state from the main process, and wires Open logs and Quit.
+      URL: ?theme=dark|light
+           &state=starting|slow|failed
+           &reason=readiness_timeout|exited_before_ready|exited_after_ready|page_load_failed
+    -->
+    <main class="boot">
+      <div class="column" id="column">
+        <div class="mark">Isagi</div>
+        <div class="track" id="track">
+          <div class="fill" id="fill"></div>
+        </div>
+        <div id="below"></div>
+      </div>
+      <p class="whisper" id="whisper" hidden></p>
+    </main>
+
+    <script>
+      // Approved copy. Titles and bodies carry no humour; the whisper shows only while loading.
+      const copy = {
+        starting: { status: 'Starting the runtime…' },
+        slow: { status: 'Still starting the runtime…' },
+        // Reused verbatim from the web `connecting` view so the handoff reads as one screen.
+        whisper: '// gathering the facts before opening the door',
+        openLogs: 'Open logs',
+        quit: 'Quit Isagi',
+        failed: {
+          readiness_timeout: {
+            title: "The runtime didn't start in time.",
+            body: 'Isagi started its runtime, but it never reported ready. The logs should show what it was stuck on. Quit and reopen Isagi to try again.',
+          },
+          exited_before_ready: {
+            title: 'The runtime stopped while starting.',
+            body: 'It exited before it was ready, so there is nothing to open yet. The logs have its last output. Quit and reopen Isagi to try again.',
+          },
+          exited_after_ready: {
+            title: 'The runtime stopped.',
+            body: 'It was running, then exited while Isagi was open. The logs have its last output. Quit and reopen Isagi to start it again.',
+          },
+          page_load_failed: {
+            title: "The workspace page didn't load.",
+            body: "The runtime is running, but this window couldn't load its page. The logs may say why. Quit and reopen Isagi to try again.",
+          },
+        },
+      };
+
+      // Fixture diagnostics, shaped like HostRuntimeDiagnostic (message, exitCode, signal).
+      // The messages are the ones apps/desktop/src/main/runtime-process/lifecycle.ts writes today.
+      const diagnostics = {
+        readiness_timeout: {
+          message: 'Runtime did not report readiness within 15000ms.',
+        },
+        exited_before_ready: {
+          message: 'Runtime exited before becoming ready.',
+          exitCode: 1,
+        },
+        exited_after_ready: {
+          message: 'Runtime exited after becoming ready.',
+          signal: 'SIGKILL',
+        },
+        page_load_failed: {
+          message: 'ERR_CONNECTION_REFUSED (-102) · http://127.0.0.1:47321/',
+        },
+      };
+
+      const params = new URLSearchParams(location.search);
+      const pick = (key, allowed) =>
+        allowed.includes(params.get(key)) ? params.get(key) : allowed[0];
+      const theme = pick('theme', ['dark', 'light']);
+      const state = pick('state', ['starting', 'slow', 'failed']);
+      const reason = pick('reason', Object.keys(copy.failed));
+      document.documentElement.dataset.theme = theme;
+
+      const column = document.getElementById('column');
+      const track = document.getElementById('track');
+      const below = document.getElementById('below');
+      const whisper = document.getElementById('whisper');
+      const el = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text != null) node.textContent = text;
+        return node;
+      };
+
+      if (state === 'failed') {
+        const text = copy.failed[reason];
+        const diagnostic = diagnostics[reason];
+        column.dataset.compact = '';
+        column.dataset.wide = '';
+        track.remove();
+        const detail = el('div', 'detail');
+        detail.append(el('h1', 'title', text.title), el('p', 'body', text.body));
+        const lines = [diagnostic.message];
+        if (diagnostic.exitCode != null) lines.push(`exit code ${diagnostic.exitCode}`);
+        if (diagnostic.signal) lines.push(`signal ${diagnostic.signal}`);
+        detail.append(el('p', 'chip', lines.join('\n')));
+        const actions = el('div', 'actions');
+        for (const [variant, label] of [
+          ['primary', copy.openLogs],
+          ['secondary', copy.quit],
+        ]) {
+          const button = el('button', 'button', label);
+          button.type = 'button';
+          button.dataset.variant = variant;
+          actions.append(button);
+        }
+        detail.append(actions);
+        below.append(detail);
+      } else {
+        // Same fill as the web `connecting` beat: the runtime is not reachable yet.
+        const fill = document.getElementById('fill');
+        fill.style.width = '17%';
+        const clip = el('span', 'ray-clip');
+        clip.append(el('span', 'ray'));
+        fill.append(clip, el('span', 'tip'));
+        const status = el('div', 'status');
+        status.append(el('p', null, copy[state].status));
+        below.append(status);
+        whisper.textContent = copy.whisper;
+        whisper.hidden = false;
+      }
+    </script>
+  </body>
+</html>
