@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Result } from 'effect';
+import { Clock, Effect, Fiber, Result } from 'effect';
+import { TestClock } from 'effect/testing';
 
 import type { SurfaceDetail } from '@isagi/contracts';
 
 import { AgentSessionError, type StopUnlessPlacedOutcome } from '../../environment/testing.js';
-import { makeAgentPort, sendAgentPrompt, spawnAgentSession, type AgentDeps } from './agents.js';
+import {
+  makeAgentPort,
+  sendAgentPrompt,
+  spawnAgentSession,
+  spawnStartupTimeoutMs,
+  type AgentDeps,
+} from './agents.js';
 
 /**
  * Once the process has launched, spawn has the session domain stop it unless a
@@ -40,11 +47,14 @@ const placedSurface = {
 
 function spawnWith(outcome: StopUnlessPlacedOutcome) {
   const decisions: Array<{ readonly agentSessionId: number; readonly ptyProcessId: number }> = [];
+  const deletedPanes: number[] = [];
   const reads = [Effect.succeed(emptySurface), Effect.succeed(placedSurface)];
   const deps = {
     surfaces: {
       getSurfaceDetail: () => reads.shift() ?? Effect.die('unexpected surface read'),
       startPane: () => Effect.succeed({ worktreeId: 1, surfaceId: 3, paneId: 7, title: 'Claude' }),
+      deleteSurfacePane: (input: { readonly paneId: number }) =>
+        Effect.sync(() => deletedPanes.push(input.paneId)),
     },
     agents: {
       ensureActivePtyProcess: () => Effect.succeed(42),
@@ -69,7 +79,7 @@ function spawnWith(outcome: StopUnlessPlacedOutcome) {
         onCreated: () => Effect.void,
       }),
     ),
-  ).then((result) => ({ result, decisions }));
+  ).then((result) => ({ result, decisions, deletedPanes }));
 }
 
 test('spawn asks the session domain to stop its process unless the session is placed', async () => {
@@ -87,9 +97,10 @@ test('an agent whose surface was closed while it launched is reported as stopped
 });
 
 test('an agent moved to another pane while it launched is reported as left running there', async () => {
-  const { result } = await spawnWith({ kind: 'placed', surfaceId: 9, paneId: 11 });
+  const { result, deletedPanes } = await spawnWith({ kind: 'placed', surfaceId: 9, paneId: 11 });
   assert.ok(Result.isFailure(result));
   assert.match(String(result.failure), /moved to pane 11 on surface 9 .* left running there/);
+  assert.deepEqual(deletedPanes, [], 'the placement decision already settled the process');
 });
 
 test('a stop that fails is reported as a failure, not as a stop', async () => {
@@ -199,4 +210,126 @@ test("a workflow's liveness reads the agent's current controller", async () => {
     Effect.all([port.isAlive(5), port.isAlive(5), port.isAlive(5)]),
   );
   assert.deepEqual(alive, [true, false, false]);
+});
+
+/**
+ * A healthy harness whose first startup output appears `startupMs` after launch (never, when
+ * null), on the test clock. The pane holds the session until something deletes it; after that the
+ * session domain's stop answers `stopAfterClose`. `stallPlacement` makes the placement check hang.
+ */
+function slowStart(options: {
+  readonly startupMs: number | null;
+  readonly stallPlacement?: boolean;
+  readonly stopAfterClose?: StopUnlessPlacedOutcome;
+}) {
+  const deletedPanes: number[] = [];
+  const stops: number[] = [];
+  let surfaceReads = 0;
+  let launchedAt = 0;
+  const deps = {
+    surfaces: {
+      getSurfaceDetail: () => Effect.succeed(surfaceReads++ === 0 ? emptySurface : placedSurface),
+      startPane: () => Effect.succeed({ worktreeId: 1, surfaceId: 3, paneId: 7, title: 'Claude' }),
+      deleteSurfacePane: (input: { readonly paneId: number; readonly ifAgentSessionId?: number }) =>
+        Effect.sync(() => {
+          assert.equal(input.ifAgentSessionId, 5, 'cleanup only closes the pane holding its agent');
+          deletedPanes.push(input.paneId);
+          return { deletedPaneIds: [input.paneId] };
+        }),
+    },
+    agents: {
+      ensureActivePtyProcess: () =>
+        Effect.map(Clock.currentTimeMillis, (now) => {
+          launchedAt = now;
+          return 42;
+        }),
+      stopUnlessPlaced: (input: { readonly ptyProcessId: number }) =>
+        Effect.suspend(() => {
+          if (deletedPanes.length === 0)
+            return options.stallPlacement
+              ? Effect.never
+              : Effect.succeed({ kind: 'placed', surfaceId: 3, paneId: 7 });
+          stops.push(input.ptyProcessId);
+          return Effect.succeed(options.stopAfterClose ?? { kind: 'stopped' });
+        }),
+    },
+    pty: {
+      getAttachmentPlan: () =>
+        Effect.map(Clock.currentTimeMillis, (now) => ({
+          session: { logPath: null },
+          replayBytes: options.startupMs !== null && now - launchedAt >= options.startupMs ? 64 : 0,
+        })),
+      writeInput: () => Effect.void,
+    },
+    observer: {
+      getProjection: () => Effect.succeed({}),
+      getTurnEdges: () => Effect.succeed([]),
+    },
+    artifacts: {
+      readMetadata: () =>
+        Effect.succeed({ status: 'valid', metadata: { harnessSessionId: 'harness-5' } }),
+    },
+  } as unknown as AgentDeps;
+
+  return Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(
+      Effect.result(
+        spawnAgentSession(deps, {
+          worktreeId: 1,
+          surfaceId: 3,
+          harness: 'claude',
+          prompt: 'Review the change.',
+          onCreated: () => Effect.void,
+        }),
+      ),
+    );
+    for (let elapsed = 0; elapsed <= spawnStartupTimeoutMs + 5_000; elapsed += 100)
+      yield* TestClock.adjust('100 millis');
+    return { result: yield* Fiber.join(fiber), deletedPanes, stops };
+  }).pipe(Effect.provide(TestClock.layer()), Effect.runPromise);
+}
+
+test('a harness slow to start within the startup budget still spawns', async () => {
+  const { result, deletedPanes, stops } = await slowStart({ startupMs: 12_000 });
+  assert.ok(Result.isSuccess(result), Result.isFailure(result) ? String(result.failure) : '');
+  assert.deepEqual(deletedPanes, []);
+  assert.deepEqual(stops, []);
+});
+
+test('a spawn that runs out of startup budget closes its pane, stops its agent and says so', async () => {
+  const { result, deletedPanes, stops } = await slowStart({ startupMs: null });
+  assert.ok(Result.isFailure(result));
+  assert.match(
+    String(result.failure),
+    /Timed out after 30s waiting for agent session 5 startup output\. Its pane 7 was closed and its agent stopped\./,
+  );
+  assert.deepEqual(deletedPanes, [7]);
+  assert.deepEqual(stops, [42]);
+});
+
+test('a placement check still undecided at the deadline leaves cleanup to the spawn', async () => {
+  const { result, deletedPanes, stops } = await slowStart({
+    startupMs: 0,
+    stallPlacement: true,
+  });
+  assert.ok(Result.isFailure(result));
+  assert.match(
+    String(result.failure),
+    /waiting for agent session 5 to start\. Its pane 7 was closed/,
+  );
+  assert.deepEqual(deletedPanes, [7]);
+  assert.deepEqual(stops, [42]);
+});
+
+test('a closed pane is not reported as a stopped agent when the stop fails', async () => {
+  const { result } = await slowStart({
+    startupMs: null,
+    stopAfterClose: { kind: 'stop_failed', cause: new Error('the backend refused the signal') },
+  });
+  assert.ok(Result.isFailure(result));
+  assert.match(
+    String(result.failure),
+    /Its pane 7 was closed, but its process 42 could not be stopped: the backend refused the signal/,
+  );
+  assert.doesNotMatch(String(result.failure), /agent stopped/);
 });

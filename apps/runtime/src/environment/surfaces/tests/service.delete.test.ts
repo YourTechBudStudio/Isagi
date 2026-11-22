@@ -697,3 +697,51 @@ test('a release failure after the deletion commits still publishes, then fails h
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('a delete conditioned on an agent session leaves a pane that now holds another one', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-pane-conditional-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const repository = yield* SurfaceRepository;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Terminal',
+        });
+        const paneId = yield* addPaneToSurface(surface.surfaceId);
+        // The spawn's session, then a claim that replaced it in the same pane.
+        yield* repository.setPaneSession({ paneId, sessionKind: 'agent_session', sessionId: 5 });
+        yield* repository.setPaneSession({ paneId, sessionKind: 'agent_session', sessionId: 99 });
+
+        const viaService = yield* surfaces.deleteSurfacePane({
+          surfaceId: surface.surfaceId,
+          paneId,
+          ifAgentSessionId: 5,
+        });
+        // The repository re-checks inside its transaction, for a claim landing after the service read.
+        const viaRepository = yield* repository.deleteSurfacePane({
+          surfaceId: surface.surfaceId,
+          paneId,
+          ifAgentSessionId: 5,
+        });
+        const matching = yield* repository.deleteSurfacePane({
+          surfaceId: surface.surfaceId,
+          paneId,
+          ifAgentSessionId: 99,
+        });
+        return { paneId, viaService, viaRepository, matching };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output.viaService, { deletedPaneIds: [] });
+    assert.deepEqual(output.viaRepository, { deletedPanes: [] });
+    assert.deepEqual(
+      output.matching.deletedPanes.map((pane) => pane.id),
+      [output.paneId],
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

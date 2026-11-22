@@ -112,10 +112,11 @@ const make = Effect.gen(function* () {
   const deleteSurfacePane = Effect.fn('SurfaceService.deleteSurfacePane')(function* (input: {
     readonly surfaceId: number;
     readonly paneId: number;
+    readonly ifAgentSessionId?: number | undefined;
   }) {
     const target = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
     if (!target) return emptyPaneDeleteOutput;
-    if (!target.panes.some(({ pane }) => pane.id === input.paneId)) return emptyPaneDeleteOutput;
+    if (!isDeletablePane(target, input)) return emptyPaneDeleteOutput;
     const plan = planSurfacePaneDelete(target, input.paneId);
     const deps = { repository, pty, eventBus, editors, entityLock, agents };
     // The lock decision inspects the pane the plan will actually delete,
@@ -123,14 +124,14 @@ const make = Effect.gen(function* () {
     // unrelated terminal pane from a surface that also holds one keeps the
     // fast path; only deleting the editor pane itself needs the lock.
     if (editorContextIdsOfPanes(panesForPlan(target, plan)).length === 0)
-      return yield* deletePlannedPanes(deps, target, plan, input.paneId, null);
+      return yield* deletePlannedPanes(deps, target, plan, input, null);
     return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
       Effect.gen(function* () {
         const fresh = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
         if (!fresh) return emptyPaneDeleteOutput;
-        if (!fresh.panes.some(({ pane }) => pane.id === input.paneId)) return emptyPaneDeleteOutput;
+        if (!isDeletablePane(fresh, input)) return emptyPaneDeleteOutput;
         const freshPlan = planSurfacePaneDelete(fresh, input.paneId);
-        return yield* deletePlannedPanes(deps, fresh, freshPlan, input.paneId, held);
+        return yield* deletePlannedPanes(deps, fresh, freshPlan, input, held);
       }),
     );
   });
@@ -481,10 +482,15 @@ interface SurfaceServiceShape {
   readonly deleteSurface: (
     surfaceId: number,
   ) => Effect.Effect<DeleteSurfaceOutput, SurfaceServiceError>;
-  /** Deleting the last pane leaves the surface empty; it never deletes the surface. */
+  /**
+   * Deleting the last pane leaves the surface empty; it never deletes the surface. With
+   * `ifAgentSessionId`, the pane is deleted only if it holds that agent session when the delete
+   * commits, so a delete decided before a claim cannot remove the session that replaced it.
+   */
   readonly deleteSurfacePane: (input: {
     readonly surfaceId: number;
     readonly paneId: number;
+    readonly ifAgentSessionId?: number | undefined;
   }) => Effect.Effect<DeletePaneOutput, SurfaceServiceError>;
   readonly createSurface: (input: {
     readonly worktreeId: number;
@@ -1036,21 +1042,39 @@ const deleteWholeSurface = Effect.fnUntraced(function* (
   } satisfies DeleteSurfaceOutput;
 });
 
+/** The pane is on the surface and, for a conditional delete, still holds the expected agent. */
+function isDeletablePane(
+  target: SurfaceDeleteTarget,
+  input: { readonly paneId: number; readonly ifAgentSessionId?: number | undefined },
+): boolean {
+  const found = target.panes.find(({ pane }) => pane.id === input.paneId);
+  if (!found) return false;
+  if (input.ifAgentSessionId === undefined) return true;
+  return (
+    found.pane.sessionKind === 'agent_session' && found.pane.sessionId === input.ifAgentSessionId
+  );
+}
+
 /** `deleteSurfacePane`'s body once its target and plan are final. */
 const deletePlannedPanes = Effect.fnUntraced(function* (
   deps: SurfaceDeleteDependencies,
   target: SurfaceDeleteTarget,
   plan: SurfacePaneDeletePlan,
-  requestedPaneId: number,
+  requested: { readonly paneId: number; readonly ifAgentSessionId?: number | undefined },
   held: EntityLockHeld | null,
 ) {
+  const requestedPaneId = requested.paneId;
   // `plan` only decides the lock. The repository re-plans against the rows
   // inside its transaction and removes only what that says, so a concurrent
   // delete can never leave a stale layout behind, and cleanup acts on the
   // sessions bound to the panes it actually removed.
   const deleted = yield* commitAndFinish(
     deps,
-    deps.repository.deleteSurfacePane({ surfaceId: target.surface.id, paneId: requestedPaneId }),
+    deps.repository.deleteSurfacePane({
+      surfaceId: target.surface.id,
+      paneId: requestedPaneId,
+      ifAgentSessionId: requested.ifAgentSessionId,
+    }),
     (rows) =>
       rows.deletedPanes.length === 0
         ? null
@@ -1067,7 +1091,8 @@ const deletePlannedPanes = Effect.fnUntraced(function* (
   if (deleted.deletedPanes.length === 0) {
     // The pane existed at load time, yet the repository removed nothing. This
     // is not the idempotent "already gone" case (handled by the caller) — it
-    // is a concurrent deletion racing this one, so leave a breadcrumb to
+    // is a concurrent deletion racing this one (or, for a conditional delete,
+    // a claim that rebound the pane), so leave a breadcrumb to
     // distinguish it from a genuine repository miss. Nothing committed, so
     // nothing is published.
     yield* Effect.logWarning(
