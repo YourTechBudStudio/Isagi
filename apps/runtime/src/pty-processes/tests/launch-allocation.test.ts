@@ -712,6 +712,8 @@ test('a PTY environment layers its own process environment, then overrides, then
         OVERRIDE: 'override',
         PROCESS: 'process',
         ISAGI_RUNTIME_TOKEN: `token-for-${JSON.stringify({ _tag: 'pty', ptyProcessId: allocation.ptyProcessId })}`,
+        // Every PTY declares an SSH-style session, below the overrides.
+        SSH_TTY: '/dev/tty',
       });
     }),
   );

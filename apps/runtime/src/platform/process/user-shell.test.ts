@@ -124,6 +124,43 @@ test('login-shell environment resolution strips runtime controls and keeps disco
   assert.equal(result.values.ISAGI_ALLOWED_ORIGINS, undefined);
 });
 
+test('login-shell environment resolution strips the launching terminal identity from both environments', async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      resolveUserShellEnvironment(
+        {
+          HOME: '/home/developer',
+          PATH: '/usr/bin:/bin',
+          TMUX: '/tmp/tmux,1,0',
+          VTE_VERSION: '7600',
+        },
+        (_input, launchEnvironment) => {
+          assert.equal(launchEnvironment.TMUX, undefined);
+          assert.equal(launchEnvironment.VTE_VERSION, undefined);
+          // An rc file may re-export identity variables; the probed environment is stripped again.
+          return Effect.succeed(
+            success(
+              'HOME=/home/developer\nPATH=/usr/bin:/bin\nTERM_PROGRAM=iTerm.app\nZELLIJ_SESSION_NAME=main\nSSH_TTY=/dev/pts/0\nDISPLAY=:0\n',
+            ),
+          );
+        },
+      ),
+    ),
+  );
+
+  assert.deepEqual(result, {
+    _tag: 'Available',
+    values: {
+      HOME: '/home/developer',
+      PATH: '/usr/bin:/bin',
+      SSH_TTY: '/dev/pts/0',
+      DISPLAY: ':0',
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+    },
+  });
+});
+
 test('login-shell environment resolution falls back to its sanitized base environment', async () => {
   const baseEnvironment = {
     HOME: '/home/developer',

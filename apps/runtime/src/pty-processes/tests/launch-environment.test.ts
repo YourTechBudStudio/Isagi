@@ -52,6 +52,8 @@ test('a process environment is the sanitized login shell plus CLI access, resolv
   assert.equal(before.ISAGI_RUNTIME_URL, undefined);
   assert.equal(before.ISAGI_RUNTIME_TOKEN, 'token-1', 'the CLI token is in the environment');
   assert.equal(after.ISAGI_RUNTIME_URL, 'http://127.0.0.1:4100');
+  // `SSH_TTY` is a PTY-only fact added by the PTY launch, so SDK workers and other non-PTY processes never get it.
+  assert.equal(before.SSH_TTY, undefined, 'a non-PTY launch declares no SSH session');
   assert.deepEqual(holders, [holder, holder], 'each call asks CLI access for that holder');
 });
 
