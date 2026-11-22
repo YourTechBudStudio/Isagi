@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { Effect } from 'effect';
 import { Atom } from 'effect/reactivity';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { query } from './policy.js';

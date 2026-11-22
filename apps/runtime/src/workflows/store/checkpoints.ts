@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, sql } from 'drizzle-orm';
 
-import type { WorkflowCheckpointScopeDto } from '@isagi/contracts';
+import type { WorkflowCheckpointScopeDto } from '@isagi/shared/contracts';
 
 import { workflowCheckpoints } from '../tables.js';
 import { now, toJson, type CheckpointRow, type Db } from './rows.js';

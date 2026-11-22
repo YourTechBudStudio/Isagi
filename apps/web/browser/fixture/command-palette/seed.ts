@@ -4,7 +4,7 @@ import type {
   ControlPlaneSnapshot,
   SurfaceDetail,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * The world the command-palette fixture's fake runtime serves.

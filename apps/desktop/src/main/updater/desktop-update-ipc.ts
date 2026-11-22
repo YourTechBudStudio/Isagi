@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect';
 
-import { desktopUpdateIntentSchema, type DesktopUpdateIntent } from '@isagi/contracts';
+import { desktopUpdateIntentSchema, type DesktopUpdateIntent } from '@isagi/shared/contracts';
 
 import { openDownloadPage } from './download-page.js';
 import { DesktopUpdater } from './service.js';

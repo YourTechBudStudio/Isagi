@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, PubSub, Stream, type Scope } from 'effect';
 
-import type { RuntimeEvent } from '@isagi/contracts';
+import type { RuntimeEvent } from '@isagi/shared/contracts';
 
 /**
  * The public runtime-event bus: what the events WebSocket streams to clients. Published by environment (projection),

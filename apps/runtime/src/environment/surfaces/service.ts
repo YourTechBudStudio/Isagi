@@ -23,7 +23,7 @@ import type {
   SurfaceOrderRejectionReason,
   WorktreeEnvironmentFocusOutput,
   DurableSessionInventory,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   deriveEditorContextFacts,

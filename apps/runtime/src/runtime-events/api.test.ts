@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import Fastify from 'fastify';
 
-import type { RuntimeEvent } from '@isagi/contracts';
+import type { RuntimeEvent } from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../../test/test-support.js';
 import { AgentSessionAttentionProjection } from '../environment/index.js';

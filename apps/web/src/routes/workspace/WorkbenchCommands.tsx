@@ -4,7 +4,11 @@ import { AsyncResult } from 'effect/reactivity';
 import { AlertTriangle, Play, RefreshCw, RotateCcw, Square } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 
-import type { CommandRunStatus, CommandSummary, WorktreeCommandsOutput } from '@isagi/contracts';
+import type {
+  CommandRunStatus,
+  CommandSummary,
+  WorktreeCommandsOutput,
+} from '@isagi/shared/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';

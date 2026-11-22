@@ -13,7 +13,7 @@ import {
   Stream,
 } from 'effect';
 
-import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
+import type { PtyStreamOutputMessageSet } from '@isagi/shared/contracts';
 
 import { InternalEvents } from '../platform/events/index.js';
 import { runPeriodically } from '../platform/fibers/index.js';

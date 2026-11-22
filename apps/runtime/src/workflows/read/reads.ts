@@ -15,7 +15,7 @@ import type {
   ListWorkflowRunsOutput,
   ListWorkflowRunsQuery,
   WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { WorkflowEngineError } from '../errors.js';
 import { getCheckpoint, listCheckpoints } from '../store/checkpoints.js';

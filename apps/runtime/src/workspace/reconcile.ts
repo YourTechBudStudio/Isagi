@@ -6,7 +6,7 @@ import type {
   ReconcileWorkspaceInput,
   ReconcileWorkspaceOutput,
   ReconciliationFinding,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { CommandService } from '../commands/index.js';
 import { EnvironmentDeletionParticipant } from '../environment/index.js';

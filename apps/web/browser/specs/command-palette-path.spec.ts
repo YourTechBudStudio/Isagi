@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import type { ProjectPathRejectionReason, WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { ProjectPathRejectionReason, WorkflowQuestionSpecDto } from '@isagi/shared/contracts';
 
 /**
  * Keyboard path completion in the **production** command palette, over the fake

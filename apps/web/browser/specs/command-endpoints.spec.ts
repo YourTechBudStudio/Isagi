@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import type { CommandSummary } from '@isagi/contracts';
+import type { CommandSummary } from '@isagi/shared/contracts';
 
 import {
   FIXTURE_COLLIDING_BADGE_IDS,

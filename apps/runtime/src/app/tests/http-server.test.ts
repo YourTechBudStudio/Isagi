@@ -8,7 +8,7 @@ import test from 'node:test';
 
 import { Cause, ConfigProvider, Effect, Exit, Layer } from 'effect';
 
-import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
+import type { PtyWebSocketOutputMessage } from '@isagi/shared/contracts';
 
 import { expectNoNewHandles, makeLogCapture } from '../../../test/test-support.js';
 import { CliAccess } from '../../cli-access/index.js';

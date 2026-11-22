@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Context, Effect, Layer, Option, Stream } from 'effect';
 
-import { apiBasePath } from '@isagi/contracts';
+import { apiBasePath } from '@isagi/shared/contracts';
 
 import { withListeningServer } from '../../platform/http/testing.js';
 import { registerFluidcastRoutes } from '../api.js';

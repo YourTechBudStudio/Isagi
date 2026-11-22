@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Effect } from 'effect';
 
-import type { EditorAttemptFailureReason } from '@isagi/contracts';
+import type { EditorAttemptFailureReason } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { LoopbackPortProbe } from '../../platform/net/index.js';

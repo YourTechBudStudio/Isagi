@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Cause, Effect, Option } from 'effect';
 
-import { RuntimeApiError } from '@isagi/runtime-client';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import {
   workflowCheckpointFixture,

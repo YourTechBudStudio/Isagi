@@ -26,8 +26,7 @@
     "verify:linux-release": "node scripts/verify-linux-release.mjs"
   },
   "dependencies": {
-    "@isagi/contracts": "workspace:*",
-    "@isagi/runtime-client": "workspace:*",
+    "@isagi/shared": "workspace:*",
     "effect": "catalog:",
     "electron-updater": "6.8.9"
   },

@@ -1,6 +1,6 @@
 import type { AtomRegistry } from 'effect/reactivity';
 
-import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { controlPlaneQuery } from '../../../src/lib/control-plane/queries.js';
 import { revalidate } from '../../../src/lib/state/policy.js';

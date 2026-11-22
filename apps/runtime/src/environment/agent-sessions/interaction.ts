@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, type Scope } from 'effect';
 
-import type { FluidcastHandoffFailure } from '@isagi/contracts';
+import type { FluidcastHandoffFailure } from '@isagi/shared/contracts';
 
 import { FluidcastSessions, type FluidcastSessionId } from '../../fluidcast/index.js';
 

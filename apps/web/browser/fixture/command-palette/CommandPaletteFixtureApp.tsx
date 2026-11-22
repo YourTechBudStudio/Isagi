@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { WorkflowQuestionSpecDto } from '@isagi/shared/contracts';
 
 import { RuntimeLocalityContext, type RuntimeLocality } from '../../../src/lib/runtime/locality.js';
 import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';

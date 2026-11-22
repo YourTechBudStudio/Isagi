@@ -1,7 +1,7 @@
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import type { ReactNode } from 'react';
 
-import type { EditorProvisioningState } from '@isagi/contracts';
+import type { EditorProvisioningState } from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { editorProvisioningCopy, startupCopy } from '../../copy/index.js';

@@ -8,7 +8,7 @@ import type {
   EditorContextFacts,
   EditorDiagnosticsOutput,
   RetryEditorProvisioningOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../../test/test-support.js';
 import { withApiServer } from '../platform/http/testing.js';

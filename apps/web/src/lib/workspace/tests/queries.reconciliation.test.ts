@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ReconciliationFinding } from '@isagi/contracts';
+import type { ReconciliationFinding } from '@isagi/shared/contracts';
 
 import { runApp } from '../../state/runtime.js';
 import { toastsAtom } from '../../toast/index.js';

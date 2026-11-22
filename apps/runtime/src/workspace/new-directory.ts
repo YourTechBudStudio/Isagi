@@ -3,7 +3,7 @@ import { isAbsolute, sep } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import type { WorktreeDestinationIssue } from '@isagi/contracts';
+import type { WorktreeDestinationIssue } from '@isagi/shared/contracts';
 
 import { canonicalizeProspectivePath } from '../platform/fs/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';

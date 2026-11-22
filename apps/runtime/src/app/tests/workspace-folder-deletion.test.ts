@@ -7,7 +7,7 @@ import test, { after as afterAll, describe } from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Stream } from 'effect';
 
-import type { DurableSessionIdentity } from '@isagi/contracts';
+import type { DurableSessionIdentity } from '@isagi/shared/contracts';
 
 import { CommandError, type CommandService } from '../../commands/index.js';
 import { AgentSessionService, SurfaceService } from '../../environment/index.js';

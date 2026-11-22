@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 
 import { Effect } from 'effect';
 
-import type { ExportWorkflowCheckpointOutput } from '@isagi/contracts';
+import type { ExportWorkflowCheckpointOutput } from '@isagi/shared/contracts';
 
 import type { GitCommandError } from '../../platform/git/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';

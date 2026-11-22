@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import {
   HarnessLedgerObserver,

@@ -1,6 +1,6 @@
 import { Effect, Layer, Stream } from 'effect';
 
-import type { AttentionSource } from '@isagi/contracts';
+import type { AttentionSource } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import {

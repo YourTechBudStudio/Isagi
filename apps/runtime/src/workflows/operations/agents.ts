@@ -2,7 +2,7 @@ import { statSync } from 'node:fs';
 
 import { Cause, Effect } from 'effect';
 
-import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
+import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/shared/contracts';
 
 import type { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import {

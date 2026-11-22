@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { apiEndpoints } from '@isagi/contracts';
+import type { apiEndpoints } from '@isagi/shared/contracts';
 
 import { RuntimeApi, type RuntimeCallError } from '../runtime/client.js';
 

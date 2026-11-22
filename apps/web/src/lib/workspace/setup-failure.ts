@@ -1,4 +1,4 @@
-import type { OpenWorktreeOutput } from '@isagi/contracts';
+import type { OpenWorktreeOutput } from '@isagi/shared/contracts';
 
 export type WorktreeSetupFailure = Extract<OpenWorktreeOutput, { status: 'created_setup_failed' }>;
 

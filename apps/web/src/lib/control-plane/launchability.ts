@@ -3,7 +3,7 @@ import type {
   ControlPlaneSnapshot,
   EditorProvisioningState,
   HarnessLaunchProjection,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 // The runtime owns launchability (see `harnessLaunchDecision` on the runtime and
 // ADR 0008): the snapshot carries a per-harness `launch` projection, and the web

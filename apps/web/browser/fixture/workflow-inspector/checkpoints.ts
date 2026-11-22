@@ -6,7 +6,7 @@ import type {
   WorkflowExecutionSummaryDto,
   WorkflowGraphInvocationDto,
   WorkflowStructureDescriptorDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * A run that saved checkpoints, and everything the checkpoint routes answer about them.

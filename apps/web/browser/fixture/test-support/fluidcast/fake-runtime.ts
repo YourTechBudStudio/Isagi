@@ -16,7 +16,7 @@ import {
   fluidcastContentEndpoints,
   fluidcastEndpoints,
   fluidcastEventStreamEndpoints,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 import type {
   AgentSessionInteraction,
   AgentSessionMetadata,
@@ -26,7 +26,7 @@ import type {
   SurfaceDetail,
   SurfacePane,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { requestBodyText } from '../request-body.js';
 import { buildHarnessSession } from './harness-sessions.js';

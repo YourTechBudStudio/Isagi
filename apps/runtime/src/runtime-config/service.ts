@@ -3,7 +3,16 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { Context, Data, Effect, Layer, Ref, Semaphore } from 'effect';
-import { Document, isMap, parseDocument, YAMLError } from 'yaml';
+import { Document, isMap } from 'yaml';
+
+import {
+  globalConfigDocumentValue,
+  globalConfigPath,
+  parseGlobalConfig,
+  readGlobalConfigFile,
+  type GlobalConfigReadFailure,
+  type RuntimeConfigPtyBackend,
+} from '@isagi/shared/global-config';
 
 import {
   describeSafely,
@@ -12,7 +21,6 @@ import {
   type SafeDiagnostic,
 } from '../platform/diagnostics/index.js';
 import { DataDirectory } from '../platform/persistence/index.js';
-import type { RuntimeConfigPtyBackend } from './config-schema.js';
 import {
   defaultRuntimeConfig,
   parseRuntimeConfig,
@@ -81,14 +89,11 @@ function ioFailure(reason: 'read_failed' | 'write_failed', cause: unknown): Runt
   return { reason, errno: safeSystemErrorCode(code) };
 }
 
-function yamlFailure(error: YAMLError): RuntimeConfigFailure {
-  const position = error.linePos?.[0];
-  return {
-    reason: 'yaml_syntax',
-    yamlCode: error.code,
-    line: position?.line ?? null,
-    column: position?.col ?? null,
-  };
+/** The shared reader's failure with its system error code passed through the runtime's allowlist. */
+function readFailure(failure: GlobalConfigReadFailure): RuntimeConfigFailure {
+  return failure.reason === 'read_failed'
+    ? { reason: 'read_failed', errno: safeSystemErrorCode(failure.systemErrorCode) }
+    : failure;
 }
 export class RuntimeConfigConflict extends Data.TaggedError('RuntimeConfigConflict')<{
   readonly expectedRevision: string;
@@ -99,7 +104,7 @@ export class RuntimeHarnessConfigInvalid extends Data.TaggedError('RuntimeHarnes
 }> {}
 const make = Effect.gen(function* () {
   const directory = yield* DataDirectory;
-  const path = resolve(directory.paths.root, 'config.yaml');
+  const path = globalConfigPath(directory.paths.root);
   const initial = yield* readOrCreateRuntimeConfig(path);
   const state = yield* Ref.make(initial);
   const semaphore = yield* Semaphore.make(1);
@@ -159,17 +164,10 @@ export class RuntimeConfig extends Context.Service<
 }
 function readOrCreateRuntimeConfig(path: string) {
   return Effect.gen(function* () {
-    const bytes = yield* Effect.try({
-      try: () => readFileSync(path, 'utf8'),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch((cause) =>
-        (cause as NodeJS.ErrnoException).code === 'ENOENT'
-          ? Effect.succeed(null)
-          : Effect.fail(runtimeConfigError(path, ioFailure('read_failed', cause))),
-      ),
-    );
-    if (bytes === null) {
+    const read = yield* Effect.sync(() => readGlobalConfigFile(path));
+    if (read.status === 'failed')
+      return yield* Effect.fail(runtimeConfigError(path, readFailure(read.failure)));
+    if (read.status === 'missing') {
       const document = new Document({ pty: { backend: defaultRuntimeConfig.pty.backend } });
       yield* Effect.try({
         try: () => writeFileSync(path, document.toString(), 'utf8'),
@@ -177,7 +175,7 @@ function readOrCreateRuntimeConfig(path: string) {
       });
       return defaultRuntimeConfig;
     }
-    return (yield* readRuntimeConfigDocument(path, bytes)).config;
+    return yield* decodeRuntimeConfig(path, read.value);
   });
 }
 
@@ -201,35 +199,21 @@ function readBytes(path: string) {
     catch: (cause) => runtimeConfigError(path, ioFailure('read_failed', cause)),
   });
 }
-function parseYamlDocument(path: string, bytes: string) {
-  const document = parseDocument(bytes);
-  const [error] = document.errors;
-  return error === undefined
-    ? Effect.succeed(document)
-    : Effect.fail(runtimeConfigError(path, yamlFailure(error)));
-}
-/**
- * The document as plain values. Conversion can fail after a clean parse (an unresolved alias, too
- * many aliases), and its error quotes the source, so it gets the same safe boundary as parsing.
- */
+/** The document as plain values, with a conversion failure as a safe `RuntimeConfigError`. */
 function documentValue(path: string, document: Document) {
-  return Effect.try({
-    try: (): unknown => document.toJS(),
-    catch: (cause) =>
-      runtimeConfigError(
-        path,
-        cause instanceof YAMLError
-          ? yamlFailure(cause)
-          : { reason: 'yaml_syntax', yamlCode: 'YAML_CONVERSION_FAILED', line: null, column: null },
-      ),
-  });
+  const converted = globalConfigDocumentValue(document);
+  return converted.status === 'converted'
+    ? Effect.succeed(converted.value)
+    : Effect.fail(runtimeConfigError(path, readFailure(converted.failure)));
 }
 /** Parses and converts `bytes`, then decodes the config: every failure is a safe `RuntimeConfigError`. */
 function readRuntimeConfigDocument(path: string, bytes: string) {
   return Effect.gen(function* () {
-    const document = yield* parseYamlDocument(path, bytes);
-    const config = yield* decodeRuntimeConfig(path, yield* documentValue(path, document));
-    return { document, config };
+    const parsed = parseGlobalConfig(bytes);
+    if (parsed.status === 'failed')
+      return yield* Effect.fail(runtimeConfigError(path, readFailure(parsed.failure)));
+    const config = yield* decodeRuntimeConfig(path, parsed.value);
+    return { document: parsed.document, config };
   });
 }
 function patchHarnessPolicy(document: Document, policy: RuntimeHarnessPolicy) {

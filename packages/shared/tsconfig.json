@@ -5,8 +5,10 @@
     "declaration": true,
     "declarationMap": true,
     "emitDeclarationOnly": true,
+    "lib": ["DOM", "ES2024"],
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "types": ["node"]
   },
   "include": ["src"],
   "references": [
@@ -14,5 +16,5 @@
       "path": "../workflow-sdk"
     }
   ],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/test-support.ts"]
 }

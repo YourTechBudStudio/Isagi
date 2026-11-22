@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect, Exit } from 'effect';
 import { Atom, AtomRegistry } from 'effect/reactivity';
 
-import type { CommandActionOutput } from '@isagi/contracts';
+import type { CommandActionOutput } from '@isagi/shared/contracts';
 
 import { mutationData, mutationError } from '../../state/result.js';
 import { controllable, flush, makeTestRegistry } from '../../state/testing.js';

@@ -1,14 +1,16 @@
 {
-  "name": "@isagi/contracts",
+  "name": "@isagi/shared",
   "version": "0.0.6",
   "private": true,
   "type": "module",
-  "types": "./src/index.ts",
+  "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
+    "./contracts": "./src/contracts/index.ts",
+    "./runtime-client": "./src/runtime-client/index.ts",
+    "./global-config": "./src/global-config/index.ts"
   },
   "scripts": {
-    "build": "vite build && tsc -b tsconfig.json --force",
+    "build": "tsc -b tsconfig.json --force",
     "check": "pnpm build && pnpm typecheck && pnpm test:built",
     "test": "pnpm build && pnpm test:built",
     "test:built": "node --import tsx --test \"src/**/*.test.ts\"",
@@ -17,13 +19,13 @@
   },
   "dependencies": {
     "@yourtechbudstudio/isagi-workflow-sdk": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@yourtechbudstudio/isagi-workflow-verifier": "workspace:0.1.2",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.5"
+    "typescript": "^7.0.2"
   }
 }

@@ -24,7 +24,7 @@ import {
   listWorkflowOperationsOutputSchema,
   listWorkflowRunsOutputSchema,
   runtimeEventSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { withEngine } from '../engine/test-support.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';

@@ -5,7 +5,7 @@ import type {
   WorkflowLoadFailureReason,
   WorkflowRejectionReason,
   WorktreeDestinationIssue,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 export type WorkflowControl = 'pause' | 'resume' | 'retry' | 'cancel' | 'dismiss' | 'advance';
 

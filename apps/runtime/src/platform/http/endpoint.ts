@@ -14,7 +14,7 @@ import {
   type ApiEndpointQuery,
   type ApiError,
   type WireSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   requestDecodingFailed,

@@ -5,8 +5,7 @@
   "references": [
     { "path": "./packages/workflow-sdk" },
     { "path": "./packages/workflow-verifier" },
-    { "path": "./packages/contracts" },
-    { "path": "./packages/runtime-client" },
+    { "path": "./packages/shared" },
     { "path": "./apps/runtime" },
     { "path": "./apps/cli" },
     { "path": "./apps/web" },

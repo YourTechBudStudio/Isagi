@@ -1,4 +1,4 @@
-import type { WorkflowEventDto } from '@isagi/contracts';
+import type { WorkflowEventDto } from '@isagi/shared/contracts';
 
 import { workflowCopy } from '../../../copy/index.js';
 

@@ -3,7 +3,7 @@ import type {
   WorkflowStructureDescriptor,
 } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 
-import type { WorkflowNodeKind } from '@isagi/contracts';
+import type { WorkflowNodeKind } from '@isagi/shared/contracts';
 
 /**
  * Whether a newer build still fits where a run is parked.

@@ -4,7 +4,7 @@ import test, { afterEach, type TestContext } from 'node:test';
 import { Effect, Option } from 'effect';
 import { AsyncResult, Atom } from 'effect/reactivity';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { RuntimeApi } from '../../runtime/client.js';
 import { refreshAndRead } from '../../state/policy.js';

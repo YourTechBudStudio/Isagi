@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect, Layer } from 'effect';
 import type Fastify from 'fastify';
 
-import type { DeleteWorktreeOutput } from '@isagi/contracts';
+import type { DeleteWorktreeOutput } from '@isagi/shared/contracts';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { ProjectConfigError } from '../../projects/index.js';

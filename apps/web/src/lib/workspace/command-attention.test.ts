@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { CommandStatus } from '@isagi/contracts';
+import type { CommandStatus } from '@isagi/shared/contracts';
 
 import { workbenchCopy } from '../../copy/index.js';
 import {

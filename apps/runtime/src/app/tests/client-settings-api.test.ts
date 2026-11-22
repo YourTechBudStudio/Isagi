@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import type { ClientSettingsOutput } from '@isagi/contracts';
+import type { ClientSettingsOutput } from '@isagi/shared/contracts';
 
 import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
 

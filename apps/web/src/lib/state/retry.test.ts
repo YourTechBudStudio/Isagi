@@ -4,8 +4,8 @@ import { mock, test, type TestContext } from 'node:test';
 
 import { Duration } from 'effect';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeTransportError } from '@isagi/runtime-client';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
+import { RuntimeApiError, RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { query, type QueryPolicy } from './policy.js';

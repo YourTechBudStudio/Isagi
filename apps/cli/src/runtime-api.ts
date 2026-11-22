@@ -5,8 +5,12 @@ import type {
   AnyApiEndpoint,
   ApiEndpointOutput,
   ApiEndpointRequestArgs,
-} from '@isagi/contracts';
-import { RuntimeClient, type ContentQuery, type RuntimeContent } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import {
+  RuntimeClient,
+  type ContentQuery,
+  type RuntimeContent,
+} from '@isagi/shared/runtime-client';
 
 import { CliFailure, fromRuntimeError } from './errors.js';
 

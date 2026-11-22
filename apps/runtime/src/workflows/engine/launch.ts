@@ -5,7 +5,7 @@ import type {
   WorkflowLaunchOrigin,
   WorkflowLoadFailureReason,
   WorkflowPlacementRequestDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { WorkflowEngineError } from '../errors.js';

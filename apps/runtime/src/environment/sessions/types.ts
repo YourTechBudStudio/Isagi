@@ -1,4 +1,4 @@
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 // Read-side composition only: a session row carries the process the runtime
 // joined onto it. The PTY domain owns the row itself (ADR 0005/0008).

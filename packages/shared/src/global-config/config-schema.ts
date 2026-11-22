@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 
 import { Schema } from 'effect';
 
-import { terminalSettingsBounds } from '@isagi/contracts';
+import { terminalSettingsBounds } from '../contracts/index.js';
 
 function optionalBoundedInteger(maximum: number, description: string) {
   return Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum }))).annotate({

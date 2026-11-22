@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { type AppearanceTheme, terminalPalette } from '@isagi/contracts';
+import { type AppearanceTheme, terminalPalette } from '@isagi/shared/contracts';
 
 import {
   after,
@@ -33,7 +33,7 @@ describe('the runtime terminal palette', () => {
           background: tokens.get('--color-terminal-surface'),
         },
         { ...terminalPalette[theme] },
-        `terminalPalette.${theme} in @isagi/contracts differs from apps/web/src/styles.css`,
+        `terminalPalette.${theme} in @isagi/shared/contracts differs from apps/web/src/styles.css`,
       );
     });
   }

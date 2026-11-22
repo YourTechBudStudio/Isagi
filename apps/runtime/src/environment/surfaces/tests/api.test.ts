@@ -11,7 +11,7 @@ import type {
   RenameSurfaceOutput,
   SetSplitWeightsOutput,
   SurfaceDetail,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { HarnessLaunchBlocked } from '../../../harnesses/index.js';
 import { SurfaceError, SurfaceOrderError, SurfaceService } from '../../index.js';

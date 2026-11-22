@@ -24,7 +24,7 @@ import {
 } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
+import type { PtyStreamOutputMessageSet } from '@isagi/shared/contracts';
 
 import { expectNoProcessMatching } from '../../../test/test-support.js';
 import { CliAccessNone } from '../../cli-access/testing.js';

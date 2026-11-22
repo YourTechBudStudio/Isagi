@@ -10,7 +10,7 @@ import type {
   WorktreeBaseRef,
   WorktreeSetupResult,
   WorktreeSetupTrustInput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { CommandService } from '../commands/index.js';
 import { diagnosticPhase } from '../platform/diagnostics/index.js';

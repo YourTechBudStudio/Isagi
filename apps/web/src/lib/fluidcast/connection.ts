@@ -2,7 +2,7 @@ import { Transport } from '@yourtechbudstudio/fluidcast-client';
 import { WorkerFeed, type FluidcastPlayerProps } from '@yourtechbudstudio/fluidcast-react';
 import { Layer, type Effect } from 'effect';
 
-import { RuntimeClient } from '@isagi/runtime-client';
+import { RuntimeClient } from '@isagi/shared/runtime-client';
 
 import { authAwareRuntimeHttpClient } from '../runtime/client.js';
 import { fluidcastTransport, fluidcastWorkerStreams } from './transport.js';

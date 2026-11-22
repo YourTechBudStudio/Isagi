@@ -5,8 +5,8 @@ import { mock, test, type TestContext } from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { RuntimeEvent } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { RuntimeEvent } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { appRuntime } from '../../state/runtime.js';
 import { flush, makeTestRegistry } from '../../state/testing.js';

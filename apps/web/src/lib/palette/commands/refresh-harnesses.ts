@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { RefreshCw } from 'lucide-react';
 
-import type { ControlPlaneSnapshot, DocsHarnessResult } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, DocsHarnessResult } from '@isagi/shared/contracts';
 
 import { agentSessionCopy, docsResultCopy, harnessRefreshCopy } from '../../../copy/index.js';
 import { controlPlaneQuery } from '../../control-plane/queries.js';

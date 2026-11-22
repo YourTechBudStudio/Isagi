@@ -6,7 +6,7 @@ import type {
   WorkflowCommandManifestDto,
   WorkspaceSnapshot,
   WorktreeCommandsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { requestBodyText } from '../test-support/request-body.js';
 import { createResponseGate, FIXTURE_PATH_TREE, suggestFromTree } from './path-world.js';

@@ -11,8 +11,8 @@ import {
   worktreeOpenApiErrorSchema,
   worktreeOrderApiErrorSchema,
   worktreeSetupApiErrorSchema,
-} from '@isagi/contracts';
-import type { ApiError } from '@isagi/contracts';
+} from '@isagi/shared/contracts';
+import type { ApiError } from '@isagi/shared/contracts';
 
 import { apiErrorDiagnostic, endpointDiagnostic, runtimeErrorCopy } from './errors.js';
 

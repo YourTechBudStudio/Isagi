@@ -1,6 +1,6 @@
 import { createContext } from 'react';
 
-import type { TerminalSettings } from '@isagi/contracts';
+import type { TerminalSettings } from '@isagi/shared/contracts';
 
 import type { TerminalPresentationCache } from '../terminal-cache/index.js';
 import type { TerminalSessionIdentity } from '../terminal-cache/index.js';

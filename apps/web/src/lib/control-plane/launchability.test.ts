@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { AgentHarness, ControlPlaneSnapshot, HarnessLaunchProjection } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  ControlPlaneSnapshot,
+  HarnessLaunchProjection,
+} from '@isagi/shared/contracts';
 
 import {
   deriveStartupGate,

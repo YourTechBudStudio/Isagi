@@ -9,7 +9,7 @@ import type {
   WorkflowRunSummary,
   WorkflowStructureDescriptorDto,
   WorkflowWaitDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   workflowEventFixture,

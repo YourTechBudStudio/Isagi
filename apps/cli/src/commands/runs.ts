@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { Effect, Option } from 'effect';
 import { Flag } from 'effect/cli';
 
-import { apiEndpoints, type WorkflowPlacementRequestDto } from '@isagi/contracts';
+import { apiEndpoints, type WorkflowPlacementRequestDto } from '@isagi/shared/contracts';
 
 import { CliContext } from '../context.js';
 import { causeText, CliFailure } from '../errors.js';

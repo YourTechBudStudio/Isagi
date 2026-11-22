@@ -1,4 +1,4 @@
-import { RuntimeApiError } from '@isagi/runtime-client';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import type { TerminalAttachmentSnapshot } from './controller.js';
 

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 
-import type { WorkflowUserInputAnswers, WorkflowWaitDto } from '@isagi/contracts';
+import type { WorkflowUserInputAnswers, WorkflowWaitDto } from '@isagi/shared/contracts';
 
 import type { EngineHarness } from '../../engine/test-support.js';
 import { workflowOperations, workflowRuns } from '../../tables.js';

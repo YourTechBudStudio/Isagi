@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { ActiveContextOutput } from '@isagi/contracts';
+import type { ActiveContextOutput } from '@isagi/shared/contracts';
 
 import { keys } from '../../state/keys.js';
 import { revalidate } from '../../state/policy.js';

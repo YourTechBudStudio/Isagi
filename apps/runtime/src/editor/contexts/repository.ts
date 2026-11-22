@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNotNull, isNull, type InferSelectModel, type SQL } from 'drizzle-orm';
 import { Context, Data, Effect, Layer } from 'effect';
 
-import type { EditorAttemptFailureReason } from '@isagi/contracts';
+import type { EditorAttemptFailureReason } from '@isagi/shared/contracts';
 
 import {
   DatabaseError,

@@ -3,7 +3,7 @@ import { Cause, Exit, Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 
-import type { EditorContextMetadata, SurfaceDetail, SurfacePane } from '@isagi/contracts';
+import type { EditorContextMetadata, SurfaceDetail, SurfacePane } from '@isagi/shared/contracts';
 
 import { editorDiagnosticsAtom, makeEnsureEditorRuntimeAtom } from '../../lib/editor/queries.js';
 import {

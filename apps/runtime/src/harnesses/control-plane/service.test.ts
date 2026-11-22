@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Deferred, Effect, Fiber, Layer, Ref, Tracer } from 'effect';
 
-import { appearanceSettingsDefaults, terminalSettingsDefaults } from '@isagi/contracts';
+import { appearanceSettingsDefaults, terminalSettingsDefaults } from '@isagi/shared/contracts';
 
 import type { EditorProvisioning } from '../../editor/index.js';
 import {

@@ -1,4 +1,4 @@
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 /**
  * The runs attached to a surface, as the workflow bar, the palette and attention read them.

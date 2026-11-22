@@ -6,7 +6,7 @@
 import { Duration, Effect, FiberHandle, FiberMap } from 'effect';
 import { Atom, AtomRegistry, Reactivity } from 'effect/reactivity';
 
-import type { ReconciliationFinding, SetActiveContextInput } from '@isagi/contracts';
+import type { ReconciliationFinding, SetActiveContextInput } from '@isagi/shared/contracts';
 
 import { toastCopy } from '../../copy/index.js';
 import { keys } from '../state/keys.js';

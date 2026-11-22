@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import type { RuntimeEvent } from '@isagi/contracts';
+import type { RuntimeEvent } from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../../../test/test-support.js';
 import { makeFakeFluidcastSessions } from '../../fluidcast/testing.js';

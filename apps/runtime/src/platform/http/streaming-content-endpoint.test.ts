@@ -8,7 +8,7 @@ import {
   apiInfrastructureErrorSchema,
   type ApiContentEndpoint,
   type WireSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   registerStreamingContentEndpoint,

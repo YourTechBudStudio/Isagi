@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import {
   makeFakeFluidcastSessions,

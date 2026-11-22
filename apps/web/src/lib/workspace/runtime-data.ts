@@ -72,7 +72,7 @@ import type {
   StartWorkflowOutput,
   WorkflowRunControlOutput,
   DurableSessionInventory,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { runtimeErrorCopy } from '../../copy/index.js';
 import { classifyRuntimeFailure } from '../runtime/classify.js';

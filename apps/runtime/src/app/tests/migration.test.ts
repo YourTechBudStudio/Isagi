@@ -10,7 +10,7 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { getTableConfig, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { Effect, Layer, Schema } from 'effect';
 
-import { workspaceSnapshotSchema } from '@isagi/contracts';
+import { workspaceSnapshotSchema } from '@isagi/shared/contracts';
 
 import * as commandTables from '../../commands/tables.js';
 import * as editorTables from '../../editor/tables.js';

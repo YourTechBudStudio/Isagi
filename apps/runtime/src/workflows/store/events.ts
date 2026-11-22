@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt } from 'drizzle-orm';
 
-import type { WorkflowEventCategory, WorkflowEventKind } from '@isagi/contracts';
+import type { WorkflowEventCategory, WorkflowEventKind } from '@isagi/shared/contracts';
 
 import { workflowEvents } from '../tables.js';
 import { now, toNullableJson, type Db, type EventRow } from './rows.js';

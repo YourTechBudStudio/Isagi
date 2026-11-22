@@ -3,8 +3,8 @@
 import { Data, Duration, Effect, Schedule } from 'effect';
 import { HttpClient, HttpClientResponse, type HttpClientError } from 'effect/http';
 
-import { apiBasePath, apiEndpoints } from '@isagi/contracts';
-import { RuntimeClient, type RuntimeEndpointError } from '@isagi/runtime-client';
+import { apiBasePath, apiEndpoints } from '@isagi/shared/contracts';
+import { RuntimeClient, type RuntimeEndpointError } from '@isagi/shared/runtime-client';
 
 const attempts = 40;
 const attemptInterval = Duration.millis(250);

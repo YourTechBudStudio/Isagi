@@ -3,13 +3,13 @@ import {
   HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
   type DesktopUpdateSnapshot,
   type HostRuntimeStatusSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 export {
   DESKTOP_UPDATE_PROTOCOL_VERSION,
   HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
-} from '@isagi/contracts';
-export type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/contracts';
+} from '@isagi/shared/contracts';
+export type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/shared/contracts';
 
 export function hasRuntimeHost(): boolean {
   return (

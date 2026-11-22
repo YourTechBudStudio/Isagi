@@ -1,4 +1,4 @@
-import { type Schema, SchemaIssue } from 'effect';
+import { Cause, type Schema, SchemaIssue } from 'effect';
 
 const formatter = SchemaIssue.makeFormatterStandardSchemaV1();
 
@@ -23,4 +23,14 @@ export function joinIssuePath(segments: ReadonlyArray<PropertyKey>): string {
 
 function segmentKey(segment: PropertyKey | { readonly key: PropertyKey }): PropertyKey {
   return typeof segment === 'object' ? segment.key : segment;
+}
+
+/** Issue paths from a decode failure's `SchemaError`; a defect in the decoder dies loudly. */
+export function schemaIssuePaths(
+  cause: Cause.Cause<Schema.SchemaError>,
+  path: ReadonlyArray<string> = [],
+): ReadonlyArray<string> {
+  const error = Cause.findErrorOption(cause);
+  if (error._tag === 'None') throw Cause.squash(cause);
+  return issuePaths(error.value, path);
 }

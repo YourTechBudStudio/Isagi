@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { OpenEditorInput, OpenEditorOutput } from '@isagi/contracts';
+import type { OpenEditorInput, OpenEditorOutput } from '@isagi/shared/contracts';
 
 import {
   editorLockKey,

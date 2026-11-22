@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/contracts';
+import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import type { EnvironmentFocusRow, SurfaceMetadataRow } from '../environment/index.js';
 import type { ProjectRow, WorktreeRow } from '../projects/index.js';

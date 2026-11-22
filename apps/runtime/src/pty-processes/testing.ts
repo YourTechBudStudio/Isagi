@@ -1,6 +1,6 @@
 import { Effect, Exit, Layer } from 'effect';
 
-import { terminalPalette, type AppearanceTheme } from '@isagi/contracts';
+import { terminalPalette, type AppearanceTheme } from '@isagi/shared/contracts';
 
 import { RuntimeConfig } from '../runtime-config/index.js';
 import { defaultRuntimeConfig } from '../runtime-config/testing.js';

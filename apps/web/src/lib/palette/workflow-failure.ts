@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 
-import type { StartWorkflowInput, WorkflowRunSummary } from '@isagi/contracts';
-import { workflowRejectedErrorSchema } from '@isagi/contracts';
+import type { StartWorkflowInput, WorkflowRunSummary } from '@isagi/shared/contracts';
+import { workflowRejectedErrorSchema } from '@isagi/shared/contracts';
 
 import {
   apiErrorDiagnostic,

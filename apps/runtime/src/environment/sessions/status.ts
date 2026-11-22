@@ -4,7 +4,7 @@ import type {
   SessionDiagnosticCode,
   SessionStatus,
   TerminalSessionStatusReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { ptyIncarnation, type Incarnation } from '../../harnesses/index.js';
 import { exitDetail } from '../../pty-processes/index.js';

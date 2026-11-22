@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { CommandStatus } from '@isagi/contracts';
+import type { CommandStatus } from '@isagi/shared/contracts';
 
 import { buildCommandSummary, composeCommandPortUrl } from '../summary.js';
 

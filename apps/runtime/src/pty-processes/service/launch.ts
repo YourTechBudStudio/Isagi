@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 
 import { Effect, FiberMap, Result, Stream } from 'effect';
 
-import { terminalPalette } from '@isagi/contracts';
+import { terminalPalette } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import type { InternalEvents } from '../../platform/events/index.js';

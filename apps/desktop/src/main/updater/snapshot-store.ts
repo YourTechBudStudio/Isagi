@@ -1,6 +1,9 @@
 import { Effect, Option, SubscriptionRef } from 'effect';
 
-import { DESKTOP_UPDATE_PROTOCOL_VERSION, type DesktopUpdateSnapshot } from '@isagi/contracts';
+import {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  type DesktopUpdateSnapshot,
+} from '@isagi/shared/contracts';
 
 export type SnapshotFacts = DesktopUpdateSnapshot extends infer Snapshot
   ? Snapshot extends DesktopUpdateSnapshot

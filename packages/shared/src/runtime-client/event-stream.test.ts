@@ -3,8 +3,7 @@ import test from 'node:test';
 
 import { Effect, Stream } from 'effect';
 
-import { fluidcastEventStreamEndpoints } from '@isagi/contracts';
-
+import { fluidcastEventStreamEndpoints } from '../contracts/index.js';
 import {
   RuntimeApiError,
   RuntimeClient,

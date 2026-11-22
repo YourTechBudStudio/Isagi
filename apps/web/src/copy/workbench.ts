@@ -1,4 +1,4 @@
-import type { CommandLogStreamErrorCode } from '@isagi/contracts';
+import type { CommandLogStreamErrorCode } from '@isagi/shared/contracts';
 
 const commandLogStreamErrorSummaries: Readonly<Record<CommandLogStreamErrorCode, string>> = {
   invalid_message: 'Command output stream sent an unreadable message.',

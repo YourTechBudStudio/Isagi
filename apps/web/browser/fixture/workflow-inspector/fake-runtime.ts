@@ -3,7 +3,7 @@ import type {
   SurfaceDetail,
   WorkflowEventDto,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { answerCheckpointRoute, CHECKPOINT_PIN } from './checkpoints.js';
 import {

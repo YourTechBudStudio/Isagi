@@ -7,7 +7,7 @@ import type {
   SessionDiagnosticCode,
   SurfaceDetail,
   SurfacePane,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { PaneActionCluster } from '../../components/PaneActionCluster.js';

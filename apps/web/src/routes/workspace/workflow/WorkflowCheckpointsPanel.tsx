@@ -3,7 +3,7 @@ import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowCheckpointSummaryDto } from '@isagi/contracts';
+import type { WorkflowCheckpointSummaryDto } from '@isagi/shared/contracts';
 
 import { queryError } from '../../../lib/state/result.js';
 import { workflowCheckpointListAtom } from '../../../lib/workspace/workflow/queries.js';

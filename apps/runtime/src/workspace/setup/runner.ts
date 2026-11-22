@@ -5,7 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { Data, Duration, Effect, Option, Result } from 'effect';
 import { glob } from 'tinyglobby';
 
-import type { WorktreeSetupResult } from '@isagi/contracts';
+import type { WorktreeSetupResult } from '@isagi/shared/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { spawnProcessGroup, stripAnsi, terminateGroup } from '../../platform/process/index.js';

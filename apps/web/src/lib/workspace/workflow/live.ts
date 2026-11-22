@@ -11,7 +11,7 @@
 import { Duration, Effect, FiberMap, PubSub, type Scope } from 'effect';
 import { Atom, Reactivity } from 'effect/reactivity';
 
-import type { WorkflowEventDto, WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowEventDto, WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { appRuntime } from '../../state/runtime.js';
 

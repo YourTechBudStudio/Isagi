@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 
-import { apiEndpoints } from '@isagi/contracts';
-import type { RuntimeClient } from '@isagi/runtime-client';
+import { apiEndpoints } from '@isagi/shared/contracts';
+import type { RuntimeClient } from '@isagi/shared/runtime-client';
 
 import { CliContext } from '../context.js';
 import { CliFailure } from '../errors.js';

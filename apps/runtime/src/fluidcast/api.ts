@@ -17,7 +17,7 @@ import {
   fluidcastContentEndpoints,
   fluidcastEndpoints,
   fluidcastEventStreamEndpoints,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   registerApiEndpoint,

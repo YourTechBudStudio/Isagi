@@ -2,7 +2,7 @@ import type {
   AgentSessionStatusReason,
   SessionStatus,
   TerminalSessionStatusReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { MissingProject, Worktree } from '../lib/workspace/types.js';
 

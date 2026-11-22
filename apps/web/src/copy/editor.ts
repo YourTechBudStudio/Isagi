@@ -2,7 +2,7 @@ import type {
   EditorAttemptFailureReason,
   EditorProcessDiagnostic,
   EditorProvisioningFailureReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { EditorPaneView, EditorSettledReason } from '../lib/editor/view.js';
 

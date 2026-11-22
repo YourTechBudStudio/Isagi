@@ -3,7 +3,7 @@ import type {
   WorkflowCheckpointFileDto,
   WorkflowCheckpointScopeDto,
   WorkflowCheckpointSummaryDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import { executionAddressKey, executionAncestry } from './ancestry.js';

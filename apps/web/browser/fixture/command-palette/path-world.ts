@@ -1,4 +1,4 @@
-import type { PathSuggestOutput } from '@isagi/contracts';
+import type { PathSuggestOutput } from '@isagi/shared/contracts';
 
 /**
  * Runtime-spelled directory strings for browser interactions. Filesystem behavior

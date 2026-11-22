@@ -13,7 +13,7 @@
 import { Effect, Option } from 'effect';
 import { AtomRegistry, Reactivity } from 'effect/reactivity';
 
-import type { WorkflowEventDto, WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowEventDto, WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { keys } from '../../state/keys.js';
 import { patch, peek } from '../../state/policy.js';

@@ -1,4 +1,4 @@
-import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 /**
  * The seven workspaces this fixture can serve.

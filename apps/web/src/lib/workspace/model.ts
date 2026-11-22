@@ -3,7 +3,7 @@ import type {
   Project as ContractProject,
   SetActiveContextInput,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { findActiveSurface } from './selectors.js';
 import type {

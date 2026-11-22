@@ -40,7 +40,7 @@ test('discovers every private workspace by exclusion and leaves workflow package
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
       ['apps/future', { name: '@isagi/future', private: true, version: '1.5.0' }],
-      ['packages/contracts', { name: '@isagi/contracts', private: true, version: '1.0.0' }],
+      ['packages/shared', { name: '@isagi/shared', private: true, version: '1.0.0' }],
       workflowSdk('4.0.0'),
       workflowVerifier('5.0.0'),
     ],
@@ -54,7 +54,7 @@ test('discovers every private workspace by exclusion and leaves workflow package
     'package.json',
     'apps/future/package.json',
     'apps/runtime/package.json',
-    'packages/contracts/package.json',
+    'packages/shared/package.json',
   ]);
   assert.deepEqual(plan.excludedManifestPaths, [
     'packages/workflow-sdk/package.json',
@@ -63,7 +63,7 @@ test('discovers every private workspace by exclusion and leaves workflow package
   assert.equal((await readPackageJson(repoRoot)).version, '2.0.0');
   assert.equal((await readPackageJson(join(repoRoot, 'apps/future'))).version, '2.0.0');
   assert.equal((await readPackageJson(join(repoRoot, 'apps/runtime'))).version, '2.0.0');
-  assert.equal((await readPackageJson(join(repoRoot, 'packages/contracts'))).version, '2.0.0');
+  assert.equal((await readPackageJson(join(repoRoot, 'packages/shared'))).version, '2.0.0');
   assert.equal((await readPackageJson(join(repoRoot, 'packages/workflow-sdk'))).version, '4.0.0');
   assert.equal(
     (await readPackageJson(join(repoRoot, 'packages/workflow-verifier'))).version,

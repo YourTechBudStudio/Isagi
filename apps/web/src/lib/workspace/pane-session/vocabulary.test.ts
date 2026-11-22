@@ -17,7 +17,7 @@ import {
   worktreeBranchRemovalSchema,
   surfacePaneSessionSchema,
   type EditorContextFacts,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * The pane model asks two different questions, and this file exists to stop them

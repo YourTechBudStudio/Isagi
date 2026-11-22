@@ -5,7 +5,7 @@ import type {
   WorkflowGraphInvocationDto,
   WorkflowRunSummary,
   WorkflowStructureDescriptorDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { buildRunView, type WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import {

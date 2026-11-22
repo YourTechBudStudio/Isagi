@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect, Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { CreateSurfaceOutput, SurfaceDetail } from '@isagi/contracts';
+import type { CreateSurfaceOutput, SurfaceDetail } from '@isagi/shared/contracts';
 
 import { peek } from '../../state/policy.js';
 import { runApp } from '../../state/runtime.js';

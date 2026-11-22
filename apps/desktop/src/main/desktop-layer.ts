@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { Context, Effect, Layer, type Redacted, Stream, SubscriptionRef } from 'effect';
 import type { HttpClient } from 'effect/http';
 
-import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
-import { RuntimeHttpClient } from '@isagi/runtime-client';
+import type { HostRuntimeStatusSnapshot } from '@isagi/shared/contracts';
+import { RuntimeHttpClient } from '@isagi/shared/runtime-client';
 
 import { DesktopLogger } from './desktop-logger.js';
 import {

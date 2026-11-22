@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import type { ApprovedHostEnvironment, HarnessDocsTargetResolution } from './definition-types.js';
 

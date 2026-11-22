@@ -1,6 +1,6 @@
 import { Data } from 'effect';
 
-import type { WorktreeCommandsRejectionReason } from '@isagi/contracts';
+import type { WorktreeCommandsRejectionReason } from '@isagi/shared/contracts';
 
 import { coordinates, describeSafely, type SafeDiagnostic } from '../platform/diagnostics/index.js';
 import { DatabaseError } from '../platform/persistence/index.js';

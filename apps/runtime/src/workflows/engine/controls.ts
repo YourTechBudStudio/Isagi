@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { WorkflowUserInputAnswers } from '@isagi/contracts';
+import type { WorkflowUserInputAnswers } from '@isagi/shared/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { WorkflowEngineError, type WorkflowControl } from '../errors.js';

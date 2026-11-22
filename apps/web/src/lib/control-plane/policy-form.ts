@@ -3,7 +3,7 @@ import type {
   ControlPlaneSnapshot,
   DocsReconciliationResult,
   HarnessPolicy,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 // State math for the first-run harness-policy manifest, pure and tested. The
 // Docs invariant is the subtle part: `installIsagiDocs` must be false whenever a

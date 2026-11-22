@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { terminalSettingsDefaults } from '@isagi/contracts';
+import { terminalSettingsDefaults } from '@isagi/shared/contracts';
 
 import {
   createTerminalPresentationCache,

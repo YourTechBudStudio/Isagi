@@ -1,6 +1,6 @@
 import { Data } from 'effect';
 
-import type { ApiError } from '@isagi/contracts';
+import type { ApiError } from '../contracts/index.js';
 
 /** The runtime answered with its `{ error }` envelope. `apiError` is the decoded contract shape. */
 export class RuntimeApiError<E extends ApiError = ApiError> extends Data.TaggedError(

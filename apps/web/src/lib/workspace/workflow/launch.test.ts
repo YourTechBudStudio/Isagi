@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { StartWorkflowInput } from '@isagi/contracts';
+import type { StartWorkflowInput } from '@isagi/shared/contracts';
 
 import type { AppRun } from '../../state/registry.js';
 import { runApp } from '../../state/runtime.js';

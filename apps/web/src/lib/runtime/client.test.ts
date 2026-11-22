@@ -11,8 +11,8 @@ import type {
   Project,
   RenameSurfaceOutput,
   ClientSettingsOutput,
-} from '@isagi/contracts';
-import { RuntimeApiError, RuntimeDecodeError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeApiError, RuntimeDecodeError } from '@isagi/shared/runtime-client';
 
 import { makeRuntimeApi, RuntimeApi } from './client.js';
 

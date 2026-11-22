@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import type { WorkflowExecutionDetailDto, WorkflowOperationDto } from '@isagi/contracts';
+import type { WorkflowExecutionDetailDto, WorkflowOperationDto } from '@isagi/shared/contracts';
 
 import { inspectorCopy } from './copy.js';
 import {

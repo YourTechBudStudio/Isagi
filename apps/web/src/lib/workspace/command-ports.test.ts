@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { CommandPort } from '@isagi/contracts';
+import type { CommandPort } from '@isagi/shared/contracts';
 
 import {
   commandBadgeId,

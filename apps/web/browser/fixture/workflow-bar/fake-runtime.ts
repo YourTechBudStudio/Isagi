@@ -6,7 +6,7 @@ import type {
   WorkflowRunSummary,
   WorktreeCommandsOutput,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   workflowEventFixture,

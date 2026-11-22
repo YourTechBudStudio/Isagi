@@ -1,6 +1,6 @@
 import type { Effect } from 'effect';
 
-import type { AgentHarness, WorkflowOperationUsage } from '@isagi/contracts';
+import type { AgentHarness, WorkflowOperationUsage } from '@isagi/shared/contracts';
 
 import type { LaunchPtyProcessInput } from '../pty-processes/index.js';
 import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';

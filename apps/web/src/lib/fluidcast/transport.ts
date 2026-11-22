@@ -19,14 +19,14 @@ import {
   fluidcastContentEndpoints,
   fluidcastEndpoints,
   fluidcastEventStreamEndpoints,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 import {
   contentEndpointUrl,
   RuntimeApiError,
   RuntimeClient,
   RuntimeDecodeError,
   RuntimeTransportError,
-} from '@isagi/runtime-client';
+} from '@isagi/shared/runtime-client';
 
 // The Fluidcast SDK's `Transport` and worker feed over one session's runtime routes. Imports only
 // types from the React package, so it runs under plain `tsx` tests.

@@ -7,7 +7,7 @@ import {
   RuntimeTransportError,
   type RuntimeClientError,
   type RuntimeContent,
-} from '@isagi/runtime-client';
+} from '@isagi/shared/runtime-client';
 
 import { runCli, type RuntimeTarget } from '../main.js';
 import type { RuntimeEntry, RuntimeLaunch } from '../serve/launch.js';

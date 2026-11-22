@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import type { EditorProvisioningFailureReason } from '@isagi/contracts';
+import type { EditorProvisioningFailureReason } from '@isagi/shared/contracts';
 
 import type {
   EditorInstallIoError,

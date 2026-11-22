@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
+import type { WorkflowCheckpointFileDto } from '@isagi/shared/contracts';
 
 import { errorMessage } from '../state/pure.js';
 import type { CheckpointScope } from '../store/checkpoints.js';

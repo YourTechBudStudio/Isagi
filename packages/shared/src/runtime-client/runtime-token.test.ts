@@ -8,8 +8,7 @@ import {
   apiEndpoints,
   fluidcastEventStreamEndpoints,
   workflowContentEndpoints,
-} from '@isagi/contracts';
-
+} from '../contracts/index.js';
 import { RuntimeClient, withRuntimeToken } from './index.js';
 import { fakeRuntime, json, runtimeUrl } from './test-support.js';
 

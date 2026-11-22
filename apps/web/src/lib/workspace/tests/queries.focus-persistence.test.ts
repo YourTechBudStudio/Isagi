@@ -4,7 +4,7 @@ import test, { type TestContext } from 'node:test';
 import { Effect, Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { SetWorktreeEnvironmentFocusInput, SurfaceDetail } from '@isagi/contracts';
+import type { SetWorktreeEnvironmentFocusInput, SurfaceDetail } from '@isagi/shared/contracts';
 
 import { peek } from '../../state/policy.js';
 import { runApp } from '../../state/runtime.js';

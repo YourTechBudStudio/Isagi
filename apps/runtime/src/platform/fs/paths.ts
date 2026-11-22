@@ -1,26 +1,10 @@
 import { realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
 
-// `home` is injectable so callers that already resolved the runtime home once can
-// thread it through instead of re-reading the environment, and so tests can exercise
-// tilde behavior against a temporary home without mutating `process.env` in a suite
-// that runs with test isolation disabled. The default preserves every existing call.
-function expandHomePath(input: string, home: string = homedir()): string {
-  if (input === '~') {
-    return home;
-  }
-  if (input.startsWith('~/')) {
-    return resolve(home, input.slice(2));
-  }
-  return input;
-}
+import { expandHomePath } from '@isagi/shared/global-config';
 
-export function normalizeHomePath(input: string, home: string = homedir()): string {
-  const expanded = expandHomePath(input, home);
-  if (expanded !== input) return expanded;
-  return resolve(input);
-}
+// Home expansion lives with `config.yaml`'s location so the desktop and the runtime expand `~` alike.
+export { normalizeHomePath } from '@isagi/shared/global-config';
 
 export function normalizeAbsoluteHomePath(input: string): string {
   if (input.trim().length === 0)

@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import {
   commandLogStreamWebSocketEndpoint,
   type PtyStreamOutputMessageSet,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { PtyServiceError } from '../../pty-processes/index.js';
 import type { PtyAttachment } from '../../pty-processes/testing.js';

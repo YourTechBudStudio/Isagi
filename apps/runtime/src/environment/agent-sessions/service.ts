@@ -4,7 +4,7 @@ import type {
   AgentHarness,
   AgentSessionInteractionOrigin,
   FluidcastHandoffFailure,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   FluidcastSessions,

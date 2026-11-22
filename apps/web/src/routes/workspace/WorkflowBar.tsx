@@ -16,7 +16,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkflowRunSummary, WorkflowWaitDto } from '@isagi/contracts';
+import type { WorkflowRunSummary, WorkflowWaitDto } from '@isagi/shared/contracts';
 
 import { Tooltip } from '../../components/Tooltip.js';
 import { workflowCopy, workflowErrorStageHeadline } from '../../copy/index.js';

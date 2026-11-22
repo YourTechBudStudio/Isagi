@@ -2,6 +2,8 @@ import { join, resolve } from 'node:path';
 
 import { Option } from 'effect';
 
+import { defaultDataDirectory } from '@isagi/shared/global-config';
+
 import { CliFailure } from '../errors.js';
 import { fromFlagOrEnv } from '../settings.js';
 import type { RuntimeLaunch, SourcedValue } from './launch.js';
@@ -59,7 +61,7 @@ export function resolveServeLaunch(
   }
 
   const dataDirectory = read(flags.dataDir, '--data-dir', 'ISAGI_DATA_DIR') ?? {
-    value: '~/.isagi',
+    value: defaultDataDirectory,
     source: 'default',
     name: 'default',
   };

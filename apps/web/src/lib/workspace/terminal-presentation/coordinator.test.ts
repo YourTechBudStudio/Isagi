@@ -7,7 +7,7 @@ import {
   terminalSettingsDefaults,
   type DurableSessionInventory,
   type SurfaceDetail,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { makeChannel, type Channel } from '../../state/channel.js';
 import { flush, makeTestRegistry } from '../../state/testing.js';

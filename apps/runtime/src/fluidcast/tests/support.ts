@@ -40,7 +40,7 @@ import {
 import { LanguageModel, type Prompt, type Response as AiResponse } from 'effect/ai';
 import { HttpClient, HttpClientResponse } from 'effect/http';
 
-import { apiBasePath } from '@isagi/contracts';
+import { apiBasePath } from '@isagi/shared/contracts';
 
 import { ProcessTokens } from '../../access/index.js';
 import {

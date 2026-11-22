@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { registerApiEndpoint, type RouteRuntime } from '../../platform/http/index.js';

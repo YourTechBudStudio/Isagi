@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect, Schema, type Layer } from 'effect';
 
-import { workspaceSnapshotSchema } from '@isagi/contracts';
+import { workspaceSnapshotSchema } from '@isagi/shared/contracts';
 
 import { SurfaceService } from '../../environment/index.js';
 import {

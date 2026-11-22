@@ -4,8 +4,8 @@ import test from 'node:test';
 import { Effect } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { AgentSessionInteraction, SurfaceDetail, SurfacePane } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeTransportError } from '@isagi/runtime-client';
+import type { AgentSessionInteraction, SurfaceDetail, SurfacePane } from '@isagi/shared/contracts';
+import { RuntimeApiError, RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { runApp } from '../state/runtime.js';
 import { makeTestRegistry } from '../state/testing.js';

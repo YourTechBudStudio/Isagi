@@ -11,8 +11,8 @@ import type {
   EnsureEditorRuntimeOutput,
   RetryEditorProvisioningOutput,
   SurfaceDetail,
-} from '@isagi/contracts';
-import { RuntimeTransportError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { controlPlaneQuery } from '../control-plane/queries.js';
 import { mutationError } from '../state/result.js';

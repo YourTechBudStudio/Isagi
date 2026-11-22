@@ -2,7 +2,7 @@ import type {
   DurableSessionIdentity,
   DurableSessionInventory,
   SurfaceDetail,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { Channel } from '../../state/channel.js';
 import { terminalSessionKey } from '../terminal-cache/index.js';

@@ -7,7 +7,7 @@ import {
   type CommandLogMetadataLatestRun,
   type CommandLogStreamOutputMessage,
   type CommandStatus,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { workbenchCopy } from '../../../copy/index.js';
 import { keys } from '../../state/keys.js';

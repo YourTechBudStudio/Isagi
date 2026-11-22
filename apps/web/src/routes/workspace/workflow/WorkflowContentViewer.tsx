@@ -3,8 +3,8 @@ import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowCheckpointFileDto } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { WorkflowCheckpointFileDto } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { disabledQuery } from '../../../lib/state/policy.js';
 import { useRegistry } from '../../../lib/state/registry.js';

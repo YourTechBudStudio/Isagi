@@ -4,8 +4,8 @@ import test, { type TestContext } from 'node:test';
 import { Effect, Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { ApiError, WorkspaceSnapshot } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeTransportError } from '@isagi/runtime-client';
+import type { ApiError, WorkspaceSnapshot } from '@isagi/shared/contracts';
+import { RuntimeApiError, RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { runApp } from '../../state/runtime.js';
 import { flush, makeTestRegistry } from '../../state/testing.js';

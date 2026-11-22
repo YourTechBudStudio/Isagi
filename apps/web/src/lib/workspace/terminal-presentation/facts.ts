@@ -9,7 +9,7 @@
 import { Effect } from 'effect';
 import { Atom, type AtomRegistry } from 'effect/reactivity';
 
-import type { DurableSessionIdentity, RuntimeEvent, SurfaceDetail } from '@isagi/contracts';
+import type { DurableSessionIdentity, RuntimeEvent, SurfaceDetail } from '@isagi/shared/contracts';
 
 import { makeChannel, sessionObject, type Channel } from '../../state/channel.js';
 

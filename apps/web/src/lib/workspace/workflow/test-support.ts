@@ -8,7 +8,7 @@ import type {
   WorkflowGraphInvocationDto,
   WorkflowOperationDto,
   WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * Shared wire fixtures.

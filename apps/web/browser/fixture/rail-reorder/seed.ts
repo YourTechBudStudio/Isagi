@@ -1,4 +1,4 @@
-import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 /**
  * The workspace the fixture's fake runtime serves.

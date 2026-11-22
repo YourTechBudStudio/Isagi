@@ -3,7 +3,7 @@ import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { useCallback, useEffect, useMemo } from 'react';
 
-import type { ProjectKind } from '@isagi/contracts';
+import type { ProjectKind } from '@isagi/shared/contracts';
 
 import { useAppRun, useRegistry } from '../state/registry.js';
 import { queryError } from '../state/result.js';

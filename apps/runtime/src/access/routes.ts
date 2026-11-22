@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { registerApiEndpoint, type RouteRuntime } from '../platform/http/index.js';
 import { clearedSessionSetCookie } from './cookie.js';

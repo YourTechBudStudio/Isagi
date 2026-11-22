@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { EditorContextFacts } from '@isagi/contracts';
+import type { EditorContextFacts } from '@isagi/shared/contracts';
 
 import { editorAttemptBanner, editorPaneView } from '../../lib/editor/view.js';
 import { AppStateProvider } from '../../lib/state/AppStateProvider.js';

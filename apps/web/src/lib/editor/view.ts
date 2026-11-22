@@ -3,7 +3,7 @@ import type {
   EditorContextFacts,
   EditorProcessDiagnostic,
   SessionStatus,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * The editor pane's pure state machine. Surface detail carries a projection of

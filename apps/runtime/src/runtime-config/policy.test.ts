@@ -10,7 +10,7 @@ import {
   clientSettingsOutputSchema,
   terminalSettingsBounds,
   terminalSettingsDefaults,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   defaultRuntimeConfig,

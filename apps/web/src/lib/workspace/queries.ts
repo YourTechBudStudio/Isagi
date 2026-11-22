@@ -2,7 +2,7 @@ import { useAtomValue } from '@effect/atom-react';
 import { Duration, Effect, Option } from 'effect';
 import { AsyncResult, Atom, AtomRegistry } from 'effect/reactivity';
 
-import type { CommandActionOutput } from '@isagi/contracts';
+import type { CommandActionOutput } from '@isagi/shared/contracts';
 
 import type { RuntimeApi } from '../runtime/client.js';
 import { keys } from '../state/keys.js';

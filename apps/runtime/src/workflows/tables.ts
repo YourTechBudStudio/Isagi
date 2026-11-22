@@ -9,7 +9,7 @@ import {
   workflowOperationKindSchema,
   workflowOperationStatusSchema,
   workflowRunStatusSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { worktreeSurfaces } from '../environment/tables.js';
 

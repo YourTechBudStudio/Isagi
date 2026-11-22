@@ -1,4 +1,4 @@
-import type { CommandPort, CommandSummary } from '@isagi/contracts';
+import type { CommandPort, CommandSummary } from '@isagi/shared/contracts';
 
 import type { RuntimeLocality } from '../runtime/locality.js';
 

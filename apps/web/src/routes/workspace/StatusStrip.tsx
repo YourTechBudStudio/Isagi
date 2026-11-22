@@ -3,7 +3,7 @@ import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { Fragment, useCallback } from 'react';
 
-import type { CommandStatus, CommandSummary } from '@isagi/contracts';
+import type { CommandStatus, CommandSummary } from '@isagi/shared/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { LiveAnnouncement } from '../../components/LiveAnnouncement.js';

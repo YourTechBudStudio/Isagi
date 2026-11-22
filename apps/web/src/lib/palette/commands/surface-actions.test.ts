@@ -8,8 +8,8 @@ import type {
   SessionStatus,
   SurfaceDetail,
   WorkflowRunSummary,
-} from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { fluidcastCopy, runtimeErrorCopy, surfaceActionsCopy } from '../../../copy/index.js';
 import { runApp } from '../../state/runtime.js';

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Writable } from 'node:stream';
 import test from 'node:test';
 
-import { RuntimeApiError } from '@isagi/runtime-client';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import {
   content,

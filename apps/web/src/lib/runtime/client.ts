@@ -87,7 +87,7 @@ import {
   type AnyApiContentEndpoint,
   type AnyApiEndpoint,
   type ApiEndpointRequestArgs,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 import {
   contentEndpointUrl,
   interpolatePath,
@@ -96,7 +96,7 @@ import {
   type ContentQuery,
   type RuntimeContentEndpointError,
   type RuntimeEndpointError,
-} from '@isagi/runtime-client';
+} from '@isagi/shared/runtime-client';
 
 import { signalAuthRequired } from '../auth/signal.js';
 import { resolveRuntimeUrl, RuntimeUrlUnavailable } from './resolve.js';
@@ -540,7 +540,7 @@ const invalidRuntimeUrlMessage = 'The runtime URL is not a valid URL.';
 export function makeRuntimeApi(
   currentRuntimeUrl: Effect.Effect<string, RuntimeUrlUnavailable>,
 ): RuntimeApiShape {
-  // `@isagi/runtime-client` builds its requesters from an `HttpClient`. Providing the platform `fetch`
+  // `@isagi/shared/runtime-client` builds its requesters from an `HttpClient`. Providing the platform `fetch`
   // client per call keeps every method requirement-free, so callers run them exactly as before.
   const withHttpApi = <A, E>(
     use: (api: RuntimeHttpApi['Service']) => Effect.Effect<A, E>,

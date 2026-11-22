@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { SurfaceDetail } from '@isagi/contracts';
+import type { SurfaceDetail } from '@isagi/shared/contracts';
 
 import type { Project, Surface } from '../workspace/types.js';
 import { buildPaletteContext, workflowOriginFromSurfaceDetail } from './context.js';

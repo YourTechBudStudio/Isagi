@@ -1,6 +1,6 @@
 import { Data } from 'effect';
 
-import type { RuntimeClientError } from '@isagi/runtime-client';
+import type { RuntimeClientError } from '@isagi/shared/runtime-client';
 
 import type { CliErrorCode } from './error-codes.js';
 import { cliRecovery, runtimeRecovery } from './recovery.js';

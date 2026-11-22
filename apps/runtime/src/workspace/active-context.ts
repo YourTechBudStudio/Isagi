@@ -4,7 +4,7 @@ import type {
   ActiveContext,
   ActiveContextOutput,
   ActiveContextPersistenceInput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { InternalEvents } from '../platform/events/index.js';
 import { ProjectRepository } from '../projects/index.js';

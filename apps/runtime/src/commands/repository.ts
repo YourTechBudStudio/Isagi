@@ -9,7 +9,11 @@ import {
 } from 'drizzle-orm';
 import { Context, Effect, Layer, Result, Schema } from 'effect';
 
-import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
+import type {
+  CommandRunDiagnosticReason,
+  CommandRunStatus,
+  CommandStatus,
+} from '@isagi/shared/contracts';
 
 import {
   DatabaseError,

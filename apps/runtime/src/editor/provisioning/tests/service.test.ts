@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schedule, Tracer } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import type { EditorProvisioningState } from '@isagi/contracts';
+import type { EditorProvisioningState } from '@isagi/shared/contracts';
 
 import { DataDirectory } from '../../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../../platform/persistence/testing.js';

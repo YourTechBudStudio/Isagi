@@ -10,8 +10,7 @@ import {
   type ApiInfrastructureError,
   type WorkspaceSnapshot,
   workflowContentEndpoints,
-} from '@isagi/contracts';
-
+} from '../contracts/index.js';
 import {
   RuntimeApiError,
   RuntimeClient,

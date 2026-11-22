@@ -2,7 +2,7 @@ import { Link2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
-import type { CommandSummary } from '@isagi/contracts';
+import type { CommandSummary } from '@isagi/shared/contracts';
 
 import { LiveAnnouncement } from '../../components/LiveAnnouncement.js';
 import { workbenchCopy } from '../../copy/index.js';

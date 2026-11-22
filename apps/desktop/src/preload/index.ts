@@ -7,7 +7,7 @@ import type {
   DesktopUpdateIntent,
   DesktopUpdateSnapshot,
   HostRuntimeStatusSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 const RAIL_TOP_INSET = process.platform === 'darwin' ? '3rem' : '1rem';
 

@@ -12,7 +12,7 @@ import type { WorkerFeed } from '@yourtechbudstudio/fluidcast-react';
 import { Deferred, Effect, Layer, Stream } from 'effect';
 import { FetchHttpClient } from 'effect/http';
 
-import { RuntimeClient } from '@isagi/runtime-client';
+import { RuntimeClient } from '@isagi/shared/runtime-client';
 
 import { fluidcastTransport, fluidcastWorkerStreams } from './transport.js';
 

@@ -2,7 +2,7 @@ import { Cause, Effect, Exit, Layer, Option, type Redacted } from 'effect';
 import { CliError, Command } from 'effect/cli';
 import { HttpClient } from 'effect/http';
 
-import { RuntimeClient, RuntimeHttpClient, withRuntimeToken } from '@isagi/runtime-client';
+import { RuntimeClient, RuntimeHttpClient, withRuntimeToken } from '@isagi/shared/runtime-client';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { cliEnvironment, newCliCapture } from './cli-environment.js';

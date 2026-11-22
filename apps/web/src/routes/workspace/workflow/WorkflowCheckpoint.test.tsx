@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { WorkflowCheckpointDto } from '@isagi/contracts';
+import type { WorkflowCheckpointDto } from '@isagi/shared/contracts';
 
 import type { RuntimeApiShape } from '../../../lib/runtime/client.js';
 import { AppStateProvider } from '../../../lib/state/AppStateProvider.js';

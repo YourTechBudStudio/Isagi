@@ -1,6 +1,6 @@
 import { Effect, Option } from 'effect';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { call } from '../runtime-api.js';
 import { checkpointsGroup } from './checkpoints.js';

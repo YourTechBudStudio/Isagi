@@ -5,7 +5,7 @@ import type {
   ProjectKind,
   ProjectOrderRejectionReason,
   WorktreeOrderRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   DatabaseError,

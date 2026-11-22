@@ -1,4 +1,4 @@
-import type { AgentHarness, HarnessLaunchBlockReason } from '@isagi/contracts';
+import type { AgentHarness, HarnessLaunchBlockReason } from '@isagi/shared/contracts';
 
 import type { RuntimeHarnessPolicyState } from '../../runtime-config/index.js';
 import type { HostInventoryState } from '../inventory/types.js';

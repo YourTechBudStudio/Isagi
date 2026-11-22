@@ -10,7 +10,7 @@ import {
   apiInfrastructureErrorSchema,
   type ApiContentEndpoint,
   type WireSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../../../test/test-support.js';
 import {

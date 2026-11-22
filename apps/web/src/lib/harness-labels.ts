@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 
-import { agentHarnessSchema, type AgentHarness } from '@isagi/contracts';
+import { agentHarnessSchema, type AgentHarness } from '@isagi/shared/contracts';
 
 // The one place the web spells harness display names. Runtime facts (which
 // harnesses exist, whether they are launchable) come from the control plane;

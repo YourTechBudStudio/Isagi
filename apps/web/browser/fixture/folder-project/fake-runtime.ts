@@ -1,6 +1,6 @@
 import type { AtomRegistry } from 'effect/reactivity';
 
-import type { ReconciliationFinding, WorkspaceSnapshot } from '@isagi/contracts';
+import type { ReconciliationFinding, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { revalidate } from '../../../src/lib/state/policy.js';
 import { runApp } from '../../../src/lib/state/runtime.js';

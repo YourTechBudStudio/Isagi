@@ -11,8 +11,8 @@ import type {
   CommandLogMetadataOutput,
   SurfaceDetail,
   WorktreeCommandsOutput,
-} from '@isagi/contracts';
-import { RuntimeTransportError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { keys } from '../../state/keys.js';
 import { mutationError } from '../../state/result.js';

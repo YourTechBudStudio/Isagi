@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import type { HarnessConversationTurn } from './definition-types.js';
 import { harnessDefinition } from './definitions.js';

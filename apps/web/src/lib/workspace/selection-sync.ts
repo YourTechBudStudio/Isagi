@@ -6,7 +6,7 @@
  * it the current values and applies the result. The little state it needs across runs lives in
  * `selectionSyncAtom`, one per app session.
  */
-import type { ActiveContextOutput } from '@isagi/contracts';
+import type { ActiveContextOutput } from '@isagi/shared/contracts';
 
 import { toastCopy } from '../../copy/index.js';
 import { sessionObject } from '../state/channel.js';

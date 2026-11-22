@@ -6,8 +6,8 @@ import type {
   AgentSessionInteractionMode,
   AgentSessionInteractionOrigin,
   AgentSessionMetadata,
-} from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { keys } from '../state/keys.js';

@@ -5,7 +5,7 @@ import { mock, test, type TestContext } from 'node:test';
 import { Duration, Effect } from 'effect';
 import type { AtomRegistry } from 'effect/reactivity';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { connectBrowserRevalidation, query, type QueryPolicy } from './policy.js';

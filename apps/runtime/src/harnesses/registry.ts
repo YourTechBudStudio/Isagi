@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import { DataDirectory } from '../platform/persistence/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/index.js';

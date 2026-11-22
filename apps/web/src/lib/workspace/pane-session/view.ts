@@ -11,7 +11,7 @@ import {
   type PtyWebSocketErrorCode,
   type SurfacePane,
   type TerminalSessionMetadata,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * The session bound to a pane, flattened so the discriminant and the metadata

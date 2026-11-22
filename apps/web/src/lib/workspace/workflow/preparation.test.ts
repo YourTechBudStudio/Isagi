@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { GetWorkflowRunOutput, WorkflowRunSummary } from '@isagi/contracts';
+import type { GetWorkflowRunOutput, WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { runApp } from '../../state/runtime.js';
 import { controllable, flush, makeTestRegistry } from '../../state/testing.js';

@@ -3,8 +3,7 @@ import test from 'node:test';
 
 import { Effect, Stream } from 'effect';
 
-import { workflowContentEndpoints } from '@isagi/contracts';
-
+import { workflowContentEndpoints } from '../contracts/index.js';
 import {
   contentEndpointUrl,
   RuntimeApiError,

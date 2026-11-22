@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { CommandActionOutput, CommandStatus } from '@isagi/contracts';
+import type { CommandActionOutput, CommandStatus } from '@isagi/shared/contracts';
 
 import type { WorktreeCommandConfig, ProjectRepository } from '../projects/index.js';
 import { loadWorktreeCommandCatalog } from '../projects/index.js';

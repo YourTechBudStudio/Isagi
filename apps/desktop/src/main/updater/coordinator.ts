@@ -11,7 +11,7 @@ import {
 } from 'effect';
 import { HttpClient } from 'effect/http';
 
-import type { DesktopUpdateSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot } from '@isagi/shared/contracts';
 
 import { DesktopUpdaterConfig, type UpdaterEvent, type UpdaterListener } from './config.js';
 import {

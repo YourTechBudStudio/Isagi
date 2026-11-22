@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Fiber, Layer, Scope, Exit } from 'effect';
 
-import type { AgentSessionInteractionOrigin } from '@isagi/contracts';
+import type { AgentSessionInteractionOrigin } from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../../../../test/test-support.js';
 import {

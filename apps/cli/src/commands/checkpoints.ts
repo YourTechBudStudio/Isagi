@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { Effect, Option, Stream } from 'effect';
 import { Flag } from 'effect/cli';
 
-import { apiEndpoints, workflowContentEndpoints } from '@isagi/contracts';
+import { apiEndpoints, workflowContentEndpoints } from '@isagi/shared/contracts';
 
 import { streamContent } from '../content-stream.js';
 import { CliContext } from '../context.js';

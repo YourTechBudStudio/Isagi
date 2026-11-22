@@ -2,7 +2,7 @@ import { useAtomValue } from '@effect/atom-react';
 import type { CSSProperties, PointerEvent, ReactNode, RefObject } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { SurfaceDetail, SurfaceLayoutNode, SurfacePane } from '@isagi/contracts';
+import type { SurfaceDetail, SurfaceLayoutNode, SurfacePane } from '@isagi/shared/contracts';
 
 import { useRegistry } from '../../lib/state/registry.js';
 import { runApp } from '../../lib/state/runtime.js';

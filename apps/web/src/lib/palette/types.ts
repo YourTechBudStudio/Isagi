@@ -5,7 +5,7 @@ import type {
   CommandSummary,
   WorkflowDescriptorResult,
   WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { IconType } from '../icon.js';
 import type { AppRun } from '../state/registry.js';

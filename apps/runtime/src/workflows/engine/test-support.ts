@@ -12,7 +12,7 @@ import type {
   RuntimeEvent,
   WorkflowPlacementRequestDto,
   WorktreeSetupResult,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { notInTerminalMode } from '../../environment/testing.js';
 import { HarnessObserverRefreshError } from '../../harnesses/index.js';

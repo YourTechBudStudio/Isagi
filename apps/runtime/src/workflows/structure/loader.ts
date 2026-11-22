@@ -24,7 +24,7 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Data, Effect } from 'effect';
 
-import type { WorkflowLoadFailureReason } from '@isagi/contracts';
+import type { WorkflowLoadFailureReason } from '@isagi/shared/contracts';
 
 import type { GraphDefinition, WorkflowDefinition } from '../types.js';
 

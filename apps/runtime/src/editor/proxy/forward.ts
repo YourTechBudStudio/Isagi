@@ -4,7 +4,7 @@ import type { Socket } from 'node:net';
 import { Effect } from 'effect';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import type { EditorProxyUnavailableError } from '@isagi/contracts';
+import type { EditorProxyUnavailableError } from '@isagi/shared/contracts';
 
 import { stripSessionCookie } from '../../access/index.js';
 import { errorMessage } from '../../platform/http/index.js';

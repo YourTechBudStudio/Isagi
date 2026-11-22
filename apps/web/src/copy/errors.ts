@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 
-import { workflowRejectedErrorSchema } from '@isagi/contracts';
+import { workflowRejectedErrorSchema } from '@isagi/shared/contracts';
 import type {
   ApiError,
   EditorAttemptFailureReason,
@@ -15,7 +15,7 @@ import type {
   WorktreeOrderRejectionReason,
   WorkflowRejectionReason,
   WorktreeSetupRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { editorAttemptFailureCopy } from './editor.js';
 import { workflowLoadFailureReasonCopyOrFallback } from './workflows.js';

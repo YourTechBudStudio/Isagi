@@ -1,4 +1,4 @@
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import { claudeHarnessDefinition } from './claude/definition.js';
 import { codexHarnessDefinition } from './codex/definition.js';

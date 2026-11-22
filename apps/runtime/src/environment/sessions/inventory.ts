@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { DurableSessionInventory } from '@isagi/contracts';
+import type { DurableSessionInventory } from '@isagi/shared/contracts';
 
 import type { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { agentSessions, terminalSessions } from '../tables.js';

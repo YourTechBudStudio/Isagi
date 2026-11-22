@@ -18,7 +18,7 @@ import type {
   WorkflowLaunchOrigin,
   WorkflowRunSummary,
   WorkflowUserInputAnswers,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { AgentSessionService, SurfaceService } from '../../environment/index.js';
 import {

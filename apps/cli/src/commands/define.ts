@@ -9,7 +9,7 @@
 import { Context, Effect, Option } from 'effect';
 import { Command, Flag } from 'effect/cli';
 
-import type { RuntimeClient } from '@isagi/runtime-client';
+import type { RuntimeClient } from '@isagi/shared/runtime-client';
 
 import type { CliContext } from '../context.js';
 import { CliFailure } from '../errors.js';

@@ -1,6 +1,6 @@
 import { Context, type Effect } from 'effect';
 
-import type { AgentHarness, SessionStatus } from '@isagi/contracts';
+import type { AgentHarness, SessionStatus } from '@isagi/shared/contracts';
 
 import type { DatabaseError } from '../platform/persistence/index.js';
 import type { Incarnation } from './incarnation.js';

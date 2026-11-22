@@ -1,4 +1,4 @@
-import type { ProjectKind } from '@isagi/contracts';
+import type { ProjectKind } from '@isagi/shared/contracts';
 
 export type ProjectStatus = 'present' | 'missing';
 

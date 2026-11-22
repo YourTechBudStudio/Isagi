@@ -1,6 +1,6 @@
 import { Context, Effect, FiberMap, Layer, Result, Stream } from 'effect';
 
-import type { EditorAttemptFailureReason, EditorDiagnosticsOutput } from '@isagi/contracts';
+import type { EditorAttemptFailureReason, EditorDiagnosticsOutput } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { InternalEvents } from '../../platform/events/index.js';

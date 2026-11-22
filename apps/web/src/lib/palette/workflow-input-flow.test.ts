@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { WorkflowQuestionSpecDto } from '@isagi/shared/contracts';
 
 import { paletteCopy } from '../../copy/index.js';
 import {

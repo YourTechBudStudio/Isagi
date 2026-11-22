@@ -26,7 +26,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/static": "^10.1.8",
     "@fastify/websocket": "^11.2.0",
-    "@isagi/contracts": "workspace:*",
+    "@isagi/shared": "workspace:*",
     "@yourtechbudstudio/fluidcast-core": "catalog:",
     "@yourtechbudstudio/fluidcast-harness": "catalog:",
     "@yourtechbudstudio/fluidcast-presets": "catalog:",

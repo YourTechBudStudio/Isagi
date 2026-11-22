@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 
-import type { EditorDiagnosticsOutput } from '@isagi/contracts';
+import type { EditorDiagnosticsOutput } from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { ContextMenu } from '../../components/ContextMenu.js';

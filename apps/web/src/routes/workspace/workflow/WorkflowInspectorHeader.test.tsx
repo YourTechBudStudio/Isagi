@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { workflowErrorStageHeadline } from '../../../copy/index.js';
 import { workflowSummaryFixture } from '../../../lib/workspace/workflow/test-support.js';

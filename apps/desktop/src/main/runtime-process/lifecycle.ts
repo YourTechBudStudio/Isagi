@@ -25,7 +25,7 @@ import {
   type HostRuntimeDiagnostic,
   type HostRuntimeFailureReason,
   type HostRuntimeStatusSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { LosslessLineDecoder, type DecodedLine } from './line-decoder.js';
 import type { RuntimeLogSink, RuntimeLogStream } from './logging.js';

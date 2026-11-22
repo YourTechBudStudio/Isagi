@@ -18,8 +18,7 @@
     "typecheck:built": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@isagi/contracts": "workspace:*",
-    "@isagi/runtime-client": "workspace:*",
+    "@isagi/shared": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

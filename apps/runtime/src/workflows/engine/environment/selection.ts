@@ -1,6 +1,9 @@
 import { Effect, Schema } from 'effect';
 
-import { workflowPlacementRequestSchema, type WorkflowPlacementRequestDto } from '@isagi/contracts';
+import {
+  workflowPlacementRequestSchema,
+  type WorkflowPlacementRequestDto,
+} from '@isagi/shared/contracts';
 
 import { WorkflowEngineError } from '../../errors.js';
 import { errorMessage } from '../../state/pure.js';

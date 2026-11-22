@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { ControlPlaneSnapshot, EditorProvisioningState } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, EditorProvisioningState } from '@isagi/shared/contracts';
 
 import { UserVisibleError } from '../../lib/workspace/runtime-data.js';
 import { startupBootView } from './startup-view.js';

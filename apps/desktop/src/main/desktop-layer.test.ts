@@ -17,7 +17,7 @@ import {
   SubscriptionRef,
 } from 'effect';
 
-import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/shared/contracts';
 
 import {
   DESKTOP_UPDATE_CHANNEL,

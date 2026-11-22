@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { AtomRegistry } from 'effect/reactivity';
 
-import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
+import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { RuntimeApi } from '../../runtime/client.js';
 import { runtimeApiLayerAtom } from '../../state/runtime.js';

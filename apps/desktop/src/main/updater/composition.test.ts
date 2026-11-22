@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect, Layer, Stream, SubscriptionRef, type Scope } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import type { DesktopUpdateSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot } from '@isagi/shared/contracts';
 
 import type { DesktopUpdaterConfig } from './config.js';
 import { DesktopUpdater } from './service.js';

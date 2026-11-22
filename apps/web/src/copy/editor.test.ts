@@ -7,7 +7,7 @@ import type {
   EditorProcessDiagnostic,
   EditorProvisioningFailureReason,
   EditorRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { runtimeErrorCopy } from './errors.js';
 import {

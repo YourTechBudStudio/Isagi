@@ -14,7 +14,7 @@ import { join } from 'node:path';
 
 import { Context, Data, Effect, Layer, Result, Schema, SchemaIssue } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import {
   describeOperationalCause,

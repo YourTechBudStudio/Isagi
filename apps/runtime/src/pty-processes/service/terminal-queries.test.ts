@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { type AppearanceTheme, terminalPalette } from '@isagi/contracts';
+import { type AppearanceTheme, terminalPalette } from '@isagi/shared/contracts';
 
 import { createTerminalQueryFilter, type TerminalQueryFilter } from './terminal-queries.js';
 

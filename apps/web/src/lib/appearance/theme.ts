@@ -1,4 +1,4 @@
-import { type AppearanceTheme, appearanceSettingsDefaults } from '@isagi/contracts';
+import { type AppearanceTheme, appearanceSettingsDefaults } from '@isagi/shared/contracts';
 
 /**
  * The document's color theme.

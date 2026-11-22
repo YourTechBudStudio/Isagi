@@ -1,8 +1,12 @@
 import { Data, Duration, Effect, type Redacted } from 'effect';
 import { HttpClient } from 'effect/http';
 
-import { apiBasePath, apiEndpoints } from '@isagi/contracts';
-import { RuntimeClient, type RuntimeClientError, withRuntimeToken } from '@isagi/runtime-client';
+import { apiBasePath, apiEndpoints } from '@isagi/shared/contracts';
+import {
+  RuntimeClient,
+  type RuntimeClientError,
+  withRuntimeToken,
+} from '@isagi/shared/runtime-client';
 
 import type { RuntimeLifecycleFailure } from '../runtime-process/index.js';
 

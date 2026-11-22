@@ -12,7 +12,7 @@ import type {
   WorkflowRunSummary,
   WorkflowUiFeedbackDto,
   WorkflowWaitDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { SavedResult } from '../engine/results.js';
 import type { CheckpointScope } from '../store/checkpoints.js';

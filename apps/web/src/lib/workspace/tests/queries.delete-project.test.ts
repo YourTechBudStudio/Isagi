@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 
 import { Effect, Logger } from 'effect';
 
-import type { DeleteProjectOutput, WorkspaceSnapshot } from '@isagi/contracts';
+import type { DeleteProjectOutput, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { toastCopy } from '../../../copy/index.js';
 import { runApp } from '../../state/runtime.js';

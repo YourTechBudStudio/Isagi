@@ -3,7 +3,7 @@ import type {
   EditorContextMetadata,
   SurfaceDetail,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { requestBodyText } from '../request-body.js';
 

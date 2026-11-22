@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { type WorktreeCommandsOutput } from '@isagi/contracts';
+import { type WorktreeCommandsOutput } from '@isagi/shared/contracts';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
 import { CommandError } from '../errors.js';

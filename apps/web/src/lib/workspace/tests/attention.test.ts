@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { makeTestRegistry } from '../../state/testing.js';
 import {

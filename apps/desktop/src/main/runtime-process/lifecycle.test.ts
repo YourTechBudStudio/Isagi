@@ -16,7 +16,7 @@ import {
 } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
+import type { HostRuntimeStatusSnapshot } from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../log-capture-test-support.js';
 import {

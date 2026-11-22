@@ -7,7 +7,7 @@ import {
   type WorktreeDeleteRejectionReason,
   type WorktreeOperationRejectionReason,
   type WorktreeSetupRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { registerApiEndpoint, type RouteRuntime } from '../platform/http/index.js';
 import type { ProjectConfigError } from '../projects/index.js';

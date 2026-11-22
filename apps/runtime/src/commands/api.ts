@@ -7,7 +7,7 @@ import {
   ptyWebSocketInputMessageSchema,
   type CommandLogStreamErrorCode,
   type CommandLogStreamOutputMessage,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   errorMessage,

@@ -13,7 +13,7 @@ import {
   useState,
 } from 'react';
 
-import type { WorkflowLaunchOrigin } from '@isagi/contracts';
+import type { WorkflowLaunchOrigin } from '@isagi/shared/contracts';
 
 import { Chip } from '../../components/Chip.js';
 import {

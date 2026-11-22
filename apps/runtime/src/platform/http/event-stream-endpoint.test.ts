@@ -8,7 +8,7 @@ import {
   apiInfrastructureErrorSchema,
   type ApiEventStreamEndpoint,
   type WireSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { ApiHandler } from './endpoint.js';
 import { registerEventStreamEndpoint } from './event-stream-endpoint.js';

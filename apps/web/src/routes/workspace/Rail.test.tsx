@@ -3,7 +3,10 @@ import { afterEach, describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { DESKTOP_UPDATE_PROTOCOL_VERSION, type DesktopUpdateSnapshot } from '@isagi/contracts';
+import {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  type DesktopUpdateSnapshot,
+} from '@isagi/shared/contracts';
 
 import { UpdateFooter } from './Rail.js';
 import { RailUpdateFooter } from './RailUpdateFooter.js';

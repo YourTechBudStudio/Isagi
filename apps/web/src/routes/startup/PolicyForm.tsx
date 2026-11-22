@@ -5,7 +5,7 @@ import type {
   ControlPlaneSnapshot,
   DocsHarnessResult,
   DocsReconciliationResult,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { docsResultCopy, editorProvisioningCopy, onboardingCopy } from '../../copy/index.js';

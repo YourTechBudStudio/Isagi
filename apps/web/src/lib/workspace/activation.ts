@@ -2,7 +2,7 @@ import { Cause, Effect, Exit, Option } from 'effect';
 import { AsyncResult, type AtomRegistry } from 'effect/reactivity';
 import { useEffect, useRef } from 'react';
 
-import type { SurfaceDetail } from '@isagi/contracts';
+import type { SurfaceDetail } from '@isagi/shared/contracts';
 
 import { toastCopy } from '../../copy/index.js';
 import { isPaletteOpen } from '../palette/store.js';

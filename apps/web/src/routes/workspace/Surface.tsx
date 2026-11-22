@@ -1,7 +1,7 @@
 import { useAtomValue } from '@effect/atom-react';
 import { AnimatePresence } from 'motion/react';
 
-import type { AgentSessionMetadata } from '@isagi/contracts';
+import type { AgentSessionMetadata } from '@isagi/shared/contracts';
 
 import { surfaceDetailCopy } from '../../copy/index.js';
 import { queryError } from '../../lib/state/result.js';

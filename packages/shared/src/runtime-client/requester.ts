@@ -24,8 +24,7 @@ import {
   type ApiEventStreamEndpointParams,
   type ApiInfrastructureError,
   type WireSchema,
-} from '@isagi/contracts';
-
+} from '../contracts/index.js';
 import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './errors.js';
 
 /**
