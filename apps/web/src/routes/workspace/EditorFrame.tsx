@@ -4,9 +4,9 @@ import { editorCopy } from '../../copy/index.js';
 import { EditorWait } from './EditorWait.js';
 
 /**
- * The embedded workbench, served through the runtime at `/editor/<id>/`. In a
- * runtime-served browser UI it is therefore same-origin with the app; in the
- * desktop it is the runtime's origin.
+ * The embedded workbench, served through the runtime at `/editor/<id>/`. The
+ * UI is always loaded from the runtime (the desktop loads it exactly as a
+ * browser does), so the frame is same-origin with the app everywhere.
  *
  * There is deliberately no `sandbox` attribute: it cannot confine a same-origin
  * frame that needs `allow-scripts allow-same-origin`, and Code Server's

@@ -7,38 +7,64 @@ import test from 'node:test';
 import { Effect, Exit } from 'effect';
 import Fastify, { type FastifyRequest } from 'fastify';
 
-import { isWebUiDocumentRequest, registerWebUi, requireWebRoot, WebRootUnusable } from './index.js';
+import {
+  isWebUiDocumentRequest,
+  prepareWebUi,
+  registerWebUi,
+  renderWebUiDocument,
+  WebRootUnusable,
+} from './index.js';
 
-async function unusable(webRoot: Parameters<typeof requireWebRoot>[0]) {
-  const exit = await Effect.runPromiseExit(requireWebRoot(webRoot));
+async function unusable(webRoot: Parameters<typeof prepareWebUi>[0]) {
+  const exit = await Effect.runPromiseExit(prepareWebUi(webRoot, 'dark'));
   assert.ok(Exit.isFailure(exit), 'expected the web root to be refused');
   const error = exit.cause.reasons.find((reason) => reason._tag === 'Fail')?.error;
   assert.ok(error instanceof WebRootUnusable);
   return error;
 }
 
-test('a web root holding a readable index.html is accepted', async () => {
+test('a web root holding a readable index.html is accepted and its document rendered with the theme', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-web-root-'));
   try {
-    writeFileSync(join(root, 'index.html'), '<!doctype html>');
-    const accepted = await Effect.runPromise(
-      requireWebRoot({ value: root, source: 'flag', name: '--web-root' }),
+    writeFileSync(join(root, 'index.html'), '<!doctype html><html lang="en"><body></body></html>');
+    const webUi = await Effect.runPromise(
+      prepareWebUi({ value: root, source: 'flag', name: '--web-root' }, 'light'),
     );
-    assert.equal(accepted, root);
+    assert.equal(webUi.root, root);
+    assert.equal(
+      webUi.document,
+      '<!doctype html><html data-theme="light" lang="en"><body></body></html>',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('no web root names the setting and both fixes', async () => {
+test('rendering sets data-theme on <html>, replacing one already there, and leaves the rest alone', () => {
+  assert.equal(renderWebUiDocument('<html>x</html>', 'dark'), '<html data-theme="dark">x</html>');
+  for (const tag of [
+    '<html lang="en" data-theme="light">',
+    '<html data-theme=\'light\' lang="en">',
+    '<html DATA-THEME=light lang="en">',
+  ]) {
+    assert.match(
+      renderWebUiDocument(`<!doctype html>${tag}<body data-theme="x"></body></html>`, 'dark'),
+      /^<!doctype html><html data-theme="dark"( lang="en")?( lang="en")?><body data-theme="x"><\/body><\/html>$/,
+      tag,
+    );
+  }
+  assert.throws(() => renderWebUiDocument('<!doctype html><body></body>', 'dark'), /no <html> tag/);
+});
+
+test('no web root names the flag that fixes it', async () => {
   const error = await unusable(undefined);
   assert.equal(
     error.message,
-    'server.serveWebUi is true, but this runtime was started without a web root. Pass isagi serve --web-root <directory of a built web workbench>, or set server.serveWebUi to false.',
+    'This runtime was started without a web root, and every runtime serves the web UI. Pass isagi serve --web-root <directory of a built web workbench>.',
   );
 });
 
-test('a missing directory or index.html names the path, its source, the fs detail and the fix', async () => {
+test('a missing directory, index.html or <html> tag names the path, its source, the detail and the fix', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-web-root-'));
   try {
     const missing = join(root, 'absent');
@@ -46,16 +72,21 @@ test('a missing directory or index.html names the path, its source, the fs detai
     assert.match(
       fromFlag.message,
       new RegExp(
-        `^server\\.serveWebUi is true, but the web root ${missing} \\(from --web-root\\) has no readable index\\.html \\(ENOENT[^)]*\\)\\. Point --web-root at a built web workbench, such as apps/web/dist after building the web app, or set server\\.serveWebUi to false\\.$`,
+        `^The web root ${missing} \\(from --web-root\\) has no usable index\\.html \\(ENOENT[^)]*\\)\\. Point --web-root at a built web workbench, such as apps/web/dist after building the web app\\.$`,
       ),
     );
 
     const bundled = await unusable({ value: root, source: 'default', name: 'default' });
     assert.match(
       bundled.message,
-      /the web root .+ \(the copy bundled with isagi\) has no readable index\.html \(ENOENT/,
+      /the web root .+ \(the copy bundled with isagi\) has no usable index\.html \(ENOENT/i,
     );
 
+    writeFileSync(join(root, 'index.html'), 'no tag');
+    const untagged = await unusable({ value: root, source: 'flag', name: '--web-root' });
+    assert.match(untagged.message, /index\.html has no <html> tag/);
+
+    rmSync(join(root, 'index.html'));
     mkdirSync(join(root, 'index.html'));
     const directory = await unusable({ value: root, source: 'flag', name: '--web-root' });
     assert.match(directory.message, /index\.html is not a file/);
@@ -86,12 +117,14 @@ test('the static routes are public to the access guard, and a route registered a
     done();
   });
   try {
-    await registerWebUi(fastify, root);
+    await registerWebUi(fastify, { root, document: '<!doctype html><html></html>' });
     fastify.get('/api/v1/after', () => ({}));
     await fastify.inject({ method: 'GET', url: '/index.html' });
+    await fastify.inject({ method: 'GET', url: '/' });
     await fastify.inject({ method: 'GET', url: '/deep/page' });
     await fastify.inject({ method: 'GET', url: '/api/v1/after' });
     assert.equal(seen.get('/index.html'), true);
+    assert.equal(seen.get('/'), true);
     assert.equal(seen.get('/deep/page'), true);
     assert.equal(seen.get('/api/v1/after'), undefined);
   } finally {

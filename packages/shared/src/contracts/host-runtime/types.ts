@@ -1,18 +1,9 @@
 export const HOST_RUNTIME_STATUS_PROTOCOL_VERSION = 1 as const;
 
 /**
- * How the desktop host came by the runtime it is talking to.
- *
- * `'managed'` means the host launched the runtime process itself, on the machine
- * the client is running on; co-location is therefore a property of how the
- * connection was constructed, not something a client has to infer.
- *
- * `'external'` means the host attached to a runtime address it was given. That
- * runtime may well be on the same machine, but nothing here establishes it, so a
- * client that needs co-location must treat this as "not established".
+ * Why the desktop's managed runtime failed. The desktop only ever runs the runtime it launched itself, on the
+ * machine the window is on; a remote runtime is used through a browser.
  */
-export type HostRuntimeOwnership = 'managed' | 'external';
-
 export type HostRuntimeFailureReason =
   | 'launch_configuration_invalid'
   | 'stage_invalid'
@@ -22,8 +13,7 @@ export type HostRuntimeFailureReason =
   | 'exited_before_ready'
   | 'health_check_failed'
   | 'process_error'
-  | 'exited_after_ready'
-  | 'external_health_check_failed';
+  | 'exited_after_ready';
 
 export interface HostRuntimeDiagnostic {
   readonly message?: string;
@@ -31,32 +21,22 @@ export interface HostRuntimeDiagnostic {
   readonly signal?: string | null;
 }
 
+/** The managed runtime's lifecycle, as the desktop main process tracks it to decide what its window shows. */
 export type HostRuntimeStatusSnapshot =
   | {
       readonly protocolVersion: typeof HOST_RUNTIME_STATUS_PROTOCOL_VERSION;
       readonly revision: number;
-      readonly ownership: HostRuntimeOwnership;
       readonly state: 'connecting';
     }
   | {
       readonly protocolVersion: typeof HOST_RUNTIME_STATUS_PROTOCOL_VERSION;
       readonly revision: number;
-      readonly ownership: HostRuntimeOwnership;
       readonly state: 'ready';
     }
   | {
       readonly protocolVersion: typeof HOST_RUNTIME_STATUS_PROTOCOL_VERSION;
       readonly revision: number;
-      readonly ownership: 'external';
-      readonly state: 'unreachable';
-      readonly reason: 'external_health_check_failed';
-      readonly diagnostic?: HostRuntimeDiagnostic;
-    }
-  | {
-      readonly protocolVersion: typeof HOST_RUNTIME_STATUS_PROTOCOL_VERSION;
-      readonly revision: number;
-      readonly ownership: 'managed';
       readonly state: 'failed';
-      readonly reason: Exclude<HostRuntimeFailureReason, 'external_health_check_failed'>;
+      readonly reason: HostRuntimeFailureReason;
       readonly diagnostic?: HostRuntimeDiagnostic;
     };

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
@@ -57,12 +58,22 @@ export function runDevelopmentSupervisor(options = {}) {
       presenter({ source: 'dev', stream: 'stdout', payload: `lock ${lock.path}\n` });
 
       if (signals.selected) return signals.selected.exitCode;
+      // Chosen here so Vite knows its proxy target before the desktop spawns the runtime on it. The port is free when
+      // picked; another process could take it before the runtime binds, which then fails readiness visibly (dev only).
+      const runtimePort =
+        options.runtimePort ??
+        (yield* Effect.tryPromise({
+          try: () => pickFreeLoopbackPort(),
+          catch: (cause) => failure(`Could not pick a runtime port: ${errorMessage(cause)}`),
+        }));
+      presenter({ source: 'dev', stream: 'stdout', payload: `runtime port ${runtimePort}\n` });
       return yield* superviseChildren({
         root,
         paths,
         presenter,
         signals,
         ...options,
+        runtimePort,
         electronExecutable,
       });
     }),
@@ -91,6 +102,7 @@ export function runDevelopmentSupervisor(options = {}) {
 function superviseChildren({
   root,
   paths = developmentPaths(root),
+  runtimePort,
   presenter,
   signals,
   electronExecutable,
@@ -106,13 +118,21 @@ function superviseChildren({
     let unsubscribeSignal = () => {};
     const runtimeDecoders = new Map();
     const outputDrains = new Set();
-    const environment = createDesktopEnvironment(process.env, root);
-    const webEnvironment = createWebEnvironment(process.env);
-    const web = spawnManaged(spawnChild, process.execPath, ['scripts/vite-launcher.mjs', 'dev'], {
-      cwd: resolve(root, 'apps/web'),
-      env: webEnvironment,
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const environment = createDesktopEnvironment(process.env, root, runtimePort);
+    const webEnvironment = createWebEnvironment(process.env, {
+      runtimePort,
+      dataDirectory: paths.dataRoot,
     });
+    const web = spawnManaged(
+      spawnChild,
+      process.execPath,
+      ['--import', 'tsx', 'scripts/vite-launcher.mjs', 'dev'],
+      {
+        cwd: resolve(root, 'apps/web'),
+        env: webEnvironment,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
 
     const timeout = setTimeout(
       () => terminal({ exitCode: 1, message: 'Timed out waiting for ISAGI_WEB_READY.' }),
@@ -422,12 +442,19 @@ function describeExit(code, signal) {
   return 'unknown result';
 }
 
-function createDesktopEnvironment(environment, root) {
+/**
+ * The desktop's environment. With `runtimePort`, `ISAGI_PORT` pins the managed runtime to the port Vite proxies to
+ * (the desktop passes no `--port`, so `serve` applies it by precedence, over any `server.port` in the dev config).
+ */
+function createDesktopEnvironment(environment, root, runtimePort) {
   const inherited = { ...environment };
   delete inherited.ELECTRON_RUN_AS_NODE;
   delete inherited.ISAGI_RUNTIME_URL;
   delete inherited.VITE_ISAGI_RUNTIME_URL;
   delete inherited[developmentEnvironmentKeys.webUrl];
+  delete inherited[developmentEnvironmentKeys.devRuntimeUrl];
+  delete inherited[developmentEnvironmentKeys.devDataDir];
+  if (runtimePort !== undefined) inherited.ISAGI_PORT = String(runtimePort);
   inherited[developmentEnvironmentKeys.worktreeRoot] = root;
   inherited[developmentEnvironmentKeys.desktopLogMode] = 'supervisor';
   inherited[developmentEnvironmentKeys.processOwner] = '1';
@@ -435,10 +462,37 @@ function createDesktopEnvironment(environment, root) {
   return inherited;
 }
 
-function createWebEnvironment(environment) {
+/**
+ * Vite's environment: the runtime it proxies to and the data directory its `transformIndexHtml` reads the theme from,
+ * when the supervisor chose a runtime port. Inherited values of both are dropped either way.
+ */
+function createWebEnvironment(environment, options = {}) {
   const inherited = { ...environment };
   delete inherited.VITE_ISAGI_RUNTIME_URL;
+  delete inherited[developmentEnvironmentKeys.devRuntimeUrl];
+  delete inherited[developmentEnvironmentKeys.devDataDir];
+  if (options.runtimePort !== undefined) {
+    inherited[developmentEnvironmentKeys.devRuntimeUrl] = `http://127.0.0.1:${options.runtimePort}`;
+    if (options.dataDirectory)
+      inherited[developmentEnvironmentKeys.devDataDir] = options.dataDirectory;
+  }
   return inherited;
+}
+
+/** A loopback port free right now, from the OS. */
+function pickFreeLoopbackPort() {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(() =>
+        typeof address === 'object' && address
+          ? resolvePort(address.port)
+          : reject(new Error('no port was assigned')),
+      );
+    });
+  });
 }
 
 function resolveElectronExecutable(desktopRoot) {
@@ -451,6 +505,7 @@ function resolveElectronExecutable(desktopRoot) {
 }
 
 export {
+  pickFreeLoopbackPort,
   createDesktopEnvironment,
   createWebEnvironment,
   createSupervisorSignalSource,

@@ -78,8 +78,8 @@ function byReason<Reason extends string>(
 // Keyed by API error `code`. `byReason` refines on `data.reason` where the reason
 // changes what the user should do; otherwise `summary` carries the whole message.
 const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
-  // Reachable when a client calls the runtime at an address its Host guard refuses, such as a desktop attached
-  // through ISAGI_RUNTIME_URL to an unlisted non-loopback address. The generic line would hide the fix.
+  // Reachable when a client calls the runtime at an address its Host guard refuses, such as a browser opening the
+  // runtime at an unlisted non-loopback name. The generic line would hide the fix.
   api_host_not_allowed: {
     summary:
       'The runtime turned this address away. List it in server.allowedHosts on the runtime, then restart it.',

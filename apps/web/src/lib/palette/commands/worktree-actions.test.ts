@@ -36,7 +36,7 @@ test('delete-active-worktree is hidden for the root active worktree', () => {
 test('delete-active-worktree preflight freezes explicit target values', async () => {
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { isagi: { getRuntimeUrl: () => Promise.resolve('http://runtime.test') } },
+    value: { location: { protocol: 'http:', origin: 'http://runtime.test' } },
   });
   const urls: string[] = [];
   globalThis.fetch = ((input) => {
@@ -89,7 +89,7 @@ test('delete-active-worktree hides branch delete option for detached worktrees',
 test('delete-active-worktree renders branch failure as a palette result', async () => {
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { isagi: { getRuntimeUrl: () => Promise.resolve('http://runtime.test') } },
+    value: { location: { protocol: 'http:', origin: 'http://runtime.test' } },
   });
   globalThis.fetch = mockDeleteFetch({
     projectId: 1,

@@ -22,7 +22,7 @@ export class ServerWaitFailed extends Data.TaggedError('ServerWaitFailed')<{
 
 /**
  * The runtime URL cannot serve as a base for the health endpoint (a scheme-less `localhost:4100`, say). The message is
- * the parser's own (`Invalid URL`), which never echoes the value: an external runtime URL can carry credentials.
+ * the parser's own (`Invalid URL`), which never echoes the value: a URL can carry credentials.
  */
 export class InvalidRuntimeUrl extends Data.TaggedError('InvalidRuntimeUrl')<{
   readonly cause: unknown;

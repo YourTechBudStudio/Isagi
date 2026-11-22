@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { runtimeRequestHeaders } from './runtime-authorization.js';
 
-const runtime = { host: '127.0.0.1:43129', authorization: 'Bearer launcher' };
+const runtime = { hosts: ['127.0.0.1:43129'], authorization: 'Bearer launcher' };
 const headers = { Accept: 'application/json' };
 const headersFor = (url: string) =>
   runtimeRequestHeaders({ url, requestHeaders: headers }, runtime);
@@ -42,4 +42,25 @@ test('other ports, other hosts, other schemes, file: and malformed URLs are left
   ]) {
     assert.equal(headersFor(url), headers, url);
   }
+});
+
+test('in development the Vite dev server host carries the bearer too, for its proxy to forward', () => {
+  const development = {
+    hosts: ['127.0.0.1:43129', '127.0.0.1:5173'],
+    authorization: 'Bearer launcher',
+  };
+  for (const url of [
+    'http://127.0.0.1:5173/api/v1/workspace',
+    'ws://127.0.0.1:5173/api/v1/events',
+  ]) {
+    assert.deepEqual(
+      runtimeRequestHeaders({ url, requestHeaders: headers }, development),
+      { ...headers, Authorization: 'Bearer launcher' },
+      url,
+    );
+  }
+  assert.equal(
+    runtimeRequestHeaders({ url: 'http://127.0.0.1:5174/', requestHeaders: headers }, development),
+    headers,
+  );
 });

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -5,25 +6,25 @@ import { fileURLToPath } from 'node:url';
 import { Cause, Effect, Exit, ManagedRuntime, Redacted, SubscriptionRef } from 'effect';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 
+import {
+  HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
+  type AppearanceTheme,
+  type HostRuntimeDiagnostic,
+  type HostRuntimeStatusSnapshot,
+} from '@isagi/shared/contracts';
+
 import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
 import { DesktopShell, makeDesktopLayer } from './desktop-layer.js';
 import { DesktopLogger } from './desktop-logger.js';
-import { configureDevelopmentUserData } from './development.js';
+import { resolveDesktopDataDirectory, resolveDesktopMode } from './desktop-mode.js';
+import { readDesktopTheme, windowBackgroundColor } from './desktop-theme.js';
+import { configureUnpackagedUserData, resolveDevelopmentRoot } from './development.js';
 import { assertAuthorizedIpcSender } from './ipc-security.js';
-import {
-  isAllowedRendererNavigation,
-  navigationDenialCoordinate,
-  rendererContentSecurityPolicy,
-  rendererDocumentUrl,
-  rendererHeadersReceivedDecision,
-  rendererRuntimeOrigins,
-  type RendererTarget,
-} from './renderer-policy.js';
 import { runtimeRequestHeaders } from './runtime-authorization.js';
-import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
+import { destroyRendererForExit } from './runtime-ipc.js';
 import { RuntimeProcess } from './runtime-process/index.js';
-import { RuntimeProcessConfigElectron } from './runtime.js';
+import { runtimeProcessConfigElectron } from './runtime.js';
 import { DesktopShutdownCoordinator, handleBeforeQuit, startDesktop } from './shutdown.js';
 import {
   decodeDesktopUpdateIntent,
@@ -31,6 +32,16 @@ import {
   DesktopUpdaterConfig,
   dispatchDesktopUpdateIntent,
 } from './updater/index.js';
+import {
+  isAllowedWindowNavigation,
+  isLoaderDocument,
+  isUiDocument,
+  loaderBaseUrl,
+  loaderUrl,
+  navigationDenialCoordinate,
+  pageLoadFailure,
+  windowContent,
+} from './window-content.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const APP_ID = 'studio.yourtechbud.isagi';
@@ -44,15 +55,54 @@ const isMac = process.platform === 'darwin';
 const isDev = !app.isPackaged;
 const desktopRoot = join(currentDirectory, '../..');
 const repositoryRoot = join(desktopRoot, '../..');
+/** Built beside `main/` by `scripts/build-loader.mjs`, in `dist-electron/loader/`, and packaged with it. */
+const loaderDirectory = join(currentDirectory, '../loader');
 
 app.setAppUserModelId(APP_ID);
-if (isDev) configureDevelopmentUserData(repositoryRoot);
+
+// Resolved once, before anything paints: the mode, the one data directory (also the managed runtime's `--data-dir`)
+// and the theme from its `config.yaml`, so the window background and the loader are right on the first frame.
+const mode = resolveDesktopMode({
+  isPackaged: app.isPackaged,
+  webUrl: process.env[developmentEnvironmentKeys.webUrl],
+});
+const dataDirectory = resolveDesktopDataDirectory({
+  mode,
+  env: process.env,
+  developmentRoot: () => resolveDevelopmentRoot(repositoryRoot),
+});
+if (mode.kind !== 'packaged') configureUnpackagedUserData(dataDirectory);
+const theme: AppearanceTheme = readDesktopTheme(dataDirectory);
+const windowBackgrounds = JSON.parse(
+  readFileSync(join(loaderDirectory, 'window-backgrounds.json'), 'utf8'),
+) as Readonly<Record<AppearanceTheme, string>>;
+const loaderBase = loaderBaseUrl(join(loaderDirectory, 'loader.html'));
+/** In development the window loads Vite, which proxies to the runtime; otherwise the runtime's own origin. */
+const developmentOrigin =
+  mode.kind === 'development' && URL.canParse(mode.webUrl)
+    ? new URL(mode.webUrl).origin
+    : undefined;
 
 let mainWindow: BrowserWindow | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
 let exitRequested = false;
 /** Captured once the desktop runtime has built; the installer path runs after that runtime is disposed. */
 let updaterInstaller: DesktopUpdater['Service']['installer'] | undefined;
+
+/** The latest runtime status; what the window shows follows from it (`windowContent`). */
+let runtimeStatus: HostRuntimeStatusSnapshot = {
+  protocolVersion: HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
+  revision: 0,
+  state: 'connecting',
+};
+/** Set once the UI page failed to load in the main frame; the window then shows the failure page. */
+let pageFailure: HostRuntimeDiagnostic | undefined;
+/** The origin the UI is loaded from, known once the runtime is ready. */
+let uiOrigin: string | undefined;
+/** The URL the window was last asked to load, so an unchanged status does not reload it. */
+let shownUrl: string | undefined;
+/** Bumped by every render, so a render that awaited the UI URL does not overwrite a newer one. */
+let renderGeneration = 0;
 
 const shutdown = new DesktopShutdownCoordinator({
   dispose: () => desktop.dispose(),
@@ -81,8 +131,10 @@ const desktopShell = DesktopShell.of({
     if (!webContents || webContents.isDestroyed()) return;
     webContents.send(channel, payload);
   },
-  requestExit: (code) => void requestExit({ code }),
-  isPackaged: app.isPackaged,
+  showRuntimeStatus: (snapshot) => {
+    runtimeStatus = snapshot;
+    if (mainWindow) void showWindowContent(mainWindow);
+  },
   logsDirectory: () => app.getPath('logs'),
   authorizeRuntimeRequests: (runtime) => installRuntimeAuthorization(runtime),
 });
@@ -92,13 +144,15 @@ let runtimeAuthorizationInstalled = false;
 /**
  * Makes every window request to the managed runtime carry its launcher token: fetches (Fluidcast's
  * event streams included), the sockets, the editor iframe and everything inside it, and media URLs.
- * The renderer, the preload bridge and the web app never see the token.
+ * In development the window's requests go to the Vite dev server, which proxies them to the runtime and
+ * forwards the header, so its host carries the token too. The renderer, the preload bridge and the web app
+ * never see the token.
  *
  * Electron keeps only the most recent listener for a WebRequest event, so this hook is the default
  * session's single `onBeforeSendHeaders` owner; anything else that wants one must extend this
- * handler rather than add a second. The window uses the default session, as the containment hook's
- * `webContents.session` does. The filter is omitted deliberately: `runtimeRequestHeaders` matches
- * the runtime's host itself, which Electron's URL patterns cannot express by port.
+ * handler rather than add a second. The window uses the default session. The filter is omitted
+ * deliberately: `runtimeRequestHeaders` matches the hosts themselves, which Electron's URL patterns
+ * cannot express by port.
  */
 function installRuntimeAuthorization(runtime: {
   readonly url: string;
@@ -110,7 +164,10 @@ function installRuntimeAuthorization(runtime: {
   }
   runtimeAuthorizationInstalled = true;
   const target = {
-    host: new URL(runtime.url).host,
+    hosts: [
+      new URL(runtime.url).host,
+      ...(developmentOrigin === undefined ? [] : [new URL(developmentOrigin).host]),
+    ],
     authorization: `Bearer ${Redacted.value(runtime.launcherToken)}`,
   };
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
@@ -126,7 +183,7 @@ function installRuntimeAuthorization(runtime: {
 const desktop = ManagedRuntime.make(
   makeDesktopLayer({
     shell: desktopShell,
-    runtimeProcessConfig: RuntimeProcessConfigElectron,
+    runtimeProcessConfig: runtimeProcessConfigElectron({ mode, dataDirectory }),
     updaterConfig: (runtimeAccess) =>
       DesktopUpdaterConfig.layerElectron(app, {
         runtimeAccess,
@@ -151,127 +208,181 @@ async function runDesktop<A, E>(
 }
 
 function createWindow() {
-  return runDesktop(createWindowEffect());
-}
+  console.info(
+    `[desktop] creating Isagi window: mode=${mode.kind} theme=${theme} chrome=${
+      isMac ? 'mac-hiddenInset@18,18' : 'native'
+    }`,
+  );
 
-function createWindowEffect() {
-  return Effect.gen(function* () {
-    yield* Effect.logInfo(
-      `creating Isagi window: mode=${isDev ? 'dev' : 'packaged'} chrome=${
-        isMac ? 'mac-hiddenInset@18,18' : 'native'
-      }`,
-    );
-
-    const target = resolveRendererTarget();
-    if (!target)
-      return yield* Effect.fail(new Error('Desktop development requires ISAGI_WEB_URL.'));
-
-    const window = new BrowserWindow({
-      backgroundColor: '#24273a',
-      height: 900,
-      minHeight: 600,
-      minWidth: 900,
-      show: false,
-      title: isDev ? 'Isagi · dev' : 'Isagi',
-      ...(isDev && !isMac ? { icon: DEVELOPMENT_ICON_PATH } : {}),
-      ...(isMac
-        ? {
-            frame: false,
-            titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: TRAFFIC_LIGHT_POSITION,
-          }
-        : {}),
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        // Asserted rather than inherited. The renderer frames a Code Server
-        // workbench, so a default flipping later would hand a foreign origin a
-        // Node environment. `webSecurity` is deliberately not named here:
-        // naming it would invite someone to think it is tunable.
-        nodeIntegrationInSubFrames: false,
-        webviewTag: false,
-        preload: join(currentDirectory, '../preload/index.js'),
-      },
-      width: 1280,
-    });
-    mainWindow = window;
-    window.once('closed', () => {
-      if (mainWindow === window) mainWindow = undefined;
-    });
-    window.once('ready-to-show', () => window.show());
-
-    // Containment precedes both the runtime and the renderer: the first frame
-    // the workbench could ever paint must not be the first one uncontained.
-    installRendererContainment(window, target);
-    startRuntime();
-    yield* loadRenderer(window, target);
+  const window = new BrowserWindow({
+    backgroundColor: windowBackgroundColor(windowBackgrounds, theme),
+    height: 900,
+    minHeight: 600,
+    minWidth: 900,
+    show: false,
+    title: isDev ? 'Isagi · dev' : 'Isagi',
+    ...(isDev && !isMac ? { icon: DEVELOPMENT_ICON_PATH } : {}),
+    ...(isMac
+      ? {
+          frame: false,
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: TRAFFIC_LIGHT_POSITION,
+        }
+      : {}),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      // Asserted rather than inherited. The UI frames a Code Server
+      // workbench, so a default flipping later would hand that frame a
+      // Node environment. `webSecurity` is deliberately not named here:
+      // naming it would invite someone to think it is tunable.
+      nodeIntegrationInSubFrames: false,
+      webviewTag: false,
+      preload: join(currentDirectory, '../preload/index.js'),
+    },
+    width: 1280,
   });
-}
+  mainWindow = window;
+  shownUrl = undefined;
+  window.once('closed', () => {
+    if (mainWindow === window) mainWindow = undefined;
+  });
+  window.once('ready-to-show', () => window.show());
 
-function resolveRendererTarget(): RendererTarget | undefined {
-  if (app.isPackaged) {
-    return { mode: 'packaged', indexPath: join(process.resourcesPath, 'web/index.html') };
-  }
-  const webUrl = process.env[developmentEnvironmentKeys.webUrl];
-  return webUrl ? { mode: 'development', devWebUrl: webUrl } : undefined;
+  // Containment precedes both the runtime and the first document: the first frame
+  // the window could ever paint must not be the first one uncontained.
+  installWindowContainment(window);
+  startRuntime();
+  void showWindowContent(window);
 }
 
 /**
- * Installs the renderer's containment boundary on the window that will host it.
- *
- * Electron keeps only the most recent listener for a WebRequest event, so this
- * hook is the session's single `onHeadersReceived` owner. Nothing else in the
- * desktop registers one today; anything that wants to must extend this handler
- * rather than add a second, which would silently displace the policy. The
- * filter argument is omitted deliberately — an omitted filter matches every
- * request, which is what keeps packaged `file://` traffic in scope.
+ * The window's containment boundary: its main frame navigates only between its two documents, by navigation or by
+ * redirect; it opens no windows; and a main-frame load failure of the UI shows the failure page. Subframes (the Code
+ * Server workbench) navigate freely inside the UI's CSP. The UI's content security policy is the runtime's own
+ * (`apps/runtime/src/web-ui/policy.ts`); the loader carries its policy in a meta tag. No log names a raw URL: the
+ * loader's query carries its diagnostic.
  */
-function installRendererContainment(window: BrowserWindow, target: RendererTarget) {
-  const documentUrl = rendererDocumentUrl(target);
-  const external = rendererRuntimeOrigins({ externalRuntimeUrl: process.env.ISAGI_RUNTIME_URL });
-  if (external.rejected) {
-    console.warn(
-      '[desktop] ISAGI_RUNTIME_URL is not a credential-free HTTP(S) URL; renderer connections stay loopback-only',
-    );
-  }
-  const policy = rendererContentSecurityPolicy({ target, runtimeOrigins: external.origins });
-  const rendererWebContentsId = window.webContents.id;
-
-  window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    const decision = rendererHeadersReceivedDecision(details, {
-      rendererWebContentsId,
-      rendererDocumentUrl: documentUrl,
-      policy,
-    });
-    // Injected, not enforced: this proves the header was supplied. Whether
-    // Chromium enforced it is established by inspecting the loaded document.
-    if (decision.kind === 'inject') {
-      console.info('[desktop] renderer content security policy injected');
-    }
-    callback(decision.response);
-  });
+function installWindowContainment(window: BrowserWindow) {
+  const isContained = (url: string) =>
+    isAllowedWindowNavigation({ url, loaderBaseUrl: loaderBase, uiOrigin: uiOrigin ?? '' });
 
   window.webContents.on('will-navigate', (details) => {
-    if (isAllowedRendererNavigation({ url: details.url, rendererDocumentUrl: documentUrl })) return;
+    if (isContained(details.url)) return;
     details.preventDefault();
-    // Only a safe coordinate: a denied URL can carry credentials, a path, a
-    // query, a fragment, or `javascript:` source.
     console.info(
-      `[desktop] denied renderer navigation to ${navigationDenialCoordinate(details.url)}`,
+      `[desktop] denied window navigation to ${navigationDenialCoordinate(details.url)}`,
+    );
+  });
+
+  // A navigation that starts at an allowed URL can still end elsewhere through a server redirect, which
+  // `will-navigate` never sees. Only the main frame: the editor frame's own redirects stay its business.
+  window.webContents.on('will-redirect', (details) => {
+    if (!details.isMainFrame || isContained(details.url)) return;
+    details.preventDefault();
+    console.info(`[desktop] denied window redirect to ${navigationDenialCoordinate(details.url)}`);
+  });
+
+  // A `beforeunload` guard in the UI (the editor's unsaved-changes prompt, say) can veto main's navigation. Main
+  // navigates away from the UI only to the loader, and only because the runtime or its page failed: what the guard
+  // protects can no longer reach the runtime, and the user must see the failure, so the veto is overridden then. Any
+  // other unload (a reload the UI started) keeps its guard.
+  window.webContents.on('will-prevent-unload', (event) => {
+    if (windowContent(runtimeStatus, pageFailure).kind !== 'loader') return;
+    event.preventDefault();
+    console.warn(
+      '[desktop] overrode the page unload guard to show the failure page; unsaved editor changes could not reach the runtime',
     );
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
-    console.info(`[desktop] denied renderer window open for ${navigationDenialCoordinate(url)}`);
+    console.info(`[desktop] denied window open for ${navigationDenialCoordinate(url)}`);
     return { action: 'deny' };
   });
+
+  window.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (uiOrigin === undefined || pageFailure) return;
+      const failure = pageLoadFailure({
+        errorCode,
+        errorDescription,
+        url: validatedURL,
+        isMainFrame,
+        uiOrigin,
+      });
+      if (!failure) return;
+      console.error(`[desktop] the UI page failed to load: ${failure.message}`);
+      pageFailure = failure;
+      void showWindowContent(window);
+    },
+  );
+}
+
+/**
+ * Loads what the current status calls for into `window`: the loader in its state, or the UI. A status that maps to the
+ * document already shown loads nothing; a render overtaken by a newer one while it waited for the UI URL is dropped.
+ */
+async function showWindowContent(window: BrowserWindow) {
+  const generation = ++renderGeneration;
+  const content = windowContent(runtimeStatus, pageFailure);
+  const target =
+    content.kind === 'loader' ? loaderUrl(loaderBase, theme, content.loader) : await resolveUiUrl();
+  if (generation !== renderGeneration || window.isDestroyed() || exitRequested) return;
+  if (target === undefined || target === shownUrl) return;
+  shownUrl = target;
+  console.info(
+    content.kind === 'loader'
+      ? `[desktop] showing the loader: ${content.loader.state === 'failed' ? `failed (${content.loader.reason})` : content.loader.state}`
+      : `[desktop] showing the UI from ${navigationDenialCoordinate(target)}`,
+  );
+  // `shownUrl` is what was requested, not yet what is displayed: a load that does not complete forgets it, so the next
+  // render (any status change) asks again rather than believing the window already shows it. A load another render
+  // superseded (ERR_ABORTED, newer generation) leaves the newer request alone; a real UI failure also arrives through
+  // `did-fail-load`.
+  window.loadURL(target).catch((error: unknown) => {
+    const code = String((error as { code?: unknown }).code ?? 'unknown');
+    if (generation !== renderGeneration) return;
+    if (shownUrl === target) shownUrl = undefined;
+    console.warn(
+      `[desktop] load of ${navigationDenialCoordinate(target)} did not complete: ${code}`,
+    );
+  });
+}
+
+/**
+ * The UI document's URL once the runtime is ready: the runtime's own URL, or in development the Vite dev server's
+ * (after it answers). A dev server that never answers is a page load failure, and returns `undefined` after
+ * re-rendering the failure page.
+ */
+async function resolveUiUrl(): Promise<string | undefined> {
+  if (mode.kind === 'development') {
+    uiOrigin = developmentOrigin;
+    const waited = await desktop.runPromiseExit(waitForWebServer(mode.webUrl));
+    if (Exit.isFailure(waited)) {
+      if (exitRequested || Cause.hasInterruptsOnly(waited.cause)) return undefined;
+      pageFailure = {
+        message: `The development web server did not answer · ${developmentOrigin ?? 'ISAGI_WEB_URL'}`,
+      };
+      if (mainWindow) void showWindowContent(mainWindow);
+      return undefined;
+    }
+    return mode.webUrl;
+  }
+  const url = await runDesktop(RuntimeProcess.use((runtimeProcess) => runtimeProcess.url)).catch(
+    () => undefined,
+  );
+  if (url === undefined) return undefined;
+  uiOrigin = new URL(url).origin;
+  return url;
 }
 
 function startRuntime() {
   runtimeStartPromise ??= desktop
     .runPromiseExit(RuntimeProcess.use((runtimeProcess) => runtimeProcess.start))
     .then((exit) => {
-      // Shutdown interrupts a start still in flight; that is not a failure to report.
+      // Shutdown interrupts a start still in flight; that is not a failure to report. A failed start is shown by the
+      // window (the status stream), and logged by the desktop layer.
       if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
         console.error(Cause.pretty(exit.cause));
       }
@@ -279,47 +390,20 @@ function startRuntime() {
   return runtimeStartPromise;
 }
 
-/**
- * Loads the exact URL the containment policy was scoped to. `loadFile` would
- * do its own path-to-URL conversion, and any disagreement with `pathToFileURL`
- * would leave the renderer's document response unmatched and the policy
- * silently uninjected. Loading the compared string removes the question.
- */
-function loadRenderer(window: BrowserWindow, target: RendererTarget) {
-  const documentUrl = rendererDocumentUrl(target);
-  if (target.mode === 'packaged') return tryPromise(() => window.loadURL(documentUrl));
-  return Effect.gen(function* () {
-    yield* waitForWebServer(target.devWebUrl);
-    yield* tryPromise(() => window.loadURL(documentUrl));
-  });
-}
-
-function tryPromise<T>(run: () => Promise<T>) {
-  return Effect.tryPromise({ try: run, catch: toError });
-}
-
-ipcMain.handle('isagi:runtime-url', (event) => {
-  assertAuthorizedIpcSender(mainWindow, event);
-  return resolveRuntimeUrlForIpc(
-    () => desktop.runPromise(RuntimeProcess.use((runtimeProcess) => runtimeProcess.url)),
-    () => exitRequested,
-  );
-});
-
-ipcMain.handle('isagi:runtime-status', (event) => {
-  assertAuthorizedIpcSender(mainWindow, event);
-  return runDesktop(
-    RuntimeProcess.use((runtimeProcess) => SubscriptionRef.get(runtimeProcess.status)),
-  );
-});
+/** The UI's documents, from its origin; the update and host-chrome channels serve only them. */
+const senderIsUi = (url: string) => uiOrigin !== undefined && isUiDocument(url, uiOrigin);
+/** The loader, in any state; Open logs serves only it. */
+const senderIsLoader = (url: string) => isLoaderDocument(url, loaderBase);
+/** Either document; Quit serves both (the loader's failure page and the UI's `config_invalid` view). */
+const senderIsWindowDocument = (url: string) => senderIsUi(url) || senderIsLoader(url);
 
 ipcMain.handle('isagi:desktop-update', (event) => {
-  assertAuthorizedIpcSender(mainWindow, event);
+  assertAuthorizedIpcSender(mainWindow, event, senderIsUi);
   return runDesktop(DesktopUpdater.use((updater) => SubscriptionRef.get(updater.status)));
 });
 
 ipcMain.handle('isagi:desktop-update-intent', async (event, payload: unknown) => {
-  assertAuthorizedIpcSender(mainWindow, event);
+  assertAuthorizedIpcSender(mainWindow, event, senderIsUi);
   const intent = decodeDesktopUpdateIntent(payload);
   // Confirming a restart hands the process to the installer, whose shutdown disposes the runtime under this intent.
   await runDesktop(
@@ -328,7 +412,7 @@ ipcMain.handle('isagi:desktop-update-intent', async (event, payload: unknown) =>
 });
 
 ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
-  assertAuthorizedIpcSender(mainWindow, event);
+  assertAuthorizedIpcSender(mainWindow, event, senderIsUi);
   console.info(`[desktop] host-chrome visible=${String(visible)} (mac=${String(isMac)})`);
   if (!isMac) return;
   const shouldShow = visible === true;
@@ -339,9 +423,17 @@ ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
 });
 
 ipcMain.handle('isagi:quit-app', async (event) => {
-  assertAuthorizedIpcSender(mainWindow, event);
-  console.info('[desktop] quit requested by renderer');
+  assertAuthorizedIpcSender(mainWindow, event, senderIsWindowDocument);
+  console.info('[desktop] quit requested by the window');
   await requestExit({ code: 0 });
+});
+
+ipcMain.handle('isagi:open-logs', async (event) => {
+  assertAuthorizedIpcSender(mainWindow, event, senderIsLoader);
+  const logsDirectory = app.getPath('logs');
+  // `openPath` resolves with an error message rather than rejecting.
+  const failure = await shell.openPath(logsDirectory);
+  if (failure) console.warn(`[desktop] could not open the logs directory: ${failure}`);
 });
 
 function requestExit(options: { readonly code: number }) {
@@ -367,13 +459,13 @@ app
     await startDesktop({
       isExitRequested: () => exitRequested,
       // The first use builds the desktop runtime: the updater starts (its launch check
-      // included) and the renderer bridge subscribes, both before the window exists. A
-      // snapshot published before the renderer can listen is not lost: the renderer
-      // reconciles the current snapshot when it subscribes.
+      // included) and the window bridge subscribes, both before the window exists. A
+      // runtime status published before the window exists is kept and shown when it
+      // opens; an update snapshot is reconciled when the renderer subscribes.
       build: async () => {
         updaterInstaller = await runDesktop(DesktopUpdater.useSync((updater) => updater.installer));
       },
-      openWindow: createWindow,
+      openWindow: async () => createWindow(),
     });
   })
   .catch((error: unknown) => {
@@ -381,10 +473,7 @@ app
     void requestExit({ code: 1 });
   });
 
+// A window recreated here (macOS) shows the current status: the loader, the UI, or the failure page.
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
-
-function toError(error: unknown) {
-  return error instanceof Error ? error : new Error(String(error));
-}

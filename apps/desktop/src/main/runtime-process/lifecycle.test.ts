@@ -6,7 +6,6 @@ import {
   Deferred,
   Duration,
   Effect,
-  Exit,
   Fiber,
   Layer,
   Redacted,
@@ -18,12 +17,11 @@ import { TestClock } from 'effect/testing';
 
 import type { HostRuntimeStatusSnapshot } from '@isagi/shared/contracts';
 
-import { makeLogCapture } from '../log-capture-test-support.js';
 import {
+  recentOutputLimit,
   RuntimeLifecycleFailure,
   RuntimeProcess,
   RuntimeProcessConfig,
-  type RuntimeTarget,
 } from './lifecycle.js';
 import type { RuntimeLogRecord, RuntimeLogSink } from './logging.js';
 import type { RuntimeChildProcess, RuntimeProcessAdapter } from './process-adapter.js';
@@ -52,23 +50,18 @@ class FakeChild extends EventEmitter {
 const readinessTimeout = Duration.seconds(15);
 const stopGrace = Duration.seconds(3);
 
-function managedTarget(): RuntimeTarget {
-  return {
-    ownership: 'managed',
-    prepare: () =>
-      Effect.succeed({
-        command: 'electron',
-        args: ['index.js'],
-        cwd: '/stage',
-        env: {},
-        processGroupOwnership: 'self',
-      }),
-  };
-}
+const managedPrepare: RuntimeProcessConfig['Service']['prepare'] = () =>
+  Effect.succeed({
+    command: 'electron',
+    args: ['index.js'],
+    cwd: '/stage',
+    env: {},
+    processGroupOwnership: 'self',
+  });
 
 function harness(
   options: {
-    readonly target?: RuntimeTarget;
+    readonly prepare?: RuntimeProcessConfig['Service']['prepare'];
     readonly checkHealth?: (url: string) => Effect.Effect<void, Error>;
     readonly spawnError?: Error;
     readonly exitOnTerm?: boolean;
@@ -101,7 +94,7 @@ function harness(
       Layer.succeed(
         RuntimeProcessConfig,
         RuntimeProcessConfig.of({
-          target: options.target ?? managedTarget(),
+          prepare: options.prepare ?? managedPrepare,
           adapter,
           checkHealth: options.checkHealth ?? (() => Effect.void),
           log: options.log ?? ((record) => logs.push(record)),
@@ -160,20 +153,17 @@ test('concurrent URL callers share one spawn and readiness plus health gate', as
 test("the managed spawn is prepared with this run's launcher token, which is never logged", async () => {
   const given: Redacted.Redacted<string>[] = [];
   const subject = harness({
-    target: {
-      ownership: 'managed',
-      prepare: ({ launcherToken }) =>
-        Effect.sync(() => {
-          given.push(launcherToken);
-          return {
-            command: 'electron',
-            args: ['index.js'],
-            cwd: '/stage',
-            env: {},
-            processGroupOwnership: 'self',
-          } as const;
-        }),
-    },
+    prepare: ({ launcherToken }) =>
+      Effect.sync(() => {
+        given.push(launcherToken);
+        return {
+          command: 'electron',
+          args: ['index.js'],
+          cwd: '/stage',
+          env: {},
+          processGroupOwnership: 'self',
+        } as const;
+      }),
   });
   await subject.run((process) =>
     Effect.gen(function* () {
@@ -300,16 +290,13 @@ test('spawn failure and pre-ready exit remain distinguishable', async () => {
 
 test('stage preparation and post-ready process errors retain their stable reasons', async () => {
   const stageFailure = harness({
-    target: {
-      ownership: 'managed',
-      prepare: () =>
-        Effect.fail(
-          new RuntimeLifecycleFailure({
-            reason: 'stage_invalid',
-            diagnostic: { message: 'metadata mismatch' },
-          }),
-        ),
-    },
+    prepare: () =>
+      Effect.fail(
+        new RuntimeLifecycleFailure({
+          reason: 'stage_invalid',
+          diagnostic: { message: 'metadata mismatch' },
+        }),
+      ),
   });
   await stageFailure.run((process) =>
     Effect.gen(function* () {
@@ -320,16 +307,13 @@ test('stage preparation and post-ready process errors retain their stable reason
   );
 
   const launchFailure = harness({
-    target: {
-      ownership: 'managed',
-      prepare: () =>
-        Effect.fail(
-          new RuntimeLifecycleFailure({
-            reason: 'launch_configuration_invalid',
-            diagnostic: { message: 'no web origin' },
-          }),
-        ),
-    },
+    prepare: () =>
+      Effect.fail(
+        new RuntimeLifecycleFailure({
+          reason: 'launch_configuration_invalid',
+          diagnostic: { message: 'no web origin' },
+        }),
+      ),
   });
   await launchFailure.run((process) =>
     Effect.gen(function* () {
@@ -342,13 +326,10 @@ test('stage preparation and post-ready process errors retain their stable reason
 
   // Anything else preparation throws is reported as an invalid stage, with its message.
   const thrown = harness({
-    target: {
-      ownership: 'managed',
-      prepare: () =>
-        Effect.sync(() => {
-          throw new Error('stage metadata unreadable');
-        }),
-    },
+    prepare: () =>
+      Effect.sync(() => {
+        throw new Error('stage metadata unreadable');
+      }),
   });
   await thrown.run((process) =>
     Effect.gen(function* () {
@@ -500,55 +481,7 @@ test('intentional stop escalates an unresponsive child and remains bounded', asy
   );
 });
 
-test('external health failure loads through, retains provenance, and always returns its URL', async () => {
-  const secretUrl = 'https://user:secret@runtime.example.test/api?token=hidden';
-  const subject = harness({
-    target: { ownership: 'external', url: secretUrl },
-    checkHealth: () => Effect.fail(new Error(`fetch ${secretUrl} failed`)),
-  });
-  await subject.run((process) =>
-    Effect.gen(function* () {
-      yield* process.start;
-      const snapshot = yield* snapshotOf(process);
-      assert.equal(snapshot.state, 'unreachable');
-      assert.equal(snapshot.ownership, 'external');
-      assert.equal(yield* process.url, secretUrl);
-      assert.deepEqual(subject.logs, [
-        {
-          stream: 'stderr',
-          payload: '[external] health check failed: fetch <external-runtime> failed\n',
-        },
-      ]);
-      assert.equal(subject.spawns(), 0);
-      assert.deepEqual(subject.signals, []);
-    }),
-  );
-});
-
 test('a health check that dies settles start like a failed check', async () => {
-  const external = harness({
-    target: { ownership: 'external', url: 'localhost:4100' },
-    checkHealth: () => Effect.die(new TypeError('Invalid URL')),
-  });
-  await external.run((process) =>
-    Effect.gen(function* () {
-      const started = yield* Effect.forkChild(process.start);
-      yield* settle;
-      assert.ok(started.pollUnsafe(), 'start must settle');
-      yield* Fiber.join(started);
-      const snapshot = yield* snapshotOf(process);
-      assert.equal(snapshot.state, 'unreachable');
-      assert.equal(
-        snapshot.state === 'unreachable' ? snapshot.reason : undefined,
-        'external_health_check_failed',
-      );
-      assert.equal(yield* process.url, 'localhost:4100');
-      assert.deepEqual(external.logs, [
-        { stream: 'stderr', payload: '[external] health check failed: Invalid URL\n' },
-      ]);
-    }),
-  );
-
   const managed = harness({ checkHealth: () => Effect.die(new Error('health crashed')) });
   await managed.run((process) =>
     Effect.gen(function* () {
@@ -572,24 +505,6 @@ test('a health check that throws instead of returning an effect is a failed chec
   const throwingCheck = (): Effect.Effect<void, Error> => {
     throw new TypeError('Invalid URL');
   };
-  const external = harness({
-    target: { ownership: 'external', url: 'localhost:4100' },
-    checkHealth: throwingCheck,
-  });
-  await external.run((process) =>
-    Effect.gen(function* () {
-      const started = yield* Effect.forkChild(Effect.exit(process.start));
-      yield* settle;
-      assert.ok(started.pollUnsafe(), 'start must settle');
-      assert.ok(Exit.isSuccess(yield* Fiber.join(started)), 'an external runtime loads through');
-      const snapshot = yield* snapshotOf(process);
-      assert.equal(snapshot.state, 'unreachable');
-      assert.deepEqual(external.logs, [
-        { stream: 'stderr', payload: '[external] health check failed: Invalid URL\n' },
-      ]);
-    }),
-  );
-
   const managed = harness({ checkHealth: throwingCheck });
   await managed.run((process) =>
     Effect.gen(function* () {
@@ -604,42 +519,6 @@ test('a health check that throws instead of returning an effect is a failed chec
       );
       assert.equal((yield* snapshotOf(process)).state, 'failed');
     }),
-  );
-});
-
-test('a defect that escapes the run is still published and settles every waiter', async () => {
-  const capture = makeLogCapture();
-  const subject = harness({
-    target: { ownership: 'external', url: 'https://user:secret@runtime.example.test' },
-    checkHealth: () => Effect.fail(new Error('unreachable')),
-    // The external failure path logs through the sink after publishing; a sink that throws there is a defect no
-    // handler inside the run expects.
-    log: () => {
-      throw new Error('log sink closed for https://user:secret@runtime.example.test');
-    },
-  });
-  await subject.run((process) =>
-    Effect.gen(function* () {
-      const first = yield* Effect.forkChild(Effect.exit(process.start));
-      yield* settle;
-      assert.ok(first.pollUnsafe(), 'start must settle');
-      assert.ok(Exit.isSuccess(yield* Fiber.join(first)));
-      // Later callers get the same settled outcome instead of waiting forever.
-      const second = yield* Effect.forkChild(Effect.exit(process.start));
-      yield* settle;
-      assert.ok(second.pollUnsafe(), 'a later start must settle too');
-      const snapshot = yield* snapshotOf(process);
-      assert.equal(snapshot.state, 'unreachable');
-      assert.deepEqual(
-        capture.lines.map((line) => [line.level, line.message]),
-        [
-          [
-            'Error',
-            'External runtime supervision ended unexpectedly: log sink closed for <external-runtime>',
-          ],
-        ],
-      );
-    }).pipe(Effect.provide(capture.layer)),
   );
 });
 
@@ -735,4 +614,25 @@ test('closing the layer scope stops a ready child', async () => {
   );
   assert.deepEqual(subject.signals, ['SIGTERM']);
   assert.equal(subject.child.listenerCount('exit'), 0);
+});
+
+test('recent output keeps the newest runtime output, bounded', async () => {
+  const subject = harness();
+  await subject.run((process) =>
+    Effect.gen(function* () {
+      const started = yield* Effect.forkChild(process.start);
+      yield* settle;
+      subject.child.stderr.write('first line\n');
+      assert.equal(yield* process.recentOutput, 'first line\n');
+      const line = `${'x'.repeat(1023)}\n`;
+      for (let index = 0; index < 80; index += 1) subject.child.stdout.write(line);
+      subject.child.stderr.write('the reason\n');
+      const output = yield* process.recentOutput;
+      assert.equal(output.length, recentOutputLimit);
+      assert.ok(output.endsWith(`${line}the reason\n`));
+      assert.ok(!output.includes('first line'));
+      ready(subject.child);
+      yield* Fiber.join(started);
+    }),
+  );
 });

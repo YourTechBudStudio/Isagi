@@ -1,8 +1,10 @@
 export { webUiContentSecurityPolicy } from './policy.js';
 export {
   isWebUiDocumentRequest,
+  prepareWebUi,
   registerWebUi,
-  requireWebRoot,
+  renderWebUiDocument,
   sendWebUiDocument,
   WebRootUnusable,
+  type WebUi,
 } from './serve.js';

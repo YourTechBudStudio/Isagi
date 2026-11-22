@@ -43,8 +43,7 @@ export type StartupGate =
  * setup while it runs.
  *
  * Every runtime provisions its editor, so a failure blocks readiness rather
- * than degrading quietly. How this gate should treat an external runtime whose
- * editor is still provisioning or cannot provision belongs to #64.
+ * than degrading quietly.
  */
 export function deriveStartupGate(snapshot: ControlPlaneSnapshot): StartupGate {
   if (snapshot.inventory.status === 'pending') return { kind: 'inventory_pending' };

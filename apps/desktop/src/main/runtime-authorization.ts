@@ -1,15 +1,18 @@
 /**
- * The request headers for one window request: adds `Authorization: Bearer <launcher token>` only to
- * `http:` and `ws:` requests for the managed runtime's own host (hostname and port), and leaves every
- * other request, and any URL that does not parse, unchanged.
+ * The request headers for one window request: adds `Authorization: Bearer <launcher token>` only to `http:` and
+ * `ws:` requests for one of `runtime.hosts` (hostname and port), and leaves every other request, and any URL that
+ * does not parse, unchanged.
  *
- * Pure, so the hook in `index.ts` stays a one-line adapter. The renderer, the preload bridge and the
- * web app never see the token; the managed runtime is always plain HTTP on loopback, so `https:` and
- * `wss:` never match.
+ * The hosts are the managed runtime's own, and in development also the Vite dev server's, which proxies `/api` and
+ * `/editor` to the runtime and forwards the header: the window's requests go to Vite there. Both are loopback and
+ * plain HTTP, so `https:` and `wss:` never match.
+ *
+ * Pure, so the hook in `index.ts` stays a one-line adapter. The renderer, the preload bridge and the web app never see
+ * the token.
  */
 export function runtimeRequestHeaders(
   details: { readonly url: string; readonly requestHeaders: Record<string, string> },
-  runtime: { readonly host: string; readonly authorization: string },
+  runtime: { readonly hosts: readonly string[]; readonly authorization: string },
 ): Record<string, string> {
   let url: URL;
   try {
@@ -17,7 +20,7 @@ export function runtimeRequestHeaders(
   } catch {
     return details.requestHeaders;
   }
-  if ((url.protocol !== 'http:' && url.protocol !== 'ws:') || url.host !== runtime.host) {
+  if ((url.protocol !== 'http:' && url.protocol !== 'ws:') || !runtime.hosts.includes(url.host)) {
     return details.requestHeaders;
   }
   // Header names are case-insensitive: drop any spelling the request carries so the bearer is never doubled.

@@ -188,7 +188,8 @@ export interface FixtureProject {
  */
 export type SuspensionScenario = 'suspended' | 'removed' | 'managed' | 'diagnostic';
 
-const RUNTIME_ORIGIN = 'http://command-palette-fixture.invalid';
+// The page's own origin, as for a runtime-served UI: the app always calls the runtime that served it.
+const RUNTIME_ORIGIN = window.location.origin;
 
 export function installFakeRuntime(): CommandPaletteRuntimeControls {
   const catalog = new Map<number, WorktreeCommandsOutput>(
@@ -232,7 +233,6 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
   const addRequests: ProjectAddRequestRecord[] = [];
   const relocateRequests: ProjectRelocateRequestRecord[] = [];
 
-  window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
   const controls: CommandPaletteRuntimeControls = {
     setCatalog: (commands, worktreeId = FIXTURE_DEFAULT_WORKTREE) => {
       const current = catalog.get(worktreeId);
@@ -367,7 +367,9 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
       window.location.origin,
     );
-    if (url.origin !== RUNTIME_ORIGIN) return realFetch(input as RequestInfo, init);
+    if (url.origin !== RUNTIME_ORIGIN || !url.pathname.startsWith('/api/')) {
+      return realFetch(input as RequestInfo, init);
+    }
 
     const method = init?.method ?? 'GET';
     const path = url.pathname.replace('/api/v1', '');

@@ -6,6 +6,8 @@ export const developmentEnvironmentKeys: Readonly<{
   processOwner: 'ISAGI_DEV_PROCESS_OWNER';
   desktopLogMode: 'ISAGI_DESKTOP_LOG_MODE';
   webUrl: 'ISAGI_WEB_URL';
+  devRuntimeUrl: 'ISAGI_DEV_RUNTIME_URL';
+  devDataDir: 'ISAGI_DEV_DATA_DIR';
 }>;
 export const privateRuntimeEnvironmentKeys: readonly string[];
 export interface DevelopmentPaths {

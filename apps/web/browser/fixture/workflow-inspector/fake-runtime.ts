@@ -28,7 +28,8 @@ import {
  * untested forever.
  */
 
-export const RUNTIME_ORIGIN = 'http://workflow-inspector.fixture';
+// The page's own origin, as for a runtime-served UI: the app always calls the runtime that served it.
+export const RUNTIME_ORIGIN = window.location.origin;
 export const FIXTURE_PLACEMENT = { projectId: 1, worktreeId: 12, surfaceId: 121, paneId: 1211 };
 
 const EVENTS_PER_PAGE = 20;
@@ -81,8 +82,6 @@ export function installFakeRuntime(): InspectorRuntimeControls {
     world = build();
     return world.events.at(-1)!;
   };
-
-  window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
 
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));

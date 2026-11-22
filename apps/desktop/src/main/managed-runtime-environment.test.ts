@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Redacted } from 'effect';
 
 import {
+  developmentAllowedOrigins,
   managedRuntimeServeArguments,
   managedRuntimeSpawnEnvironment,
   sanitizeManagedRuntimeEnvironment,
@@ -73,7 +74,7 @@ test("the desktop's launcher token replaces an inherited one, and serve argument
   });
   assert.equal(environment.ISAGI_LAUNCHER_TOKEN, 'a'.repeat(64));
   const args = managedRuntimeServeArguments({
-    allowedOrigins: 'file://',
+    allowedOrigins: undefined,
     dataDirectory: '/data',
     webRoot: '/web',
   });
@@ -84,17 +85,17 @@ test("the desktop's launcher token replaces an inherited one, and serve argument
   );
 });
 
-test('serve arguments carry the origins, the web root and, when the desktop chose one, the data directory', () => {
+test('serve arguments always carry the data directory and web root, and origins only in development', () => {
   assert.deepEqual(
     managedRuntimeServeArguments({
-      allowedOrigins: 'file://',
-      dataDirectory: undefined,
+      allowedOrigins: undefined,
+      dataDirectory: '/Users/ada/.isagi',
       webRoot: '/Applications/Isagi.app/Contents/Resources/web',
     }),
     [
       'serve',
-      '--allowed-origins',
-      'file://',
+      '--data-dir',
+      '/Users/ada/.isagi',
       '--web-root',
       '/Applications/Isagi.app/Contents/Resources/web',
     ],
@@ -117,14 +118,28 @@ test('serve arguments carry the origins, the web root and, when the desktop chos
   );
 });
 
+test('development admits the Vite origin first, then configured origins, de-duplicated', () => {
+  assert.equal(
+    developmentAllowedOrigins({
+      webOrigin: 'http://127.0.0.1:5173',
+      configuredAllowedOrigins: ' http://localhost:5173 ,,http://127.0.0.1:5173',
+    }),
+    'http://127.0.0.1:5173,http://localhost:5173',
+  );
+  assert.equal(
+    developmentAllowedOrigins({
+      webOrigin: 'http://127.0.0.1:5173',
+      configuredAllowedOrigins: undefined,
+    }),
+    'http://127.0.0.1:5173',
+  );
+});
+
 /**
  * `runtime.ts` cannot be imported here — it requires Electron's `app` — so the
- * boundary is verified structurally. An externally attached runtime is not
- * spawned by the desktop at all, which is what makes "an external runtime
- * inherits nothing from the desktop" a property of the wiring rather than of a
- * check.
+ * boundary is verified structurally.
  */
-test('only the managed target assembles a spawn environment', async () => {
+test('only the managed runtime preparation assembles a spawn environment', async () => {
   const source = await readFile(
     join(dirname(fileURLToPath(import.meta.url)), 'runtime.ts'),
     'utf8',
@@ -136,11 +151,4 @@ test('only the managed target assembles a spawn environment', async () => {
       source.indexOf('function prepareManagedRuntime'),
     'the only assembler call must live inside prepareManagedRuntime',
   );
-
-  // The external target carries a URL and nothing else: no prepare, no env.
-  const externalTarget = source.slice(
-    source.indexOf("{ ownership: 'external'"),
-    source.indexOf("{ ownership: 'managed'"),
-  );
-  assert.doesNotMatch(externalTarget, /env|prepare/u);
 });

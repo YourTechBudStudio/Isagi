@@ -53,7 +53,8 @@ declare global {
   }
 }
 
-const RUNTIME_ORIGIN = 'http://folder-project-fixture.invalid';
+// The page's own origin, as for a runtime-served UI: the app always calls the runtime that served it.
+const RUNTIME_ORIGIN = window.location.origin;
 
 /**
  * A runtime made of one object and a `fetch` stub, in the shape
@@ -89,7 +90,6 @@ export function installFakeRuntime(registry: AtomRegistry.AtomRegistry) {
    */
   let generation = 0;
 
-  window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
   window.folderProjectFixture = {
     setScenario: async (id) => {
       generation += 1;
@@ -122,7 +122,9 @@ export function installFakeRuntime(registry: AtomRegistry.AtomRegistry) {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
       window.location.origin,
     );
-    if (url.origin !== RUNTIME_ORIGIN) return realFetch(input as RequestInfo, init);
+    if (url.origin !== RUNTIME_ORIGIN || !url.pathname.startsWith('/api/')) {
+      return realFetch(input as RequestInfo, init);
+    }
 
     const method = init?.method ?? 'GET';
     const path = url.pathname.replace('/api/v1', '');

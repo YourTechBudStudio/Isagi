@@ -14,9 +14,9 @@ isagi serve --host 0.0.0.0 --data-dir ~/isagi-server
 | Listen port | `--port <0-65535>` | `ISAGI_PORT` | `server.port` in the global config, else `0`, a free port chosen at start |
 | Data directory | `--data-dir <path>` | `ISAGI_DATA_DIR` | `~/.isagi` |
 | Browser origins allowed to call the runtime | `--allowed-origins <origin,…>` | — | none; clients without an origin are always allowed |
-| Web workbench build | `--web-root <path>` | — | the copy bundled with `isagi`; served only when `server.serveWebUi` is true |
+| Web workbench build | `--web-root <path>` | — | the copy bundled with `isagi`; every runtime serves it at its own address, and an unusable one fails startup |
 
-To use the workbench from a browser on another machine, set `server.serveWebUi: true`, list the hostname you browse to in `server.allowedHosts`, and put HTTPS in front (for example `tailscale serve`); the [global schema](config-global.schema.ts) has the details. Anyone who can reach that address can then use the runtime unless login is on.
+Every runtime serves the web workbench at its own address, so a browser on this machine can open the `ISAGI_RUNTIME_READY` URL directly. To use it from a browser on another machine, list the hostname you browse to in `server.allowedHosts`, and put HTTPS in front (for example `tailscale serve`); the [global schema](config-global.schema.ts) has the details. Anyone who can reach that address can then use the runtime unless login is on.
 
 ## Login
 
@@ -24,7 +24,6 @@ Turn on `server.auth` to require a login, keeping the secrets in login-shell var
 
 ```yaml
 server:
-  serveWebUi: true
   allowedHosts: ['*.example-tailnet.ts.net']
   auth:
     enabled: true

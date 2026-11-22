@@ -13,7 +13,7 @@ export class ServerLaunch extends Context.Service<
     /** Flag or environment; undefined means `config.yaml`, then the default. */
     readonly host: SourcedValue<string> | undefined;
     readonly port: SourcedValue<number> | undefined;
-    /** The web workbench build; read and checked only when `server.serveWebUi` is true. */
+    /** The web workbench build every runtime serves; checked at startup, where none is a startup error. */
     readonly webRoot: SourcedValue<string> | undefined;
     readonly allowedOrigins: readonly string[];
   }

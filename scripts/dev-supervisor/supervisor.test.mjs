@@ -12,6 +12,7 @@ import { Effect } from 'effect';
 import {
   createDesktopEnvironment,
   createSupervisorSignalSource,
+  pickFreeLoopbackPort,
   createWebEnvironment,
   runDevelopmentSupervisor,
   superviseChildren,
@@ -47,9 +48,39 @@ test('root supervision forces managed desktop ownership without dropping host to
 
 test('root supervision removes a stale renderer runtime URL from Vite', () => {
   assert.deepEqual(
-    createWebEnvironment({ PATH: '/usr/bin', VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid' }),
+    createWebEnvironment({
+      PATH: '/usr/bin',
+      VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid',
+      ISAGI_DEV_RUNTIME_URL: 'http://stale.invalid',
+    }),
     { PATH: '/usr/bin' },
   );
+});
+
+test('the chosen runtime port reaches the desktop as ISAGI_PORT and Vite as its proxy target', () => {
+  const desktop = createDesktopEnvironment(
+    { PATH: '/usr/bin', ISAGI_PORT: '1' },
+    '/checkout',
+    43210,
+  );
+  assert.equal(desktop.ISAGI_PORT, '43210');
+  assert.equal(desktop.ISAGI_DEV_RUNTIME_URL, undefined);
+  assert.deepEqual(
+    createWebEnvironment(
+      { PATH: '/usr/bin' },
+      { runtimePort: 43210, dataDirectory: '/checkout/data/.isagi' },
+    ),
+    {
+      PATH: '/usr/bin',
+      ISAGI_DEV_RUNTIME_URL: 'http://127.0.0.1:43210',
+      ISAGI_DEV_DATA_DIR: '/checkout/data/.isagi',
+    },
+  );
+});
+
+test('a picked runtime port is a free loopback port', async () => {
+  const port = await pickFreeLoopbackPort();
+  assert.ok(Number.isInteger(port) && port > 0 && port < 65536);
 });
 
 test('root supervision owns the prepared stack and releases its worktree lock', async () => {

@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 
-const mainFrame = { name: 'main' };
+const mainFrame = { name: 'main', url: 'http://127.0.0.1:47321/' };
+const anyDocument = () => true;
 const activeContents = { mainFrame };
 const activeWindow = {
   isDestroyed: () => false,
@@ -21,6 +22,7 @@ test('IPC authorization accepts only the active non-destroyed Isagi window', () 
         sender: activeContents,
         senderFrame: mainFrame,
       } as never,
+      anyDocument,
     ),
   );
   assert.throws(
@@ -31,6 +33,7 @@ test('IPC authorization accepts only the active non-destroyed Isagi window', () 
           sender: {},
           senderFrame: mainFrame,
         } as never,
+        anyDocument,
       ),
     /active Isagi window/,
   );
@@ -39,15 +42,17 @@ test('IPC authorization accepts only the active non-destroyed Isagi window', () 
       assertAuthorizedIpcSender(
         { ...activeWindow, isDestroyed: () => true } as never,
         { sender: activeContents, senderFrame: mainFrame } as never,
+        anyDocument,
       ),
     /active Isagi window/,
   );
   assert.throws(
     () =>
-      assertAuthorizedIpcSender(undefined, {
-        sender: activeContents,
-        senderFrame: mainFrame,
-      } as never),
+      assertAuthorizedIpcSender(
+        undefined,
+        { sender: activeContents, senderFrame: mainFrame } as never,
+        anyDocument,
+      ),
     /active Isagi window/,
   );
 });
@@ -63,8 +68,9 @@ test('a subframe of the active window is rejected even though its webContents ma
         activeWindow as never,
         {
           sender: activeContents,
-          senderFrame: { name: 'embedded-workbench' },
+          senderFrame: { name: 'embedded-workbench', url: mainFrame.url },
         } as never,
+        anyDocument,
       ),
     /main Isagi frame/,
   );
@@ -78,8 +84,25 @@ test('a subframe of the active window is rejected even though its webContents ma
           sender: activeContents,
           senderFrame: null,
         } as never,
+        anyDocument,
       ),
     /main Isagi frame/,
+  );
+});
+
+test('the main frame is rejected when its document is not one the channel serves', () => {
+  const event = { sender: activeContents, senderFrame: mainFrame } as never;
+  const seen: string[] = [];
+  assert.doesNotThrow(() =>
+    assertAuthorizedIpcSender(activeWindow as never, event, (url) => {
+      seen.push(url);
+      return url.startsWith('http://127.0.0.1:47321/');
+    }),
+  );
+  assert.deepEqual(seen, [mainFrame.url]);
+  assert.throws(
+    () => assertAuthorizedIpcSender(activeWindow as never, event, (url) => url.startsWith('file:')),
+    /document allowed this channel/,
   );
 });
 
@@ -93,16 +116,17 @@ test('every renderer-invokable channel authorizes its sender first', async () =>
   const source = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
 
   const handlers = [...source.matchAll(/ipcMain\.handle\(\s*'([^']+)'[\s\S]*?\n\}\);/gu)];
-  assert.ok(handlers.length >= 6, `expected the known channels, found ${handlers.length}`);
-
   const channels = handlers.map(([, channel]) => channel ?? '');
-  assert.deepEqual(
-    channels.filter((channel) => channel.startsWith('isagi:desktop-update')).sort(),
-    ['isagi:desktop-update', 'isagi:desktop-update-intent'],
-  );
+  assert.deepEqual(channels.sort(), [
+    'isagi:desktop-update',
+    'isagi:desktop-update-intent',
+    'isagi:host-chrome-visible',
+    'isagi:open-logs',
+    'isagi:quit-app',
+  ]);
 
   for (const [body, channel] of handlers)
-    assert.match(body, /assertAuthorizedIpcSender\(mainWindow, event\)/u, channel);
+    assert.match(body, /assertAuthorizedIpcSender\(mainWindow, event, \w+\)/u, channel);
 });
 
 test('the renderer is never handed a general invoke, a channel name, or a destination', async () => {
@@ -111,7 +135,7 @@ test('the renderer is never handed a general invoke, a channel name, or a destin
     'utf8',
   );
 
-  const exposed = source.slice(source.indexOf('exposeInMainWorld'));
+  const exposed = source.slice(source.indexOf("exposeInMainWorld('isagi'"));
   // Every intent method is zero-argument; only the two capabilities that must
   // carry data — a status listener and the chrome flag — take a parameter.
   for (const method of [

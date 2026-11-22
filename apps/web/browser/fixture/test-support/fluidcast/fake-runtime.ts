@@ -53,7 +53,8 @@ import { buildHarnessSession } from './harness-sessions.js';
  * route answers for the spec to fail on.
  */
 
-export const RUNTIME_ORIGIN = 'http://fluidcast-test-support.invalid';
+// The page's own origin, as for a runtime-served UI: the app always calls the runtime that served it.
+export const RUNTIME_ORIGIN = window.location.origin;
 export const WORKTREE_ID = 12;
 export const FLUIDCAST_SURFACE_ID = 41;
 export const OTHER_SURFACE_ID = 42;
@@ -166,8 +167,6 @@ export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
   let nextSessionNumber = 1;
   // The fake's own view of each session's paused flag, folded from the events it streamed.
   const pausedById = new Map<string, boolean>();
-
-  window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
 
   const controls: FluidcastRuntimeControls = {
     commands: () => commands.map((command) => ({ ...command })),
@@ -327,7 +326,9 @@ export async function installFakeRuntime(): Promise<FluidcastRuntimeControls> {
       typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
       window.location.origin,
     );
-    if (url.origin !== RUNTIME_ORIGIN) return realFetch(input as RequestInfo, init);
+    if (url.origin !== RUNTIME_ORIGIN || !url.pathname.startsWith('/api/')) {
+      return realFetch(input as RequestInfo, init);
+    }
 
     const method = init?.method ?? 'GET';
     const path = url.pathname.replace('/api/v1', '');

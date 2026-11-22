@@ -483,7 +483,7 @@ test('fluidcast history compaction resolves its threshold, and is absent unless 
 });
 
 test('server settings default when absent and keep only what is configured', () => {
-  const none = { serveWebUi: false, allowedHosts: [], auth: { enabled: false } };
+  const none = { allowedHosts: [], auth: { enabled: false } };
   assert.deepEqual(defaultRuntimeConfig.server, none);
   assert.deepEqual(parseRuntimeConfig({}).server, none);
   assert.deepEqual(parseRuntimeConfig({ server: {} }).server, none);
@@ -541,10 +541,15 @@ test('a malformed server.auth field fails startup at its path', () => {
   }
 });
 
-test('serveWebUi is read as written and defaults to false', () => {
-  assert.equal(parseRuntimeConfig({ server: {} }).server.serveWebUi, false);
-  assert.equal(parseRuntimeConfig({ server: { serveWebUi: true } }).server.serveWebUi, true);
-  assert.equal(parseRuntimeConfig({ server: { serveWebUi: false } }).server.serveWebUi, false);
+test('a legacy server.serveWebUi key still loads and is ignored', () => {
+  // Removed setting: every runtime serves the web UI. Configs written before keep starting.
+  for (const serveWebUi of [true, false, 'yes']) {
+    assert.deepEqual(parseRuntimeConfig({ server: { serveWebUi, port: 11299 } }).server, {
+      port: 11_299,
+      allowedHosts: [],
+      auth: { enabled: false },
+    });
+  }
 });
 
 test('allowed hosts accept hostnames, IPs and leading wildcards, lowercased', () => {

@@ -3,28 +3,39 @@
 // Chromium cannot evaluate before exposing the bridge.
 const { contextBridge, ipcRenderer } = require('electron') as typeof import('electron');
 
-import type {
-  DesktopUpdateIntent,
-  DesktopUpdateSnapshot,
-  HostRuntimeStatusSnapshot,
-} from '@isagi/shared/contracts';
+import type { DesktopUpdateIntent, DesktopUpdateSnapshot } from '@isagi/shared/contracts';
 
 const RAIL_TOP_INSET = process.platform === 'darwin' ? '3rem' : '1rem';
 
 // Electron runs a configured preload in *every* frame of the window, including
-// cross-origin iframes; `nodeIntegrationInSubFrames: false` withholds Node from
-// those frames but does not withhold this script. The embedded Code Server
-// workbench is such a frame, so nothing below the guard may run there: the
-// bridge is host-renderer capability, and a foreign origin must observe no
-// `window.isagi` at all rather than one whose calls merely fail authorization.
+// iframes; `nodeIntegrationInSubFrames: false` withholds Node from those frames
+// but does not withhold this script. The embedded Code Server workbench is such
+// a frame, so nothing below the guard may run there: the bridge is host-window
+// capability, and the workbench must observe no `window.isagi` at all rather
+// than one whose calls merely fail authorization.
+//
+// The main frame shows one of two documents. The desktop-owned loader (a
+// `file:` page) gets only Quit and Open logs; the UI (the runtime's page) gets
+// the host bridge. Main checks each channel's sending document again.
 if (process.isMainFrame) {
-  if (document.readyState === 'loading') {
-    window.addEventListener('DOMContentLoaded', applyHostChromeInsets, { once: true });
+  if (location.protocol === 'file:') {
+    exposeLoaderBridge();
   } else {
-    applyHostChromeInsets();
-  }
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', applyHostChromeInsets, { once: true });
+    } else {
+      applyHostChromeInsets();
+    }
 
-  exposeHostBridge();
+    exposeHostBridge();
+  }
+}
+
+function exposeLoaderBridge() {
+  contextBridge.exposeInMainWorld('isagiLoader', {
+    quit: () => ipcRenderer.invoke('isagi:quit-app') as Promise<void>,
+    openLogs: () => ipcRenderer.invoke('isagi:open-logs') as Promise<void>,
+  });
 }
 
 function applyHostChromeInsets() {
@@ -33,24 +44,6 @@ function applyHostChromeInsets() {
 
 function exposeHostBridge() {
   contextBridge.exposeInMainWorld('isagi', {
-    getRuntimeUrl: () => ipcRenderer.invoke('isagi:runtime-url') as Promise<string>,
-    getRuntimeStatus: () =>
-      ipcRenderer.invoke('isagi:runtime-status') as Promise<HostRuntimeStatusSnapshot>,
-    subscribeRuntimeStatus: (listener: (snapshot: HostRuntimeStatusSnapshot) => void) => {
-      const receive = (_event: Electron.IpcRendererEvent, snapshot: HostRuntimeStatusSnapshot) =>
-        listener(snapshot);
-      ipcRenderer.on('isagi:runtime-status-changed', receive);
-      // Subscribe first, then reconcile the current monotonically versioned snapshot.
-      // A transition between these operations is harmless because the renderer keeps
-      // the greatest revision it has observed.
-      void ipcRenderer
-        .invoke('isagi:runtime-status')
-        .then((snapshot: HostRuntimeStatusSnapshot) => listener(snapshot))
-        .catch(() => {
-          // The renderer may be destroyed between subscription and reconciliation.
-        });
-      return () => ipcRenderer.off('isagi:runtime-status-changed', receive);
-    },
     setHostChromeVisible: (visible: boolean) =>
       ipcRenderer.invoke('isagi:host-chrome-visible', visible) as Promise<void>,
     quitApp: () => ipcRenderer.invoke('isagi:quit-app') as Promise<void>,
@@ -61,9 +54,9 @@ function exposeHostBridge() {
       const receive = (_event: Electron.IpcRendererEvent, snapshot: DesktopUpdateSnapshot) =>
         listener(snapshot);
       ipcRenderer.on('isagi:desktop-update-changed', receive);
-      // Subscribe first, then reconcile, exactly as the runtime status does: an
-      // update published between the two cannot be lost, because the renderer
-      // keeps the greatest revision it has observed.
+      // Subscribe first, then reconcile: an update published between the two
+      // cannot be lost, because the renderer keeps the greatest revision it has
+      // observed.
       void ipcRenderer
         .invoke('isagi:desktop-update')
         .then((snapshot: DesktopUpdateSnapshot | undefined) => {

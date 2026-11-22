@@ -7,7 +7,8 @@
   "exports": {
     "./contracts": "./src/contracts/index.ts",
     "./runtime-client": "./src/runtime-client/index.ts",
-    "./global-config": "./src/global-config/index.ts"
+    "./global-config": "./src/global-config/index.ts",
+    "./css-tokens": "./src/css-tokens/index.ts"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json --force",

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build",
     "check": "pnpm typecheck && pnpm build",
-    "dev": "node scripts/vite-launcher.mjs dev",
+    "dev": "node --import tsx scripts/vite-launcher.mjs dev",
     "preview": "pnpm build && node scripts/vite-launcher.mjs preview",
     "test": "pnpm test:built",
     "test:browser": "node browser/check-chromium.mjs && pnpm build && playwright test -c browser/playwright.config.ts",

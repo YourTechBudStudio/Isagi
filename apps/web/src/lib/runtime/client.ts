@@ -517,9 +517,7 @@ export interface RuntimeApiShape {
 
 /**
  * The runtime API as a per-app service. `layer` resolves the runtime URL per request
- * (`resolveRuntimeUrl`): the desktop bridge (`window.isagi.getRuntimeUrl()`), then
- * `VITE_ISAGI_RUNTIME_URL` in Vite development only, then the page's own http(s) origin, else a
- * `RuntimeUrlUnavailable` failure. It reads `window` only when a request runs, so modules
+ * (`resolveRuntimeUrl`): the page's own http(s) origin, else a `RuntimeUrlUnavailable` failure. It reads `window` only when a request runs, so modules
  * that import it load cleanly in node tests.
  */
 export class RuntimeApi extends Context.Service<RuntimeApi, RuntimeApiShape>()(
@@ -556,7 +554,7 @@ export function makeRuntimeApi(
   ) => withHttpApi((api) => api.request(endpoint, ...args));
   /**
    * A socket or download URL under the runtime URL; no request is made. A runtime URL `new URL`
-   * rejects (an external `localhost:4100`, say) is a runtime this client cannot reach, a typed
+   * rejects is a runtime this client cannot reach, a typed
    * failure as it is for requests, never a defect. The message is fixed and the parser's error stays
    * in `cause`: a runtime URL can carry credentials, and the parser's message differs by engine
    * (Chromium and Node say `Invalid URL`; other engines may quote the input).
