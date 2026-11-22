@@ -7,6 +7,10 @@ import {
   measureTerminalFit,
   type TerminalFitSize,
 } from '../terminal-geometry.js';
+import {
+  browserClipboardWriter,
+  type TerminalClipboardWriter,
+} from '../terminal-host-integration/index.js';
 
 /**
  * Every browser capability the presentation controller reaches for, in one
@@ -40,6 +44,8 @@ export interface TerminalPresentationEnvironment {
   readonly measureFit: (terminal: Terminal, host: HTMLElement) => TerminalFitSize | null;
   readonly clearRenderCache: (terminal: Terminal) => void;
   readonly monotonicNow: () => number;
+  /** The user's local clipboard, for OSC 52 copies and the copy shortcut. */
+  readonly writeClipboardText: TerminalClipboardWriter;
 }
 
 export const browserTerminalEnvironment: TerminalPresentationEnvironment = {
@@ -60,4 +66,5 @@ export const browserTerminalEnvironment: TerminalPresentationEnvironment = {
   measureFit: measureTerminalFit,
   clearRenderCache: clearTerminalRenderCache,
   monotonicNow: () => performance.now(),
+  writeClipboardText: browserClipboardWriter,
 };

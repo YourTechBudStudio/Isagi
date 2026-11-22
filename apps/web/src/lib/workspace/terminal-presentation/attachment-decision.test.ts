@@ -98,6 +98,7 @@ function setup(t: TestContext) {
           onViewport: () => undefined,
           onEvent: () => undefined,
           paneFocusAllowed: () => true,
+          onClipboardWriteFailed: () => undefined,
           resolveUrl: async () => {
             env.claims += 1;
             return 'ws://runtime.test/pty/7';

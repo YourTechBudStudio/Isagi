@@ -81,6 +81,9 @@ const loginShellEnvironment = {
   PORT: '0',
   ELECTRON_RUN_AS_NODE: '1',
   ISAGI_ALLOWED_ORIGINS: 'file://',
+  TMUX: '/tmp/tmux-501/default,123,0',
+  TERM_PROGRAM: 'iTerm.app',
+  VTE_VERSION: '7600',
 };
 
 test('PTY process repository creates owner-unaware process metadata', async () => {
@@ -176,6 +179,11 @@ test('PTY launches inherit the resolved login-shell environment without runtime 
     assert.equal(launchedEnvironment.ELECTRON_RUN_AS_NODE, undefined);
     assert.equal(launchedEnvironment.ISAGI_ALLOWED_ORIGINS, undefined);
     assert.equal(launchedEnvironment.ISAGI_AGENT_SESSION_ID, '10');
+    // Every PTY is a remote terminal, and never the terminal that launched the runtime.
+    assert.equal(launchedEnvironment.SSH_TTY, '/dev/tty');
+    assert.equal(launchedEnvironment.TMUX, undefined);
+    assert.equal(launchedEnvironment.TERM_PROGRAM, undefined);
+    assert.equal(launchedEnvironment.VTE_VERSION, undefined);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -197,6 +205,7 @@ test('PTY launches honour explicit environment overrides the inherited baseline 
             HOST: '0.0.0.0',
             ISAGI_CUSTOM: 'wanted',
             APP_MODE: 'dev',
+            SSH_TTY: '/dev/pts/override',
           },
         });
       }).pipe(
@@ -216,6 +225,11 @@ test('PTY launches honour explicit environment overrides the inherited baseline 
     assert.equal(launchedEnvironment.HOST, '0.0.0.0');
     assert.equal(launchedEnvironment.ISAGI_CUSTOM, 'wanted');
     assert.equal(launchedEnvironment.APP_MODE, 'dev');
+    assert.equal(
+      launchedEnvironment.SSH_TTY,
+      '/dev/pts/override',
+      'an override beats the remote-terminal default',
+    );
     // Inherited runtime controls the caller did not override stay stripped.
     assert.equal(launchedEnvironment.ISAGI_ALLOWED_ORIGINS, undefined);
     assert.equal(launchedEnvironment.ELECTRON_RUN_AS_NODE, undefined);

@@ -20,6 +20,10 @@ import {
 } from '../terminal-cache/index.js';
 import { createScopedLifecycle } from '../terminal-cache/scoped-lifecycle.js';
 import { createTerminalSlotArbiter } from '../terminal-cache/slot-arbiter.js';
+import {
+  installOsc52Clipboard,
+  installTerminalSelectionCopy,
+} from '../terminal-host-integration/index.js';
 import type { TerminalDiagnosticGauges } from './diagnostics.js';
 import type { TerminalPresentationEnvironment } from './environment.js';
 import { createTerminalReplayGate, type TerminalReplayGateFailure } from './replay-gate.js';
@@ -127,6 +131,11 @@ export interface CreateTerminalPresentationControllerInput {
    * silently omit the decision.
    */
   readonly paneFocusAllowed: () => boolean;
+  /**
+   * A clipboard write this terminal attempted (a program's OSC 52 copy or the copy shortcut)
+   * failed. Production shows a toast; required so no construction site can drop the failure.
+   */
+  readonly onClipboardWriteFailed: () => void;
 }
 
 export function createTerminalPresentationController(
@@ -197,6 +206,14 @@ export function createTerminalPresentationController(
   let pendingInsertion = false;
   let insertionResetTask: number | null = null;
   const pendingKeyboardData: string[] = [];
+  /**
+   * Whether a program's OSC 52 copy may reach the clipboard. Off for the whole replay: those
+   * bytes are history, and reattaching must never re-fire an old copy. Armed only by the replay
+   * parse barrier, because xterm parses asynchronously and replayed bytes are still being parsed
+   * after the gate itself has moved on. Every reattach builds a new controller, so this never
+   * needs to disarm.
+   */
+  let clipboardArmed = false;
 
   const current = () => !disposed && input.attachment.isCurrentMutable();
   const observeMilestone = (event: TerminalAttachmentMilestone) => {
@@ -365,21 +382,22 @@ export function createTerminalPresentationController(
   });
   const binaryDisposable = terminal.onBinary((data) => submitInput(data, false));
   const keyDisposable = terminal.onKey(({ key }) => pendingKeyboardData.push(key));
-  const handleKeyDown = (event: KeyboardEvent) => {
-    if (isCopyShortcut(event) && terminal.getSelection()) {
-      event.preventDefault();
-      event.stopPropagation();
-      void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => undefined);
-      return;
-    }
-    input.onCustomKey?.(event, sendKeyboardInput);
-  };
-  const handleCopy = (event: ClipboardEvent) => {
-    const selection = terminal.getSelection();
-    if (!selection) return;
-    event.clipboardData?.setData('text/plain', selection);
-    event.preventDefault();
-  };
+  const uninstallSelectionCopy = installTerminalSelectionCopy({
+    host,
+    terminal,
+    writeText: env.writeClipboardText,
+    onWriteFailed: input.onClipboardWriteFailed,
+    onKeyDown: (event) => input.onCustomKey?.(event, sendKeyboardInput),
+  });
+  const osc52Disposable = installOsc52Clipboard(terminal, {
+    // Not `current()`: sealing (an exit, a moved stream) stops new output reaching xterm, but
+    // bytes already accepted as live are still being parsed, and a program that copies just
+    // before it exits must still reach the clipboard. Disposal — a reattach, an eviction, a
+    // teardown — is what ends this terminal's authority.
+    canWrite: () => clipboardArmed && !disposed,
+    writeText: env.writeClipboardText,
+    onWriteFailed: input.onClipboardWriteFailed,
+  });
   const handleInsertion = () => {
     pendingInsertion = true;
     if (insertionResetTask !== null) env.cancelTask(insertionResetTask);
@@ -388,8 +406,6 @@ export function createTerminalPresentationController(
       insertionResetTask = null;
     });
   };
-  host.addEventListener('keydown', handleKeyDown, true);
-  host.addEventListener('copy', handleCopy);
   // Capture, not bubble: xterm's own paste handler calls `stopPropagation()` on
   // the way down, so a bubbling listener never sees a paste at all. `beforeinput`
   // covers the insertions that never produce a key event — IME commits and
@@ -676,6 +692,9 @@ export function createTerminalPresentationController(
     terminal.write('', () => {
       observeMilestone({ type: 'parse_barrier_completed', at: env.monotonicNow() });
       closeReplayOutputScope();
+      // Every replayed byte is parsed now; anything after this is live output. Armed before the
+      // early returns, which only stop the reveal: live copies must not depend on it.
+      clipboardArmed = true;
       if (!current() || renderBarrier?.id !== barrierId || snapshot.sealReason) return;
       pendingActivationWork = () => {
         restoreColdViewport();
@@ -761,8 +780,8 @@ export function createTerminalPresentationController(
     keyDisposable.dispose();
     scrollDisposable.dispose();
     bufferDisposable.dispose();
-    host.removeEventListener('keydown', handleKeyDown, true);
-    host.removeEventListener('copy', handleCopy);
+    uninstallSelectionCopy();
+    osc52Disposable.dispose();
     host.removeEventListener('paste', handleInsertion, true);
     host.removeEventListener('beforeinput', handleInsertion, true);
     listeners.clear();
@@ -784,13 +803,6 @@ function decodeMessage(data: unknown): PtyWebSocketOutputMessage | null {
   } catch {
     return null;
   }
-}
-
-function isCopyShortcut(event: KeyboardEvent) {
-  if (event.key.toLowerCase() !== 'c') return false;
-  return /mac/i.test(navigator.platform)
-    ? event.metaKey && !event.altKey
-    : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
 }
 
 function viewportMemoriesEqual(left: TerminalViewportMemory | null, right: TerminalViewportMemory) {

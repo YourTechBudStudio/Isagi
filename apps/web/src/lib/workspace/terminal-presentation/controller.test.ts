@@ -22,6 +22,147 @@ import { createFakeTerminalEnvironment, type FakeTerminalEnvironment } from './t
 const PLACEMENT: TerminalPlacement = { worktreeId: 1, surfaceId: 2, paneId: 3 };
 const IDENTITY = { kind: 'agent_session', sessionId: 7 } as const;
 
+describe('terminal presentation controller clipboard', () => {
+  it('ignores OSC 52 in replayed history, even when it is parsed after replay ended', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    harness.env.socket.emitMessage({ type: 'replay_start', bytes: 32 });
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('old copy') });
+    // The gate has already left `replaying` here, but xterm has parsed none of the history yet.
+    harness.env.socket.emitMessage({ type: 'replay_end' });
+    harness.env.terminal.flushWrites();
+    harness.env.runFrames();
+    harness.env.terminal.emitRender();
+    assert.equal(harness.controller.getSnapshot().readiness.phase, 'revealed');
+    harness.env.terminal.flushWrites();
+    await settleMicrotasks();
+
+    assert.deepEqual(harness.env.clipboardWrites, []);
+    harness.cache.dispose();
+  });
+
+  it('writes OSC 52 from live output, both held while settling and after reveal', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    harness.env.socket.emitMessage({ type: 'replay_start', bytes: 7 });
+    harness.env.socket.emitMessage({ type: 'output', data: 'history' });
+    harness.env.socket.emitMessage({ type: 'replay_end' });
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('held while settling', 'st') });
+    harness.env.terminal.flushWrites();
+    harness.env.runFrames();
+    harness.env.terminal.emitRender();
+    harness.env.terminal.flushWrites();
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('héllo, 世界') });
+    harness.env.terminal.flushWrites();
+    await settleMicrotasks();
+
+    assert.deepEqual(harness.env.clipboardWrites, ['held while settling', 'héllo, 世界']);
+    assert.equal(harness.clipboardFailures.count, 0);
+    harness.cache.dispose();
+  });
+
+  it('suppresses copies in a reattached replay again', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    replayAndReveal(harness, 'history');
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('live copy') });
+    harness.env.terminal.flushWrites();
+
+    const rebuilt = await harness.reattach();
+    const socket = harness.env.sockets.at(-1)!;
+    const terminal = harness.env.terminals.at(-1)!;
+    assert.notEqual(terminal, harness.env.terminal, 'a reattach builds a new terminal');
+    const slot = harness.env.createSlot();
+    rebuilt.registerSlot(slot.element);
+    harness.env.runFrames();
+    replayAndReveal(harness, `history${osc52('live copy')}`, socket, terminal);
+    await settleMicrotasks();
+
+    assert.equal(rebuilt.getSnapshot().readiness.phase, 'revealed');
+    assert.deepEqual(harness.env.clipboardWrites, ['live copy'], 'the replayed copy did not fire');
+    harness.cache.dispose();
+  });
+
+  it('keeps a live copy the process emitted just before it exited', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    replayAndReveal(harness, 'history');
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('last words') });
+    // The exit seals the attachment before xterm has parsed the copy ahead of it.
+    harness.env.socket.emitMessage({ type: 'exit', exitCode: 0, signal: null });
+    assert.equal(harness.controller.getSnapshot().sealReason, 'exited');
+    harness.env.terminal.flushWrites();
+    await settleMicrotasks();
+
+    assert.deepEqual(harness.env.clipboardWrites, ['last words']);
+    harness.cache.dispose();
+  });
+
+  it('drops a queued copy once the controller is disposed', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    replayAndReveal(harness, 'history');
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('too late') });
+    harness.controller.dispose();
+    harness.env.terminal.flushWrites();
+    await settleMicrotasks();
+
+    assert.deepEqual(harness.env.clipboardWrites, []);
+    harness.cache.dispose();
+  });
+
+  it('reports a rejected OSC 52 write once', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    replayAndReveal(harness, '');
+    harness.env.clipboardRejects = true;
+    harness.env.socket.emitMessage({ type: 'output', data: osc52('refused') });
+    harness.env.terminal.flushWrites();
+    await settleMicrotasks();
+
+    assert.deepEqual(harness.env.clipboardWrites, ['refused']);
+    assert.equal(harness.clipboardFailures.count, 1);
+    harness.cache.dispose();
+  });
+
+  it('copies the selection with the copy shortcut and passes other keys through', async () => {
+    const harness = await startController();
+    openSlot(harness);
+    const mac = /mac/i.test(navigator.platform);
+    const shortcut = mac
+      ? { key: 'c', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }
+      : { key: 'C', metaKey: false, ctrlKey: true, shiftKey: true, altKey: false };
+
+    // No selection: the shortcut is just a key, and reaches the custom key handler.
+    const unselected = harness.env.dispatchHostEvent(harness.controller.host, 'keydown', shortcut);
+    assert.equal(unselected.defaultPrevented, false);
+    assert.deepEqual(harness.customKeys, [shortcut.key]);
+
+    harness.env.terminal.selection = 'selected text';
+    const copied = harness.env.dispatchHostEvent(harness.controller.host, 'keydown', shortcut);
+    assert.deepEqual(copied, { defaultPrevented: true, propagationStopped: true });
+    assert.deepEqual(harness.customKeys, [shortcut.key], 'a handled copy is not passed through');
+
+    harness.env.clipboardRejects = true;
+    harness.env.dispatchHostEvent(harness.controller.host, 'keydown', shortcut);
+    await settleMicrotasks();
+    assert.deepEqual(harness.env.clipboardWrites, ['selected text', 'selected text']);
+    assert.equal(harness.clipboardFailures.count, 1);
+
+    const data = new Map<string, string>();
+    const copyEvent = harness.env.dispatchHostEvent(harness.controller.host, 'copy', {
+      clipboardData: { setData: (type: string, value: string) => data.set(type, value) },
+    });
+    assert.equal(copyEvent.defaultPrevented, true);
+    assert.equal(data.get('text/plain'), 'selected text');
+
+    harness.controller.dispose();
+    harness.env.dispatchHostEvent(harness.controller.host, 'keydown', shortcut);
+    assert.equal(harness.env.clipboardWrites.length, 2, 'disposal removes the listeners');
+    harness.cache.dispose();
+  });
+});
+
 describe('terminal presentation controller', () => {
   it('reveals only after the parse and render barriers, then drains held live output once', async () => {
     const harness = await startController();
@@ -553,6 +694,7 @@ describe('terminal presentation controller', () => {
       initialViewport: null,
       onViewport: () => undefined,
       paneFocusAllowed: () => true,
+      onClipboardWriteFailed: () => undefined,
       resolveUrl: (signal) => {
         env.claims += 1;
         // A claim that never settles on its own: only the disposal signal ends it.
@@ -604,6 +746,7 @@ describe('terminal presentation controller', () => {
       initialViewport: null,
       onViewport: () => undefined,
       paneFocusAllowed: () => true,
+      onClipboardWriteFailed: () => undefined,
       resolveUrl: () => Promise.reject(failure),
     });
 
@@ -629,7 +772,13 @@ interface Harness {
   readonly attachment: TerminalAttachmentHandle<TerminalPresentationController>;
   /** Every viewport the controller asked the cache to remember, in order. */
   readonly viewports: readonly TerminalViewportMemory[];
+  /** Every `onClipboardWriteFailed` call, across this harness's controllers. */
+  readonly clipboardFailures: { count: number };
+  /** Keydowns the controller passed through to `onCustomKey`. */
+  readonly customKeys: readonly string[];
   readonly settle: () => Promise<void>;
+  /** Reattach the same session: a new attachment epoch builds a new controller on `env`. */
+  readonly reattach: () => Promise<TerminalPresentationController>;
 }
 
 async function startController(
@@ -647,24 +796,35 @@ async function startController(
   const start = session.beginAttachment();
   if (start.status !== 'started') throw new Error('Expected attachment.');
   const viewports: TerminalViewportMemory[] = [];
-  const controller = createTerminalPresentationController({
-    attachment: start.attachment,
-    scrollbackLines: 1000,
-    initiallyInteractive: true,
-    parkingRoot: env.parkingRoot,
-    environment: env,
-    onEvent: () => undefined,
-    initialViewport: options.initialViewport ?? null,
-    onViewport: (viewport) => {
-      viewports.push(viewport);
-      session.updateViewport(viewport);
-    },
-    paneFocusAllowed: options.paneFocusAllowed ?? (() => true),
-    resolveUrl: async () => {
-      env.claims += 1;
-      return 'ws://runtime.test/pty/7';
-    },
-  });
+  const clipboardFailures = { count: 0 };
+  const customKeys: string[] = [];
+  const build = (attachment: TerminalAttachmentHandle<TerminalPresentationController>) =>
+    createTerminalPresentationController({
+      attachment,
+      scrollbackLines: 1000,
+      initiallyInteractive: true,
+      parkingRoot: env.parkingRoot,
+      environment: env,
+      onEvent: () => undefined,
+      initialViewport: options.initialViewport ?? null,
+      onViewport: (viewport) => {
+        viewports.push(viewport);
+        session.updateViewport(viewport);
+      },
+      paneFocusAllowed: options.paneFocusAllowed ?? (() => true),
+      onClipboardWriteFailed: () => {
+        clipboardFailures.count += 1;
+      },
+      onCustomKey: (event) => {
+        customKeys.push(event.key);
+        return false;
+      },
+      resolveUrl: async () => {
+        env.claims += 1;
+        return 'ws://runtime.test/pty/7';
+      },
+    });
+  const controller = build(start.attachment);
 
   env.runTasks();
   await settleMicrotasks();
@@ -677,7 +837,47 @@ async function startController(
     env.runFrames();
   };
   await settle();
-  return { env, cache, controller, attachment: start.attachment, viewports, settle };
+  const reattach = async () => {
+    const next = session.beginAttachment();
+    if (next.status !== 'started') throw new Error('Expected a second attachment.');
+    const rebuilt = build(next.attachment);
+    env.runTasks();
+    await settleMicrotasks();
+    env.sockets.at(-1)?.open();
+    await settle();
+    return rebuilt;
+  };
+  return {
+    env,
+    cache,
+    controller,
+    attachment: start.attachment,
+    viewports,
+    clipboardFailures,
+    customKeys,
+    settle,
+    reattach,
+  };
+}
+
+/** Replay `history`, then reveal: parse, activate, and paint, as a real attachment does. */
+function replayAndReveal(
+  harness: Harness,
+  history: string,
+  socket = harness.env.socket,
+  terminal = harness.env.terminal,
+) {
+  socket.emitMessage({ type: 'replay_start', bytes: history.length });
+  socket.emitMessage({ type: 'output', data: history });
+  socket.emitMessage({ type: 'replay_end' });
+  terminal.flushWrites();
+  harness.env.runFrames();
+  terminal.emitRender();
+}
+
+function osc52(text: string, terminator: 'bel' | 'st' = 'bel') {
+  const payload = Buffer.from(text, 'utf8').toString('base64');
+  return `\u001b]52;c;${payload}${terminator === 'bel' ? '\u0007' : '\u001b\\'}`;
 }
 
 function openSlot(harness: Harness) {

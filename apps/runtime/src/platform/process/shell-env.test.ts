@@ -49,3 +49,57 @@ test('user process environment removes runtime-owned controls without losing use
     COLORTERM: 'truecolor',
   });
 });
+
+test('user process environment drops the launching terminal identity but keeps the host and Isagi terminal', () => {
+  const environment = userShellBaseEnv({
+    HOME: '/home/developer',
+    TERM: 'tmux-256color',
+    COLORTERM: '24bit',
+    TMUX: '/tmp/tmux-501/default,123,0',
+    TMUX_PANE: '%1',
+    STY: '123.pts-0.host',
+    ZELLIJ: '0',
+    ZELLIJ_SESSION_NAME: 'main',
+    TERM_PROGRAM: 'iTerm.app',
+    TERM_PROGRAM_VERSION: '3.5.0',
+    TERM_SESSION_ID: 'w0t0p0',
+    LC_TERMINAL: 'iTerm2',
+    LC_TERMINAL_VERSION: '3.5.0',
+    VTE_VERSION: '7600',
+    ITERM_SESSION_ID: 'w0t0p0:abc',
+    ITERM_PROFILE: 'Default',
+    KITTY_WINDOW_ID: '1',
+    KITTY_PID: '42',
+    WEZTERM_PANE: '0',
+    WEZTERM_EXECUTABLE: '/usr/bin/wezterm',
+    WT_SESSION: 'guid',
+    WT_PROFILE_ID: 'guid',
+    ALACRITTY_WINDOW_ID: '1',
+    ALACRITTY_SOCKET: '/tmp/alacritty.sock',
+    GHOSTTY_RESOURCES_DIR: '/usr/share/ghostty',
+    GHOSTTY_BIN_DIR: '/usr/bin',
+    KONSOLE_VERSION: '230800',
+    KONSOLE_DBUS_SESSION: '/Sessions/1',
+    KONSOLE_DBUS_SERVICE: 'org.kde.konsole',
+    XTERM_VERSION: 'XTerm(390)',
+    TERMINAL_EMULATOR: 'JetBrains-JediTerm',
+    GNOME_TERMINAL_SCREEN: '/org/gnome/Terminal/screen/1',
+    GNOME_TERMINAL_SERVICE: ':1.42',
+    SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22',
+    SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+    SSH_TTY: '/dev/pts/0',
+    DISPLAY: ':0',
+    WAYLAND_DISPLAY: 'wayland-0',
+  });
+
+  assert.deepEqual(environment, {
+    HOME: '/home/developer',
+    TERM: 'xterm-256color',
+    COLORTERM: 'truecolor',
+    SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22',
+    SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+    SSH_TTY: '/dev/pts/0',
+    DISPLAY: ':0',
+    WAYLAND_DISPLAY: 'wayland-0',
+  });
+});

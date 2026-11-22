@@ -44,6 +44,19 @@ export interface FakeTerminalEnvironment extends TerminalPresentationEnvironment
   readonly runFrames: () => void;
   readonly runTasks: () => void;
   readonly resizeMessages: () => readonly TerminalFitSize[];
+  /** Text written through `writeClipboardText`, in order, whether or not the write succeeded. */
+  readonly clipboardWrites: readonly string[];
+  /** When true, `writeClipboardText` rejects, as a browser refusing the write would. */
+  clipboardRejects: boolean;
+  /**
+   * Dispatch a DOM event to listeners registered on a fake element (a controller's `host`). The
+   * returned flags say whether a listener called `preventDefault` / `stopPropagation`.
+   */
+  readonly dispatchHostEvent: (
+    target: HTMLElement,
+    type: string,
+    event: Record<string, unknown>,
+  ) => { readonly defaultPrevented: boolean; readonly propagationStopped: boolean };
 }
 
 export interface FakeSlot {
@@ -65,6 +78,8 @@ export interface FakeTerminal {
   readonly scrollToBottomCount: number;
   readonly scrollLines: readonly number[];
   readonly viewportY: number;
+  /** What `getSelection()` returns. */
+  selection: string;
   /**
    * Emit bytes as xterm would. `wasUserInput` is xterm's own classification —
    * true for keys, pastes, and mouse reports alike — and, when
@@ -76,7 +91,11 @@ export interface FakeTerminal {
   readonly emitBinary: (data: string) => void;
   readonly emitKey: (key: string) => void;
   readonly emitRender: () => void;
-  /** Parse everything written so far, then paint — as xterm's parser schedules. */
+  /**
+   * Parse everything written so far, in write order, then paint — as xterm's parser schedules.
+   * Parsing routes complete OSC sequences (BEL or ST terminated, within one write) to the
+   * handlers registered through `parser.registerOscHandler`; nothing else is interpreted.
+   */
   readonly flushWrites: () => void;
   /** Replace the normal buffer's contents, as replay output would. */
   readonly setBufferLines: (lines: readonly string[], viewportY?: number) => void;
@@ -111,6 +130,7 @@ export function createFakeTerminalEnvironment(): FakeTerminalEnvironment {
   let webglDisposed = 0;
   let hostMoves = 0;
   let parkMoves = 0;
+  const clipboardWrites: string[] = [];
 
   let releaseFonts = () => undefined as void;
   const fonts = new Promise<void>((resolve) => {
@@ -150,6 +170,30 @@ export function createFakeTerminalEnvironment(): FakeTerminalEnvironment {
     },
     get webglDisposed() {
       return webglDisposed;
+    },
+
+    clipboardWrites,
+    clipboardRejects: false,
+    writeClipboardText: (text) => {
+      clipboardWrites.push(text);
+      return env.clipboardRejects
+        ? Promise.reject(new Error('The fake clipboard refused the write.'))
+        : Promise.resolve();
+    },
+    dispatchHostEvent: (target, type, event) => {
+      let defaultPrevented = false;
+      let propagationStopped = false;
+      (target as unknown as FakeElement).dispatch(type, {
+        type,
+        ...event,
+        preventDefault: () => {
+          defaultPrevented = true;
+        },
+        stopPropagation: () => {
+          propagationStopped = true;
+        },
+      });
+      return { defaultPrevented, propagationStopped };
     },
 
     terminalCreationFailure: null,
@@ -279,12 +323,20 @@ class FakeElement {
     if (child.parentElement === this) child.parentElement = null;
   }
 
-  addEventListener() {
-    return undefined;
+  private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+
+  addEventListener(type: string, listener: (event: unknown) => void) {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
   }
 
-  removeEventListener() {
-    return undefined;
+  removeEventListener(type: string, listener: (event: unknown) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatch(type: string, event: unknown) {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
   }
 
   asElement(): HTMLElement {
@@ -305,8 +357,19 @@ class FakeTerminalImpl {
   refreshCount = 0;
   scrollToBottomCount = 0;
   readonly scrollLines: number[] = [];
+  selection = '';
   private readonly events = new Map<string, Set<(value: never) => void>>();
-  private readonly writeCallbacks: Array<() => void> = [];
+  private readonly pendingWrites: Array<{ readonly data: string; readonly callback?: () => void }> =
+    [];
+  private readonly oscHandlers = new Map<number, Set<(data: string) => boolean>>();
+  readonly parser = {
+    registerOscHandler: (ident: number, handler: (data: string) => boolean) => {
+      const handlers = this.oscHandlers.get(ident) ?? new Set();
+      handlers.add(handler);
+      this.oscHandlers.set(ident, handlers);
+      return { dispose: () => handlers.delete(handler) };
+    },
+  };
   private readonly activeBuffer = new FakeBuffer();
   readonly buffer = {
     active: this.activeBuffer.asBuffer(),
@@ -362,7 +425,7 @@ class FakeTerminalImpl {
 
   write(data: string, callback?: () => void) {
     this.written.push(data);
-    if (callback) this.writeCallbacks.push(callback);
+    this.pendingWrites.push(callback ? { data, callback } : { data });
   }
 
   resize(cols: number, rows: number) {
@@ -395,7 +458,7 @@ class FakeTerminalImpl {
   }
 
   getSelection() {
-    return '';
+    return this.selection;
   }
 
   emitData(data: string, wasUserInput = false) {
@@ -422,8 +485,11 @@ class FakeTerminalImpl {
   }
 
   flushWrites() {
-    const callbacks = this.writeCallbacks.splice(0);
-    for (const callback of callbacks) callback();
+    const writes = this.pendingWrites.splice(0);
+    for (const write of writes) {
+      this.parseOsc(write.data);
+      write.callback?.();
+    }
     this.emit('parsed', undefined as never);
     // Parsing dirties rows, and xterm's renderer paints them. A reveal barrier
     // that only ever saw hand-driven paints would never meet the one replay
@@ -433,6 +499,24 @@ class FakeTerminalImpl {
 
   asTerminal(): Terminal {
     return this as unknown as Terminal;
+  }
+
+  private parseOsc(data: string) {
+    const ESC = '\u001b';
+    let start = data.indexOf(`${ESC}]`);
+    while (start >= 0) {
+      const bel = data.indexOf('\u0007', start);
+      const st = data.indexOf(`${ESC}\\`, start + 2);
+      const end = bel < 0 ? st : st < 0 ? bel : Math.min(bel, st);
+      if (end < 0) return;
+      const body = data.slice(start + 2, end);
+      const separator = body.indexOf(';');
+      const ident = Number(separator < 0 ? body : body.slice(0, separator));
+      for (const handler of this.oscHandlers.get(ident) ?? []) {
+        if (handler(separator < 0 ? '' : body.slice(separator + 1))) break;
+      }
+      start = data.indexOf(`${ESC}]`, end + 1);
+    }
   }
 
   private listen(type: string, listener: (value: never) => void) {
