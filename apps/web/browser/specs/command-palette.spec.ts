@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 import type { CommandSummary } from '@isagi/shared/contracts';
 
+import { clientPlatforms, emulateClientPlatform } from './support/client-platform.js';
+
 /**
  * The `Commands` palette section and the workbench focus ownership around it,
  * against the **production** `CommandPalette` and `WorkbenchDrawer` over a fake
@@ -55,7 +57,7 @@ async function selectByQuery(page: Page, query: string, label: string) {
 }
 
 /** The highlight has no marker of its own; the row background *is* the cue the user sees. */
-const HIGHLIGHT = /bg-white\/8/;
+const HIGHLIGHT = /(^|\s)bg-tint\/8(\s|$)/;
 
 /**
  * Walk the highlight onto a row with real `ArrowDown` presses and commit it with
@@ -591,7 +593,7 @@ const strip = (page: Page) => page.locator('[data-fixture-strip]');
 
 /** The drawer's single notice band, located by what it says rather than by shape. */
 const suspendedNotice = (page: Page) =>
-  drawer(page).getByText(/^Suspended when leaving this worktree/);
+  drawer(page).getByText(/^Suspended when you left this worktree/);
 
 /**
  * Open the drawer and land on one command *without* acting on it.
@@ -765,3 +767,51 @@ test('the palette calls a suspended command Resume', async ({ page }) => {
     { worktreeId: ORIGIN_WORKTREE, commandName: 'dev' },
   ]);
 });
+
+// ---------------------------------------------------------------------------
+// The app shortcuts this page binds for real (the palette's Mod+K and Mod+N, and Mod+. for zen),
+// for each client platform. Mod+K takes priority over focused text inputs; Mod+N and Mod+. work
+// from app chrome. Focused terminals and the editor frame are covered by
+// `terminal-semantics.spec.ts` and `editor-pane.spec.ts`.
+// ---------------------------------------------------------------------------
+
+for (const client of clientPlatforms) {
+  test.describe(`app shortcuts, ${client.name} client`, () => {
+    test.beforeEach(async ({ page }) => {
+      await emulateClientPlatform(page, client);
+      await page.goto('./');
+      await expect(page.locator(`[data-pane-stand-in="${ORIGIN_WORKTREE}"]`)).toBeAttached();
+    });
+
+    test('Mod+K opens the palette with focus in a text input', async ({ page }) => {
+      // Any text field outside the palette: a plain input, so nothing of its own handles keys.
+      await page.locator('[data-fixture-shell]').evaluate((shell) => {
+        const field = document.createElement('input');
+        field.setAttribute('aria-label', 'field outside the palette');
+        shell.append(field);
+      });
+      const field = page.getByRole('textbox', { name: 'field outside the palette' });
+      await field.focus();
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect(palette(page)).toBeVisible();
+      await expect(field).toHaveValue('');
+    });
+
+    test('Mod+N on app chrome opens Add project', async ({ page }) => {
+      await page.locator('[data-fixture-shell]').click({ position: { x: 5, y: 5 } });
+      await page.keyboard.press(`${client.mod}+n`);
+      await expect(palette(page)).toBeVisible();
+      await expect(palette(page).getByText('Add project')).toBeVisible();
+    });
+
+    test('Mod+. on app chrome toggles zen', async ({ page }) => {
+      const zen = page.locator('[data-zen]');
+      await expect(zen).toHaveAttribute('data-zen', 'false');
+      await page.locator('[data-fixture-shell]').click({ position: { x: 5, y: 5 } });
+      await page.keyboard.press(`${client.mod}+.`);
+      await expect(zen).toHaveAttribute('data-zen', 'true');
+      await page.keyboard.press(`${client.mod}+.`);
+      await expect(zen).toHaveAttribute('data-zen', 'false');
+    });
+  });
+}

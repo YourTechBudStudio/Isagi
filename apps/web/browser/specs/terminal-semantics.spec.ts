@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { clientPlatforms, controlByte, emulateClientPlatform } from './support/client-platform.js';
+
 const rendererFor = (projectName: string) => (projectName === 'dom-fallback' ? 'dom' : 'webgl');
 
 /** X10 (`ESC [ M …`) or SGR (`ESC [ < b ; x ; y M|m`) mouse reporting, whichever xterm negotiated. */
@@ -415,6 +417,71 @@ test('an ordinary shell runs a full-screen program and gets its scrollback back 
   expect(restored.visibleText).toBe(before.visibleText);
   expect(restored.normalRows).toBe(before.normalRows);
 });
+
+// ---------------------------------------------------------------------------
+// App shortcuts with a real xterm focused. xterm sends Ctrl+letter to the PTY and cancels the
+// event, so only a shortcut that takes priority (capture, stopped before xterm) reaches the app;
+// the yielding ones stay the shell's. The page binds the production keymap to counters
+// (`?shortcuts=1`, see `ShortcutProbe`). Each case types `y` afterwards as an ordering barrier: once
+// it reached the PTY, any byte the chord produced has too.
+// ---------------------------------------------------------------------------
+
+for (const client of clientPlatforms) {
+  test.describe(`app shortcuts in a focused terminal, ${client.name} client`, () => {
+    test.beforeEach(async ({ page }, testInfo) => {
+      await emulateClientPlatform(page, client);
+      await openFixture(page, testInfo.project.name, 'shortcuts=1');
+      await revealed(page);
+      await page.locator('.xterm').first().click();
+      await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+    });
+
+    test('Mod+K takes priority: the palette shortcut runs and the PTY never sees ^K', async ({
+      page,
+    }) => {
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect.poll(async () => (await shortcutRuns(page))['toggle-palette']).toBe(1);
+      await typedBarrier(page);
+      expect(inputPayloads(await readCounters(page)).join('')).not.toContain(controlByte('k'));
+    });
+
+    test('Mod+N yields to the terminal', async ({ page }) => {
+      await page.keyboard.press(`${client.mod}+n`);
+      await typedBarrier(page);
+      const sent = inputPayloads(await readCounters(page)).join('');
+      if (client.name === 'Linux') {
+        // The shell's ^N, and no Add project.
+        expect(sent).toContain(controlByte('n'));
+        expect((await shortcutRuns(page))['add-project']).toBeUndefined();
+      } else {
+        // xterm leaves Cmd+N alone on macOS, so it bubbles to the app as it always has.
+        expect(sent).not.toContain(controlByte('n'));
+        expect((await shortcutRuns(page))['add-project']).toBe(1);
+      }
+    });
+
+    test('Mod+W never deletes the pane from inside the terminal', async ({ page }) => {
+      await page.keyboard.press(`${client.mod}+w`);
+      await typedBarrier(page);
+      expect((await shortcutRuns(page))['delete-active-pane']).toBeUndefined();
+      if (client.name === 'Linux') {
+        expect(inputPayloads(await readCounters(page)).join('')).toContain(controlByte('w'));
+      }
+    });
+  });
+}
+
+async function shortcutRuns(page: Page) {
+  return JSON.parse((await page.locator('[data-shortcut-runs]').textContent()) ?? '{}') as Record<
+    string,
+    number | undefined
+  >;
+}
+
+async function typedBarrier(page: Page) {
+  await page.keyboard.press('y');
+  await expect.poll(async () => inputPayloads(await readCounters(page)).join('')).toContain('y');
+}
 
 async function openFixture(page: Page, projectName: string, query = '') {
   const suffix = query ? `&${query}` : '';

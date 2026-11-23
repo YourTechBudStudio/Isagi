@@ -16,6 +16,7 @@ import {
   type FixtureTerminalState,
 } from './instrumentation.js';
 import { createFixtureRegistry } from './test-support/registry.js';
+import { ShortcutProbe } from './test-support/ShortcutProbe.js';
 
 const params = new URLSearchParams(location.search);
 const renderer = params.get('renderer') === 'dom' ? 'dom' : 'webgl';
@@ -30,6 +31,12 @@ const topology = readTopology(params.get('topology'));
 const identityKind = recipe === 'shell' ? 'terminal_session' : 'agent_session';
 // Query retries off for this page: a failed fixture read surfaces at once.
 const fixtureRegistry = createFixtureRegistry({ initialValues: [[queryRetryAtom, null]] });
+const APP_SHORTCUTS = [
+  'toggle-palette',
+  'add-project',
+  'toggle-zen',
+  'delete-active-pane',
+] as const;
 const instrumentation = createInstrumentedEnvironment({
   renderer,
   recipe,
@@ -58,6 +65,7 @@ export function FixtureApp() {
         <output className="sr-only" data-inspection>
           {JSON.stringify(inspection)}
         </output>
+        <ShortcutProbe ids={APP_SHORTCUTS} />
         <output className="sr-only" data-parking-roots>
           {document.querySelectorAll('[data-terminal-parking-root]').length}
         </output>

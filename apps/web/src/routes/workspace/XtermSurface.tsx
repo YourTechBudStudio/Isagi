@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ptyCopy } from '../../copy/index.js';
+import { isMacPlatform } from '../../lib/platform.js';
 import type {
   PtyStreamSink,
   PtyStreamSurfaceTransport,
@@ -246,10 +247,6 @@ function isCopyShortcut(event: KeyboardEvent) {
     return event.metaKey && !event.altKey;
   }
   return event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
-}
-
-function isMacPlatform() {
-  return /mac/i.test(navigator.platform);
 }
 
 function fitTerminalToHost(terminal: Terminal, host: HTMLElement): TerminalFitResult {

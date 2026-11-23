@@ -66,7 +66,8 @@ import {
   workflowFailurePresentation,
   workflowLaunchOutcome,
 } from '../../lib/palette/workflow-failure.js';
-import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
+import { modKey } from '../../lib/platform.js';
+import { useShortcut } from '../../lib/shortcuts/index.js';
 import { disabledQuery } from '../../lib/state/policy.js';
 import { useAppRun, useRegistry } from '../../lib/state/registry.js';
 import { queryError } from '../../lib/state/result.js';
@@ -297,44 +298,35 @@ export function CommandPalette() {
   }, [registry, machine.kind, open]);
 
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!isPlatformModifierShortcut(event)) {
+  // The busy lock extends to the shortcuts. Closing or replacing the palette mid-run makes the
+  // machine drop the attempt's outcome (`runMatches` fails), so a rejection would vanish unseen and
+  // a resolution would act later, detached from any visible action. The scrim and Escape-back are
+  // already locked while running; these were the remaining paths that could abandon in-flight work.
+  //
+  // The keymap still claims a recognized shortcut when the lock makes it a no-op, so native
+  // host/browser behavior cannot leak through the lock.
+  useShortcut('toggle-palette', {
+    run: () => {
+      // Only the close half is locked; Mod+K with the palette closed always opens it, so the lock
+      // can never make the palette unreachable.
+      if (open && running) {
         return;
       }
-      const key = event.key.toLowerCase();
-      // The busy lock extends to the shortcuts. Closing or replacing the
-      // palette mid-run makes the machine drop the attempt's outcome
-      // (`runMatches` fails), so a rejection would vanish unseen and a
-      // resolution would act later, detached from any visible action. The
-      // scrim and Escape-back are already locked while running; these were the
-      // remaining paths that could abandon in-flight work.
-      //
-      // `preventDefault` still fires for a recognized shortcut even when it
-      // no-ops, so native host/browser behavior cannot leak through the lock.
-      if (key === 'k') {
-        event.preventDefault();
-        // Only the close half is locked; Mod+K with the palette closed always
-        // opens it, so the lock can never make the palette unreachable.
-        if (open && running) {
-          return;
-        }
-        if (open) {
-          closeCurrentPalette();
-        } else {
-          openPalette(registry);
-        }
-      } else if (key === 'n') {
-        event.preventDefault();
-        if (running) {
-          return;
-        }
-        openPalette(registry, 'add-project');
+      if (open) {
+        closeCurrentPalette();
+      } else {
+        openPalette(registry);
       }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, registry, closeCurrentPalette, running]);
+    },
+  });
+  useShortcut('add-project', {
+    run: () => {
+      if (running) {
+        return;
+      }
+      openPalette(registry, 'add-project');
+    },
+  });
 
   // Reset on open; jump straight into a command flow when autostarted.
   useLayoutEffect(() => {

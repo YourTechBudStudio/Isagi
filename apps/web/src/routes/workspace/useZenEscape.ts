@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 
 import { isUnclaimedEscape } from '../../lib/escape.js';
 import { paletteAtom, paletteSelectors } from '../../lib/palette/store.js';
+import { useShortcut } from '../../lib/shortcuts/index.js';
 import { useRegistry } from '../../lib/state/registry.js';
 import { setZen, zenAtom } from '../../lib/workspace/store.js';
 
@@ -26,4 +27,11 @@ export function useZenEscape(): void {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [zen, paletteOpen, registry]);
+}
+
+/** Mod+. toggles zen (provisional). A keymap entry that yields to focused surfaces. */
+export function useZenToggleShortcut(): void {
+  const registry = useRegistry();
+  const zen = useAtomValue(zenAtom);
+  useShortcut('toggle-zen', { run: () => setZen(registry, !zen) });
 }

@@ -8,6 +8,7 @@ import {
 } from '@isagi/shared/contracts';
 
 import { ptyCopy, ptySocketErrorCopy } from '../../../copy/index.js';
+import { isMacPlatform } from '../../platform.js';
 import { createPtyStreamTransport } from '../pty-stream/transport.js';
 import { formatRuntimeError, formatRuntimeErrorSummary } from '../runtime-data.js';
 import { TERMINAL_HOST_CLASS } from '../terminal-appearance.js';
@@ -788,7 +789,7 @@ function decodeMessage(data: unknown): PtyWebSocketOutputMessage | null {
 
 function isCopyShortcut(event: KeyboardEvent) {
   if (event.key.toLowerCase() !== 'c') return false;
-  return /mac/i.test(navigator.platform)
+  return isMacPlatform()
     ? event.metaKey && !event.altKey
     : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
 }

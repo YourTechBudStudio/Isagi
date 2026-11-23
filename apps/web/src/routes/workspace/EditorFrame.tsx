@@ -1,6 +1,7 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 
 import { editorCopy } from '../../copy/index.js';
+import { attachShortcutSource } from '../../lib/shortcuts/index.js';
 import { EditorWait } from './EditorWait.js';
 
 /**
@@ -12,8 +13,11 @@ import { EditorWait } from './EditorWait.js';
  * frame that needs `allow-scripts allow-same-origin`, and Code Server's
  * extensions already run code on the runtime host with the user's privileges,
  * so the frame gains no capability from it. The pane never speaks to the frame
- * — no `postMessage` listener, no `contentWindow` access — so the containment
- * is one-directional and stated here rather than assumed.
+ * — no `postMessage` listener — and touches its `contentWindow` for one thing
+ * only: reading trusted key input for the app shortcuts that take priority over
+ * every surface (Mod+K, the palette). Nothing is written into the frame, and a
+ * script inside it cannot trigger an app command, because synthetic events are
+ * ignored.
  *
  * The cover is the frame's own load, not the runtime's readiness: the runtime
  * says a probe succeeded, which is a different fact from this document having
@@ -59,6 +63,26 @@ export function EditorFrame({
     return () => window.removeEventListener('blur', onWindowBlur);
   }, [onActivate]);
 
+  // Every load is a fresh document (Code Server reloads itself), so the shortcut
+  // source is attached per load; the previous document's listener went with it.
+  const detachShortcuts = useRef<(() => void) | null>(null);
+  useEffect(() => () => detachShortcutSource(detachShortcuts), []);
+  const onLoad = () => {
+    detachShortcutSource(detachShortcuts);
+    const frameWindow = frameRef.current?.contentWindow;
+    if (frameWindow) {
+      try {
+        detachShortcuts.current = attachShortcutSource(frameWindow);
+      } catch (error) {
+        // Only a cross-origin frame can refuse this, and the UI and the editor
+        // share the runtime's origin; if that ever breaks, say so instead of
+        // leaving Mod+K silently dead inside the editor.
+        console.warn('[editor] app shortcuts are unavailable inside the workbench frame', error);
+      }
+    }
+    onLoaded();
+  };
+
   return (
     <div className="relative flex min-h-0 flex-1">
       <iframe
@@ -67,7 +91,7 @@ export function EditorFrame({
         title={title}
         allow=""
         referrerPolicy="no-referrer"
-        onLoad={onLoaded}
+        onLoad={onLoad}
         // Tabbing into the workbench focuses the frame element in *our*
         // document, which is a normal focus event; the blur seam above is only
         // needed for the pointer path.
@@ -81,4 +105,13 @@ export function EditorFrame({
       )}
     </div>
   );
+}
+
+function detachShortcutSource(detach: RefObject<(() => void) | null>) {
+  try {
+    detach.current?.();
+  } catch {
+    // Best-effort: the document it was attached to may already be gone.
+  }
+  detach.current = null;
 }
