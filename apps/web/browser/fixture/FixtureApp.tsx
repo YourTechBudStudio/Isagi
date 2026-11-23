@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { zenTransition } from '../../src/lib/motion.js';
 import { AppStateProvider } from '../../src/lib/state/AppStateProvider.js';
 import { queryRetryAtom } from '../../src/lib/state/policy.js';
+import { ToastProvider } from '../../src/lib/toast/index.js';
 import { useTerminalAttachmentResource } from '../../src/lib/workspace/terminal-presentation/context.js';
 import { TerminalPresentationProvider } from '../../src/lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { sendAgentComposerNewline } from '../../src/routes/workspace/agentComposerKeys.js';
@@ -54,39 +55,42 @@ export function FixtureApp() {
   const [inspection, setInspection] = useState<readonly FixtureTerminalState[]>([]);
   return (
     <AppStateProvider registry={fixtureRegistry}>
-      <main className="h-screen bg-canvas p-4 text-fg" data-browser-terminal-fixture>
-        <FixtureControls
-          inspect={() => setInspection(instrumentation.inspectTerminals())}
-          destroy={() => setProviderMounted(false)}
-        />
-        <output className="sr-only" data-counters>
-          {JSON.stringify(counters)}
-        </output>
-        <output className="sr-only" data-inspection>
-          {JSON.stringify(inspection)}
-        </output>
-        <ShortcutProbe ids={APP_SHORTCUTS} />
-        <output className="sr-only" data-parking-roots>
-          {document.querySelectorAll('[data-terminal-parking-root]').length}
-        </output>
-        {providerMounted ? (
-          <TerminalPresentationProvider
-            settings={{
-              scrollbackLines: 5_000,
-              cache: {
-                idleTtlMinutes: 180,
-                maxHiddenSessions,
-                maxEstimatedBufferMiB,
-              },
-            }}
-            environment={instrumentation.environment}
-          >
-            <FixtureWorkspace />
-          </TerminalPresentationProvider>
-        ) : (
-          <div data-provider-destroyed />
-        )}
-      </main>
+      {/* Toasts render so a failed terminal clipboard write is visible, as it is in the app. */}
+      <ToastProvider>
+        <main className="h-screen bg-canvas p-4 text-fg" data-browser-terminal-fixture>
+          <FixtureControls
+            inspect={() => setInspection(instrumentation.inspectTerminals())}
+            destroy={() => setProviderMounted(false)}
+          />
+          <output className="sr-only" data-counters>
+            {JSON.stringify(counters)}
+          </output>
+          <output className="sr-only" data-inspection>
+            {JSON.stringify(inspection)}
+          </output>
+          <ShortcutProbe ids={APP_SHORTCUTS} />
+          <output className="sr-only" data-parking-roots>
+            {document.querySelectorAll('[data-terminal-parking-root]').length}
+          </output>
+          {providerMounted ? (
+            <TerminalPresentationProvider
+              settings={{
+                scrollbackLines: 5_000,
+                cache: {
+                  idleTtlMinutes: 180,
+                  maxHiddenSessions,
+                  maxEstimatedBufferMiB,
+                },
+              }}
+              environment={instrumentation.environment}
+            >
+              <FixtureWorkspace />
+            </TerminalPresentationProvider>
+          ) : (
+            <div data-provider-destroyed />
+          )}
+        </main>
+      </ToastProvider>
     </AppStateProvider>
   );
 }
@@ -144,6 +148,31 @@ function FixtureControls({ inspect, destroy }: { inspect: () => void; destroy: (
       </button>
       <button type="button" onClick={() => instrumentation.sendAnsi('\u001b[3J')} data-action="ed3">
         ED3
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          instrumentation.sendReplayOutput(`${osc52Copy(OSC52_REPLAYED_TEXT)}osc52-replayed\r\n`)
+        }
+        data-action="osc52-replayed"
+      >
+        OSC 52 in replay
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          instrumentation.sendLive(`${osc52Copy(OSC52_LIVE_TEXT, '\u001b\\')}osc52-live-marker\r\n`)
+        }
+        data-action="osc52-live"
+      >
+        OSC 52 live
+      </button>
+      <button
+        type="button"
+        onClick={() => instrumentation.sendLive('\u001b]52;c;?\u0007osc52-read-marker\r\n')}
+        data-action="osc52-read"
+      >
+        OSC 52 read
       </button>
       <button
         type="button"
@@ -387,4 +416,13 @@ function readRecipe(value: string | null): AnsiRecipe {
 
 function readTopology(value: string | null) {
   return value === 'focus' ? 'focus' : 'default';
+}
+
+const OSC52_REPLAYED_TEXT = 'replayed osc52 copy';
+const OSC52_LIVE_TEXT = 'live osc52 copy · héllo 世界';
+
+/** A program's OSC 52 clipboard write, base64 over UTF-8 as the CLIs emit it. */
+function osc52Copy(text: string, terminator = '\u0007') {
+  const encoded = new TextEncoder().encode(text);
+  return `\u001b]52;c;${btoa(String.fromCharCode(...encoded))}${terminator}`;
 }

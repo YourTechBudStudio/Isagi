@@ -32,6 +32,7 @@ describe('presentation resource selection', () => {
       onViewport: () => undefined,
       onEvent: () => undefined,
       paneFocusAllowed: () => true,
+      onClipboardWriteFailed: () => undefined,
       resolveUrl: async () => 'ws://runtime.test/pty/7',
       isCancelled: () => false,
     });

@@ -241,6 +241,10 @@ export function createInstrumentedEnvironment(input: {
     sendLive(data: string) {
       currentSocket().message({ type: 'output', data });
     },
+    /** One replayed output chunk carrying `data`, between a manual `replay-start` and `replay-end`. */
+    sendReplayOutput(data: string) {
+      currentSocket().message({ type: 'output', data, replay: true });
+    },
     sendAnsi(data: string) {
       currentSocket().message({ type: 'output', data });
     },

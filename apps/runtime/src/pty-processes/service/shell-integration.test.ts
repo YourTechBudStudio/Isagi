@@ -60,6 +60,39 @@ test('shell integration parser retains a partial marker prefix until it complete
   assert.deepEqual(events, ['foreground-start']);
 });
 
+test('shell integration parser passes OSC 52 clipboard writes through byte-for-byte', () => {
+  // The client turns OSC 52 into a write to the user's own clipboard, so the runtime must never alter it: not when it
+  // is split across PTY chunks, and not when it sits next to an Isagi marker the parser strips.
+  const base64 = Buffer.from('copied from the TUI').toString('base64');
+  const belWrite = `\x1b]52;c;${base64}\x07`;
+  const stWrite = `\x1b]52;c;${base64}\x1b\\`;
+
+  const events: string[] = [];
+  const parser = createShellIntegrationParser({
+    shellIntegration: { token: 'token-1' },
+    onEvent: (event) => events.push(event),
+  });
+  const split = [
+    belWrite.slice(0, 3),
+    belWrite.slice(3, 9),
+    belWrite.slice(9),
+    stWrite.slice(0, 1),
+    stWrite.slice(1),
+  ];
+  assert.equal(
+    split.map((chunk) => parser.push(chunk)).join('') + parser.flush(),
+    belWrite + stWrite,
+  );
+
+  const beside =
+    parser.push(`a${belWrite}\x1b]6973;isagi;foreground-start;token-1\x07`) +
+    parser.push(`${stWrite}\x1b]6973;isagi;foreground-`) +
+    parser.push(`end;token-1\x07${belWrite}b`) +
+    parser.flush();
+  assert.equal(beside, `a${belWrite}${stWrite}${belWrite}b`);
+  assert.deepEqual(events, ['foreground-start', 'foreground-end']);
+});
+
 test('shell integration parser flushes an unterminated marker run once it exceeds the buffer bound', () => {
   const events: string[] = [];
   const parser = createShellIntegrationParser({

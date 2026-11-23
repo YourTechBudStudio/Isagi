@@ -18,6 +18,10 @@ export const toastCopy = {
   workbenchCommandFailed: {
     title: 'Could not run that command.',
   },
+  terminalClipboardWriteFailed: {
+    title: 'Could not copy to your clipboard.',
+    subtitle: 'The browser said no. Try the copy again.',
+  },
   surfaceFocusPersistFailed: {
     title: 'Could not save the active surface.',
     subtitle: 'This switch is local; restart may reopen another surface.',

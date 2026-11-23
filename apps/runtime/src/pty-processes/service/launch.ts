@@ -260,6 +260,16 @@ function startAllocation(
   );
 }
 
+/**
+ * Isagi terminals are remote terminals: the user sits at a client, not at the host running this
+ * PTY. Declaring an SSH-style session makes TUIs such as Codex copy via OSC 52, which the client
+ * writes to the user's own clipboard, instead of only to the host's. Only PTYs get it: SDK workers
+ * and user-shell commands have no terminal. `/dev/tty` is the controlling terminal, always valid
+ * inside the PTY; tools check that the variable is present. `SSH_CONNECTION` is deliberately not
+ * set: tools parse its structured value, and the runtime has no honest one to give.
+ */
+const remoteTerminalEnvironment = { SSH_TTY: '/dev/tty' } as const;
+
 function prepareLaunch(
   deps: PtyLaunchDependencies,
   input: LaunchPtyProcessInput,
@@ -271,9 +281,10 @@ function prepareLaunch(
     yield* deps.foreground.clear(ptyProcessId);
     // Resolved per launch (see `LaunchEnvironment`), with this process's own token, which the
     // access module releases on its `pty_process_*` end event. Explicit overrides still win, as
-    // they do for the URL.
+    // they do for the URL and for the remote-terminal declaration.
     const processEnvironment: NodeJS.ProcessEnv = {
       ...(yield* deps.launchEnvironment.forProcess({ _tag: 'pty', ptyProcessId })),
+      ...remoteTerminalEnvironment,
       ...input.envOverrides,
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };
