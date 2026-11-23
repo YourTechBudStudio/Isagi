@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { workflowCopy } from '../../copy/index.js';
 import { AppStateProvider } from '../../lib/state/AppStateProvider.js';

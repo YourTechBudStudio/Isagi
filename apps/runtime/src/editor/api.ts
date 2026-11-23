@@ -1,7 +1,7 @@
 import { Effect, type Layer } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { registerApiEndpoint, type Rejection, type RouteRuntime } from '../platform/http/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';

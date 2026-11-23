@@ -4,7 +4,7 @@ import type {
   WorkflowGraphInvocationDto,
   WorkflowQuestionSpecDto,
   WorkflowWaitDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { workflowCopy, workflowErrorStageHeadline } from '../../../copy/index.js';
 import { waitTimings } from '../../../lib/workspace/workflow/history.js';

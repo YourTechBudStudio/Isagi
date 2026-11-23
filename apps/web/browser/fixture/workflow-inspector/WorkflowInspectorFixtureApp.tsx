@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkflowEventDto } from '@isagi/contracts';
+import type { WorkflowEventDto } from '@isagi/shared/contracts';
 
 import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
 import { useRegistry } from '../../../src/lib/state/registry.js';

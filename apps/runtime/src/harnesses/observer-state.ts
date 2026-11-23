@@ -1,4 +1,4 @@
-import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
+import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/shared/contracts';
 
 import { attributeCodexRecords } from './codex/attribution.js';
 import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';

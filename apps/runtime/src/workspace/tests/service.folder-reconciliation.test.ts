@@ -6,7 +6,7 @@ import test, { after as afterAll, describe } from 'node:test';
 import { asc } from 'drizzle-orm';
 import { Effect } from 'effect';
 
-import type { ReconciliationFinding } from '@isagi/contracts';
+import type { ReconciliationFinding } from '@isagi/shared/contracts';
 
 import type { SurfaceService } from '../../environment/index.js';
 import { surfacePanes, worktreeSurfaces } from '../../environment/tables.js';

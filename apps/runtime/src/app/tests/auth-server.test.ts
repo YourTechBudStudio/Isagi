@@ -19,7 +19,9 @@ const passwordVariable = `AUTH_SERVER_TEST_PASSWORD_${process.pid}`;
 const password = 'correct horse';
 const launcherToken = 'launcher-token-for-tests';
 const allowedOrigin = 'http://127.0.0.1:43129';
-const documentBody = '<!doctype html><title>Isagi</title>';
+const sourceDocument = '<!doctype html><html><title>Isagi</title></html>';
+// What the runtime serves: the document rendered with the (default) theme.
+const documentBody = '<!doctype html><html data-theme="light"><title>Isagi</title></html>';
 
 type ErrorBody = { error: { code: string; message: string } };
 
@@ -31,7 +33,7 @@ before(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'isagi-auth-server-'));
   const webRoot = join(dataRoot, 'web');
   mkdirSync(join(webRoot, 'assets'), { recursive: true });
-  writeFileSync(join(webRoot, 'index.html'), documentBody);
+  writeFileSync(join(webRoot, 'index.html'), sourceDocument);
   writeFileSync(join(webRoot, 'assets', 'a.js'), 'export {};');
   // The password comes from the login-shell environment, as `env.NAME` does for users.
   process.env[passwordVariable] = password;
@@ -39,7 +41,6 @@ before(async () => {
     join(dataRoot, 'config.yaml'),
     [
       'server:',
-      '  serveWebUi: true',
       '  auth:',
       '    enabled: true',
       '    username: ada',

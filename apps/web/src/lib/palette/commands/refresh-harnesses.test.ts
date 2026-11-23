@@ -7,8 +7,8 @@ import type {
   ControlPlaneSnapshot,
   DocsReconciliationResult,
   HarnessControlPlaneEntry,
-} from '@isagi/contracts';
-import { RuntimeTransportError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { harnessRefreshCopy, runtimeErrorCopy } from '../../../copy/index.js';
 import { controlPlaneQuery } from '../../control-plane/queries.js';

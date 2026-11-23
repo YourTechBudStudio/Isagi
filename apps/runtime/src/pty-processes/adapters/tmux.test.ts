@@ -15,7 +15,7 @@ test('tmux replay captures the full pane and marks replay output', async () => {
     const messages = await Effect.runPromise(
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
-        const replayMessages: import('@isagi/contracts').PtyWebSocketOutputMessage[] = [];
+        const replayMessages: import('@isagi/shared/contracts').PtyWebSocketOutputMessage[] = [];
         yield* backend.replay({
           ref: { schemaVersion: 1, backend: 'tmux', sessionName: 'isagi-session-1' },
           logPath: null,

@@ -23,7 +23,7 @@ import type {
   WorkflowEventDto,
   WorkflowLaunchOrigin,
   WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { RuntimeApi } from '../../runtime/client.js';
 import { keys } from '../../state/keys.js';

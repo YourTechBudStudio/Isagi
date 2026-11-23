@@ -1,4 +1,4 @@
-import type { ApiError } from '@isagi/contracts';
+import type { ApiError } from '@isagi/shared/contracts';
 
 import { GitCommandError, ProjectPathValidationError } from '../git/index.js';
 import { DataDirectoryError, DatabaseError } from '../persistence/index.js';

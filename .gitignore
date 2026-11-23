@@ -12,6 +12,7 @@ coverage/
 apps/web/.browser-dist/
 apps/web/playwright-report/
 apps/web/test-results/
+apps/desktop/test-results/
 *.tsbuildinfo
 .DS_Store
 .env

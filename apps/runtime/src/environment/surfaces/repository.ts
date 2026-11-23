@@ -6,7 +6,7 @@ import type {
   PaneSessionKind,
   SurfaceLayoutNode,
   SurfaceOrderRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { editorContextRow, type EditorContextRow } from '../../editor/index.js';
 import { editorContexts } from '../../editor/tables.js';

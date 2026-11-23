@@ -9,6 +9,10 @@ export const developmentEnvironmentKeys = Object.freeze({
   processOwner: 'ISAGI_DEV_PROCESS_OWNER',
   desktopLogMode: 'ISAGI_DESKTOP_LOG_MODE',
   webUrl: 'ISAGI_WEB_URL',
+  // Vite's: the runtime its dev server proxies `/api` and `/editor` to, and the data directory whose `config.yaml`
+  // gives the served document its theme. Set by the supervisor; never a runtime's business.
+  devRuntimeUrl: 'ISAGI_DEV_RUNTIME_URL',
+  devDataDir: 'ISAGI_DEV_DATA_DIR',
 });
 export const privateRuntimeEnvironmentKeys = Object.freeze(
   Object.values(developmentEnvironmentKeys),

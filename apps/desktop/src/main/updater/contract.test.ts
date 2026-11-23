@@ -3,7 +3,10 @@ import test from 'node:test';
 
 import { Result, Schema } from 'effect';
 
-import { DESKTOP_UPDATE_PROTOCOL_VERSION, desktopUpdateSnapshotSchema } from '@isagi/contracts';
+import {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  desktopUpdateSnapshotSchema,
+} from '@isagi/shared/contracts';
 
 const decode = Schema.decodeUnknownResult(desktopUpdateSnapshotSchema);
 const base = {

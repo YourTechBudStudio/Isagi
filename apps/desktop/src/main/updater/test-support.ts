@@ -10,7 +10,7 @@ import {
   type HttpClientRequest,
 } from 'effect/http';
 
-import type { DesktopUpdateSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot } from '@isagi/shared/contracts';
 
 import { DesktopUpdaterConfig, type UpdaterAdapter } from './config.js';
 import { UpdaterDiagnostics, type UpdaterDiagnosticRecord } from './diagnostics.js';

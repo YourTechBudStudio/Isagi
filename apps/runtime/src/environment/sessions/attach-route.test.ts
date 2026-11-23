@@ -8,7 +8,7 @@ import {
   agentSessionPtyWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   type PtyStreamOutputMessageSet,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { makeFiberProbe } from '../../../test/test-support.js';
 import { HarnessAdapterError } from '../../harnesses/index.js';

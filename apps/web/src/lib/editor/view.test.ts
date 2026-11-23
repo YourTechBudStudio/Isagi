@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { EditorContextFacts } from '@isagi/contracts';
+import type { EditorContextFacts } from '@isagi/shared/contracts';
 
 import {
   editorAttemptBanner,

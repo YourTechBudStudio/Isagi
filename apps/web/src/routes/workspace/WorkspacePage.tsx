@@ -16,7 +16,7 @@ import {
   useDispatchedCommandErrorHandler,
 } from '../../lib/palette/dispatcher.js';
 import { paletteAtom, paletteSelectors } from '../../lib/palette/store.js';
-import { isPlatformModifierShortcut } from '../../lib/platform.js';
+import { useShortcut } from '../../lib/shortcuts/index.js';
 import { useRegistry } from '../../lib/state/registry.js';
 import { queryError } from '../../lib/state/result.js';
 import {
@@ -27,11 +27,11 @@ import {
 import { paneDeleteKey, useRunDelete } from '../../lib/workspace/pending-deletes.js';
 import { formatRuntimeError, useWorkspaceResult } from '../../lib/workspace/queries.js';
 import { runtimeConnectionAtom } from '../../lib/workspace/runtime-events.js';
-import { activePaneBySurfaceAtom, setZen, zenAtom } from '../../lib/workspace/store.js';
+import { activePaneBySurfaceAtom, zenAtom } from '../../lib/workspace/store.js';
 import { TerminalPresentationProvider } from '../../lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
-import { useZenEscape } from './useZenEscape.js';
+import { useZenEscape, useZenToggleShortcut } from './useZenEscape.js';
 import { WorkArea } from './WorkArea.js';
 
 function FirstRunDragRegion() {
@@ -112,36 +112,20 @@ export function WorkspacePage() {
 
   // Zen: Esc exits (see `useZenEscape`); a provisional Mod+. toggles it.
   useZenEscape();
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (isPlatformModifierShortcut(event) && event.key === '.') {
-        event.preventDefault();
-        setZen(registry, !zen);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [zen, registry]);
+  useZenToggleShortcut();
 
   // Pauses the Fluidcast sessions that leave the active surface. Lives here, outside `WorkArea`,
   // so a pane's mount or unmount never decides visibility.
   useFluidcastPresentation(activeSurface?.id ?? null);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        paletteOpen ||
-        isEditableEventTarget(event.target) ||
-        !isPlatformModifierShortcut(event) ||
-        event.key.toLowerCase() !== 'w' ||
-        !activeSurface
-      ) {
+  // Yields to editable targets and already-claimed keys (see the keymap entry), and here to the
+  // open palette and to having nothing to delete.
+  useShortcut('delete-active-pane', {
+    enabled: () => !paletteOpen && Boolean(activeSurface),
+    run: () => {
+      if (!activeSurface) {
         return;
       }
-
-      event.preventDefault();
-
       // The shortcut has no affordance of its own, so it reports through the
       // target pane's action cluster, which pins visible while a delete runs.
       // That needs the pane id up front; when nothing is stored the command
@@ -162,19 +146,8 @@ export function WorkspacePage() {
           paneId: String(activePaneId),
         },
       });
-    };
-
-    window.addEventListener('keydown', onKey, { capture: true });
-    return () => window.removeEventListener('keydown', onKey, { capture: true });
-  }, [
-    activePaneBySurfaceId,
-    activeSurface,
-    activeWorktreeId,
-    dispatchCommand,
-    onDispatchError,
-    paletteOpen,
-    runDelete,
-  ]);
+    },
+  });
 
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: DURATION.ui, ease: EASE_EXPO }}>
@@ -217,19 +190,4 @@ function useClientSettings() {
     isPending: result._tag === 'Initial',
     error: queryError(result),
   };
-}
-
-function isEditableEventTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const tagName = target.tagName.toLowerCase();
-  return (
-    tagName === 'input' ||
-    tagName === 'textarea' ||
-    tagName === 'select' ||
-    target.isContentEditable ||
-    Boolean(target.closest('[contenteditable="true"]'))
-  );
 }

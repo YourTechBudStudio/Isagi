@@ -1,4 +1,4 @@
-import type { PtyStreamErrorCode } from '@isagi/contracts';
+import type { PtyStreamErrorCode } from '@isagi/shared/contracts';
 
 export type PtyStreamNotice = {
   readonly kind: 'protocol' | 'transport';

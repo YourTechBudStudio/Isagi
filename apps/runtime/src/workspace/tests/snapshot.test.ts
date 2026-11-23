@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect, Schema, Stream } from 'effect';
 
-import { workspaceSnapshotSchema } from '@isagi/contracts';
+import { workspaceSnapshotSchema } from '@isagi/shared/contracts';
 
 import { CommandService } from '../../commands/index.js';
 import { AgentSessionService, SurfaceService } from '../../environment/index.js';

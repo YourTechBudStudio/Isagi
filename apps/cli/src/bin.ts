@@ -9,7 +9,7 @@ runCliProcess(process.argv.slice(2), {
     // so nothing but `serve` loads it or its native modules.
     load: () => import(/* @vite-ignore */ new URL('./index.js', import.meta.url).href),
     cliEntryPath: fileURLToPath(import.meta.url),
-    // The web build packed beside `dist/` (`<package>/web`); served only when `server.serveWebUi` is true.
+    // The web build packed beside `dist/` (`<package>/web`); every runtime serves it.
     defaultWebRoot: fileURLToPath(new URL('../web', import.meta.url)),
   },
 });

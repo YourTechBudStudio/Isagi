@@ -4,7 +4,7 @@ import type {
   WorkflowNodeDescriptorDto,
   WorkflowOutcomeDescriptorDto,
   WorkflowStructureDescriptorDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * The current build's structure, addressed by where each element is *registered* rather than by which

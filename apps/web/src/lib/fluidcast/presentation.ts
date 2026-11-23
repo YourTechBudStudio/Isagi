@@ -4,8 +4,8 @@ import { Effect, Schema } from 'effect';
 import { AsyncResult, Atom } from 'effect/reactivity';
 import { useEffect, useRef } from 'react';
 
-import type { SurfaceDetail } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { SurfaceDetail } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { useRegistry } from '../state/registry.js';

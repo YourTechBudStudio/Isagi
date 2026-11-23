@@ -1,6 +1,6 @@
 import { ArrowRight, TriangleAlert, Workflow } from 'lucide-react';
 
-import type { WorkflowStructureDiagnosticDto } from '@isagi/contracts';
+import type { WorkflowStructureDiagnosticDto } from '@isagi/shared/contracts';
 
 import {
   paletteCopy,

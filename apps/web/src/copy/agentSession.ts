@@ -1,4 +1,4 @@
-import type { HarnessLaunchBlockReason } from '@isagi/contracts';
+import type { HarnessLaunchBlockReason } from '@isagi/shared/contracts';
 
 /**
  * The recovery prompts an agent pane shows when no live process is attached and

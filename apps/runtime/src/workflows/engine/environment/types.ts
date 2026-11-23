@@ -1,4 +1,4 @@
-import type { WorkflowPlacementRequestDto, WorkflowPlacementSource } from '@isagi/contracts';
+import type { WorkflowPlacementRequestDto, WorkflowPlacementSource } from '@isagi/shared/contracts';
 
 export type { WorkflowPlacementSource };
 

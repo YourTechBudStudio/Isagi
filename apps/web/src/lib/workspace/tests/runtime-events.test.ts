@@ -8,7 +8,7 @@ import {
   runtimeEventTypeSchema,
   type RuntimeEvent,
   type WorktreeCommandsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { keys } from '../../state/keys.js';
 import { appReactivityAtom, runApp } from '../../state/runtime.js';

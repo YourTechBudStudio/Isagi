@@ -1,7 +1,7 @@
 import type {
   EditorContextFacts as ContractEditorContextFacts,
   EditorAttemptFailureReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 // Read-side composition only: the editor context carries the process the
 // runtime joined onto its pointer. The PTY domain owns the row itself

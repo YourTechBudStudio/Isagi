@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self'; font-src 'self'; script-src 'self'; img-src data:; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Isagi</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./loader.css" />
+    <!--
+      The desktop loader. The main process loads it by file URL with its state in the query
+      (see apps/desktop/src/main/loader-url.ts), so every state is also openable by hand:
+        ?theme=dark|light
+        &state=starting|slow|failed
+        &reason=<HostRuntimeFailureReason>|page_load_failed
+        &message=<diagnostic>&exitCode=<n>&signal=<name>
+      `slow` is what `starting` turns into after 8 s; main never sends it.
+    -->
+    <script src="./loader.js" defer></script>
+  </head>
+  <body>
+    <main class="boot">
+      <div class="column" id="column">
+        <div class="mark">Isagi</div>
+        <div class="track" id="track">
+          <div class="fill" id="fill"></div>
+        </div>
+        <div id="below"></div>
+      </div>
+      <p class="whisper" id="whisper" hidden></p>
+    </main>
+  </body>
+</html>

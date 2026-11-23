@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { workflowLoadFailureReasonSchema } from '@isagi/contracts';
+import { workflowLoadFailureReasonSchema } from '@isagi/shared/contracts';
 
 import {
   paletteCopy,

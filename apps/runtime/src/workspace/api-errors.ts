@@ -2,7 +2,7 @@ import type {
   runtimeStateFileFailedErrorSchema,
   WorktreeSetupRejectedError,
   WorktreeSetupRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { ProjectConfigError } from '../projects/index.js';
 import type { WorktreeSetupError } from './setup/service.js';

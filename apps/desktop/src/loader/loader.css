@@ -1,0 +1,337 @@
+/*
+ * Desktop loader: what the window shows while the managed runtime starts, and when it fails.
+ *
+ * A faithful copy of the web boot surface (apps/web/src/routes/startup/StartupSurfaces.tsx) in plain CSS, so the
+ * loader → runtime-page handoff reads as one screen moving on. Approved as the phase 02 mock
+ * (scratch/plans/desktop-shell-and-shortcuts). Every colour, font family, duration and radius comes from
+ * `tokens.css`, which `scripts/build-loader.mjs` generates from apps/web/src/styles.css at build time; nothing here
+ * names a palette value. Tailwind utilities from the web surface are noted alongside the rules they mirror.
+ *
+ * Starting and slow: full-size mark, live track at the web `connecting` fill, status line, whisper.
+ * Failed: compact mark, no track, wide column, title, body, diagnostic chip, Open logs + Quit.
+ */
+
+/* Fonts: the families styles.css uses, copied beside this file by the build. */
+@import url('./fonts/sora/index.css');
+@import url('./fonts/source-sans-3/index.css');
+@import url('./fonts/fira-code/index.css');
+
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+/* ── Page and atmosphere (styles.css: body, body::before, body::after) ── */
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  color: var(--color-fg);
+  background: var(--color-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body::before {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    radial-gradient(circle at 16% 16%, var(--halo-blue), transparent 34rem),
+    radial-gradient(circle at 84% 10%, var(--halo-violet), transparent 36rem),
+    radial-gradient(circle at 50% 96%, var(--halo-cyan), transparent 32rem);
+}
+
+body::after {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Boot surface (BootSurface: grid h-screen place-items-center p-6) ── */
+.boot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  padding: 24px;
+  overflow: hidden;
+}
+
+/* flex w-full flex-col items-center text-center max-w-100 | max-w-2xl */
+.column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+}
+
+.column[data-wide] {
+  max-width: 672px;
+}
+
+/* BootMark: font-display font-semibold leading-none tracking-[-0.035em] text-[38px] | [21px] */
+.mark {
+  font-family: var(--font-display);
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  color: var(--color-fg);
+  transition: all var(--duration-surface) var(--ease-expo);
+}
+
+.column[data-compact] .mark {
+  font-size: 21px;
+}
+
+/* BootTrack: h-0.75 rounded-full mt-6.5 w-[190px]. Only the loading states show it. */
+.track {
+  position: relative;
+  width: 190px;
+  height: 3px;
+  margin-top: 26px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-line) 16%, transparent);
+  transition: all var(--duration-surface) var(--ease-expo);
+}
+
+.fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--color-blue), var(--color-violet));
+  transition: all var(--duration-surface) var(--ease-expo);
+}
+
+/* The light ray sweeping the filled length, clipped to the fill. */
+.ray-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.ray {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 50%;
+  background: linear-gradient(
+    to right,
+    transparent,
+    /* Tailwind's built-in `white` (the web track's `via-white/45`), not a theme token. */ color-mix(
+      in srgb,
+      #fff 45%,
+      transparent
+    ),
+    transparent
+  );
+  animation: ray 2.6s linear infinite;
+}
+
+/* The live tip: a soft violet glow breathing at the leading edge. */
+.tip {
+  position: absolute;
+  top: 50%;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--color-violet) 55%, transparent),
+    transparent 70%
+  );
+  animation: breathe 2.6s var(--ease-expo) infinite;
+}
+
+/* BootStatus: mt-4 h-4.5; font-mono text-[12px] text-fg-subtle */
+.status {
+  height: 18px;
+  margin-top: 16px;
+}
+
+.status p {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-fg-subtle);
+}
+
+/* BootTitle: mt-5.5 font-display text-[20px] font-semibold tracking-tight text-fg */
+.title {
+  margin: 22px 0 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.025em;
+  color: var(--color-fg);
+}
+
+/* Failure drops the track, so the title sits under the compact mark at the track's compact spacing. */
+.column[data-compact] .title {
+  margin-top: 18px;
+}
+
+/* BootBody: mt-2 max-w-[52ch] text-[13px] leading-[1.55] text-fg-muted */
+.body {
+  max-width: 52ch;
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-fg-muted);
+}
+
+/* DiagnosticChip tone=error: mt-3.5 max-w-[72ch] rounded-sm border px-3 py-2 font-mono
+   text-[11.5px] leading-relaxed whitespace-pre-wrap border-error/24 bg-error/8 text-error */
+.chip {
+  max-width: 72ch;
+  margin: 14px 0 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--color-error) 24%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.625;
+  color: var(--color-error);
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+/* BootActions: mt-5 flex gap-2.5 */
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* Button size=sm: px-3 py-2 text-[12.5px] rounded-md font-medium */
+.button {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: all var(--duration-micro) var(--ease-expo);
+}
+
+/* variant=primary: border-blue/32 bg-blue/15 text-fg hover:bg-blue/22 */
+.button[data-variant='primary'] {
+  border-color: color-mix(in srgb, var(--color-blue) 32%, transparent);
+  background: color-mix(in srgb, var(--color-blue) 15%, transparent);
+  color: var(--color-fg);
+}
+
+.button[data-variant='primary']:hover {
+  background: color-mix(in srgb, var(--color-blue) 22%, transparent);
+}
+
+/* variant=secondary: border-line/40 bg-transparent text-fg-muted hover:border-line/60 hover:text-fg */
+.button[data-variant='secondary'] {
+  border-color: color-mix(in srgb, var(--color-line) 40%, transparent);
+  background: transparent;
+  color: var(--color-fg-muted);
+}
+
+.button[data-variant='secondary']:hover {
+  border-color: color-mix(in srgb, var(--color-line) 60%, transparent);
+  color: var(--color-fg);
+}
+
+.button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-blue) 60%, transparent);
+  outline-offset: 2px;
+}
+
+/* Whisper: absolute bottom-5 font-mono text-[11.5px] text-fg-subtle, opacity 0.55 */
+.whisper {
+  position: absolute;
+  right: 0;
+  bottom: 20px;
+  left: 0;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-fg-subtle);
+  text-align: center;
+  opacity: 0.55;
+}
+
+/* Detail unfold: initial opacity 0, y 8 → landed, on the surface transition. */
+.detail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: unfold var(--duration-surface) var(--ease-expo) both;
+}
+
+@keyframes unfold {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes ray {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ray,
+  .tip,
+  .detail {
+    animation: none;
+  }
+
+  .mark,
+  .track,
+  .fill {
+    transition: none;
+  }
+}

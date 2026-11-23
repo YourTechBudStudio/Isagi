@@ -5,7 +5,7 @@ import {
   ptyWebSocketOutputMessageSchema,
   type PtyStreamErrorCode,
   type PtyWebSocketOutputMessage,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { ptyCopy, ptySocketErrorCopy } from '../../../copy/index.js';
 import { createPtyStreamTransport } from '../pty-stream/transport.js';

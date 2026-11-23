@@ -1,6 +1,6 @@
 import type { FastifyReply } from 'fastify';
 
-import type { ApiError } from '@isagi/contracts';
+import type { ApiError } from '@isagi/shared/contracts';
 
 export interface ApiRouteContext {
   readonly endpointId: string;

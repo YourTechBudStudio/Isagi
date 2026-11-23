@@ -9,7 +9,7 @@ import type {
   ActiveContextOutput,
   ActiveContextPersistenceInput,
   ReconcileWorkspaceOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { runApp } from '../../state/runtime.js';
 import { advance, controllable, flush, makeTestRegistry } from '../../state/testing.js';

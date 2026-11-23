@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import type { WorktreeDestinationIssue } from '@isagi/contracts';
+import type { WorktreeDestinationIssue } from '@isagi/shared/contracts';
 
 import { diagnosticPhase } from '../platform/diagnostics/index.js';
 import { Git, type GitCommandError, listGitWorktrees } from '../platform/git/index.js';

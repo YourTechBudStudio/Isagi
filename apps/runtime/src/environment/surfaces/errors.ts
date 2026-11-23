@@ -1,6 +1,6 @@
 import { Data } from 'effect';
 
-import type { SurfaceOrderRejectionReason } from '@isagi/contracts';
+import type { SurfaceOrderRejectionReason } from '@isagi/shared/contracts';
 
 // The surfaces domain's expected-failure channel.
 //

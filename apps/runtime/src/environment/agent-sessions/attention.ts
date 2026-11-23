@@ -1,7 +1,11 @@
 import { eq, getTableColumns } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { AttentionSource, AttentionState, TerminalAttentionState } from '@isagi/contracts';
+import type {
+  AttentionSource,
+  AttentionState,
+  TerminalAttentionState,
+} from '@isagi/shared/contracts';
 
 import { AgentSessionArtifacts, HarnessLedgerObserver } from '../../harnesses/index.js';
 import { DatabaseError, RuntimeDatabase } from '../../platform/persistence/index.js';

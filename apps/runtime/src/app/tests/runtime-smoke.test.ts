@@ -32,7 +32,7 @@ import {
   type ApiError,
   type RuntimeEvent,
   type WireSchema,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   activeHandleCounts,

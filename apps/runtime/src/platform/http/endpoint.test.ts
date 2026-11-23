@@ -5,7 +5,7 @@ import { Data, Effect, Layer, ManagedRuntime, References } from 'effect';
 import { TestClock } from 'effect/testing';
 import Fastify from 'fastify';
 
-import { apiEndpoints, type ApiError, type HealthOutput } from '@isagi/contracts';
+import { apiEndpoints, type ApiError, type HealthOutput } from '@isagi/shared/contracts';
 
 import { makeLogCapture } from '../../../test/test-support.js';
 import { DatabaseError } from '../persistence/index.js';

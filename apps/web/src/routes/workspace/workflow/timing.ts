@@ -1,4 +1,4 @@
-import type { WorkflowExecutionSummaryDto } from '@isagi/contracts';
+import type { WorkflowExecutionSummaryDto } from '@isagi/shared/contracts';
 
 import type { WaitTiming } from '../../../lib/workspace/workflow/history.js';
 

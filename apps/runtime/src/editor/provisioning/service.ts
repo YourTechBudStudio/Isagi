@@ -1,6 +1,9 @@
 import { Context, Data, Duration, Effect, Layer, Option, Ref, Semaphore } from 'effect';
 
-import type { EditorProvisioningFailureReason, EditorProvisioningState } from '@isagi/contracts';
+import type {
+  EditorProvisioningFailureReason,
+  EditorProvisioningState,
+} from '@isagi/shared/contracts';
 
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { EditorInstallIo } from './install-io.js';

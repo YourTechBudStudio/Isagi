@@ -2,8 +2,8 @@ import { useAtom } from '@effect/atom-react';
 import { Effect } from 'effect';
 import { useMemo, useState } from 'react';
 
-import type { ControlPlaneSnapshot, DocsReconciliationResult } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { ControlPlaneSnapshot, DocsReconciliationResult } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { editorProvisioningCopy, onboardingCopy } from '../../copy/index.js';
 import {

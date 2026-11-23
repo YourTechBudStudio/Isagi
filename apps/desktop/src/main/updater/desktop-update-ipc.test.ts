@@ -7,7 +7,7 @@ import {
   DESKTOP_UPDATE_PROTOCOL_VERSION,
   type DesktopUpdateIntent,
   type DesktopUpdateSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { decodeDesktopUpdateIntent, dispatchDesktopUpdateIntent } from './desktop-update-ipc.js';
 import { RELEASE_DOWNLOAD_PAGE_URL } from './download-page.js';

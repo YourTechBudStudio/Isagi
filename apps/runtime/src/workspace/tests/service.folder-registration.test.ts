@@ -5,7 +5,7 @@ import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect, Schema } from 'effect';
 
-import { workspaceSnapshotSchema } from '@isagi/contracts';
+import { workspaceSnapshotSchema } from '@isagi/shared/contracts';
 
 import { createFixtureWorkspace, removeTree } from '../../platform/git/testing.js';
 import { ProjectRepository } from '../../projects/index.js';

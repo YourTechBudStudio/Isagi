@@ -1,4 +1,4 @@
-import type { WorkflowExecutionSummaryDto } from '@isagi/contracts';
+import type { WorkflowExecutionSummaryDto } from '@isagi/shared/contracts';
 
 import type { WorkflowRunView } from '../../../lib/workspace/workflow/run-view.js';
 import { addressKey, type DeclaredAddress, type DeclaredTopology } from './topology.js';

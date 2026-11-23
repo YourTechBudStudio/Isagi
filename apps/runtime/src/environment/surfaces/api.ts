@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type SessionLaunchRejectedError } from '@isagi/contracts';
+import { apiEndpoints, type SessionLaunchRejectedError } from '@isagi/shared/contracts';
 
 import { editorRejection } from '../../editor/index.js';
 import type { HarnessAdapterError, HarnessLaunchBlocked } from '../../harnesses/index.js';

@@ -1,39 +1,23 @@
 import {
   DESKTOP_UPDATE_PROTOCOL_VERSION,
-  HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
   type DesktopUpdateSnapshot,
-  type HostRuntimeStatusSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
-export {
-  DESKTOP_UPDATE_PROTOCOL_VERSION,
-  HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
-} from '@isagi/contracts';
-export type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/contracts';
+export { DESKTOP_UPDATE_PROTOCOL_VERSION } from '@isagi/shared/contracts';
+export type { DesktopUpdateSnapshot } from '@isagi/shared/contracts';
 
-export function hasRuntimeHost(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.isagi?.getRuntimeStatus === 'function' &&
-    typeof window.isagi.subscribeRuntimeStatus === 'function'
-  );
-}
-
-export function subscribeRuntimeStatus(
-  listener: (snapshot: HostRuntimeStatusSnapshot) => void,
-): () => void {
-  return (
-    window.isagi?.subscribeRuntimeStatus?.((snapshot) => {
-      if (snapshot.protocolVersion === HOST_RUNTIME_STATUS_PROTOCOL_VERSION) listener(snapshot);
-    }) ?? (() => {})
-  );
+/**
+ * Whether this page runs inside the desktop app. The desktop exposes its bridge only to the UI it loaded from its own
+ * managed runtime, so a present bridge also means the runtime runs on this machine.
+ */
+export function hasDesktopHost(): boolean {
+  return typeof window !== 'undefined' && typeof window.isagi === 'object' && window.isagi !== null;
 }
 
 /**
- * Both host snapshots are monotonically revisioned so that subscribe-then-
- * reconcile is safe: the current-snapshot response may be older than a push that
- * arrived while it was in flight, and the greater revision always wins. One
- * helper, because two copies of this rule is how the two boundaries drift apart.
+ * Host snapshots are monotonically revisioned so that subscribe-then-reconcile
+ * is safe: the current-snapshot response may be older than a push that arrived
+ * while it was in flight, and the greater revision always wins.
  */
 export function reconcileRevision<T extends { readonly revision: number }>(
   current: T | null,

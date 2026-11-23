@@ -4,7 +4,7 @@ import type {
   WorkflowExecutionSummaryDto,
   WorkflowGraphInvocationDto,
   WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /**
  * One run as the inspector reads it: the run detail's tree, indexed, plus its event log.

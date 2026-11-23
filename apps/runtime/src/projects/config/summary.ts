@@ -1,4 +1,4 @@
-import type { WorktreeSetupSummary } from '@isagi/contracts';
+import type { WorktreeSetupSummary } from '@isagi/shared/contracts';
 
 import type { WorktreeHooksConfig } from './config-schema.js';
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { WorkflowQuestionSpecDto } from '@isagi/shared/contracts';
 
 import { InputFlowScreenView } from '../../components/input-flow/index.js';
 import { useKeyboardSelection } from '../../hooks/useKeyboardSelection.js';

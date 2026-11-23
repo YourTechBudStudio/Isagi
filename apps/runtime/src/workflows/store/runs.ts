@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, inArray, isNotNull, notInArray, or } from 'drizzle-orm';
 
-import type { WorkflowRunStatus } from '@isagi/contracts';
+import type { WorkflowRunStatus } from '@isagi/shared/contracts';
 
 import type { DoomedEnvironment } from '../../environment/index.js';
 import { worktreeSurfaces } from '../../environment/tables.js';

@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, max } from 'drizzle-orm';
 
-import type { WorkflowOperationStatus } from '@isagi/contracts';
+import type { WorkflowOperationStatus } from '@isagi/shared/contracts';
 
 import { workflowOperations } from '../tables.js';
 import type { EventDraft } from './events.js';

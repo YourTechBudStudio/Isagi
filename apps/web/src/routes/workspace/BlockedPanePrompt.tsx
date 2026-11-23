@@ -1,6 +1,6 @@
 import { Ban, Trash2 } from 'lucide-react';
 
-import type { AgentHarness, HarnessLaunchBlockReason } from '@isagi/contracts';
+import type { AgentHarness, HarnessLaunchBlockReason } from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { agentSessionCopy } from '../../copy/index.js';

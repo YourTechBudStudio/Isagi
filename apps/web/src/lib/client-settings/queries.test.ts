@@ -8,7 +8,7 @@ import {
   appearanceSettingsDefaults,
   terminalSettingsDefaults,
   type ClientSettingsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { revalidationSignalAtom } from '../state/policy.js';
 import { advance, controllable, flush, makeTestRegistry } from '../state/testing.js';

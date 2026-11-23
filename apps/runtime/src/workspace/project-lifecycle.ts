@@ -8,7 +8,7 @@ import type {
   ProjectOrderRejectionReason,
   RelocateProjectOutput,
   WorktreeOrderRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { CommandService } from '../commands/index.js';
 import { AgentSessionService } from '../environment/index.js';

@@ -87,7 +87,7 @@ import {
   type AnyApiContentEndpoint,
   type AnyApiEndpoint,
   type ApiEndpointRequestArgs,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 import {
   contentEndpointUrl,
   interpolatePath,
@@ -96,7 +96,7 @@ import {
   type ContentQuery,
   type RuntimeContentEndpointError,
   type RuntimeEndpointError,
-} from '@isagi/runtime-client';
+} from '@isagi/shared/runtime-client';
 
 import { signalAuthRequired } from '../auth/signal.js';
 import { resolveRuntimeUrl, RuntimeUrlUnavailable } from './resolve.js';
@@ -517,9 +517,7 @@ export interface RuntimeApiShape {
 
 /**
  * The runtime API as a per-app service. `layer` resolves the runtime URL per request
- * (`resolveRuntimeUrl`): the desktop bridge (`window.isagi.getRuntimeUrl()`), then
- * `VITE_ISAGI_RUNTIME_URL` in Vite development only, then the page's own http(s) origin, else a
- * `RuntimeUrlUnavailable` failure. It reads `window` only when a request runs, so modules
+ * (`resolveRuntimeUrl`): the page's own http(s) origin, else a `RuntimeUrlUnavailable` failure. It reads `window` only when a request runs, so modules
  * that import it load cleanly in node tests.
  */
 export class RuntimeApi extends Context.Service<RuntimeApi, RuntimeApiShape>()(
@@ -540,7 +538,7 @@ const invalidRuntimeUrlMessage = 'The runtime URL is not a valid URL.';
 export function makeRuntimeApi(
   currentRuntimeUrl: Effect.Effect<string, RuntimeUrlUnavailable>,
 ): RuntimeApiShape {
-  // `@isagi/runtime-client` builds its requesters from an `HttpClient`. Providing the platform `fetch`
+  // `@isagi/shared/runtime-client` builds its requesters from an `HttpClient`. Providing the platform `fetch`
   // client per call keeps every method requirement-free, so callers run them exactly as before.
   const withHttpApi = <A, E>(
     use: (api: RuntimeHttpApi['Service']) => Effect.Effect<A, E>,
@@ -556,7 +554,7 @@ export function makeRuntimeApi(
   ) => withHttpApi((api) => api.request(endpoint, ...args));
   /**
    * A socket or download URL under the runtime URL; no request is made. A runtime URL `new URL`
-   * rejects (an external `localhost:4100`, say) is a runtime this client cannot reach, a typed
+   * rejects is a runtime this client cannot reach, a typed
    * failure as it is for requests, never a defect. The message is fixed and the parser's error stays
    * in `cause`: a runtime URL can carry credentials, and the parser's message differs by engine
    * (Chromium and Node say `Invalid URL`; other engines may quote the input).

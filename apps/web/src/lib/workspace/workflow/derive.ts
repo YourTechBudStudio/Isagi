@@ -1,4 +1,4 @@
-import type { AttentionState, WorkflowRunSummary, WorkflowWaitDto } from '@isagi/contracts';
+import type { AttentionState, WorkflowRunSummary, WorkflowWaitDto } from '@isagi/shared/contracts';
 
 import { workflowCopy } from '../../../copy/index.js';
 

@@ -18,7 +18,7 @@ import {
   type RuntimeEvent,
   type RuntimeEventInputMessage,
   type WorktreeCommandsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { keys } from '../state/keys.js';

@@ -2,8 +2,8 @@
  * The content security policy of every web-UI response: the document, its assets and the SPA fallback. Proxied Code
  * Server responses never carry it.
  *
- * Twin of `rendererContentSecurityPolicy` in `apps/desktop/src/main/renderer-policy.ts`: the same directives, with
- * `'self'` standing for the runtime, because a runtime-served page's own origin is the runtime. Change both together.
+ * The single policy of the UI everywhere: browsers and the desktop both load the UI from the runtime, so `'self'` is
+ * the runtime. (The desktop's own loader page carries its own policy in a meta tag; it loads nothing from here.)
  * The editor is framed at a runtime-relative path, so `'self'` in `frame-src` covers it, and `connect-src 'self'`
  * admits the same-host `ws:`/`wss:` sockets (CSP Level 3).
  *

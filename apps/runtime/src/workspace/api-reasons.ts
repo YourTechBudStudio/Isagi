@@ -9,7 +9,7 @@ import type {
   WorktreeDeleteRejectionReason,
   WorktreeOperationRejectionReason,
   WorktreeSetupRejectionReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { WorkspaceError } from './errors.js';
 

@@ -5,7 +5,7 @@ import process from 'node:process';
 
 import { Data, Effect, Result } from 'effect';
 
-import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/contracts';
+import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import type { LoopbackPortProbe } from '../platform/net/index.js';

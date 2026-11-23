@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { SurfaceLayoutNode } from '@isagi/contracts';
+import type { SurfaceLayoutNode } from '@isagi/shared/contracts';
 
 import { insertPaneIntoLayout, prunePaneFromLayout, setNodeWeights } from '../layout.js';
 

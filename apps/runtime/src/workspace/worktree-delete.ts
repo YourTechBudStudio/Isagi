@@ -5,7 +5,7 @@ import type {
   DeleteWorktreeOutput,
   DeleteWorktreePreflightOutput,
   DurableSessionIdentity,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { CommandService } from '../commands/index.js';
 import {

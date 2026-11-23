@@ -1,4 +1,4 @@
-import type { WorkflowEventDto } from '@isagi/contracts';
+import type { WorkflowEventDto } from '@isagi/shared/contracts';
 
 /**
  * Facts that live only in a run's event log, derived for the Trace.

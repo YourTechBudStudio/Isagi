@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-import type { ProjectPathRejectionReason, WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { ProjectPathRejectionReason, WorkflowQuestionSpecDto } from '@isagi/shared/contracts';
 
 /**
  * Keyboard path completion in the **production** command palette, over the fake
@@ -1058,7 +1058,7 @@ test('a listing failure keeps aria-controls resolving to a present listbox', asy
 const listRow = (page: Page, label: string) =>
   page.locator(`${PALETTE} button`).filter({ has: page.locator(`span:text-is("${label}")`) });
 
-const LIST_HIGHLIGHT = /bg-white\/8/;
+const LIST_HIGHLIGHT = /(^|\s)bg-tint\/8(\s|$)/;
 
 /** Walk the list highlight onto a row with real arrow presses. */
 async function highlightRow(page: Page, label: string) {

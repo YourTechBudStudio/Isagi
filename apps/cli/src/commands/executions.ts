@@ -1,7 +1,7 @@
 import { Option } from 'effect';
 import { Flag } from 'effect/cli';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { call } from '../runtime-api.js';
 import { clientCommand, group } from './define.js';

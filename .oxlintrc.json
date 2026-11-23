@@ -31,7 +31,12 @@
         "argsIgnorePattern": "^_"
       }
     ],
-    "eslint/no-underscore-dangle": ["error", { "allow": ["_tag"] }],
+    "eslint/no-underscore-dangle": [
+      "error",
+      {
+        "allow": ["_tag"]
+      }
+    ],
     "eslint/no-restricted-imports": [
       "error",
       {
@@ -106,7 +111,7 @@
       }
     },
     {
-      "files": ["packages/contracts/src/**"],
+      "files": ["packages/shared/src/contracts/**"],
       "rules": {
         "eslint/no-restricted-imports": [
           "error",
@@ -146,6 +151,90 @@
               {
                 "group": ["effect/*"],
                 "message": "Contracts stay descriptive: import only Schema and SchemaTransformation from effect."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/web/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "zustand",
+                "message": "Use effect/reactivity atoms (ADR 0001)."
+              },
+              {
+                "name": "@tanstack/react-query",
+                "message": "Use effect/reactivity atoms (ADR 0001)."
+              },
+              {
+                "name": "@effect/atom-react",
+                "importNames": ["RegistryProvider"],
+                "message": "RegistryProvider creates a second registry; provide the app registry via RegistryContext."
+              },
+              {
+                "name": "@isagi/shared/global-config",
+                "message": "global-config reads config.yaml from the filesystem; the web app never imports it."
+              },
+              {
+                "name": "yaml",
+                "message": "The web app does not parse config.yaml; the runtime owns it."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "effect/unstable",
+                  "effect/unstable/*",
+                  "@effect/schema",
+                  "@effect/schema/*",
+                  "@effect/platform",
+                  "@effect/platform/*"
+                ],
+                "message": "Effect v4 only: stable effect@4 ships no effect/unstable/*; Schema and platform modules live in effect itself (effect, effect/http, effect/process, ...)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/web/vite.config.ts"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "zustand",
+                "message": "Use effect/reactivity atoms (ADR 0001)."
+              },
+              {
+                "name": "@tanstack/react-query",
+                "message": "Use effect/reactivity atoms (ADR 0001)."
+              },
+              {
+                "name": "@effect/atom-react",
+                "importNames": ["RegistryProvider"],
+                "message": "RegistryProvider creates a second registry; provide the app registry via RegistryContext."
+              }
+            ],
+            "patterns": [
+              {
+                "group": [
+                  "effect/unstable",
+                  "effect/unstable/*",
+                  "@effect/schema",
+                  "@effect/schema/*",
+                  "@effect/platform",
+                  "@effect/platform/*"
+                ],
+                "message": "Effect v4 only: stable effect@4 ships no effect/unstable/*; Schema and platform modules live in effect itself (effect, effect/http, effect/process, ...)."
               }
             ]
           }

@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { ActiveContextOutput, WorkspaceSnapshot } from '@isagi/contracts';
+import type { ActiveContextOutput, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { defaultRetry, queryRetryAtom } from '../../state/policy.js';
 import { runApp } from '../../state/runtime.js';

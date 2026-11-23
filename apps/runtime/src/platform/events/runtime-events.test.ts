@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from 'effect';
 
-import type { RuntimeEvent } from '@isagi/contracts';
+import type { RuntimeEvent } from '@isagi/shared/contracts';
 
 import { RuntimeEvents } from './runtime-events.js';
 import { tapRuntimeEvents } from './testing.js';

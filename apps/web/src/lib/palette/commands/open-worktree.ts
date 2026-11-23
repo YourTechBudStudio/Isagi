@@ -4,7 +4,7 @@ import type {
   OpenWorktreeOutput,
   WorktreeBaseRef,
   WorktreeSetupTrustInput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { paletteCopy, worktreeCreateCopy, worktreeSetupReviewCopy } from '../../../copy/index.js';
 import { restoreActivePaneFocus } from '../../workspace/activation.js';

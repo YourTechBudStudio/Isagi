@@ -22,7 +22,7 @@ import type {
   WorktreeSetupResult,
   WorktreeSetupTrustInput,
   WorktreeSetupTrustOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { CommandService } from '../commands/index.js';
 import { AgentSessionService, SurfaceService } from '../environment/index.js';

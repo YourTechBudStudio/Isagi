@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { workflowCopy } from '../../../copy/index.js';
 import { workflowRunPresentation } from './derive.js';

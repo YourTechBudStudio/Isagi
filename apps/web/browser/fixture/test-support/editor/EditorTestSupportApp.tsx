@@ -19,6 +19,7 @@ import { publishTerminalFact } from '../../../../src/lib/workspace/terminal-pres
 import { TerminalPresentationProvider } from '../../../../src/lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { Surface } from '../../../../src/routes/workspace/Surface.js';
 import { createFixtureRegistry } from '../registry.js';
+import { ShortcutProbe } from '../ShortcutProbe.js';
 import type { EditorRuntimeControls } from './fake-runtime.js';
 import { SURFACE_ID, WORKTREE_ID } from './fake-runtime.js';
 
@@ -104,6 +105,7 @@ function Harness() {
         across a cross-document boundary is invisible otherwise.
       */}
       <div data-active-pane-id={activePaneId === null ? '' : String(activePaneId)} />
+      <ShortcutProbe ids={['toggle-palette', 'add-project', 'toggle-zen', 'delete-active-pane']} />
       {/*
         Stands in for focus-owning chrome closing. It calls the same shared
         router the palette and the drawer call, so the return leg under test is

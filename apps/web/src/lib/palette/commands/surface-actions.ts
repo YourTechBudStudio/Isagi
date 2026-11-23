@@ -7,7 +7,7 @@ import {
   type SurfaceDetail,
   type SurfacePane,
   type WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { fluidcastCopy, surfaceActionsCopy } from '../../../copy/index.js';
 import { interactionOrigin, setPaneInteraction } from '../../fluidcast/commits.js';

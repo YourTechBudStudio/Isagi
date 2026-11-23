@@ -242,12 +242,9 @@ importers:
 
   apps/cli:
     dependencies:
-      '@isagi/contracts':
+      '@isagi/shared':
         specifier: workspace:*
-        version: link:../../packages/contracts
-      '@isagi/runtime-client':
-        specifier: workspace:*
-        version: link:../../packages/runtime-client
+        version: link:../../packages/shared
       effect:
         specifier: 'catalog:'
         version: 4.0.2
@@ -267,12 +264,9 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@isagi/contracts':
+      '@isagi/shared':
         specifier: workspace:*
-        version: link:../../packages/contracts
-      '@isagi/runtime-client':
-        specifier: workspace:*
-        version: link:../../packages/runtime-client
+        version: link:../../packages/shared
       effect:
         specifier: 'catalog:'
         version: 4.0.2
@@ -286,6 +280,9 @@ importers:
       '@electron/rebuild':
         specifier: ^4.2.0
         version: 4.2.0(supports-color@7.2.0)
+      '@playwright/test':
+        specifier: ^1.62.0
+        version: 1.62.0
       '@types/node':
         specifier: ^24.10.1
         version: 24.12.4
@@ -328,9 +325,9 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
-      '@isagi/contracts':
+      '@isagi/shared':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../packages/shared
       '@yourtechbudstudio/fluidcast-core':
         specifier: 'catalog:'
         version: 0.1.0(@effect/ai-openai@4.0.2(effect@4.0.2))(effect@4.0.2)
@@ -419,12 +416,9 @@ importers:
       '@fontsource-variable/source-sans-3':
         specifier: ^5.2.9
         version: 5.2.9
-      '@isagi/contracts':
+      '@isagi/shared':
         specifier: workspace:*
-        version: link:../../packages/contracts
-      '@isagi/runtime-client':
-        specifier: workspace:*
-        version: link:../../packages/runtime-client
+        version: link:../../packages/shared
       '@xterm/addon-webgl':
         specifier: ^0.19.0
         version: 0.19.0
@@ -505,7 +499,19 @@ importers:
         specifier: ^8.3.5
         version: 8.3.5(@types/node@24.12.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0)
 
-  packages/contracts:
+  packages/runtime-stage-dependencies:
+    dependencies:
+      '@fastify/websocket':
+        specifier: ^11.2.0
+        version: 11.2.0
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
+      node-pty:
+        specifier: 1.2.0-beta.15
+        version: 1.2.0-beta.15
+
+  packages/shared:
     dependencies:
       '@yourtechbudstudio/isagi-workflow-sdk':
         specifier: workspace:*
@@ -513,6 +519,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.2
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -526,40 +535,6 @@ importers:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
-      vite:
-        specifier: ^8.3.5
-        version: 8.3.5(@types/node@24.12.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0)
-
-  packages/runtime-client:
-    dependencies:
-      '@isagi/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.2
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.12.4
-      tsx:
-        specifier: ^4.21.0
-        version: 4.22.3
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-
-  packages/runtime-stage-dependencies:
-    dependencies:
-      '@fastify/websocket':
-        specifier: ^11.2.0
-        version: 11.2.0
-      better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
-      node-pty:
-        specifier: 1.2.0-beta.15
-        version: 1.2.0-beta.15
 
   packages/workflow-sdk:
     devDependencies:

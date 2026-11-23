@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 
 import { Effect, Stream } from 'effect';
 
-import type { DurableSessionIdentity } from '@isagi/contracts';
+import type { DurableSessionIdentity } from '@isagi/shared/contracts';
 
 import type { CommandService } from '../../commands/index.js';
 import type { AgentSessionService, SurfaceService } from '../../environment/index.js';

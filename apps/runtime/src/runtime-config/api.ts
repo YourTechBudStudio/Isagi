@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ClientSettingsOutput } from '@isagi/contracts';
+import { apiEndpoints, type ClientSettingsOutput } from '@isagi/shared/contracts';
 
 import { registerApiEndpoint, type RouteRuntime } from '../platform/http/index.js';
 import { RuntimeConfig } from './service.js';

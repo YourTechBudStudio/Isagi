@@ -1,6 +1,9 @@
 import { Data } from 'effect';
 
-import type { ProjectOrderRejectionReason, WorktreeOrderRejectionReason } from '@isagi/contracts';
+import type {
+  ProjectOrderRejectionReason,
+  WorktreeOrderRejectionReason,
+} from '@isagi/shared/contracts';
 
 import type { GitCommandError, ProjectPathValidationError } from '../platform/git/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';

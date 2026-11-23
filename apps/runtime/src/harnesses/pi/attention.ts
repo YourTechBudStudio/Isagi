@@ -1,4 +1,4 @@
-import type { AttentionState } from '@isagi/contracts';
+import type { AttentionState } from '@isagi/shared/contracts';
 
 import type { HarnessObservationRecord } from '../projection.js';
 

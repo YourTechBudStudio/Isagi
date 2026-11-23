@@ -227,9 +227,9 @@ export class PtyRepository extends Context.Service<
     }) => Effect.Effect<void, DatabaseError>;
     readonly updateBackendMetadata: (input: {
       readonly ptyProcessId: number;
-      readonly backend: import('@isagi/contracts').PtyProcessBackend;
+      readonly backend: import('@isagi/shared/contracts').PtyProcessBackend;
       readonly backendRefJson: string;
-      readonly logMode: import('@isagi/contracts').PtyProcessLogMode;
+      readonly logMode: import('@isagi/shared/contracts').PtyProcessLogMode;
       readonly logPath: string | null;
     }) => Effect.Effect<void, DatabaseError>;
     readonly transitionProcess: (input: {

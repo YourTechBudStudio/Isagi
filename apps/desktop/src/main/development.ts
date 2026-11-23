@@ -4,10 +4,8 @@ import process from 'node:process';
 
 import { app } from 'electron';
 
-import {
-  developmentEnvironmentKeys,
-  developmentPaths,
-} from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
+import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
+import { unpackagedLogsDirectory, unpackagedUserDataDirectory } from './desktop-mode.js';
 
 export function resolveDevelopmentRoot(repositoryRoot: string) {
   const configured = process.env[developmentEnvironmentKeys.worktreeRoot];
@@ -21,10 +19,14 @@ export function resolveDevelopmentRoot(repositoryRoot: string) {
   return root;
 }
 
-export function configureDevelopmentUserData(repositoryRoot: string) {
-  const root = resolveDevelopmentRoot(repositoryRoot);
-  const userData = developmentPaths(root).userData;
+/**
+ * Points Electron's profile and logs directory beside an unpackaged run's data directory (in development, the
+ * checkout's `data/.isagi/electron-user-data`, as before, and `data/.isagi/logs`), so a fresh data directory is also a
+ * fresh profile and a fresh place for the runtime failure record. Before `whenReady`.
+ */
+export function configureUnpackagedUserData(dataDirectory: string) {
+  const userData = unpackagedUserDataDirectory(dataDirectory);
   app.setPath('userData', userData);
+  app.setAppLogsPath(unpackagedLogsDirectory(dataDirectory));
   console.info(`[desktop] Electron profile ${userData}`);
-  return root;
 }

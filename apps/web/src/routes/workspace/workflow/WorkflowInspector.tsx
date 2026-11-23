@@ -4,7 +4,7 @@ import { AsyncResult } from 'effect/reactivity';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowCheckpointSummaryDto, WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowCheckpointSummaryDto, WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
 import { isPaletteOpen } from '../../../lib/palette/store.js';

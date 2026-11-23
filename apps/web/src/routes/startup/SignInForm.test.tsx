@@ -5,8 +5,12 @@ import { describe, it, type TestContext } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { ApiError } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
+import type { ApiError } from '@isagi/shared/contracts';
+import {
+  RuntimeApiError,
+  RuntimeDecodeError,
+  RuntimeTransportError,
+} from '@isagi/shared/runtime-client';
 
 import { startupCopy } from '../../copy/index.js';
 import { workbenchShownAtom } from '../../lib/auth/state.js';

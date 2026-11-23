@@ -3,7 +3,7 @@ import type {
   WorkflowOutcomeDto,
   WorkflowPlacementRequestDto,
   WorkflowPlacementSource,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { RuntimeDrizzleDatabase } from '../../platform/persistence/index.js';
 import type {

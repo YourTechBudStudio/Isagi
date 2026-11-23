@@ -1,4 +1,4 @@
-import type { ReconciliationFinding } from '@isagi/contracts';
+import type { ReconciliationFinding } from '@isagi/shared/contracts';
 
 type MissingProjectFinding = Extract<ReconciliationFinding, { readonly kind: 'project_missing' }>;
 type MissingWorktreeFinding = Extract<ReconciliationFinding, { readonly kind: 'worktree_missing' }>;

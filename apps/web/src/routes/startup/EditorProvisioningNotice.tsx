@@ -1,4 +1,4 @@
-import type { EditorProvisioningState } from '@isagi/contracts';
+import type { EditorProvisioningState } from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { editorProvisioningCopy } from '../../copy/index.js';

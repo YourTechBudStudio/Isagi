@@ -5,7 +5,7 @@ import { test, type TestContext } from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import { RuntimeClient } from '@isagi/runtime-client';
+import { RuntimeClient } from '@isagi/shared/runtime-client';
 
 import { fluidcastTransport } from '../fluidcast/transport.js';
 import { authAwareRuntimeHttpClient, makeRuntimeApi } from '../runtime/client.js';

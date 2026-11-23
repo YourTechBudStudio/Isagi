@@ -3,7 +3,10 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { EditorProvisioningFailureReason, EditorProvisioningState } from '@isagi/contracts';
+import type {
+  EditorProvisioningFailureReason,
+  EditorProvisioningState,
+} from '@isagi/shared/contracts';
 
 import { editorProvisioningCopy } from '../../copy/index.js';
 import { editorProvisioningManifestLine } from '../../lib/editor/provisioning.js';

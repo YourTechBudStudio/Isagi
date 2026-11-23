@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import type { OpenEditorOutput } from '@isagi/contracts';
+import type { OpenEditorOutput } from '@isagi/shared/contracts';
 
 import { EditorUnavailable } from '../../../editor/index.js';
 import { DatabaseError } from '../../../platform/persistence/index.js';

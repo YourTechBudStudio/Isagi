@@ -1,4 +1,4 @@
-import type { FluidcastHandoffFailure } from '@isagi/contracts';
+import type { FluidcastHandoffFailure } from '@isagi/shared/contracts';
 
 import { runtimeErrorCopy } from './errors.js';
 

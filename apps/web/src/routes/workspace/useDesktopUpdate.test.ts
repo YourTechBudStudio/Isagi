@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { DESKTOP_UPDATE_PROTOCOL_VERSION, type DesktopUpdateSnapshot } from '@isagi/contracts';
+import {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  type DesktopUpdateSnapshot,
+} from '@isagi/shared/contracts';
 
 import {
   desktopUpdateReducer,

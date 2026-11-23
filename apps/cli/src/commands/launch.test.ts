@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 
-import { RuntimeApiError } from '@isagi/runtime-client';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { fail, fakeRuntime, onlyJsonDocument, runIsagi } from '../testing/cli-harness.js';
 

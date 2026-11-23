@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, type SubscriptionRef } from 'effect';
 
-import type { DesktopUpdateSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot } from '@isagi/shared/contracts';
 
 import { selectUpdaterComposition } from './composition.js';
 import { makeSelfUpdatingUpdater } from './coordinator.js';

@@ -37,15 +37,32 @@ test('every preload side effect is gated behind the main-frame guard', () => {
 test('the bridge and the document mutation reach the page only through the guard', () => {
   // Both effects are function declarations, so their only execution path is the
   // guarded block; a future call site outside it fails this assertion.
-  for (const effect of ['exposeHostBridge()', 'applyHostChromeInsets'])
+  for (const effect of ['exposeHostBridge()', 'exposeLoaderBridge()', 'applyHostChromeInsets'])
     assert.equal(
       code.match(new RegExp(`(?<!function )${effect.replace(/[()]/gu, '\\$&')}`, 'gu'))?.length,
-      effect === 'exposeHostBridge()' ? 1 : 2,
+      effect === 'applyHostChromeInsets' ? 2 : 1,
       `${effect} must only be reachable from the main-frame guard`,
     );
-  assert.equal(code.match(/contextBridge\.exposeInMainWorld\(/gu)?.length, 1);
-  assert.ok(
-    positionOf('function exposeHostBridge()') > positionOf('if (process.isMainFrame) {'),
-    'the guard must precede the effects it gates',
+  assert.equal(code.match(/contextBridge\.exposeInMainWorld\(/gu)?.length, 2);
+  for (const bridge of ['function exposeHostBridge()', 'function exposeLoaderBridge()'])
+    assert.ok(
+      positionOf(bridge) > positionOf('if (process.isMainFrame) {'),
+      'the guard must precede the effects it gates',
+    );
+});
+
+test('the loader document gets only Quit and Open logs, and the UI never the loader bridge', () => {
+  const branch = code.slice(
+    positionOf("if (location.protocol === 'file:') {"),
+    positionOf('function exposeLoaderBridge()'),
+  );
+  assert.match(branch, /exposeLoaderBridge\(\);\s*\} else \{/u);
+  const loader = code.slice(
+    positionOf('function exposeLoaderBridge()'),
+    positionOf('function applyHostChromeInsets'),
+  );
+  assert.deepEqual(
+    [...loader.matchAll(/ipcRenderer\.invoke\('([^']+)'/gu)].map(([, channel]) => channel),
+    ['isagi:quit-app', 'isagi:open-logs'],
   );
 });

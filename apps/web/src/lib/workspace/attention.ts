@@ -5,7 +5,7 @@ import type {
   AttentionSourceIdentity,
   AttentionState,
   WorkflowRunSummary,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { Project, Surface, Worktree } from './types.js';
 import type { AttachedRuns } from './workflow/attached.js';

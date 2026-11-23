@@ -45,12 +45,12 @@ const paneB = (page: Page) => pane(page, 'claude · voice B');
 const player = (scope: Locator) => scope.locator('.fluidcast-player');
 
 /**
- * The player streams speech through its own `<audio>` element from the runtime's speech URL, which
- * no `fetch` stub can answer. The route serves the same silence the page's fake voice produces,
- * with the CORS header the element's `crossOrigin` load needs.
+ * The player streams speech through its own `<audio>` element from the runtime's speech URL (the page's own origin,
+ * as for a runtime-served UI), which no `fetch` stub can answer. The route serves the same silence the page's fake
+ * voice produces, with the CORS header the element's `crossOrigin` load needs.
  */
 async function routeSpeech(page: Page) {
-  await page.route('http://fluidcast-test-support.invalid/**/speech/**', (route) =>
+  await page.route('**/api/**/speech/**', (route) =>
     route.fulfill({
       status: 200,
       body: Buffer.from(silentWav()),

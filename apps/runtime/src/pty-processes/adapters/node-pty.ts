@@ -426,7 +426,7 @@ function appendBackendLog(path: string | null, data: string): unknown {
 function replayBackendLog(
   path: string | null,
   limitBytes: number | null,
-  send: (message: import('@isagi/contracts').PtyStreamOutputMessageSet) => void,
+  send: (message: import('@isagi/shared/contracts').PtyStreamOutputMessageSet) => void,
 ) {
   return replayUtf8LogFile({
     logPath: path,

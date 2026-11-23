@@ -3,7 +3,7 @@ import { Effect, Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { HarnessLaunchProjection } from '@isagi/contracts';
+import type { HarnessLaunchProjection } from '@isagi/shared/contracts';
 
 import { ptyCopy } from '../../copy/index.js';
 import { harnessLaunch } from '../../lib/control-plane/launchability.js';

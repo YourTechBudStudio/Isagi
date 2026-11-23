@@ -8,7 +8,7 @@ import websocket from '@fastify/websocket';
 import { Effect, Layer, Logger, References, Schema } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import { editorProxyUnavailableErrorSchema } from '@isagi/contracts';
+import { editorProxyUnavailableErrorSchema } from '@isagi/shared/contracts';
 
 import type { RouteRuntime } from '../../platform/http/index.js';
 import { withListeningServer, type ListeningServer } from '../../platform/http/testing.js';

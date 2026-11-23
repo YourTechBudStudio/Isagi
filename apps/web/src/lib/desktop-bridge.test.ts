@@ -6,10 +6,9 @@ import {
   desktopUpdateActions,
   hasDesktopUpdateHost,
   requestQuit,
+  hasDesktopHost,
   subscribeDesktopUpdate,
-  subscribeRuntimeStatus,
   type DesktopUpdateSnapshot,
-  type HostRuntimeStatusSnapshot,
 } from './desktop-bridge.js';
 
 const globalWithWindow = globalThis as { window?: unknown };
@@ -147,33 +146,12 @@ test('a rejected or absent update action resolves rather than surfacing as a pro
   }
 });
 
-test('runtime status subscription filters protocol versions and returns host cleanup', () => {
-  let hostListener!: (snapshot: HostRuntimeStatusSnapshot) => void;
-  let cleanupCalls = 0;
-  const received: HostRuntimeStatusSnapshot[] = [];
-  globalWithWindow.window = {
-    isagi: {
-      subscribeRuntimeStatus: (listener: (snapshot: HostRuntimeStatusSnapshot) => void) => {
-        hostListener = listener;
-        return () => {
-          cleanupCalls += 1;
-        };
-      },
-    },
-  };
+test('hasDesktopHost is true only with a bridge object', () => {
   try {
-    const cleanup = subscribeRuntimeStatus((snapshot) => received.push(snapshot));
-    const ready = {
-      protocolVersion: 1,
-      revision: 1,
-      ownership: 'managed',
-      state: 'ready',
-    } as const satisfies HostRuntimeStatusSnapshot;
-    hostListener(ready);
-    hostListener({ ...ready, protocolVersion: 2 } as unknown as HostRuntimeStatusSnapshot);
-    assert.deepEqual(received, [ready]);
-    cleanup();
-    assert.equal(cleanupCalls, 1);
+    globalWithWindow.window = {};
+    assert.equal(hasDesktopHost(), false);
+    globalWithWindow.window = { isagi: {} };
+    assert.equal(hasDesktopHost(), true);
   } finally {
     delete globalWithWindow.window;
   }

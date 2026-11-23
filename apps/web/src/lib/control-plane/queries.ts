@@ -6,7 +6,7 @@ import type {
   AcceptHarnessPolicyInput,
   AgentHarness,
   ControlPlaneSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { keys } from '../state/keys.js';
 import { pollWhile, query, revalidate } from '../state/policy.js';

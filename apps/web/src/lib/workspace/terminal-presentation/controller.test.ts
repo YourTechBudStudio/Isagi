@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { terminalSettingsDefaults } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import { terminalSettingsDefaults } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { ptyCopy, runtimeErrorCopy } from '../../../copy/index.js';
 import {

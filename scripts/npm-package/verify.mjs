@@ -5,15 +5,7 @@
 // a tarball this script passed. Usage: node scripts/npm-package/verify.mjs <tarball>
 
 import { spawn } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, resolve } from 'node:path';
 import process from 'node:process';
@@ -177,10 +169,9 @@ async function checkErrorDocuments() {
 }
 
 async function checkServe() {
-  // With the web UI on, so the run proves the bundled default web root resolves and `@fastify/static` survives
-  // bundling. API-only mode is covered by the runtime's own tests.
+  // Every runtime serves the web UI, so the run proves the bundled default web root resolves and `@fastify/static`
+  // survives bundling.
   mkdirSync(data, { recursive: true });
-  writeFileSync(resolve(data, 'config.yaml'), 'server:\n  serveWebUi: true\n', 'utf8');
   const child = spawn(resolve(prefix, 'bin/isagi'), ['serve', '--data-dir', data], {
     cwd: root,
     env: environment,

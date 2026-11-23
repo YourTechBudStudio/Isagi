@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, PubSub, Stream, type Scope } from 'effect';
 
-import type { SessionStatus, SurfaceChangedEvent } from '@isagi/contracts';
-import type { DurableSessionIdentity } from '@isagi/contracts';
+import type { SessionStatus, SurfaceChangedEvent } from '@isagi/shared/contracts';
+import type { DurableSessionIdentity } from '@isagi/shared/contracts';
 
 type SurfaceChangedPayload = SurfaceChangedEvent['payload'];
 

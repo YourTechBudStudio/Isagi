@@ -1,7 +1,7 @@
 import { Duration, Stream } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiBasePath, type AnyApiEventStreamEndpoint } from '@isagi/contracts';
+import { apiBasePath, type AnyApiEventStreamEndpoint } from '@isagi/shared/contracts';
 
 import { runRoute, type ApiHandler } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';

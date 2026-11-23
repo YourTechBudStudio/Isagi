@@ -7,7 +7,7 @@ import {
   apiBasePath,
   type AnyApiContentEndpoint,
   type ApiContentEndpointQuery,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { runRoute, type ApiHandler } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';

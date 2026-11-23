@@ -6,8 +6,8 @@ import { test } from 'node:test';
 import { Effect, Layer } from 'effect';
 import { AsyncResult, Atom, AtomRegistry, Reactivity } from 'effect/reactivity';
 
-import type { ApiError, WorkspaceSnapshot } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { ApiError, WorkspaceSnapshot } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { query } from './policy.js';

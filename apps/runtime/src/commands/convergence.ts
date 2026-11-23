@@ -1,6 +1,6 @@
 import { Effect, Result } from 'effect';
 
-import type { CommandStatus } from '@isagi/contracts';
+import type { CommandStatus } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import type { DatabaseError } from '../platform/persistence/index.js';

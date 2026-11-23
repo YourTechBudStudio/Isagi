@@ -1,5 +1,5 @@
 export { registerRuntimeConfigRoutes } from './api.js';
-export type { RuntimeConfigPtyBackend } from './config-schema.js';
+export type { RuntimeConfigPtyBackend } from '@isagi/shared/global-config';
 export { resolveFluidcastKeys } from './fluidcast-keys.js';
 export { resolveSecretReference, type SecretResolution } from './secret-reference.js';
 export type {

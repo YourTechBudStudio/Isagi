@@ -7,7 +7,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Deferred, Effect, Fiber, type Layer, Result } from 'effect';
 
-import type { AgentSessionMetadata } from '@isagi/contracts';
+import type { AgentSessionMetadata } from '@isagi/shared/contracts';
 
 import type { FluidcastAvailability } from '../../../fluidcast/index.js';
 import {

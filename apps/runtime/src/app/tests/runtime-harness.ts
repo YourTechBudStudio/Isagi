@@ -30,7 +30,10 @@ export interface BootRuntimeOptions {
   readonly dataDirectory: string;
   /** The browser origins the server accepts, as `serve --allowed-origins` would pass them. Default none. */
   readonly allowedOrigins?: readonly string[];
-  /** The web workbench build, as `serve --web-root` would pass it. Default none. */
+  /**
+   * The web workbench build, as `serve --web-root` would pass it. Omitted: {@link testWebRoot}, a minimal document.
+   * An explicit `undefined` is a runtime started without one (a startup error).
+   */
   readonly webRoot?: SourcedValue<string> | undefined;
   /**
    * Provided around the whole runtime instead of `RuntimeLogger.layer`, so it reaches construction, request fibers and
@@ -62,13 +65,20 @@ export function testAppLayer(userShell: Layer.Layer<UserShell> = testRuntimeUser
 /** The CLI bundle a source-mode runtime's shim runs, as `scripts/serve-from-source.ts` passes it. */
 const cliEntryPath = fileURLToPath(new URL('../../../../cli/dist/isagi.mjs', import.meta.url));
 
+/** A minimal built-workbench stand-in: one `index.html`. Every runtime serves a web root, so every test boot has one. */
+export const testWebRoot: SourcedValue<string> = {
+  value: fileURLToPath(new URL('../../../test/fixtures/web-root', import.meta.url)),
+  source: 'flag',
+  name: '--web-root',
+};
+
 /** The launch `serve` would hand over for `options`: loopback, any free port, unless `config.yaml` says otherwise. */
 export function testRuntimeLaunch(options: BootRuntimeOptions): RuntimeLaunch {
   return {
     host: undefined,
     port: undefined,
     dataDirectory: { value: options.dataDirectory, source: 'flag', name: '--data-dir' },
-    webRoot: options.webRoot,
+    webRoot: 'webRoot' in options ? options.webRoot : testWebRoot,
     allowedOrigins: options.allowedOrigins ?? [],
     cliEntryPath,
     launcherToken: options.launcherToken,

@@ -1,4 +1,4 @@
-import type { WorkflowErrorStage, WorkflowNodeKind } from '@isagi/contracts';
+import type { WorkflowErrorStage, WorkflowNodeKind } from '@isagi/shared/contracts';
 
 import { isolate } from '../state/isolation.js';
 import { captureLabel } from '../state/labels.js';

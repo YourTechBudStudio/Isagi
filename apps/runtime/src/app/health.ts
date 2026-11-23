@@ -3,7 +3,7 @@ import process from 'node:process';
 import { Effect } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { publicRoute } from '../access/index.js';
 import { runtimePackageVersion } from '../platform/assets/index.js';

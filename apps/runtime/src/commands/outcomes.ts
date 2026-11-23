@@ -1,4 +1,8 @@
-import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
+import type {
+  CommandRunDiagnosticReason,
+  CommandRunStatus,
+  CommandStatus,
+} from '@isagi/shared/contracts';
 
 import { interruptedByRuntime } from '../pty-processes/index.js';
 

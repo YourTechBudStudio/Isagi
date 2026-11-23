@@ -3,7 +3,7 @@ import type {
   Project as ContractProject,
   SurfacePaneSession,
   Worktree as ContractWorktree,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 export type { AttentionState };
 

@@ -1,4 +1,4 @@
-import type { WorkflowOperationUsage } from '@isagi/contracts';
+import type { WorkflowOperationUsage } from '@isagi/shared/contracts';
 
 import { parseClaudeHeadlessResult } from '../headless-output.js';
 

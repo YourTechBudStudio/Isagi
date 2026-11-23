@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it, type TestContext } from 'node:test';
 
-import { terminalSettingsDefaults, type ApiError } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeTransportError } from '@isagi/runtime-client';
+import { terminalSettingsDefaults, type ApiError } from '@isagi/shared/contracts';
+import { RuntimeApiError, RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
 import {

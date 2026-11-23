@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Result, Schema } from 'effect';
 
-import { commandRunDiagnosticReasonSchema, commandSummarySchema } from '@isagi/contracts';
+import { commandRunDiagnosticReasonSchema, commandSummarySchema } from '@isagi/shared/contracts';
 
 /**
  * The wire guard for the resolved-port break.

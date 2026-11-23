@@ -1,4 +1,4 @@
-import type { WorkflowErrorStage, WorkflowLoadFailureReason } from '@isagi/contracts';
+import type { WorkflowErrorStage, WorkflowLoadFailureReason } from '@isagi/shared/contracts';
 
 export const workflowCopy = {
   // Cancel stops graph work. It does not delete anything, and it cannot promise that an external

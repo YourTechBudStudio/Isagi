@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { terminalSettingsDefaults } from '@isagi/contracts';
+import { terminalSettingsDefaults } from '@isagi/shared/contracts';
 
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
 import type { TerminalPresentationController } from './controller.js';

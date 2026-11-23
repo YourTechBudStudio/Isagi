@@ -4,7 +4,7 @@ import type {
   WorktreeSetupPreflightOutput,
   WorktreeSetupTrustInput,
   WorktreeSetupTrustOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { WorktreeHooksConfig, ProjectRow } from '../../projects/index.js';

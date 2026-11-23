@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Clock, Effect, Fiber, Result } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import type { SurfaceDetail } from '@isagi/contracts';
+import type { SurfaceDetail } from '@isagi/shared/contracts';
 
 import { AgentSessionError, type StopUnlessPlacedOutcome } from '../../environment/testing.js';
 import {

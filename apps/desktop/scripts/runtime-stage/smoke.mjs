@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -96,10 +96,14 @@ function runPtyProbe(root, workingDirectory, electronExecutable) {
 function runRuntimeProbe(root, workingDirectory, electronExecutable) {
   return Effect.callback((resume) => {
     const dataRoot = resolve(workingDirectory, `data-${Date.now()}-${Math.random()}`);
+    // Every runtime serves a web UI; the probe only needs a minimal document to start.
+    const webRoot = resolve(dataRoot, 'web-root');
+    mkdirSync(webRoot, { recursive: true });
+    writeFileSync(resolve(webRoot, 'index.html'), '<!doctype html><html></html>');
     // As the desktop starts it: `isagi.mjs serve`, with settings as flags.
     const child = spawn(
       electronExecutable,
-      [resolve(root, 'isagi.mjs'), 'serve', '--data-dir', dataRoot],
+      [resolve(root, 'isagi.mjs'), 'serve', '--data-dir', dataRoot, '--web-root', webRoot],
       {
         cwd: workingDirectory,
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },

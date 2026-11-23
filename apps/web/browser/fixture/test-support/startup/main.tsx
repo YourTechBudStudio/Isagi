@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 
 import { App } from '../../../../src/App.js';
-import { applyThemeHint } from '../../../../src/lib/appearance/theme.js';
+import { ensureDocumentTheme } from '../../../../src/lib/appearance/theme.js';
 import { connectAuthSignal } from '../../../../src/lib/auth/state.js';
 import { AppStateProvider } from '../../../../src/lib/state/AppStateProvider.js';
 import { ToastProvider } from '../../../../src/lib/toast/index.js';
@@ -19,7 +19,7 @@ import '../../fixture.css';
  * with Playwright request and socket routing, so the runtime's state survives the reload a
  * sign-in performs, which an in-page `fetch` stub cannot.
  */
-applyThemeHint();
+ensureDocumentTheme();
 const registry = createFixtureRegistry();
 connectAuthSignal(registry);
 

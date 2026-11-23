@@ -6,7 +6,7 @@ import type {
   WorkflowRunSummary,
   WorktreeCommandsOutput,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   workflowEventFixture,
@@ -25,7 +25,8 @@ import { requestBodyText } from '../test-support/request-body.js';
  * All names, paths and branches are invented. Nothing here is real workspace data.
  */
 
-export const RUNTIME_ORIGIN = 'http://workflow-bar.fixture';
+// The page's own origin, as for a runtime-served UI: the app always calls the runtime that served it.
+export const RUNTIME_ORIGIN = window.location.origin;
 export const FIXTURE_PLACEMENT = {
   projectId: 1,
   worktreeId: 12,
@@ -150,8 +151,6 @@ export function installFakeRuntime(): WorkflowBarRuntimeControls {
   let holdControl = false;
   let releaseControl: (() => void) | null = null;
   let nextRequestId = 1;
-
-  window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
 
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));

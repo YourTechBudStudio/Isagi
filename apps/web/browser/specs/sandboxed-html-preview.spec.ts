@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 
 /**
- * Whether a sandboxed `srcdoc` preview survives the desktop shell's content security policy.
+ * Whether a sandboxed `srcdoc` preview survives the content security policy every Isagi window runs under: the
+ * runtime's `webUiContentSecurityPolicy`, which the browser and the desktop (now loading the UI from its runtime) share.
  *
  * The question is a property of the browser engine, not of Isagi's code: does Chromium match an
  * `about:srcdoc` frame against `frame-src`, or does it treat it as a local scheme that inherits the
@@ -9,24 +10,24 @@ import { expect, test } from '@playwright/test';
  * here rather than by asking a person to watch a console is strictly better — it becomes a
  * regression test instead of an observation somebody made once.
  *
- * **This spec does not import the desktop policy.** The web package keeps Electron out, so the link
- * is made from the other side: `apps/desktop/src/main/renderer-policy.test.ts` pins the exact
- * `frame-src` this spec reproduces, and names this file. If the shipped directive ever changes,
- * that test fails and points here.
+ * **This spec does not import the runtime policy.** The web package keeps the runtime out, so the link
+ * is made from the other side: `apps/runtime/src/web-ui/policy.test.ts` pins the exact policy this spec
+ * reproduces, and names this file. If the shipped policy ever changes, that test fails and points here.
  *
  * The `sandbox` attribute — not this policy — is the control that matters. Nothing may weaken it to
  * make a preview work.
  */
 
-/** Exactly the directives `buildContentSecurityPolicy` emits for a packaged window. */
-const packagedPolicy = [
+/** Exactly `webUiContentSecurityPolicy` in `apps/runtime/src/web-ui/policy.ts`. */
+const runtimePolicy = [
   "default-src 'self'",
-  'frame-src http://127.0.0.1:* blob:',
+  "frame-src 'self' blob:",
   "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
   "font-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self'",
-  "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*",
+  "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
@@ -44,14 +45,14 @@ const host = `<!doctype html>
   srcdoc="&lt;p id=&quot;kept&quot;&gt;captured html&lt;/p&gt;&lt;script&gt;parent.sandboxEscaped = true;&lt;/script&gt;"></iframe>
 </body></html>`;
 
-test('a sandboxed srcdoc preview loads under the packaged content security policy', async ({
+test('a sandboxed srcdoc preview loads under the runtime content security policy', async ({
   page,
 }) => {
   await page.route('**/csp-probe', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'text/html',
-      headers: { 'Content-Security-Policy': packagedPolicy },
+      headers: { 'Content-Security-Policy': runtimePolicy },
       body: host,
     }),
   );

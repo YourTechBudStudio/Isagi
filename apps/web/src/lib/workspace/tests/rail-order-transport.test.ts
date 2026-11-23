@@ -4,7 +4,7 @@ import test, { afterEach, type TestContext } from 'node:test';
 import { Effect, Option } from 'effect';
 import { AsyncResult, Atom } from 'effect/reactivity';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import { RuntimeApi } from '../../runtime/client.js';
 import { refreshAndRead } from '../../state/policy.js';
@@ -22,12 +22,12 @@ import { applyRailMove, moveBefore, type RailMoveIntent } from '../rail-order.js
  * method, anchor field or snapshot decode that drifts fails here rather than looking correct all
  * the way to the runtime's door.
  *
- * The runtime URL normally comes from the Electron bridge, so the bridge is
+ * The runtime URL is the page's origin, so `window.location` is
  * stubbed for the whole file. `node:test` runs each file in its own process, so
  * this global stays local to this suite.
  */
 Object.assign(globalThis, {
-  window: { isagi: { getRuntimeUrl: () => Promise.resolve('http://runtime.test') } },
+  window: { location: { protocol: 'http:', origin: 'http://runtime.test' } },
 });
 
 interface RecordedRequest {

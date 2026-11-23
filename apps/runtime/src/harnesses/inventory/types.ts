@@ -1,4 +1,4 @@
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import type { ApprovedHostEnvironment } from '../definition-types.js';
 

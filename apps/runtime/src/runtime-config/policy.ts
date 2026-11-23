@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { defaultCompactionThreshold } from '@yourtechbudstudio/fluidcast-presets';
-import { Cause, type Redacted, Schema } from 'effect';
+import { type Redacted, Schema } from 'effect';
 
 import {
   appearanceSettingsDefaults,
@@ -9,20 +9,21 @@ import {
   type AgentHarness,
   type AppearanceSettings,
   type TerminalSettings,
-} from '@isagi/contracts';
-
-import { normalizeAbsoluteHomePath } from '../platform/fs/index.js';
+} from '@isagi/shared/contracts';
 import {
-  runtimeAppearanceSettingsSchema,
+  parseAppearance as parseAppearanceSection,
   runtimeConfigPtyBackendSchema,
   runtimeFluidcastSchema,
   runtimeHarnessPolicySchema,
   runtimeServerSettingsSchema,
   runtimeTerminalSettingsSchema,
   runtimeWorkflowSettingsSchema,
+  joinIssuePath,
+  schemaIssuePaths,
   type RuntimeConfigPtyBackend,
-} from './config-schema.js';
-import { issuePaths, joinIssuePath } from './issue-paths.js';
+} from '@isagi/shared/global-config';
+
+import { normalizeAbsoluteHomePath } from '../platform/fs/index.js';
 
 export interface RuntimeHarnessPolicyEntry {
   readonly enabled: boolean;
@@ -65,8 +66,6 @@ export interface RuntimeConfigShape {
   readonly server: {
     readonly host?: string;
     readonly port?: number;
-    /** Whether the runtime serves the web workbench at its own address. Default false (API only). */
-    readonly serveWebUi: boolean;
     /** Non-loopback hosts the Host guard admits; lowercased once here. Default none. */
     readonly allowedHosts: readonly string[];
     /** Runtime login, as written: `env.NAME` references are resolved by `access/` only when enabled. Default off. */
@@ -106,7 +105,7 @@ export const defaultRuntimeConfig: RuntimeConfigShape = {
   terminal: terminalSettingsDefaults,
   appearance: appearanceSettingsDefaults,
   fluidcast: { status: 'disabled' },
-  server: { serveWebUi: false, allowedHosts: [], auth: { enabled: false } },
+  server: { allowedHosts: [], auth: { enabled: false } },
 };
 
 /** Throws `RuntimeConfigIssues` for a section that must fail; `harnesses` and `fluidcast` never do. */
@@ -214,11 +213,9 @@ function parseTerminal(value: unknown): TerminalSettings {
 }
 
 function parseAppearance(value: unknown): AppearanceSettings {
-  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'appearance')) {
-    return appearanceSettingsDefaults;
-  }
-  const decoded = decodeSection(runtimeAppearanceSettingsSchema, value.appearance, ['appearance']);
-  return { theme: decoded.theme ?? appearanceSettingsDefaults.theme };
+  const parsed = parseAppearanceSection(value);
+  if (parsed.status === 'invalid') throw new RuntimeConfigIssues(parsed.issuePaths);
+  return parsed.appearance;
 }
 
 function parseServer(value: unknown): RuntimeConfigShape['server'] {
@@ -229,7 +226,6 @@ function parseServer(value: unknown): RuntimeConfigShape['server'] {
   return {
     ...(decoded.host === undefined ? {} : { host: decoded.host }),
     ...(decoded.port === undefined ? {} : { port: decoded.port }),
-    serveWebUi: decoded.serveWebUi ?? false,
     allowedHosts: (decoded.allowedHosts ?? []).map((entry) => entry.toLowerCase()),
     auth: {
       enabled: decoded.auth?.enabled ?? false,
@@ -299,16 +295,6 @@ function decodeSection<S extends Schema.Decoder<unknown>>(
   const decoded = Schema.decodeUnknownExit(schema)(value);
   if (decoded._tag === 'Success') return decoded.value;
   throw new RuntimeConfigIssues(schemaIssuePaths(decoded.cause, path));
-}
-
-/** Issue paths from a decode failure's `SchemaError`; a defect in the decoder dies loudly. */
-function schemaIssuePaths(
-  cause: Cause.Cause<Schema.SchemaError>,
-  path: ReadonlyArray<string> = [],
-): ReadonlyArray<string> {
-  const error = Cause.findErrorOption(cause);
-  if (error._tag === 'None') throw Cause.squash(cause);
-  return issuePaths(error.value, path);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,4 +1,4 @@
-import type { WorkflowQuestionSpecDto, WorkflowUserInputAnswers } from '@isagi/contracts';
+import type { WorkflowQuestionSpecDto, WorkflowUserInputAnswers } from '@isagi/shared/contracts';
 
 import type { InputFlowOption, InputFlowScreen } from '../../components/input-flow/index.js';
 import { paletteCopy } from '../../copy/index.js';

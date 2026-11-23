@@ -11,7 +11,7 @@ import {
   type AppearanceTheme,
   type PtyStreamOutputMessageSet,
   terminalPalette,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { CliAccessNone } from '../../cli-access/testing.js';
 import { publishOnlyRecordingEventBus } from '../../platform/events/testing.js';

@@ -3,7 +3,11 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { AgentHarness, ControlPlaneSnapshot, HarnessLaunchProjection } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  ControlPlaneSnapshot,
+  HarnessLaunchProjection,
+} from '@isagi/shared/contracts';
 
 import { onboardingDraft } from '../../lib/control-plane/policy-form.js';
 import { PolicyForm, type PolicyProvisioningFailure } from './PolicyForm.js';

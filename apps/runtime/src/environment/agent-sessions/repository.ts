@@ -1,7 +1,7 @@
 import { and, eq, isNull, lt } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/shared/contracts';
 
 import { AgentSessionArtifacts } from '../../harnesses/index.js';
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';

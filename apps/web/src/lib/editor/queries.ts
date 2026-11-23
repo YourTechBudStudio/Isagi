@@ -1,7 +1,7 @@
 import { Duration, Effect } from 'effect';
 import { Atom } from 'effect/reactivity';
 
-import type { EnsureEditorRuntimeInput } from '@isagi/contracts';
+import type { EnsureEditorRuntimeInput } from '@isagi/shared/contracts';
 
 import { controlPlaneQuery } from '../control-plane/queries.js';
 import { query, revalidate } from '../state/policy.js';

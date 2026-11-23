@@ -2,7 +2,7 @@ import type {
   WorkflowEventDto,
   WorkflowExecutionSummaryDto,
   WorkflowGraphInvocationDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   codeReloads,

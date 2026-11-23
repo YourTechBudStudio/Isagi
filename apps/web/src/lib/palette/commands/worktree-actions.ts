@@ -1,6 +1,6 @@
 import { Trash2 } from 'lucide-react';
 
-import type { DeleteWorktreeInput, DeleteWorktreeOutput } from '@isagi/contracts';
+import type { DeleteWorktreeInput, DeleteWorktreeOutput } from '@isagi/shared/contracts';
 
 import { worktreeActionsCopy } from '../../../copy/index.js';
 import { deleteWorktreeFromPalette } from '../../workspace/commits.js';

@@ -1,4 +1,4 @@
-import type { TerminalPaletteEntry } from '@isagi/contracts';
+import type { TerminalPaletteEntry } from '@isagi/shared/contracts';
 
 /**
  * The runtime is a node-pty program's terminal of record for queries.

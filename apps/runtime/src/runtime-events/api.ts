@@ -8,7 +8,7 @@ import {
   runtimeEventsWebSocketEndpoint,
   type RuntimeEvent,
   type RuntimeEventInputMessage,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { AgentSessionAttentionProjection } from '../environment/index.js';
 import { nextRuntimeEventEnvelope, RuntimeEvents } from '../platform/events/index.js';

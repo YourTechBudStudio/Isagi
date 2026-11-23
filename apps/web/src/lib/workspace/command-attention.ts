@@ -1,4 +1,4 @@
-import type { CommandRunDiagnostic, CommandStatus } from '@isagi/contracts';
+import type { CommandRunDiagnostic, CommandStatus } from '@isagi/shared/contracts';
 
 import { workbenchCopy } from '../../copy/index.js';
 import type { AttentionState } from './types.js';

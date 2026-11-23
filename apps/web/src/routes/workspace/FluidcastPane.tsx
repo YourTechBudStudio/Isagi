@@ -4,7 +4,7 @@ import { FluidcastPlayer } from '@yourtechbudstudio/fluidcast-react';
 import { Mic } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { AgentSessionMetadata, SurfaceDetail, SurfacePane } from '@isagi/contracts';
+import type { AgentSessionMetadata, SurfaceDetail, SurfacePane } from '@isagi/shared/contracts';
 
 import { PaneActionCluster } from '../../components/PaneActionCluster.js';
 import { fluidcastCopy, ptyCopy } from '../../copy/index.js';

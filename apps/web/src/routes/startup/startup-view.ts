@@ -1,7 +1,7 @@
 import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { ControlPlaneSnapshot } from '@isagi/contracts';
+import type { ControlPlaneSnapshot } from '@isagi/shared/contracts';
 
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
 import { mutationError, queryError } from '../../lib/state/result.js';

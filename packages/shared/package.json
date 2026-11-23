@@ -1,0 +1,32 @@
+{
+  "name": "@isagi/shared",
+  "version": "0.0.6",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./contracts": "./src/contracts/index.ts",
+    "./runtime-client": "./src/runtime-client/index.ts",
+    "./global-config": "./src/global-config/index.ts",
+    "./css-tokens": "./src/css-tokens/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json --force",
+    "check": "pnpm build && pnpm typecheck && pnpm test:built",
+    "test": "pnpm build && pnpm test:built",
+    "test:built": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "pnpm typecheck:built",
+    "typecheck:built": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@yourtechbudstudio/isagi-workflow-sdk": "workspace:*",
+    "effect": "catalog:",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@yourtechbudstudio/isagi-workflow-verifier": "workspace:0.1.2",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2"
+  }
+}

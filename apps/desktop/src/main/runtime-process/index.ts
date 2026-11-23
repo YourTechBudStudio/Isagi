@@ -1,9 +1,4 @@
-export {
-  RuntimeLifecycleFailure,
-  RuntimeProcess,
-  RuntimeProcessConfig,
-  type RuntimeTarget,
-} from './lifecycle.js';
+export { RuntimeLifecycleFailure, RuntimeProcess, RuntimeProcessConfig } from './lifecycle.js';
 export {
   createRuntimeLogSink,
   formatSupervisorLogRecord,

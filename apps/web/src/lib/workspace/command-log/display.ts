@@ -1,4 +1,4 @@
-import type { CommandLogStreamErrorCode } from '@isagi/contracts';
+import type { CommandLogStreamErrorCode } from '@isagi/shared/contracts';
 
 import { workbenchCopy } from '../../../copy/index.js';
 import type { PtyStreamConnectionPhase, PtyStreamNotice } from '../pty-stream/index.js';

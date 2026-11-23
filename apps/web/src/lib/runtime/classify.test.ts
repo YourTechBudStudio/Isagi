@@ -3,8 +3,12 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { ApiError } from '@isagi/contracts';
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
+import type { ApiError } from '@isagi/shared/contracts';
+import {
+  RuntimeApiError,
+  RuntimeDecodeError,
+  RuntimeTransportError,
+} from '@isagi/shared/runtime-client';
 
 import { classifyRuntimeFailure, isAuthRequired } from './classify.js';
 

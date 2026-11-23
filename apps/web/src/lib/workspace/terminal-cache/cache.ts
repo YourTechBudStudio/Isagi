@@ -1,4 +1,4 @@
-import type { TerminalCacheSettings } from '@isagi/contracts';
+import type { TerminalCacheSettings } from '@isagi/shared/contracts';
 
 import {
   estimateTerminalPresentationBytes,

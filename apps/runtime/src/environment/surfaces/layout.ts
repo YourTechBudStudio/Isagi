@@ -4,7 +4,7 @@ import {
   surfaceLayoutNodeSchema,
   type SplitPaneDirection,
   type SurfaceLayoutNode,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 type InsertSide = 'before' | 'after';
 

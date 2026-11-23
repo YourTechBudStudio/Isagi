@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Context, Data, Effect } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError } from '@isagi/contracts';
+import { apiEndpoints, type ApiError } from '@isagi/shared/contracts';
 
 import { GitCommandError } from '../git/index.js';
 import { DatabaseError } from '../persistence/index.js';

@@ -1,6 +1,6 @@
 import { Deferred, Effect, PubSub } from 'effect';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { getWorkflowRun } from '../runtime-data.js';
 import { workflowLive } from './live.js';

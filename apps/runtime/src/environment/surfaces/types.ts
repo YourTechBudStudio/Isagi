@@ -7,7 +7,7 @@ import type {
   SplitPaneDirection,
   SurfaceLayoutNode,
   TerminalSessionStatusReason,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 export interface EnvironmentFocusRow {
   readonly worktreeId: number;

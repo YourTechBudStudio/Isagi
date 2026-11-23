@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect, Result } from 'effect';
 
-import { terminalSettingsDefaults } from '@isagi/contracts';
+import { terminalSettingsDefaults } from '@isagi/shared/contracts';
 
 import { DataDirectory, type IsagiDataDirectory } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';

@@ -3,8 +3,8 @@
 import { Data, Duration, Effect, Schedule } from 'effect';
 import { HttpClient, HttpClientResponse, type HttpClientError } from 'effect/http';
 
-import { apiBasePath, apiEndpoints } from '@isagi/contracts';
-import { RuntimeClient, type RuntimeEndpointError } from '@isagi/runtime-client';
+import { apiBasePath, apiEndpoints } from '@isagi/shared/contracts';
+import { RuntimeClient, type RuntimeEndpointError } from '@isagi/shared/runtime-client';
 
 const attempts = 40;
 const attemptInterval = Duration.millis(250);
@@ -22,7 +22,7 @@ export class ServerWaitFailed extends Data.TaggedError('ServerWaitFailed')<{
 
 /**
  * The runtime URL cannot serve as a base for the health endpoint (a scheme-less `localhost:4100`, say). The message is
- * the parser's own (`Invalid URL`), which never echoes the value: an external runtime URL can carry credentials.
+ * the parser's own (`Invalid URL`), which never echoes the value: a URL can carry credentials.
  */
 export class InvalidRuntimeUrl extends Data.TaggedError('InvalidRuntimeUrl')<{
   readonly cause: unknown;

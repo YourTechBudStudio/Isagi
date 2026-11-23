@@ -5,11 +5,7 @@ import { privateRuntimeEnvironmentKeys } from '../../../../scripts/dev-superviso
 /**
  * How a managed runtime is launched: `isagi.mjs serve` with the desktop's
  * settings as flags, and an environment carrying only what is not a `serve`
- * setting.
- *
- * Only the managed target reaches this module. A runtime attached through
- * `ISAGI_RUNTIME_URL` is not spawned by the desktop at all, so it inherits
- * nothing from here.
+ * setting. The desktop only ever runs the runtime it launches.
  */
 
 /**
@@ -52,26 +48,43 @@ export function managedRuntimeSpawnEnvironment(input: {
 }
 
 /**
- * The `isagi.mjs` arguments for a managed runtime. A flag outranks any
- * inherited `ISAGI_DATA_DIR`, so the desktop's data directory always wins;
- * with none (a packaged app without an override) `serve` applies its own
- * `ISAGI_DATA_DIR`, then `~/.isagi`.
+ * The `isagi.mjs` arguments for a managed runtime. `--data-dir` is always
+ * passed: it is the directory the desktop resolved once (`desktop-mode.ts`) and
+ * read its theme from, so the window and the runtime read the same
+ * `config.yaml` and the runtime never resolves the path a second way.
  *
- * `--web-root` names the desktop's own web build. The runtime serves it only
- * when the user's `config.yaml` sets `server.serveWebUi`; the desktop never
- * sets it.
+ * `--web-root` names the desktop's own web build, which the runtime serves at
+ * its own origin and the window loads from there.
+ *
+ * `--allowed-origins` is passed only in development, where the window's
+ * document comes from the Vite dev server rather than the runtime. A packaged
+ * or unpackaged window is same-origin with the runtime and needs none.
  */
 export function managedRuntimeServeArguments(input: {
-  readonly allowedOrigins: string;
-  readonly dataDirectory: string | undefined;
+  readonly allowedOrigins: string | undefined;
+  readonly dataDirectory: string;
   readonly webRoot: string;
 }): string[] {
   return [
     'serve',
-    '--allowed-origins',
-    input.allowedOrigins,
-    ...(input.dataDirectory ? ['--data-dir', input.dataDirectory] : []),
+    ...(input.allowedOrigins ? ['--allowed-origins', input.allowedOrigins] : []),
+    '--data-dir',
+    input.dataDirectory,
     '--web-root',
     input.webRoot,
   ];
+}
+
+/**
+ * The browser origins a development runtime admits: the Vite dev server's, which the window loads, and any the
+ * developer added through `ISAGI_ALLOWED_ORIGINS`, de-duplicated in order.
+ */
+export function developmentAllowedOrigins(input: {
+  readonly webOrigin: string;
+  readonly configuredAllowedOrigins: string | undefined;
+}): string {
+  const configured = input.configuredAllowedOrigins?.split(',') ?? [];
+  return [
+    ...new Set([input.webOrigin, ...configured.map((origin) => origin.trim()).filter(Boolean)]),
+  ].join(',');
 }

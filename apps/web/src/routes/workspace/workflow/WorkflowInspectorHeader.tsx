@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/shared/contracts';
 
 import { workflowErrorStageHeadline } from '../../../copy/index.js';
 import {

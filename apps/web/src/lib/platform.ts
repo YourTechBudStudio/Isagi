@@ -2,7 +2,11 @@ type NavigatorWithUaData = Navigator & {
   userAgentData?: { platform?: string };
 };
 
-function detectIsMac(): boolean {
+/**
+ * Whether the client runs on macOS: the one platform check for keyboard handling (the `Mod`
+ * modifier of app shortcuts, the terminal copy chord) and hints.
+ */
+export function isMacPlatform(): boolean {
   if (typeof navigator === 'undefined') {
     return false;
   }
@@ -13,12 +17,8 @@ function detectIsMac(): boolean {
   return /mac/i.test(platform);
 }
 
-export function isPlatformModifierShortcut(event: Pick<KeyboardEvent, 'ctrlKey' | 'metaKey'>) {
-  return detectIsMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-}
-
 /**
  * The platform's modifier glyph for keyboard hints: `⌘` on macOS, `Ctrl`
  * elsewhere. Mirrors the `Mod` abstraction used for shortcuts (`Mod+K`, etc.).
  */
-export const modKey: string = detectIsMac() ? '⌘' : 'Ctrl';
+export const modKey: string = isMacPlatform() ? '⌘' : 'Ctrl';

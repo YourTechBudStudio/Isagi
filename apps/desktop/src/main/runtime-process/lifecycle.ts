@@ -1,4 +1,4 @@
-// The managed (or external) runtime the desktop talks to, as one scoped service.
+// The managed runtime the desktop launches and talks to, as one scoped service.
 //
 // The child process's Node callbacks are adapted once, at spawn: listeners only forward log lines or complete
 // Deferreds. Everything else (readiness, health, the post-ready watch, termination) is one supervising fiber forked
@@ -25,7 +25,7 @@ import {
   type HostRuntimeDiagnostic,
   type HostRuntimeFailureReason,
   type HostRuntimeStatusSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { LosslessLineDecoder, type DecodedLine } from './line-decoder.js';
 import type { RuntimeLogSink, RuntimeLogStream } from './logging.js';
@@ -37,13 +37,41 @@ import type {
 
 const readyPrefix = 'ISAGI_RUNTIME_READY ';
 
+/** How much of the child's latest output `recentOutput` keeps, in characters. */
+export const recentOutputLimit = 64 * 1024;
+
+/** The last `limit` characters appended, kept as chunks so appending stays cheap for a chatty child. */
+class OutputTail {
+  readonly #limit: number;
+  #chunks: string[] = [];
+  #length = 0;
+
+  constructor(limit: number) {
+    this.#limit = limit;
+  }
+
+  append(payload: string) {
+    this.#chunks.push(payload);
+    this.#length += payload.length;
+    while (
+      this.#length - (this.#chunks[0]?.length ?? 0) >= this.#limit &&
+      this.#chunks.length > 1
+    ) {
+      this.#length -= this.#chunks.shift()!.length;
+    }
+  }
+
+  text() {
+    const joined = this.#chunks.join('');
+    return joined.length > this.#limit ? joined.slice(-this.#limit) : joined;
+  }
+}
+
 /** How long `terminate` keeps watching after `SIGKILL` before it gives up on observing the exit. */
 const killObservationWindow = Duration.seconds(1);
 
-type ManagedFailureReason = Exclude<HostRuntimeFailureReason, 'external_health_check_failed'>;
-
 export class RuntimeLifecycleFailure extends Data.TaggedError('RuntimeLifecycleFailure')<{
-  readonly reason: ManagedFailureReason;
+  readonly reason: HostRuntimeFailureReason;
   readonly diagnostic: HostRuntimeDiagnostic;
 }> {
   override get message() {
@@ -51,31 +79,21 @@ export class RuntimeLifecycleFailure extends Data.TaggedError('RuntimeLifecycleF
   }
 }
 
-export type RuntimeTarget =
-  | {
-      readonly ownership: 'managed';
-      /**
-       * Resolves what to spawn, carrying `launcherToken` to the runtime in its environment (never its arguments). A
-       * `RuntimeLifecycleFailure` keeps its reason; anything thrown (a defect) is reported as `stage_invalid`.
-       */
-      readonly prepare: (launch: {
-        readonly launcherToken: Redacted.Redacted<string>;
-      }) => Effect.Effect<RuntimeSpawnSpecification, RuntimeLifecycleFailure>;
-    }
-  | {
-      readonly ownership: 'external';
-      readonly url: string;
-    };
-
 /** Everything platform-shaped the runtime process needs; `runtime.ts` builds it from Electron, tests from fakes. */
 export class RuntimeProcessConfig extends Context.Service<
   RuntimeProcessConfig,
   {
-    readonly target: RuntimeTarget;
+    /**
+     * Resolves what to spawn, carrying `launcherToken` to the runtime in its environment (never its arguments). A
+     * `RuntimeLifecycleFailure` keeps its reason; anything thrown (a defect) is reported as `stage_invalid`.
+     */
+    readonly prepare: (launch: {
+      readonly launcherToken: Redacted.Redacted<string>;
+    }) => Effect.Effect<RuntimeSpawnSpecification, RuntimeLifecycleFailure>;
     readonly adapter: RuntimeProcessAdapter;
     /**
      * Succeeds once `url` serves a healthy runtime API. Its failure message becomes the `health_check_failed`
-     * diagnostic (managed) or, with URLs redacted, a log line (external).
+     * diagnostic.
      */
     readonly checkHealth: (url: string) => Effect.Effect<void, Error>;
     /** Where the child's own stdout/stderr lines go. A protocol (supervisor records, `[runtime]` lines), not a log. */
@@ -111,12 +129,11 @@ interface AttachedChild {
 const make = Effect.gen(function* () {
   const config = yield* RuntimeProcessConfig;
   const layerScope = yield* Effect.scope;
-  // One per app run, as there is one managed spawn. Made in external mode too, where nothing uses it.
+  // One per app run, as there is one managed spawn.
   const launcherToken = Redacted.make(randomBytes(32).toString('hex'));
   const status = yield* SubscriptionRef.make<HostRuntimeStatusSnapshot>({
     protocolVersion: HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
     revision: 0,
-    ownership: config.target.ownership,
     state: 'connecting',
   });
   // Snapshot publication and the revision increment are one atomic transition.
@@ -140,7 +157,11 @@ const make = Effect.gen(function* () {
   /** Set once startup or the running child failed; `ready` may already hold the URL when a ready runtime crashes. */
   let terminalFailure: RuntimeLifecycleFailure | undefined;
 
-  const log = (stream: RuntimeLogStream, payload: string) => config.log({ stream, payload });
+  const output = new OutputTail(recentOutputLimit);
+  const log = (stream: RuntimeLogStream, payload: string) => {
+    output.append(payload);
+    config.log({ stream, payload });
+  };
   const forward = (stream: RuntimeLogStream, line: DecodedLine) =>
     log(stream, `${line.payload}${line.ending}`);
 
@@ -237,7 +258,7 @@ const make = Effect.gen(function* () {
       attached.release();
     });
 
-  const runManaged = (prepare: Extract<RuntimeTarget, { ownership: 'managed' }>['prepare']) =>
+  const runManaged = (prepare: RuntimeProcessConfig['Service']['prepare']) =>
     Effect.gen(function* () {
       const specification = yield* Effect.suspend(() => prepare({ launcherToken })).pipe(
         Effect.catchDefect((defect) =>
@@ -280,7 +301,7 @@ const make = Effect.gen(function* () {
         Effect.raceFirst(exitBeforeReady),
         Effect.raceFirst(errorBeforeReady),
       );
-      yield* publish({ ownership: 'managed', state: 'ready' });
+      yield* publish({ state: 'ready' });
       yield* Deferred.succeed(ready, url);
 
       // Running: the next exit or process error is a failure.
@@ -313,7 +334,6 @@ const make = Effect.gen(function* () {
         Effect.suspend(() => {
           terminalFailure = lifecycleFailure;
           return publish({
-            ownership: 'managed',
             state: 'failed',
             reason: lifecycleFailure.reason,
             diagnostic: lifecycleFailure.diagnostic,
@@ -324,49 +344,19 @@ const make = Effect.gen(function* () {
       Effect.scoped,
     );
 
-  const runExternal = (url: string) =>
-    checkHealth(url).pipe(
-      Effect.matchEffect({
-        onSuccess: () => publish({ ownership: 'external', state: 'ready' }),
-        onFailure: (error) =>
-          publish(externalUnreachable).pipe(
-            Effect.andThen(
-              Effect.sync(() =>
-                log('stderr', `[external] health check failed: ${errorMessageWithoutUrl(error)}\n`),
-              ),
-            ),
-          ),
-      }),
-      // An unreachable external runtime still loads through: its URL is handed out either way.
-      Effect.andThen(Deferred.succeed(ready, url)),
-      Effect.asVoid,
-    );
-
   /**
    * The lifecycle invariant, held for every way the run fiber can end: unless a stop interrupted it, an exit that has
    * not already published a terminal outcome publishes one and settles `ready`. The paths above do this themselves
-   * (a managed failure inside the run's scope, before `terminate`); this is the backstop for whatever escapes them, so
+   * (a failure inside the run's scope, before `terminate`); this is the backstop for whatever escapes them, so
    * a defect in `prepare`, `checkHealth`, `publish`, the log sink or a finalizer can never leave `start` waiting.
    */
-  const settleRunExit = (target: RuntimeTarget, exit: Exit.Exit<void>) =>
+  const settleRunExit = (exit: Exit.Exit<void>) =>
     Effect.suspend(() => {
       if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) return Effect.void;
       // Interrupted by a stop or by the layer scope closing, with a defect alongside (a failing finalizer): the stop
       // owns the outcome, so the defect is only logged.
       const stopping = phase !== 'started' || Cause.hasInterrupts(exit.cause);
       const defect = Cause.squash(exit.cause);
-      if (target.ownership === 'external') {
-        // Logged and reported like a failed health check, without the message: it could carry the external URL.
-        const logged = Effect.logError(
-          `External runtime supervision ended unexpectedly: ${errorMessageWithoutUrl(defect)}`,
-        );
-        // An external runtime whose outcome is already known loads through as it is.
-        if (stopping || Deferred.isDoneUnsafe(ready)) return logged;
-        return logged.pipe(
-          Effect.andThen(publish(externalUnreachable)),
-          Effect.andThen(Deferred.succeed(ready, target.url)),
-        );
-      }
       const logged = Effect.logError('Managed runtime supervision ended unexpectedly', exit.cause);
       // A stored failure has already been published and has settled `ready`.
       if (stopping || terminalFailure) return logged;
@@ -375,7 +365,6 @@ const make = Effect.gen(function* () {
       return logged.pipe(
         Effect.andThen(
           publish({
-            ownership: 'managed',
             state: 'failed',
             reason: lifecycleFailure.reason,
             diagnostic: lifecycleFailure.diagnostic,
@@ -390,14 +379,13 @@ const make = Effect.gen(function* () {
     if (terminalFailure) return yield* terminalFailure;
     if (phase === 'idle') {
       phase = 'started';
-      const target = config.target;
       // Forked into the layer scope, not the caller's: a caller that stops waiting (an IPC invoke torn down with its
       // window) must not cancel the runtime everyone else waits on. Suspended, so even building the run happens inside
       // the fiber whose exit `settleRunExit` observes.
       run = yield* Effect.forkIn(
-        Effect.suspend(() =>
-          target.ownership === 'managed' ? runManaged(target.prepare) : runExternal(target.url),
-        ).pipe(Effect.onExit((exit) => settleRunExit(target, exit))),
+        Effect.suspend(() => runManaged(config.prepare)).pipe(
+          Effect.onExit((exit) => settleRunExit(exit)),
+        ),
         layerScope,
       );
     }
@@ -422,10 +410,8 @@ const make = Effect.gen(function* () {
     status,
     launcherToken,
     start,
-    url:
-      config.target.ownership === 'external'
-        ? Effect.succeed(config.target.url)
-        : start.pipe(Effect.andThen(Deferred.await(ready))),
+    url: start.pipe(Effect.andThen(Deferred.await(ready))),
+    recentOutput: Effect.sync(() => output.text()),
     stop,
   });
 });
@@ -437,13 +423,19 @@ export class RuntimeProcess extends Context.Service<
     readonly status: SubscriptionRef.SubscriptionRef<HostRuntimeStatusSnapshot>;
     /**
      * The bearer the managed runtime admits for this app run (`ISAGI_LAUNCHER_TOKEN` at spawn): the window's requests
-     * and restart readiness carry it. In memory only; unused for an external runtime.
+     * and restart readiness carry it. In memory only.
      */
     readonly launcherToken: Redacted.Redacted<string>;
-    /** Idempotent and shared: the first call spawns (or health-checks an external runtime); every caller waits for the same outcome. */
+    /** Idempotent and shared: the first call spawns; every caller waits for the same outcome. */
     readonly start: Effect.Effect<void, RuntimeLifecycleFailure>;
-    /** The runtime URL: an external one immediately, a managed one once it is ready. */
+    /** The runtime URL, once it is ready. */
     readonly url: Effect.Effect<string, RuntimeLifecycleFailure>;
+    /**
+     * The child's latest output (stdout and stderr interleaved as received, and the lifecycle's own lines), bounded to
+     * the last {@link recentOutputLimit} characters. What a failure record keeps, since a packaged app's stdout goes
+     * nowhere a user can read.
+     */
+    readonly recentOutput: Effect.Effect<string>;
     /** Idempotent; later callers wait for the first. Also the layer's finalizer, so disposing the runtime stops the child. */
     readonly stop: Effect.Effect<void>;
   }
@@ -472,13 +464,6 @@ function observeReadyLine(
   }
 }
 
-const externalUnreachable = {
-  ownership: 'external',
-  state: 'unreachable',
-  reason: 'external_health_check_failed',
-  diagnostic: { message: 'The configured external runtime did not pass its health check.' },
-} as const satisfies SnapshotFacts;
-
 function exitsWithin(attached: AttachedChild, duration: Duration.Duration) {
   return Deferred.await(attached.exited).pipe(
     Effect.timeoutOption(duration),
@@ -486,7 +471,7 @@ function exitsWithin(attached: AttachedChild, duration: Duration.Duration) {
   );
 }
 
-function failure(reason: ManagedFailureReason, diagnostic: HostRuntimeDiagnostic) {
+function failure(reason: HostRuntimeFailureReason, diagnostic: HostRuntimeDiagnostic) {
   return new RuntimeLifecycleFailure({ reason, diagnostic });
 }
 
@@ -518,10 +503,4 @@ function errorMessage(error: unknown) {
 
 function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error));
-}
-
-function errorMessageWithoutUrl(error: unknown) {
-  if (!(error instanceof Error)) return 'health request failed';
-  if (URL.canParse(error.message)) return 'health request failed';
-  return error.message.replace(/https?:\/\/\S+/g, '<external-runtime>');
 }

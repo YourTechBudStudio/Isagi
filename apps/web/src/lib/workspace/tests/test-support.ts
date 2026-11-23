@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import { Effect } from 'effect';
 import type { AtomRegistry } from 'effect/reactivity';
 
-import type { ProjectKind, WorkspaceSnapshot } from '@isagi/contracts';
+import type { ProjectKind, WorkspaceSnapshot } from '@isagi/shared/contracts';
 
 import type { RuntimeApiShape } from '../../runtime/client.js';
 import { controllable, flush, makeTestRegistry } from '../../state/testing.js';

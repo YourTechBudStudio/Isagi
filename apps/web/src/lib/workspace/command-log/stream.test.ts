@@ -7,7 +7,7 @@ import {
   ptyWebSocketOutputMessageSchema,
   type CommandLogMetadataOutput,
   type WorktreeCommandsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { flush, makeTestRegistry } from '../../state/testing.js';
 import { commandLogMetadataAtom, worktreeCommandsAtom } from '../queries.js';

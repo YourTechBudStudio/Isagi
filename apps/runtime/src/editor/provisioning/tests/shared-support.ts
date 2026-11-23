@@ -1,6 +1,6 @@
 import { Effect, Layer } from 'effect';
 
-import type { EditorProvisioningState } from '@isagi/contracts';
+import type { EditorProvisioningState } from '@isagi/shared/contracts';
 
 import type { ResolvedEditorInstallation } from '../install.js';
 import { codeServerManifest } from '../manifest.js';

@@ -3,7 +3,7 @@ import type {
   ControlPlaneSnapshot,
   EditorProvisioningState,
   HarnessLaunchProjection,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 // The runtime owns launchability (see `harnessLaunchDecision` on the runtime and
 // ADR 0008): the snapshot carries a per-harness `launch` projection, and the web
@@ -43,8 +43,7 @@ export type StartupGate =
  * setup while it runs.
  *
  * Every runtime provisions its editor, so a failure blocks readiness rather
- * than degrading quietly. How this gate should treat an external runtime whose
- * editor is still provisioning or cannot provision belongs to #64.
+ * than degrading quietly.
  */
 export function deriveStartupGate(snapshot: ControlPlaneSnapshot): StartupGate {
   if (snapshot.inventory.status === 'pending') return { kind: 'inventory_pending' };

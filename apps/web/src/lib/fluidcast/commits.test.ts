@@ -4,8 +4,8 @@ import test from 'node:test';
 import { Deferred, Effect } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { AgentSessionMetadata, ApiError } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { AgentSessionMetadata, ApiError } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { keys } from '../state/keys.js';
 import { appReactivityAtom, runApp } from '../state/runtime.js';

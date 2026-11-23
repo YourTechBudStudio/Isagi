@@ -12,7 +12,7 @@ import { dirname, resolve } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import type { AgentHarness, DocsReconciliationResult } from '@isagi/contracts';
+import type { AgentHarness, DocsReconciliationResult } from '@isagi/shared/contracts';
 
 import { boundedDiagnostic } from '../../platform/diagnostics/index.js';
 import type { RuntimeHarnessPolicy } from '../../runtime-config/index.js';

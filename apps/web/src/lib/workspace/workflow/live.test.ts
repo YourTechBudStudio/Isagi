@@ -4,7 +4,7 @@ import { mock, test, type TestContext } from 'node:test';
 import { Effect } from 'effect';
 import { AsyncResult, type Atom, type AtomRegistry } from 'effect/reactivity';
 
-import type { GetWorkflowRunOutput, ListWorkflowEventsOutput } from '@isagi/contracts';
+import type { GetWorkflowRunOutput, ListWorkflowEventsOutput } from '@isagi/shared/contracts';
 
 import type { RuntimeApiShape } from '../../runtime/client.js';
 import { runApp } from '../../state/runtime.js';

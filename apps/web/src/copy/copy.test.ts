@@ -5,8 +5,8 @@ import type {
   AgentSessionStatusReason,
   ApiError,
   TerminalSessionStatusReason,
-} from '@isagi/contracts';
-import { workflowRejectionReasonSchema } from '@isagi/contracts';
+} from '@isagi/shared/contracts';
+import { workflowRejectionReasonSchema } from '@isagi/shared/contracts';
 
 import { ptyCopy, ptySocketErrorCopy, runtimeErrorCopy } from './index.js';
 

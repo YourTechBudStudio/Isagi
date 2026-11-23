@@ -7,7 +7,7 @@ import type {
   CommandActionOutput,
   CommandLogMetadataOutput,
   WorktreeCommandsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { runApp } from '../../state/runtime.js';
 import { flush, makeTestRegistry } from '../../state/testing.js';

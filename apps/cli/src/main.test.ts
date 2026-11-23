@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
+import {
+  RuntimeApiError,
+  RuntimeDecodeError,
+  RuntimeTransportError,
+} from '@isagi/shared/runtime-client';
 
 import { cliErrorCodeSchema } from './errors.js';
 import { splitJsonFlag, type RuntimeTarget } from './main.js';

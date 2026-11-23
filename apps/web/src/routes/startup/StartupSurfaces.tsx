@@ -1,7 +1,7 @@
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import type { ReactNode } from 'react';
 
-import type { EditorProvisioningState } from '@isagi/contracts';
+import type { EditorProvisioningState } from '@isagi/shared/contracts';
 
 import { Button } from '../../components/Button.js';
 import { editorProvisioningCopy, startupCopy } from '../../copy/index.js';
@@ -22,7 +22,6 @@ export type SignInPhase = 'idle' | 'checking' | 'failed' | 'error' | 'signed_in'
 
 export type BootView =
   | { kind: 'connecting' }
-  | { kind: 'host_failed' }
   | { kind: 'environment_pending' }
   | { kind: 'opening' }
   | { kind: 'runtime_unreachable'; error: string; retrying: boolean; onRetry: () => void }
@@ -57,7 +56,6 @@ type TrackTone = 'running' | 'blocked' | 'error';
 // setup beat — the fill runs 50→100 straight through.
 const FILL: Record<BootKind, number> = {
   connecting: 17,
-  host_failed: 17,
   environment_pending: 42,
   setup: 75,
   opening: 100,
@@ -113,8 +111,6 @@ function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
       return { tone: 'running', live: true };
     case 'opening':
       return { tone: 'running', live: false };
-    case 'host_failed':
-      return { tone: 'error', live: false };
     // Setup waits on the user: the track holds completely still until a save or
     // retry is actually running.
     case 'setup':

@@ -1,4 +1,4 @@
-import type { DurablePtySessionKind } from '@isagi/contracts';
+import type { DurablePtySessionKind } from '@isagi/shared/contracts';
 
 export interface TerminalSessionIdentity {
   /**

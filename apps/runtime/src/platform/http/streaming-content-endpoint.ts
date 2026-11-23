@@ -1,7 +1,7 @@
 import { Effect, Exit, Pull, Scope, Stream } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiBasePath, type AnyApiContentEndpoint } from '@isagi/contracts';
+import { apiBasePath, type AnyApiContentEndpoint } from '@isagi/shared/contracts';
 
 import { runRoute, type ApiHandler, type Rejection } from './endpoint.js';
 import { sendApiError, unhandledApiError, type ApiRouteContext } from './errors.js';

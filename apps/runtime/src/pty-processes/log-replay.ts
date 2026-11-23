@@ -5,7 +5,7 @@ import { setImmediate as yieldImmediate } from 'node:timers/promises';
 
 import { Effect } from 'effect';
 
-import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
+import type { PtyStreamOutputMessageSet } from '@isagi/shared/contracts';
 
 import { PtyServiceError } from './types.js';
 

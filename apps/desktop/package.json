@@ -7,7 +7,7 @@
   "type": "module",
   "main": "dist-electron/main/index.js",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node --import tsx scripts/build-loader.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "pnpm stage:runtime && pnpm build && electron .",
     "dev:install-launcher": "node scripts/development-desktop-entry.mjs install",
@@ -21,19 +21,21 @@
     "stage:runtime": "node scripts/stage-runtime.mjs",
     "test": "pnpm test:built",
     "test:built": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/*.test.mjs\" \"scripts/runtime-stage/*.test.mjs\"",
+    "test:e2e": "pnpm -w build && pnpm stage:runtime --skip-runtime-build && pnpm test:e2e:prepared",
+    "test:e2e:prepared": "playwright test -c e2e/playwright.config.ts",
     "typecheck": "pnpm typecheck:built",
     "typecheck:built": "tsc --noEmit -p tsconfig.json",
     "verify:linux-release": "node scripts/verify-linux-release.mjs"
   },
   "dependencies": {
-    "@isagi/contracts": "workspace:*",
-    "@isagi/runtime-client": "workspace:*",
+    "@isagi/shared": "workspace:*",
     "effect": "catalog:",
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
     "@electron/rebuild": "^4.2.0",
+    "@playwright/test": "^1.62.0",
     "@types/node": "^24.10.1",
     "electron": "^43.8.3",
     "electron-builder": "^26.15.3",

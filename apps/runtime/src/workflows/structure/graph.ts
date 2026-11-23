@@ -1,4 +1,4 @@
-import type { WorkflowNodeKind } from '@isagi/contracts';
+import type { WorkflowNodeKind } from '@isagi/shared/contracts';
 
 import type { GraphEdge, GraphNode, GraphOutcome } from '../types.js';
 import type { AnyGraphDefinition, LoadedWorkflowArtifact } from './loader.js';

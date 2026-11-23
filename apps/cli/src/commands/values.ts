@@ -4,7 +4,7 @@
  * like any other parse error (a `cli_usage_invalid` document, see `usage.ts`), and
  * `checkCommandLine` judges it too.
  *
- * Rules come from `@isagi/contracts` rather than being restated: a page limit is whatever the
+ * Rules come from `@isagi/shared/contracts` rather than being restated: a page limit is whatever the
  * contract's pagination query accepts, a run status is one of the contract's literals.
  */
 import { Effect, Schema } from 'effect';
@@ -16,7 +16,7 @@ import {
   type WorkflowRunStatus,
   type WorkflowSurfaceChoiceDto,
   type WorkflowWorktreeChoiceDto,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 /** A conversion: the value, or what it must be (`must be a positive integer`). */
 type Converted<A> =

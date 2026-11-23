@@ -1,4 +1,4 @@
-import type { SurfaceLayoutNode } from '@isagi/contracts';
+import type { SurfaceLayoutNode } from '@isagi/shared/contracts';
 
 import { decodeSurfaceLayout, prunePaneFromLayout } from './layout.js';
 import type { SurfaceDeleteTarget } from './types.js';

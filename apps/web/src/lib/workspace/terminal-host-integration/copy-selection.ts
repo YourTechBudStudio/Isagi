@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/xterm';
 
+import { isMacPlatform } from '../../platform.js';
 import { type TerminalClipboardWriter, writeTerminalClipboard } from './clipboard.js';
 
 export interface TerminalSelectionCopyOptions {
@@ -48,7 +49,7 @@ export function installTerminalSelectionCopy(options: TerminalSelectionCopyOptio
 
 export function isCopyShortcut(event: KeyboardEvent): boolean {
   if (event.type !== 'keydown' || event.key.toLowerCase() !== 'c') return false;
-  return /mac/i.test(navigator.platform)
+  return isMacPlatform()
     ? event.metaKey && !event.altKey
     : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
 }

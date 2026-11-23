@@ -1,6 +1,10 @@
 import { Activity, Play, TriangleAlert } from 'lucide-react';
 
-import type { CommandActionOutput, CommandSummary, WorktreeCommandsOutput } from '@isagi/contracts';
+import type {
+  CommandActionOutput,
+  CommandSummary,
+  WorktreeCommandsOutput,
+} from '@isagi/shared/contracts';
 
 import { paletteCopy } from '../../copy/index.js';
 import { pathlessCommandPortNumbers } from '../workspace/command-ports.js';

@@ -55,7 +55,7 @@ function syncAssets(assetRoot) {
   );
 
   copyFile(
-    resolve(runtimeRoot, 'src', 'runtime-config', 'config-schema.ts'),
+    resolve(repoRoot, 'packages/shared/src/global-config/config-schema.ts'),
     resolve(assetRoot, 'config-schemas', 'runtime-config.schema.ts'),
   );
   copyFile(

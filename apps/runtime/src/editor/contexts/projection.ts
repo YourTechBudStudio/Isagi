@@ -1,4 +1,4 @@
-import type { EditorProcessDiagnostic } from '@isagi/contracts';
+import type { EditorProcessDiagnostic } from '@isagi/shared/contracts';
 
 import { exitDetail, type PtyProcessRow } from '../../pty-processes/index.js';
 import type { EditorContextFacts, EditorContextRow, EditorReadinessObservation } from './types.js';

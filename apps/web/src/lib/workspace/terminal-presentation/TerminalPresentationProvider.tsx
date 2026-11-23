@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
-import type { TerminalSettings } from '@isagi/contracts';
-import { RuntimeApiError } from '@isagi/runtime-client';
+import type { TerminalSettings } from '@isagi/shared/contracts';
+import { RuntimeApiError } from '@isagi/shared/runtime-client';
 
 import { keys } from '../../state/keys.js';
 import { useRegistry } from '../../state/registry.js';

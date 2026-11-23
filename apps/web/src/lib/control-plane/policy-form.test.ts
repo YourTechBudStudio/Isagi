@@ -7,7 +7,7 @@ import type {
   DocsReconciliationAction,
   DocsReconciliationResult,
   HarnessPolicy,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   buildHarnessPolicy,

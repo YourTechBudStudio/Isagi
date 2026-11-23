@@ -1,4 +1,4 @@
-import type { DocsReconciliationAction, DocsReconciliationReason } from '@isagi/contracts';
+import type { DocsReconciliationAction, DocsReconciliationReason } from '@isagi/shared/contracts';
 
 // User-facing prose for the startup gate: the boot surface's status lines, the
 // blocker states, and harness onboarding. Voice stays plain and dry; the light

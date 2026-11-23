@@ -1,6 +1,7 @@
+import { useAtomValue } from '@effect/atom-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { WorkflowQuestionSpecDto } from '@isagi/shared/contracts';
 
 import { RuntimeLocalityContext, type RuntimeLocality } from '../../../src/lib/runtime/locality.js';
 import { AppStateProvider } from '../../../src/lib/state/AppStateProvider.js';
@@ -14,9 +15,11 @@ import {
   setActivePane,
   setActiveSurface,
   setSelection,
+  zenAtom,
 } from '../../../src/lib/workspace/store.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
+import { useZenToggleShortcut } from '../../../src/routes/workspace/useZenEscape.js';
 import { WorkbenchDrawer } from '../../../src/routes/workspace/WorkbenchDrawer.js';
 import {
   WorkflowInputFlow,
@@ -109,6 +112,7 @@ export function CommandPaletteFixtureApp({
             <>
               <WorkbenchDrawer />
               <CommandPalette />
+              <ZenShortcut />
               {/* The strip is the always-on surface, so it sits at the foot of the
                   work area exactly as the app places it. It shares the drawer's
                   catalog query, which is the point: a command's chip and its drawer
@@ -139,6 +143,17 @@ export function CommandPaletteFixtureApp({
       </RuntimeLocalityContext.Provider>
     </AppStateProvider>
   );
+}
+
+/**
+ * The production Mod+. binding, with the zen flag it toggles stamped where a spec can read it. The
+ * page has no zen layout to change, so the flag is the observable.
+ */
+function ZenShortcut() {
+  useZenToggleShortcut();
+  const zen = useAtomValue(zenAtom);
+  // Not an `<output>`: its implicit `status` role would collide with the palette's own.
+  return <div hidden data-zen={String(zen)} />;
 }
 
 /**

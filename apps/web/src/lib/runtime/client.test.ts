@@ -11,8 +11,8 @@ import type {
   Project,
   RenameSurfaceOutput,
   ClientSettingsOutput,
-} from '@isagi/contracts';
-import { RuntimeApiError, RuntimeDecodeError } from '@isagi/runtime-client';
+} from '@isagi/shared/contracts';
+import { RuntimeApiError, RuntimeDecodeError } from '@isagi/shared/runtime-client';
 
 import { makeRuntimeApi, RuntimeApi } from './client.js';
 
@@ -552,11 +552,18 @@ test('runtime client retries provisioning with no arguments at all', async () =>
   assert.deepEqual(output, { provisioning: { status: 'checking', version: '4.135.0' } });
 });
 
-test('RuntimeApi.layer resolves the runtime URL per request, so a restarted runtime is picked up', async (t) => {
-  const urls = ['http://runtime-a.test', 'http://runtime-b.test', 'http://runtime-c.test/base/'];
+test('RuntimeApi.layer resolves the runtime URL per request, from the page origin', async (t) => {
+  const origins = ['http://runtime-a.test', 'http://runtime-b.test', 'http://runtime-c.test'];
   let resolutions = 0;
   Object.assign(globalThis, {
-    window: { isagi: { getRuntimeUrl: () => Promise.resolve(urls[resolutions++]) } },
+    window: {
+      location: {
+        protocol: 'http:',
+        get origin() {
+          return origins[resolutions++];
+        },
+      },
+    },
   });
   t.after(() => {
     Reflect.deleteProperty(globalThis, 'window');
@@ -586,11 +593,7 @@ test('RuntimeApi.layer resolves the runtime URL per request, so a restarted runt
     'http://runtime-a.test/api/v1/worktrees/10/commands',
     'http://runtime-b.test/api/v1/worktrees/10/commands',
   ]);
-  assert.equal(
-    identity,
-    'http://runtime-c.test/base',
-    'identity is resolved per call and normalized',
-  );
+  assert.equal(identity, 'http://runtime-c.test', 'identity is resolved per call');
 });
 
 test('RuntimeApi.layer fails a request with RuntimeUrlUnavailable when a file: page has no runtime URL', async (t) => {

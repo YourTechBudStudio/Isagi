@@ -1,6 +1,6 @@
 import { Data } from 'effect';
 
-import type { EditorAttemptFailureReason } from '@isagi/contracts';
+import type { EditorAttemptFailureReason } from '@isagi/shared/contracts';
 
 // The editor domain's entire expected-failure channel, in three classes that
 // differ by *when* they happen rather than by what went wrong.

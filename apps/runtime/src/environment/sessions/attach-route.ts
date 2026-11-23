@@ -8,7 +8,7 @@ import {
   type PtyWebSocketErrorCode,
   type PtyWebSocketInputMessage,
   type PtyWebSocketOutputMessage,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   ptyIncarnation,

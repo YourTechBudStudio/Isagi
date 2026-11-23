@@ -5,8 +5,8 @@ import { test } from 'node:test';
 import { Option } from 'effect';
 import { AsyncResult } from 'effect/reactivity';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
-import { RuntimeTransportError } from '@isagi/runtime-client';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
+import { RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import { query } from './policy.js';

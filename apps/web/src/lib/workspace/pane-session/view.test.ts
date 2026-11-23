@@ -9,7 +9,7 @@ import type {
   SessionDiagnosticCode,
   SessionStatus,
   TerminalSessionMetadata,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import {
   claimInputForSession,

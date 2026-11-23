@@ -1,5 +1,5 @@
-import type { ApiError } from '@isagi/contracts';
-import type { RuntimeClientError } from '@isagi/runtime-client';
+import type { ApiError } from '@isagi/shared/contracts';
+import type { RuntimeClientError } from '@isagi/shared/runtime-client';
 
 /**
  * A runtime-client failure reduced to the shape the UI reasons about. This is the

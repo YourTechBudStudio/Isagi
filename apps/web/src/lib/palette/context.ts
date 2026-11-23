@@ -1,4 +1,4 @@
-import type { AgentHarness, SurfaceDetail, WorkflowLaunchOrigin } from '@isagi/contracts';
+import type { AgentHarness, SurfaceDetail, WorkflowLaunchOrigin } from '@isagi/shared/contracts';
 
 import type { Project, Worktree } from '../workspace/types.js';
 import type { PaletteContext } from './types.js';

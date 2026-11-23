@@ -3,7 +3,7 @@ import type {
   EditorContextMetadata,
   SurfaceDetail,
   WorkspaceSnapshot,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { requestBodyText } from '../request-body.js';
 
@@ -136,10 +136,9 @@ export function installFakeRuntime(): EditorRuntimeControls {
   const ensureRequests: { editorContextId: number; intent: string }[] = [];
   const diagnosticsRequests: { editorContextId: number; ptyProcessId: number }[] = [];
 
-  // The page's own origin, as for a runtime-served UI, so the editor's runtime-relative endpoint
-  // resolves to a document this fixture actually serves. Read at install, once the page exists.
+  // The page's own origin, as for a runtime-served UI: the app calls the runtime that served it, and the editor's
+  // runtime-relative endpoint resolves to a document this fixture actually serves.
   const RUNTIME_ORIGIN = window.location.origin;
-  window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
 
   const controls: EditorRuntimeControls = {
     ensureRequests: () => [...ensureRequests],

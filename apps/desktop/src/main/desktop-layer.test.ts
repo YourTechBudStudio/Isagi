@@ -17,14 +17,9 @@ import {
   SubscriptionRef,
 } from 'effect';
 
-import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/contracts';
+import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from '@isagi/shared/contracts';
 
-import {
-  DESKTOP_UPDATE_CHANNEL,
-  DesktopShell,
-  makeDesktopServices,
-  RUNTIME_STATUS_CHANNEL,
-} from './desktop-layer.js';
+import { DESKTOP_UPDATE_CHANNEL, DesktopShell, makeDesktopServices } from './desktop-layer.js';
 import { makeLogCapture } from './log-capture-test-support.js';
 import {
   type RuntimeChildProcess,
@@ -75,7 +70,6 @@ class RecordingUpdater extends FakeUpdater {
 function harness(
   options: {
     readonly selfUpdating?: boolean;
-    readonly isPackaged?: boolean;
     /** A path, or the shell's own `logsDirectory` (one that throws, as `app.getPath` can). */
     readonly logsDirectory?: string | (() => string);
     /** Like `onRequestExit`: main's coordinator hands over to the installer by disposing the runtime first. */
@@ -83,18 +77,14 @@ function harness(
       install: () => void,
       runtime: ManagedRuntime.ManagedRuntime<unknown, never>,
     ) => void;
-    /** Runs when the shell is asked to exit, as main's coordinator does: synchronously, from the caller's stack. */
-    readonly onRequestExit?: (runtime: ManagedRuntime.ManagedRuntime<unknown, never>) => void;
-    /** An external runtime at this URL instead of a managed child. */
-    readonly externalUrl?: string;
   } = {},
 ) {
   const order: string[] = [];
   const sends: { readonly channel: string; readonly payload: unknown }[] = [];
-  const exits: number[] = [];
+  const shown: HostRuntimeStatusSnapshot[] = [];
   const requests: string[] = [];
   const authorizations: (string | undefined)[] = [];
-  /** What the shell was told, in order: `authorize <url> <token>` and `send <state>` for runtime snapshots. */
+  /** What the shell was told, in order: `authorize <url> <token>` and `show <state>` for runtime snapshots. */
   const bridge: string[] = [];
   const child = new FakeChild();
   let spawns = 0;
@@ -104,19 +94,14 @@ function harness(
   const runtimeProcessConfig = Layer.succeed(
     RuntimeProcessConfig,
     RuntimeProcessConfig.of({
-      target: options.externalUrl
-        ? { ownership: 'external', url: options.externalUrl }
-        : {
-            ownership: 'managed',
-            prepare: () =>
-              Effect.succeed({
-                command: 'electron',
-                args: ['index.js'],
-                cwd: '/stage',
-                env: {},
-                processGroupOwnership: 'self',
-              }),
-          },
+      prepare: () =>
+        Effect.succeed({
+          command: 'electron',
+          args: ['index.js'],
+          cwd: '/stage',
+          env: {},
+          processGroupOwnership: 'self',
+        }),
       adapter: {
         spawn: () => {
           spawns += 1;
@@ -163,19 +148,13 @@ function harness(
 
   const logsDirectory = options.logsDirectory;
   const shell = DesktopShell.of({
-    send: (channel, payload) => {
-      sends.push({ channel, payload });
-      if (channel === RUNTIME_STATUS_CHANNEL) {
-        bridge.push(`send ${(payload as HostRuntimeStatusSnapshot).state}`);
-      }
+    send: (channel, payload) => void sends.push({ channel, payload }),
+    showRuntimeStatus: (snapshot) => {
+      shown.push(snapshot);
+      bridge.push(`show ${snapshot.state}`);
     },
     authorizeRuntimeRequests: ({ url, launcherToken }) =>
       void bridge.push(`authorize ${url} ${Redacted.value(launcherToken)}`),
-    requestExit: (code) => {
-      exits.push(code);
-      options.onRequestExit?.(runtime as ManagedRuntime.ManagedRuntime<unknown, never>);
-    },
-    isPackaged: options.isPackaged ?? false,
     logsDirectory:
       typeof logsDirectory === 'function'
         ? logsDirectory
@@ -200,10 +179,6 @@ function harness(
     ),
   );
 
-  const runtimeSends = () =>
-    sends
-      .filter((send) => send.channel === RUNTIME_STATUS_CHANNEL)
-      .map((send) => send.payload as HostRuntimeStatusSnapshot);
   const updateSends = () =>
     sends
       .filter((send) => send.channel === DESKTOP_UPDATE_CHANNEL)
@@ -215,12 +190,12 @@ function harness(
     authorizations,
     bridge,
     child,
-    exits,
     logs: logs.lines,
     order,
     requests,
     runtime,
-    runtimeSends,
+    shown: () => [...shown],
+    sends: () => [...sends],
     spawns: () => spawns,
     updateSends,
     updateSnapshot,
@@ -267,77 +242,85 @@ test('disposing a desktop runtime that never built stops nothing', async () => {
   assert.deepEqual(subject.order, []);
 });
 
-test('the renderer is pushed the current runtime and update snapshots, then every later one', async () => {
+test('the window is shown the current runtime status and every later one; the renderer is pushed only updates', async () => {
   const subject = harness();
   try {
     await subject.runtime.runPromise(Effect.void);
-    await until(() => subject.runtimeSends().length === 1 && subject.updateSends().length === 1);
+    await until(() => subject.shown().length === 1 && subject.updateSends().length === 1);
     assert.deepEqual(
-      subject.runtimeSends().map((snapshot) => [snapshot.revision, snapshot.state]),
+      subject.shown().map((snapshot) => [snapshot.revision, snapshot.state]),
       [[0, 'connecting']],
     );
     assert.deepEqual(subject.updateSends(), [await subject.updateSnapshot()]);
     assert.equal(subject.updateSends()[0]?.state, 'disabled');
 
     await startRuntime(subject, 43129);
-    await until(() => subject.runtimeSends().length === 2);
+    await until(() => subject.shown().length === 2);
     assert.deepEqual(
-      subject.runtimeSends().map((snapshot) => [snapshot.revision, snapshot.state]),
+      subject.shown().map((snapshot) => [snapshot.revision, snapshot.state]),
       [
         [0, 'connecting'],
         [1, 'ready'],
       ],
+    );
+    assert.deepEqual(
+      subject.sends().map((send) => send.channel),
+      [DESKTOP_UPDATE_CHANNEL],
+      'the renderer is never pushed runtime status',
     );
   } finally {
     await subject.runtime.dispose();
   }
 });
 
-test('a failed managed runtime is logged, preserved when packaged, and exits nonzero without reaching the renderer', async () => {
+test('a failed runtime is logged, preserved with its last output, and shown as the failure page while the app keeps running', async () => {
   const logsDirectory = await mkdtemp(join(tmpdir(), 'isagi-desktop-layer-'));
-  let disposal: Promise<void> | undefined;
-  const subject = harness({
-    isPackaged: true,
-    logsDirectory,
-    // Main's coordinator disposes the desktop runtime synchronously from inside the request.
-    onRequestExit: (runtime) => {
-      disposal = runtime.dispose();
-    },
-  });
+  const subject = harness({ logsDirectory });
+  try {
+    const started = subject.runtime.runPromiseExit(RuntimeProcess.use((process) => process.start));
+    await until(() => subject.spawns() === 1);
+    subject.child.stdout.write('starting\n');
+    subject.child.stderr.write('Runtime failed to start: listen EADDRINUSE 127.0.0.1:11299\n');
+    subject.child.exit(1, null);
+    assert.equal(Exit.isFailure(await started), true);
+    await until(() => subject.shown().length === 2);
 
-  const started = subject.runtime.runPromiseExit(RuntimeProcess.use((process) => process.start));
-  await until(() => subject.spawns() === 1);
-  subject.child.exit(1, null);
-  assert.equal(Exit.isFailure(await started), true);
-  await until(() => subject.exits.length === 1 && disposal !== undefined);
-  await disposal;
-
-  assert.deepEqual(subject.exits, [1]);
-  assert.deepEqual(
-    subject.runtimeSends().map((snapshot) => snapshot.state),
-    ['connecting'],
-  );
-  const record = JSON.parse(
-    await readFile(join(logsDirectory, 'managed-runtime-failure.json'), 'utf8'),
-  ) as Record<string, unknown>;
-  assert.equal(record.state, 'failed');
-  assert.equal(record.reason, 'exited_before_ready');
-  assert.equal(typeof record.recordedAt, 'string');
-  assert.deepEqual(
-    subject.logs.map((line) => [line.level, line.message.split(' {')[0]]),
-    [
-      ['Error', 'Managed runtime failed'],
+    assert.deepEqual(
+      subject.shown().map((snapshot) => snapshot.state),
+      ['connecting', 'failed'],
+    );
+    const failed = subject.shown()[1];
+    assert.equal(failed?.state === 'failed' ? failed.reason : undefined, 'exited_before_ready');
+    const record = JSON.parse(
+      await readFile(join(logsDirectory, 'managed-runtime-failure.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    assert.equal(record.state, 'failed');
+    assert.equal(record.reason, 'exited_before_ready');
+    assert.equal(typeof record.recordedAt, 'string');
+    // The reason the runtime gave is in the record the failure page's Open logs leads to.
+    assert.equal(
+      record.lastOutput,
+      'starting\nRuntime failed to start: listen EADDRINUSE 127.0.0.1:11299\n',
+    );
+    assert.deepEqual(
+      subject.logs.map((line) => [line.level, line.message.split(' {')[0]]),
       [
-        'Error',
-        `Managed runtime failure record written to ${join(logsDirectory, 'managed-runtime-failure.json')}`,
+        ['Error', 'Managed runtime failed'],
+        [
+          'Error',
+          `Managed runtime failure record written to ${join(logsDirectory, 'managed-runtime-failure.json')}`,
+        ],
       ],
-    ],
-  );
+    );
+    // Nothing tore the services down: the updater still answers.
+    assert.equal((await subject.updateSnapshot()).state, 'disabled');
+  } finally {
+    await subject.runtime.dispose();
+  }
 });
 
-test('a failed runtime still exits nonzero when the logs directory cannot be named', async () => {
+test('a failed runtime is still shown when the logs directory cannot be named', async () => {
   const subject = harness({
-    isPackaged: true,
     logsDirectory: () => {
       throw new Error("Failed to get 'logs' path");
     },
@@ -347,8 +330,8 @@ test('a failed runtime still exits nonzero when the logs directory cannot be nam
     await until(() => subject.spawns() === 1);
     subject.child.exit(1, null);
     await started;
-    await until(() => subject.exits.length === 1);
-    assert.deepEqual(subject.exits, [1]);
+    await until(() => subject.shown().length === 2);
+    assert.equal(subject.shown()[1]?.state, 'failed');
     assert.deepEqual(
       subject.logs.map((line) => [line.level, line.message.split(' {')[0]]),
       [
@@ -358,24 +341,6 @@ test('a failed runtime still exits nonzero when the logs directory cannot be nam
           "Failed to preserve managed runtime failure record: no logs directory Error: Failed to get 'logs' path",
         ],
       ],
-    );
-  } finally {
-    await subject.runtime.dispose();
-  }
-});
-
-test('an unpackaged failed runtime exits nonzero without writing a failure record', async () => {
-  const subject = harness({ isPackaged: false });
-  try {
-    const started = subject.runtime.runPromiseExit(RuntimeProcess.use((process) => process.start));
-    await until(() => subject.spawns() === 1);
-    subject.child.exit(1, null);
-    await started;
-    await until(() => subject.exits.length === 1);
-    assert.deepEqual(subject.exits, [1]);
-    assert.deepEqual(
-      subject.logs.map((line) => line.level),
-      ['Error'],
     );
   } finally {
     await subject.runtime.dispose();
@@ -445,12 +410,12 @@ test('handing over to the installer disposes the desktop runtime from inside the
   assert.equal(subject.updater.installs, 1);
 });
 
-test("the first managed ready authorizes the window's runtime requests before the renderer hears of it, once", async () => {
+test("the first ready authorizes the window's runtime requests before the window is shown it, once", async () => {
   const subject = harness();
   try {
     await subject.runtime.runPromise(Effect.void);
     await until(() => subject.bridge.length === 1);
-    assert.deepEqual(subject.bridge, ['send connecting']);
+    assert.deepEqual(subject.bridge, ['show connecting']);
 
     await startRuntime(subject, 43132);
     await until(() => subject.bridge.length === 3);
@@ -458,28 +423,14 @@ test("the first managed ready authorizes the window's runtime requests before th
       RuntimeProcess.use((process) => Effect.succeed(Redacted.value(process.launcherToken))),
     );
     assert.deepEqual(subject.bridge, [
-      'send connecting',
+      'show connecting',
       `authorize http://127.0.0.1:43132/ ${token}`,
-      'send ready',
+      'show ready',
     ]);
     assert.equal(
       subject.logs.some((line) => JSON.stringify(line).includes(token)),
       false,
       'the token is never logged',
-    );
-  } finally {
-    await subject.runtime.dispose();
-  }
-});
-
-test('an external runtime is never authorized', async () => {
-  const subject = harness({ externalUrl: 'http://127.0.0.1:43133' });
-  try {
-    await subject.runtime.runPromise(RuntimeProcess.use((process) => process.start));
-    await until(() => subject.bridge.includes('send ready'));
-    assert.equal(
-      subject.bridge.some((entry) => entry.startsWith('authorize')),
-      false,
     );
   } finally {
     await subject.runtime.dispose();

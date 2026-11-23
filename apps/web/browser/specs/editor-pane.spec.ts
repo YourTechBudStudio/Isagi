@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { clientPlatforms, emulateClientPlatform } from './support/client-platform.js';
+
 /**
  * The editor pane, mounted through the production `Surface` against a fake
  * runtime.
@@ -359,3 +361,95 @@ test('with no workbench up, focus lands on the pane itself', async ({ page }) =>
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null))
     .toBe('isagi · feat/embedded-editor');
 });
+
+// ---------------------------------------------------------------------------
+// App shortcuts with focus inside the workbench. Keys there go to the frame's own document, so the
+// pane feeds that document into the app shortcuts on every load: priority entries only (Mod+K),
+// trusted events only. The page binds the production keymap to counters (`?shortcuts=1`).
+// ---------------------------------------------------------------------------
+
+const shortcutRuns = async (page: Page) =>
+  JSON.parse((await page.locator('[data-shortcut-runs]').textContent()) ?? '{}') as Record<
+    string,
+    number | undefined
+  >;
+
+async function focusInsideWorkbench(page: Page) {
+  await expect(workbench(page).locator('.status')).toBeVisible();
+  await workbench(page).locator('.code').click();
+  expect(await page.evaluate(() => document.activeElement?.tagName)).toBe('IFRAME');
+}
+
+for (const client of clientPlatforms) {
+  test.describe(`app shortcuts inside the workbench, ${client.name} client`, () => {
+    test.beforeEach(async ({ page }) => {
+      await emulateClientPlatform(page, client);
+      await page.goto('./?shortcuts=1');
+      await focusInsideWorkbench(page);
+    });
+
+    test('Mod+K takes priority over the workbench document', async ({ page }) => {
+      // A listener inside the workbench stands in for Code Server's own key handling.
+      await workbench(page)
+        .locator('body')
+        .evaluate((body) => {
+          const seen: string[] = [];
+          (window as unknown as { seen: string[] }).seen = seen;
+          body.ownerDocument.addEventListener('keydown', (event) => seen.push(event.key), true);
+        });
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect.poll(async () => (await shortcutRuns(page))['toggle-palette']).toBe(1);
+      // The modifier's own keydown is the workbench's; the chord's key never arrives.
+      expect(
+        await workbench(page)
+          .locator('body')
+          .evaluate(() => (window as unknown as { seen: string[] }).seen),
+      ).toEqual([client.mod]);
+    });
+
+    test('Mod+K still works after the workbench reloads itself', async ({ page }) => {
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect.poll(async () => (await shortcutRuns(page))['toggle-palette']).toBe(1);
+
+      await workbench(page)
+        .locator('body')
+        .evaluate(() => location.reload());
+      await expect(workbench(page).locator('.code')).toBeVisible();
+      await focusInsideWorkbench(page);
+
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect.poll(async () => (await shortcutRuns(page))['toggle-palette']).toBe(2);
+    });
+
+    test('a script inside the workbench cannot trigger an app shortcut', async ({ page }) => {
+      await workbench(page)
+        .locator('.code')
+        .evaluate((code, mac) => {
+          code.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'k',
+              ctrlKey: !mac,
+              metaKey: mac,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        }, client.name === 'macOS');
+      // A real Mod+K afterwards is the barrier: it is counted, the synthetic one before it was not.
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect.poll(async () => (await shortcutRuns(page))['toggle-palette']).toBe(1);
+    });
+
+    test("the yielding shortcuts stay the workbench's", async ({ page }) => {
+      await page.keyboard.press(`${client.mod}+n`);
+      await page.keyboard.press(`${client.mod}+w`);
+      await page.keyboard.press(`${client.mod}+.`);
+      await page.keyboard.press(`${client.mod}+k`);
+      await expect.poll(async () => (await shortcutRuns(page))['toggle-palette']).toBe(1);
+      const runs = await shortcutRuns(page);
+      expect(runs['add-project']).toBeUndefined();
+      expect(runs['delete-active-pane']).toBeUndefined();
+      expect(runs['toggle-zen']).toBeUndefined();
+    });
+  });
+}

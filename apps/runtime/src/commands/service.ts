@@ -6,7 +6,7 @@ import type {
   CommandStatus,
   CommandSummary,
   WorktreeCommandsOutput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import {

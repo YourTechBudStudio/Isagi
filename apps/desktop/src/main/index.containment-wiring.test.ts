@@ -5,15 +5,15 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 /**
- * The containment decisions are unit-tested in `renderer-policy.test.ts`. What
+ * The containment decisions are unit-tested in `window-content.test.ts`. What
  * cannot be tested there is that they are actually *installed*, and installed
  * early enough: the Electron entry module runs `app.whenReady()` at import time
  * and cannot be loaded without an Electron app.
  *
  * So the wiring is verified structurally, in the same style as the IPC channel
- * audit. A future change that removes a web preference, drops a policy, or
- * moves the hook after the renderer load fails here rather than shipping an
- * uncontained frame.
+ * audit. A future change that removes a web preference, drops a hook, or moves
+ * it after the first load fails here rather than shipping an uncontained
+ * window. The end-to-end suite (`e2e/`) drives the same hooks in a real app.
  */
 const source = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
 
@@ -23,13 +23,10 @@ function positionOf(needle: string) {
   return index;
 }
 
-test('containment is installed before the runtime starts and before the renderer loads', () => {
-  const install = positionOf('installRendererContainment(window, target)');
-  assert.ok(install < positionOf('startRuntime();'), 'containment must precede startRuntime()');
-  assert.ok(
-    install < positionOf('yield* loadRenderer(window, target)'),
-    'containment must precede loadRenderer()',
-  );
+test('containment is installed before the runtime starts and before the first document loads', () => {
+  const install = positionOf('installWindowContainment(window);');
+  assert.ok(install < positionOf('startRuntime();\n  void showWindowContent(window);'));
+  assert.ok(install < positionOf('void showWindowContent(window);\n}'));
 });
 
 test('the window asserts subframe and webview isolation without naming webSecurity', () => {
@@ -50,16 +47,10 @@ test('the window asserts subframe and webview isolation without naming webSecuri
   assert.doesNotMatch(source, /webSecurity\s*:/u);
 });
 
-test('the header hook is the session-scoped, filterless, single owner', () => {
-  assert.match(
-    source,
-    /window\.webContents\.session\.webRequest\.onHeadersReceived\(\(details, callback\) =>/u,
-  );
-  // Exactly one registration: Electron keeps only the most recent listener, so
-  // a second one anywhere in the entry module would displace this policy.
-  assert.equal(source.match(/onHeadersReceived\(/gu)?.length, 1);
-  // The callback runs once, unconditionally, on whichever decision came back.
-  assert.match(source, /callback\(decision\.response\);/u);
+test('the runtime CSP is the only one: the desktop rewrites no response headers', () => {
+  // The UI's policy is the runtime's `webUiContentSecurityPolicy`; the loader's is its meta tag.
+  assert.doesNotMatch(source, /onHeadersReceived\(/u);
+  assert.doesNotMatch(source, /Content-Security-Policy/iu);
 });
 
 test("the runtime authorization hook is the default session's single, filterless onBeforeSendHeaders owner", () => {
@@ -67,8 +58,8 @@ test("the runtime authorization hook is the default session's single, filterless
     source,
     /session\.defaultSession\.webRequest\.onBeforeSendHeaders\(\(details, callback\) =>/u,
   );
-  // Exactly one registration, beside the one `onHeadersReceived`: Electron keeps only the most
-  // recent listener per event, so a second would silently displace the launcher token.
+  // Exactly one registration: Electron keeps only the most recent listener per
+  // event, so a second would silently displace the launcher token.
   assert.equal(source.match(/onBeforeSendHeaders\(/gu)?.length, 1);
   assert.match(
     source,
@@ -76,8 +67,13 @@ test("the runtime authorization hook is the default session's single, filterless
   );
 });
 
-test('navigation and window opening are both denied, and neither logs a raw URL', () => {
+test('navigation is limited to the two documents, window opening is denied, and no log names a raw URL', () => {
   assert.match(source, /window\.webContents\.on\('will-navigate'/u);
+  assert.match(source, /isAllowedWindowNavigation\(\{\s*url,\s*loaderBaseUrl: loaderBase,/u);
+  assert.match(
+    source,
+    /'will-navigate', \(details\) => \{\s*if \(isContained\(details\.url\)\) return;/u,
+  );
   assert.match(source, /details\.preventDefault\(\)/u);
   assert.match(source, /setWindowOpenHandler\(\(\{ url \}\) =>/u);
   assert.match(source, /action: 'deny'/u);
@@ -85,18 +81,39 @@ test('navigation and window opening are both denied, and neither logs a raw URL'
   // and break Code Server; its absence is deliberate.
   assert.doesNotMatch(source, /will-frame-navigate/u);
 
+  // The loader URL carries its diagnostic, and a denied URL can carry anything: logs use coordinates.
   for (const [, argument] of source.matchAll(/console\.(?:info|warn|error)\(([^\n]*)/gu)) {
-    if (!/denied renderer|ISAGI_RUNTIME_URL/u.test(argument ?? '')) continue;
     assert.doesNotMatch(
       argument ?? '',
-      /\$\{(?:details\.url|url|process\.env)/u,
-      `a denial log must carry a coordinate, not the raw value: ${argument}`,
+      /\$\{(?:details\.url|url|target|validatedURL|loaderBase|process\.env)\}/u,
+      `a log must carry a coordinate, not the raw value: ${argument}`,
     );
   }
 });
 
-test('the renderer is loaded by the same URL the policy is scoped to', () => {
-  assert.match(source, /window\.loadURL\(documentUrl\)/u);
-  // `loadFile` would re-derive the path-to-URL conversion independently.
+test('main-frame redirects are contained too, and only a failure transition overrides an unload guard', () => {
+  assert.match(source, /window\.webContents\.on\('will-redirect'/u);
+  assert.match(source, /if \(!details\.isMainFrame \|\| isContained\(details\.url\)\) return;/u);
+  assert.match(source, /window\.webContents\.on\('will-prevent-unload'/u);
+  assert.match(
+    source,
+    /if \(windowContent\(runtimeStatus, pageFailure\)\.kind !== 'loader'\) return;\s*event\.preventDefault\(\);/u,
+  );
+});
+
+test('a main-frame UI load failure shows the failure page, and the app no longer quits on a runtime failure', () => {
+  assert.match(source, /window\.webContents\.on\(\s*'did-fail-load'/u);
+  assert.match(
+    source,
+    /pageLoadFailure\(\{\s*errorCode,\s*errorDescription,\s*url: validatedURL,\s*isMainFrame,\s*uiOrigin,?\s*\}\)/u,
+  );
+  assert.doesNotMatch(
+    source,
+    /exitAfterRuntimeFailure|requestExit\(\{ code: 1 \}\)\s*;\s*\/\/ runtime/u,
+  );
+});
+
+test('the window loads exactly the URLs the policy computes, never a file path', () => {
+  assert.match(source, /window\.loadURL\(target\)/u);
   assert.doesNotMatch(source, /loadFile\(/u);
 });

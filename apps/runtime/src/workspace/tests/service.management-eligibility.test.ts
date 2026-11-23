@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Effect, Layer, Schema } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints } from '@isagi/contracts';
+import { apiEndpoints } from '@isagi/shared/contracts';
 
 import { CommandService } from '../../commands/index.js';
 import { AgentSessionService, SurfaceService } from '../../environment/index.js';

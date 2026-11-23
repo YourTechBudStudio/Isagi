@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import type { CommandPort, CommandSummary } from '@isagi/contracts';
+import type { CommandPort, CommandSummary } from '@isagi/shared/contracts';
 
 import type { RuntimeLocality } from '../../lib/runtime/locality.js';
 import { CommandEndpoints } from './CommandEndpoints.js';

@@ -1,4 +1,4 @@
-import type { CommandStatus, CommandSummary } from '@isagi/contracts';
+import type { CommandStatus, CommandSummary } from '@isagi/shared/contracts';
 
 import type { ResolvedPortEntry } from './ports.js';
 

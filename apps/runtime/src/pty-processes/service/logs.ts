@@ -6,7 +6,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { Effect, Result } from 'effect';
 
-import type { PtyProcessLogMode, PtyStreamOutputMessageSet } from '@isagi/contracts';
+import type { PtyProcessLogMode, PtyStreamOutputMessageSet } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import { replayUtf8LogFile } from '../log-replay.js';

@@ -7,7 +7,7 @@ import type {
   EditorProvisioningState,
   HarnessLaunchBlockReason,
   HarnessPolicy,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { EditorProvisioning } from '../../editor/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';

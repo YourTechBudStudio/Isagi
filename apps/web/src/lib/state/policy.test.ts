@@ -5,8 +5,8 @@ import { mock, test, type TestContext } from 'node:test';
 import { Duration, Effect } from 'effect';
 import { AsyncResult, type AtomRegistry } from 'effect/reactivity';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
-import { RuntimeTransportError } from '@isagi/runtime-client';
+import type { WorkspaceSnapshot } from '@isagi/shared/contracts';
+import { RuntimeTransportError } from '@isagi/shared/runtime-client';
 
 import { RuntimeApi } from '../runtime/client.js';
 import {

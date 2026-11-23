@@ -5,7 +5,7 @@ import type {
   PtyProcessLogMode,
   PtyStreamOutputMessageSet,
   SessionStatus,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { coordinates, describeSafely, type SafeDiagnostic } from '../platform/diagnostics/index.js';
 import type { ShellLaunchMode } from '../platform/process/index.js';

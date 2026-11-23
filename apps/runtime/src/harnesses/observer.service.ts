@@ -1,6 +1,6 @@
 import { Cause, Clock, Context, Data, Effect, Layer, Semaphore, Stream } from 'effect';
 
-import type { AgentHarness, AttentionState } from '@isagi/contracts';
+import type { AgentHarness, AttentionState } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../platform/diagnostics/index.js';
 import { InternalEvents, type InternalEvent } from '../platform/events/index.js';

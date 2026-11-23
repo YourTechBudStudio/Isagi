@@ -28,7 +28,7 @@ import type {
   SetSplitWeightsOutput,
   SplitPaneInput,
   StartPaneInput,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { toastCopy } from '../../copy/index.js';
 import { makeLatestWins, sessionObject } from '../state/channel.js';

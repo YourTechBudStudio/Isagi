@@ -8,7 +8,7 @@ import type {
   FluidcastHandoffFailure,
   SurfaceDetail,
   SurfacePane,
-} from '@isagi/contracts';
+} from '@isagi/shared/contracts';
 
 import { PaneActionCluster } from '../../components/PaneActionCluster.js';
 import { fluidcastCopy } from '../../copy/index.js';
