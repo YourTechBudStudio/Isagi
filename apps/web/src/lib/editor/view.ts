@@ -119,7 +119,7 @@ export function editorPaneView(
 }
 
 /**
- * The contract code the runtime settled this pane with — `port_allocation_failed`,
+ * The contract code the runtime settled this pane with — `launch_allocation_failed`,
  * `exited`, `unreachable`. It is the label the pane puts in front of a raw
  * `detail` string so the runtime's own evidence is never mistaken for Isagi's
  * voiced sentence, matching the `code · detail` framing a restore prompt and the

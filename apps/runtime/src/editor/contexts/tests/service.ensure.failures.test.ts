@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { LoopbackPortUnavailable } from '../../../platform/net/index.js';
 import {
   editorContextChangedIds,
   insertWorktree,
@@ -51,9 +50,9 @@ async function assertClassBFault(
   const attempt = result.row?.attempt;
   assert.ok(attempt !== undefined && attempt.state === 'failed');
   assert.equal(attempt.reason, expected.reason);
-  // No pointer, no endpoint: the failure happened before anything was owned.
+  // No pointer, no socket: the failure happened before anything was owned.
   assert.equal(result.row?.activePtyProcessId, null);
-  assert.equal(result.row?.endpointPort, null);
+  assert.equal(result.row?.sessionSocketPath, null);
   const { detail } = attempt;
   assert.equal(detail !== null, expected.hasDetail);
   assert.equal((result.failure as { detail: string | null }).detail, detail);
@@ -72,27 +71,6 @@ test('a missing launch target is persisted and raised', async () => {
   );
 });
 
-test('a port allocation failure is persisted and raised with a redacted detail', async () => {
-  const result = await assertClassBFault(
-    {
-      portProbe: {
-        probeInactive: () => Effect.succeed(true),
-        obtainEphemeralPort: Effect.fail(
-          new LoopbackPortUnavailable({
-            // A cause carrying a sentinel that must never reach the row.
-            cause: new Error('SUPERSECRETTOKEN12345'),
-          }),
-        ),
-      },
-      options: { probe: neverSettlingProbe },
-    },
-    { reason: 'port_allocation_failed', hasDetail: true },
-  );
-
-  const detail = failureDetail(result.row);
-  assert.ok(!detail.includes('SUPERSECRETTOKEN12345'), detail);
-});
-
 test('a socket path over the byte cap is refused before anything is allocated', async () => {
   const deepRoot = `/tmp/${'nested-directory/'.repeat(6)}isagi`;
   const result = await assertClassBFault(
@@ -106,7 +84,7 @@ test('a socket path over the byte cap is refused before anything is allocated', 
     { reason: 'session_socket_unavailable', hasDetail: true },
   );
 
-  assert.match(failureDetail(result.row), /session socket path exceeds 100 bytes/);
+  assert.match(failureDetail(result.row), /editor socket path exceeds 100 bytes/);
 });
 
 test('a failed handoff write is persisted and raised, and owns no process', async () => {
@@ -122,19 +100,16 @@ test('a failed handoff write is persisted and raised, and owns no process', asyn
   assert.match(failureDetail(result.row), /Database operation install_editor_incarnation failed/);
 });
 
-test('the port probe is never consulted when provisioning refuses first', async () => {
+test('the launch target is never consulted when the context is refused first', async () => {
   const outcome = await withEditorService(
     {
-      portProbe: {
-        probeInactive: () => Effect.succeed(true),
-        obtainEphemeralPort: Effect.die('provisioning must be checked before a port is taken'),
-      },
+      findWorktree: () => Effect.die('the context must be checked before a launch is prepared'),
       options: { probe: neverSettlingProbe },
     },
     () =>
       Effect.gen(function* () {
         const service = yield* EditorContextService;
-        // Reaching a *refusal* rather than the port probe is the assertion; the
+        // Reaching a *refusal* rather than preparation is the assertion; the
         // context does not exist, so nothing may be allocated on its behalf.
         return yield* service
           .ensureRuntime({ editorContextId: 4_242, intent: 'reuse' })

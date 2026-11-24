@@ -17,8 +17,6 @@ function record(overrides: Partial<EditorContextRecord> = {}): EditorContextReco
     id: 7,
     worktreeId: 3,
     activePtyProcessId: null,
-    endpointHost: null,
-    endpointPort: null,
     sessionSocketPath: null,
     attemptState: 'none',
     attemptReason: null,
@@ -32,8 +30,6 @@ function record(overrides: Partial<EditorContextRecord> = {}): EditorContextReco
 
 const RUNNING: EditorContextRecord = record({
   activePtyProcessId: 42,
-  endpointHost: '127.0.0.1',
-  endpointPort: 41_234,
   sessionSocketPath: '/tmp/isagi/editors/code-server/sock/7-abc123.sock',
 });
 
@@ -72,11 +68,11 @@ function violation(input: EditorContextRecord): EditorContextRowInvariantViolati
   assert.fail('Expected the row to be rejected, but it decoded.');
 }
 
-test('an idle context decodes to attempt none with no pointer or endpoint', () => {
+test('an idle context decodes to attempt none with no pointer or socket', () => {
   const row = editorContextRow(record(), null);
   assert.deepEqual(row.attempt, { state: 'none' });
   assert.equal(row.activePtyProcessId, null);
-  assert.equal(row.endpointHost, null);
+  assert.equal(row.sessionSocketPath, null);
   assert.equal(row.activePtyProcess, null);
 });
 
@@ -92,15 +88,15 @@ test('a failed attempt decodes its reason and its nullable detail', () => {
   const withDetail = editorContextRow(
     record({
       attemptState: 'failed',
-      attemptReason: 'port_allocation_failed',
-      attemptDetail: 'no free port',
+      attemptReason: 'launch_allocation_failed',
+      attemptDetail: 'spawn failed',
     }),
     null,
   );
   assert.deepEqual(withDetail.attempt, {
     state: 'failed',
-    reason: 'port_allocation_failed',
-    detail: 'no free port',
+    reason: 'launch_allocation_failed',
+    detail: 'spawn failed',
   });
 
   const withoutDetail = editorContextRow(
@@ -114,11 +110,10 @@ test('a failed attempt decodes its reason and its nullable detail', () => {
   });
 });
 
-test('a live context carries its pointer, endpoint, socket, and joined process', () => {
+test('a live context carries its pointer, socket, and joined process', () => {
   const row = editorContextRow(RUNNING, ptyRecord());
   assert.equal(row.activePtyProcessId, 42);
-  assert.equal(row.endpointHost, '127.0.0.1');
-  assert.equal(row.endpointPort, 41_234);
+  assert.equal(row.sessionSocketPath, '/tmp/isagi/editors/code-server/sock/7-abc123.sock');
   assert.equal(row.activePtyProcess?.status, 'running');
   assert.deepEqual(row.activePtyProcess?.args, ['--auth', 'none']);
 });
@@ -131,27 +126,15 @@ test('a pointer whose process row is gone is valid, not malformed', () => {
   assert.equal(row.activePtyProcess, null);
 });
 
-test('invariant 1: a pointer without a complete endpoint is a defect', () => {
-  for (const partial of [
-    { endpointHost: null },
-    { endpointPort: null },
-    { sessionSocketPath: null },
-  ] as const) {
-    const error = violation({ ...RUNNING, ...partial });
-    assert.match(error.message, /Editor context 7 violates row invariant/);
-    assert.match(error.message, /complete endpoint/);
-  }
+test('invariant 1: a pointer without a session socket is a defect', () => {
+  const error = violation({ ...RUNNING, sessionSocketPath: null });
+  assert.match(error.message, /Editor context 7 violates row invariant/);
+  assert.match(error.message, /a pointer without a session socket/);
 });
 
-test('invariant 1: an endpoint or socket without a pointer is a defect', () => {
-  for (const orphaned of [
-    { endpointHost: '127.0.0.1' },
-    { endpointPort: 41_234 },
-    { sessionSocketPath: '/tmp/a.sock' },
-  ]) {
-    const error = violation(record(orphaned));
-    assert.match(error.message, /without a pointer/);
-  }
+test('invariant 1: a session socket without a pointer is a defect', () => {
+  const error = violation(record({ sessionSocketPath: '/tmp/a.sock' }));
+  assert.match(error.message, /a session socket without a pointer/);
 });
 
 test('invariant 2: in_progress beside a pointer is a defect', () => {
@@ -206,10 +189,10 @@ test('invariant 5: failed beside a pointer is legal only for a refused replaceme
   const error = violation({
     ...RUNNING,
     attemptState: 'failed',
-    attemptReason: 'port_allocation_failed',
+    attemptReason: 'launch_allocation_failed',
     attemptDetail: null,
   });
-  assert.match(error.message, /failed\{port_allocation_failed\} beside a retained pointer/);
+  assert.match(error.message, /failed\{launch_allocation_failed\} beside a retained pointer/);
 });
 
 test('the started-at column belongs to in_progress and to no other state', () => {

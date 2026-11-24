@@ -49,11 +49,10 @@ export function deriveEditorContextFacts(
     };
   }
 
-  // The runtime-relative path the editor proxy serves this context at. Gated on the stored
-  // endpoint, so it still says whether the incarnation was ever reachable; Code Server's own host
-  // and port never leave the runtime (#64 AC3).
-  const endpoint =
-    row.endpointHost === null || row.endpointPort === null ? null : { path: `/editor/${row.id}/` };
+  // The runtime-relative path the editor proxy serves this context at. Gated on the pointer's
+  // session socket, which is installed with it; Code Server's own sockets never leave the runtime
+  // (#64 AC3).
+  const endpoint = row.sessionSocketPath === null ? null : { path: `/editor/${row.id}/` };
 
   const process = row.activePtyProcess;
   if (process === null) {

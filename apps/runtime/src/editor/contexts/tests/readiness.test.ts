@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { Duration, Effect, Fiber } from 'effect';
@@ -15,6 +17,8 @@ import {
   type EditorProbeRequest,
   type EditorReadinessSettlement,
 } from '../readiness.js';
+
+const SOCKET = '/tmp/isagi-editor-0a1b/7-a1b2c3-w.sock';
 
 const TIMING = {
   initialDelayMs: 250,
@@ -34,9 +38,9 @@ function scriptedRequest(script: {
   const calls: string[] = [];
   let healthzIndex = 0;
   let workbenchIndex = 0;
-  const request: EditorProbeRequest = ({ url, requireMarker }) =>
+  const request: EditorProbeRequest = ({ socketPath, path, requireMarker }) =>
     Effect.sync(() => {
-      calls.push(url);
+      calls.push(`${socketPath}${path}`);
       const queue = requireMarker ? script.workbench : script.healthz;
       const index = requireMarker ? workbenchIndex : healthzIndex;
       if (requireMarker) workbenchIndex += 1;
@@ -57,8 +61,7 @@ function runProbe(
     const settlements: EditorReadinessSettlement[] = [];
     const fiber = yield* Effect.forkChild(
       probeWorkbench({
-        host: '127.0.0.1',
-        port: 41_287,
+        socketPath: SOCKET,
         request,
         timing: { ...TIMING, ...timing },
         onSettled: (settlement) =>
@@ -84,7 +87,7 @@ test('both stages passing settles ready with no detail', async () => {
   assert.deepEqual(settlements, [{ state: 'ready', detail: null }]);
   // Health first, workbench immediately after — the advance never reaches a
   // second interval, so the stage change cost no extra poll.
-  assert.deepEqual(calls, ['http://127.0.0.1:41287/healthz', 'http://127.0.0.1:41287/']);
+  assert.deepEqual(calls, [`${SOCKET}/healthz`, `${SOCKET}/`]);
 });
 
 test('stage 1 passing then a marker mismatch keeps polling and settles unreachable', async () => {
@@ -98,7 +101,7 @@ test('stage 1 passing then a marker mismatch keeps polling and settles unreachab
   assert.deepEqual(settlements, [
     {
       state: 'unreachable',
-      detail: '127.0.0.1:41287 · workbench · marker absent · gave up after 60s',
+      detail: `${SOCKET} · workbench · marker absent · gave up after 60s`,
     },
   ]);
   // It kept asking, and — the monotonic rule — never went back to health.
@@ -117,7 +120,7 @@ test('a workbench that never comes up settles naming the health stage', async ()
   assert.deepEqual(settlements, [
     {
       state: 'unreachable',
-      detail: '127.0.0.1:41287 · healthz · no response · gave up after 60s',
+      detail: `${SOCKET} · healthz · no response · gave up after 60s`,
     },
   ]);
 });
@@ -132,7 +135,7 @@ test('a request that never answers is bounded by the per-request timeout', async
   assert.deepEqual(settlements, [
     {
       state: 'unreachable',
-      detail: '127.0.0.1:41287 · healthz · request timed out · gave up after 60s',
+      detail: `${SOCKET} · healthz · request timed out · gave up after 60s`,
     },
   ]);
 });
@@ -143,8 +146,7 @@ test('a probe interrupted mid-flight writes no observation', async () => {
       const recorded: EditorReadinessSettlement[] = [];
       const fiber = yield* Effect.forkChild(
         probeWorkbench({
-          host: '127.0.0.1',
-          port: 41_287,
+          socketPath: SOCKET,
           request: () => Effect.succeed({ kind: 'no_response' } as const),
           timing: TIMING,
           onSettled: (settlement) =>
@@ -166,23 +168,21 @@ test('a probe interrupted mid-flight writes no observation', async () => {
 test('the settled detail is composed only from authored components', () => {
   assert.equal(
     describeUnreachable({
-      host: '127.0.0.1',
-      port: 41_287,
+      socketPath: SOCKET,
       stage: 'workbench',
       outcome: { kind: 'http_status', status: 502 },
       deadlineMs: 60_000,
     }),
-    '127.0.0.1:41287 · workbench · http 502 · gave up after 60s',
+    `${SOCKET} · workbench · http 502 · gave up after 60s`,
   );
   assert.equal(
     describeUnreachable({
-      host: '127.0.0.1',
-      port: 41_287,
+      socketPath: SOCKET,
       stage: 'workbench',
       outcome: { kind: 'not_html' },
       deadlineMs: 30_000,
     }),
-    '127.0.0.1:41287 · workbench · not html · gave up after 30s',
+    `${SOCKET} · workbench · not html · gave up after 30s`,
   );
 });
 
@@ -190,6 +190,16 @@ test('the settled detail is composed only from authored components', () => {
 // The default request path, against a real server
 // ---------------------------------------------------------------------------
 
+interface ServedRequest {
+  readonly path: string;
+  readonly headers: IncomingHttpHeaders;
+}
+
+/**
+ * A real HTTP server on a UNIX socket, as Code Server listens. The directory is
+ * short and under the system temp root, because a socket path is capped near
+ * 104 bytes.
+ */
 function withServer<A>(
   handler: (path: string) => {
     readonly status: number;
@@ -197,10 +207,14 @@ function withServer<A>(
     readonly chunks?: readonly string[] | undefined;
     readonly location?: string | undefined;
   },
-  body: (origin: string) => Promise<A>,
+  body: (socketPath: string, served: readonly ServedRequest[]) => Promise<A>,
 ): Promise<A> {
+  const directory = mkdtempSync(join(tmpdir(), 'ier-'));
+  const socketPath = join(directory, 'w.sock');
+  const served: ServedRequest[] = [];
   return new Promise<A>((resolve, reject) => {
     const server: Server = createServer((request, response) => {
+      served.push({ path: request.url ?? '/', headers: request.headers });
       const result = handler(request.url ?? '/');
       const headers: Record<string, string> = {};
       if (result.contentType) headers['content-type'] = result.contentType;
@@ -209,11 +223,13 @@ function withServer<A>(
       for (const chunk of result.chunks ?? []) response.write(chunk);
       response.end();
     });
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as AddressInfo;
-      body(`http://127.0.0.1:${port}`)
+    server.listen(socketPath, () => {
+      body(socketPath, served)
         .then(resolve, reject)
-        .finally(() => server.close());
+        .finally(() => {
+          server.close();
+          rmSync(directory, { recursive: true, force: true });
+        });
     });
   });
 }
@@ -221,10 +237,11 @@ function withServer<A>(
 test('the default request reads a real 2xx health response as ok', async () => {
   const outcome = await withServer(
     () => ({ status: 200, contentType: 'text/plain', chunks: ['ok'] }),
-    (origin) =>
+    (socketPath) =>
       Effect.runPromise(
         defaultEditorProbeRequest({
-          url: `${origin}/healthz`,
+          socketPath,
+          path: '/healthz',
           requireMarker: false,
         }),
       ),
@@ -236,10 +253,11 @@ test('the default request reads a real 2xx health response as ok', async () => {
 test('the default request reports a real non-2xx status', async () => {
   const outcome = await withServer(
     () => ({ status: 502, contentType: 'text/plain', chunks: ['bad gateway'] }),
-    (origin) =>
+    (socketPath) =>
       Effect.runPromise(
         defaultEditorProbeRequest({
-          url: `${origin}/healthz`,
+          socketPath,
+          path: '/healthz',
           requireMarker: false,
         }),
       ),
@@ -248,14 +266,14 @@ test('the default request reports a real non-2xx status', async () => {
   assert.deepEqual(outcome, { kind: 'http_status', status: 502 });
 });
 
-test('the default request refuses to follow a redirect off the allocated origin', async () => {
+test('the default request refuses to follow a redirect off the upstream origin', async () => {
   const outcome = await withServer(
     () => ({ status: 302, location: 'http://example.invalid/', chunks: [] }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
-  // Readiness is a statement about *this* origin. Naming the refusal is what
+  // Readiness is a statement about *this* incarnation. Naming the refusal is what
   // separates it from an ordinary bad status the workbench happened to return.
   assert.deepEqual(outcome, { kind: 'redirected_away' });
 });
@@ -263,8 +281,8 @@ test('the default request refuses to follow a redirect off the allocated origin'
 test('the default request rejects a 2xx that is not HTML', async () => {
   const outcome = await withServer(
     () => ({ status: 200, contentType: 'application/json', chunks: ['{}'] }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'not_html' });
@@ -277,8 +295,8 @@ test('the default request finds the marker in a real HTML body', async () => {
       contentType: 'text/html; charset=utf-8',
       chunks: [`<!doctype html><script id="${EDITOR_WORKBENCH_MARKER}">{}</script>`],
     }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'ok' });
@@ -297,8 +315,8 @@ test('the default request finds a marker split across chunk boundaries', async (
         `${EDITOR_WORKBENCH_MARKER.slice(half)}">x</span>`,
       ],
     }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'ok' });
@@ -311,21 +329,23 @@ test('the default request reports a real HTML body without the marker', async ()
       contentType: 'text/html',
       chunks: ['<!doctype html><body>not the workbench</body>'],
     }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'marker_absent' });
 });
 
-test('the default request reports an unreachable origin as no response', async () => {
-  // A port nothing is listening on: the transport failure is opaque by design.
+test('the default request reports an unreachable socket as no response', async () => {
+  // A socket path nothing listens on: the transport failure is opaque by design.
+  const directory = mkdtempSync(join(tmpdir(), 'ier-'));
   const outcome = await Effect.runPromise(
     defaultEditorProbeRequest({
-      url: 'http://127.0.0.1:1/healthz',
+      socketPath: join(directory, 'absent.sock'),
+      path: '/healthz',
       requireMarker: false,
     }),
-  );
+  ).finally(() => rmSync(directory, { recursive: true, force: true }));
 
   assert.deepEqual(outcome, { kind: 'no_response' });
 });
@@ -347,8 +367,8 @@ test('the default request follows Code Server’s own same-origin redirect', asy
             chunks: [`<html>${EDITOR_WORKBENCH_MARKER}</html>`],
           }
         : { status: 302, location: '/?folder=%2Fsome%2Fworktree', chunks: [] },
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'ok' });
@@ -360,9 +380,9 @@ test('a relative redirect target resolves against the origin rather than escapin
       path === '/healthz'
         ? { status: 302, location: 'healthz/', chunks: [] }
         : { status: 200, contentType: 'text/plain', chunks: ['ok'] },
-    (origin) =>
+    (socketPath) =>
       Effect.runPromise(
-        defaultEditorProbeRequest({ url: `${origin}/healthz`, requireMarker: false }),
+        defaultEditorProbeRequest({ socketPath, path: '/healthz', requireMarker: false }),
       ),
   );
 
@@ -372,8 +392,8 @@ test('a relative redirect target resolves against the origin rather than escapin
 test('a redirect loop settles on the status rather than walking forever', async () => {
   const outcome = await withServer(
     () => ({ status: 307, location: '/again', chunks: [] }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'http_status', status: 307 });
@@ -382,9 +402,62 @@ test('a redirect loop settles on the status rather than walking forever', async 
 test('a 3xx with no Location is reported as the status it is', async () => {
   const outcome = await withServer(
     () => ({ status: 303, chunks: [] }),
-    (origin) =>
-      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+    (socketPath) =>
+      Effect.runPromise(defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true })),
   );
 
   assert.deepEqual(outcome, { kind: 'http_status', status: 303 });
+});
+
+test('every probe request names the upstream host, redirect hops included', async () => {
+  const served = await withServer(
+    (path) =>
+      path === '/'
+        ? { status: 302, location: '/?folder=%2Fw', chunks: [] }
+        : { status: 200, contentType: 'text/html', chunks: [EDITOR_WORKBENCH_MARKER] },
+    async (socketPath, requests) => {
+      const outcome = await Effect.runPromise(
+        defaultEditorProbeRequest({ socketPath, path: '/', requireMarker: true }),
+      );
+      assert.deepEqual(outcome, { kind: 'ok' });
+      return requests;
+    },
+  );
+
+  assert.deepEqual(
+    served.map((request) => [request.path, request.headers.host]),
+    [
+      ['/', 'localhost'],
+      ['/?folder=%2Fw', 'localhost'],
+    ],
+  );
+});
+
+test('an absolute redirect to the upstream origin stays on the incarnation', async () => {
+  const outcome = await withServer(
+    (path) =>
+      path === '/next'
+        ? { status: 200, contentType: 'text/plain', chunks: ['ok'] }
+        : { status: 302, location: 'http://localhost/next', chunks: [] },
+    (socketPath) =>
+      Effect.runPromise(
+        defaultEditorProbeRequest({ socketPath, path: '/healthz', requireMarker: false }),
+      ),
+  );
+
+  assert.deepEqual(outcome, { kind: 'ok' });
+});
+
+test('an absolute redirect to another loopback authority is redirected away', async () => {
+  for (const location of ['http://127.0.0.1/', 'http://localhost:8080/', 'https://localhost/']) {
+    const outcome = await withServer(
+      () => ({ status: 302, location, chunks: [] }),
+      (socketPath) =>
+        Effect.runPromise(
+          defaultEditorProbeRequest({ socketPath, path: '/healthz', requireMarker: false }),
+        ),
+    );
+
+    assert.deepEqual(outcome, { kind: 'redirected_away' }, location);
+  }
 });

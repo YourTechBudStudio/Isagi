@@ -31,8 +31,6 @@ test('an editor pane projects the editor context beside its placement', async ()
           editorContextId: opened.editorContextId,
           handoff: {
             ptyProcessId,
-            endpointHost: '127.0.0.1',
-            endpointPort: 41_234,
             sessionSocketPath: '/tmp/isagi-editor-detail.sock',
           },
         });

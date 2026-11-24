@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
-import type { AddressInfo, Socket } from 'node:net';
+import type { Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import websocket from '@fastify/websocket';
@@ -13,14 +16,18 @@ import { editorProxyUnavailableErrorSchema } from '@isagi/shared/contracts';
 import type { RouteRuntime } from '../../platform/http/index.js';
 import { withListeningServer, type ListeningServer } from '../../platform/http/testing.js';
 import { EditorContextService } from '../contexts/service.js';
-import { proxyExchange } from './forward.js';
+import { proxyExchange, upstreamRequestHeaders } from './forward.js';
 import { registerEditorProxy } from './route.js';
 
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
-type Targets = ReadonlyMap<number, { readonly host: string; readonly port: number }>;
+interface Target {
+  readonly socketPath: string;
+}
+
+type Targets = ReadonlyMap<number, Target>;
 
 function stubEditors(targets: Targets): EditorContextService['Service'] {
   const unused = (name: string) => () => Effect.die(`${name} is not used by proxy tests`);
@@ -57,7 +64,7 @@ interface Proxy extends ListeningServer {
 function withProxy<A>(
   targets: Targets,
   run: (proxy: Proxy) => Promise<A>,
-  options: { readonly observed?: boolean } = {},
+  options: { readonly observed?: boolean; readonly allowedOrigins?: readonly string[] } = {},
 ): Promise<A> {
   const logs: LogEntry[] = [];
   const logger = Logger.make((entry) => {
@@ -97,6 +104,7 @@ function withProxy<A>(
         logs,
         exchangeEnded: (n = 1) => within(endings[n - 1]!),
       }),
+    { allowedOrigins: options.allowedOrigins ?? [] },
   );
 }
 
@@ -125,13 +133,39 @@ function registerObservedProxy(
   );
 }
 
-/** A stub Code Server: plain `node:http`, with an optional raw `upgrade` handler. */
-async function withUpstream<A>(
+/**
+ * A short, private directory for one test's UNIX sockets. Short because a socket path is capped near 104 bytes, and
+ * under the system temp root for the same reason the runtime's own socket directory is.
+ */
+async function withSocketDirectory<A>(run: (directory: string) => Promise<A>): Promise<A> {
+  const directory = mkdtempSync(join(tmpdir(), 'iep-'));
+  try {
+    return await run(directory);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+/** A stub Code Server: plain `node:http` on a UNIX socket, as Code Server listens, with an optional raw `upgrade` handler. */
+function withUpstream<A>(
   handlers: {
     readonly request?: http.RequestListener;
     readonly upgrade?: (request: http.IncomingMessage, socket: Socket, head: Buffer) => void;
   },
-  run: (target: { readonly host: string; readonly port: number }) => Promise<A>,
+  run: (target: Target) => Promise<A>,
+): Promise<A> {
+  return withSocketDirectory((directory) =>
+    listenUpstream(join(directory, 'w.sock'), handlers, run),
+  );
+}
+
+async function listenUpstream<A>(
+  socketPath: string,
+  handlers: {
+    readonly request?: http.RequestListener;
+    readonly upgrade?: (request: http.IncomingMessage, socket: Socket, head: Buffer) => void;
+  },
+  run: (target: Target) => Promise<A>,
 ): Promise<A> {
   const server = http.createServer(
     handlers.request ??
@@ -145,9 +179,9 @@ async function withUpstream<A>(
     socket.on('close', () => sockets.delete(socket));
   });
   if (handlers.upgrade) server.on('upgrade', handlers.upgrade);
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   try {
-    return await run({ host: '127.0.0.1', port: (server.address() as AddressInfo).port });
+    return await run({ socketPath });
   } finally {
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -155,9 +189,19 @@ async function withUpstream<A>(
 }
 
 /** A stub Code Server that speaks WebSocket, for frame-level echo through the byte-level proxy. */
-async function withWebSocketUpstream<A>(
-  run: (target: { readonly host: string; readonly port: number }) => Promise<A>,
+function withWebSocketUpstream<A>(
+  run: (target: Target) => Promise<A>,
   onServerSocketClosed: () => void = () => undefined,
+): Promise<A> {
+  return withSocketDirectory((directory) =>
+    listenWebSocketUpstream(join(directory, 'w.sock'), run, onServerSocketClosed),
+  );
+}
+
+async function listenWebSocketUpstream<A>(
+  socketPath: string,
+  run: (target: Target) => Promise<A>,
+  onServerSocketClosed: () => void,
 ): Promise<A> {
   const upstream = Fastify({ logger: false });
   await upstream.register(websocket);
@@ -168,9 +212,9 @@ async function withWebSocketUpstream<A>(
     );
     socket.on('close', onServerSocketClosed);
   });
-  const address = await upstream.listen({ host: '127.0.0.1', port: 0 });
+  await upstream.listen({ path: socketPath });
   try {
-    return await run({ host: '127.0.0.1', port: Number(new URL(address).port) });
+    return await run({ socketPath });
   } finally {
     await upstream.close();
   }
@@ -284,19 +328,93 @@ const within = <A>(promise: Promise<A>, ms = 3_000) =>
     ),
   ]);
 
-async function closedPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address() as AddressInfo;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
+/** A socket path nothing listens on: an incarnation that has gone away. */
+function withAbsentUpstream<A>(run: (target: Target) => Promise<A>): Promise<A> {
+  return withSocketDirectory((directory) => run({ socketPath: join(directory, 'gone.sock') }));
 }
+
+/** A raw upgrade's response head, read off the socket: for answers Fastify writes before any hijack. */
+function upgradeStatus(result: UpgradeOutcome): number | undefined {
+  return result.response.statusCode;
+}
+
+// ---------------------------------------------------------------------------
+// Upstream request headers
+// ---------------------------------------------------------------------------
+
+test('upstream headers: Host is the upstream host, first, whatever the client named', () => {
+  assert.deepEqual(upstreamRequestHeaders(['Host', 'vm.tail.ts.net', 'Accept', '*/*']), [
+    'Host',
+    'localhost',
+    'Accept',
+    '*/*',
+  ]);
+  // No client Host at all still presents one.
+  assert.deepEqual(upstreamRequestHeaders([]), ['Host', 'localhost']);
+});
+
+test('upstream headers: an Origin becomes the upstream origin, and is never invented', () => {
+  assert.deepEqual(
+    upstreamRequestHeaders(['host', '127.0.0.1:11299', 'origin', 'http://127.0.0.1:5173']),
+    ['Host', 'localhost', 'origin', 'http://localhost'],
+  );
+  assert.deepEqual(upstreamRequestHeaders(['host', '127.0.0.1:11299']), ['Host', 'localhost']);
+});
+
+test('upstream headers: Forwarded and every X-Forwarded-* header are dropped', () => {
+  assert.deepEqual(
+    upstreamRequestHeaders([
+      'Host',
+      'vm.tail.ts.net',
+      'Forwarded',
+      'host=evil.test;proto=https',
+      'X-Forwarded-Host',
+      'evil.test',
+      'x-forwarded-proto',
+      'https',
+      'X-Forwarded-For',
+      '10.0.0.1',
+      'X-Forwardedness',
+      'kept',
+    ]),
+    ['Host', 'localhost', 'X-Forwardedness', 'kept'],
+  );
+});
+
+test('upstream headers: runtime credentials are dropped and everything else passes in order', () => {
+  assert.deepEqual(
+    upstreamRequestHeaders([
+      'Host',
+      'vm.tail.ts.net',
+      'Authorization',
+      'Bearer launcher-secret',
+      'Cookie',
+      'vscode-tkn=abc; isagi_session=v1.1.mac; other=def',
+      'Upgrade',
+      'websocket',
+      'Sec-WebSocket-Key',
+      'abc==',
+      'Cookie',
+      'isagi_session=v1.1.mac',
+    ]),
+    [
+      'Host',
+      'localhost',
+      'Cookie',
+      'vscode-tkn=abc; other=def',
+      'Upgrade',
+      'websocket',
+      'Sec-WebSocket-Key',
+      'abc==',
+    ],
+  );
+});
 
 // ---------------------------------------------------------------------------
 // HTTP
 // ---------------------------------------------------------------------------
 
-test('HTTP: the prefix is stripped, the query kept, and Host, Origin and Cookie arrive unchanged', async () => {
+test('HTTP: the prefix is stripped, the query kept, and Code Server sees a same-origin request', async () => {
   let seen: { url?: string | undefined; headers?: http.IncomingHttpHeaders } = {};
   await withUpstream(
     {
@@ -325,10 +443,77 @@ test('HTTP: the prefix is stripped, the query kept, and Host, Origin and Cookie 
       }),
   );
   assert.equal(seen.url, '/stable-abc/x%20y?y=1&z=%2F');
-  assert.equal(seen.headers?.host, 'vm.tail.ts.net');
-  assert.equal(seen.headers?.origin, 'https://vm.tail.ts.net');
+  assert.equal(seen.headers?.host, 'localhost');
+  assert.equal(seen.headers?.origin, 'http://localhost');
   assert.equal(seen.headers?.cookie, 'session=abc; other=def');
-  assert.equal(seen.headers?.['x-forwarded-proto'], 'https');
+  assert.equal(seen.headers?.['x-forwarded-proto'], undefined);
+});
+
+test('HTTP: a foreign Origin is refused before Code Server is contacted; a same-host one passes', async () => {
+  let contacted = 0;
+  await withUpstream(
+    {
+      request: (_request, response) => {
+        contacted += 1;
+        response.end('ok');
+      },
+    },
+    (target) =>
+      withProxy(new Map([[7, target]]), async (proxy) => {
+        const refused = await send(proxy.port, '/editor/7/x', {
+          headers: { origin: 'http://evil.test' },
+        });
+        assert.equal(refused.status, 403);
+        assert.equal(refused.body.toString(), 'Forbidden');
+        assert.equal(contacted, 0);
+
+        const sameHost = await send(proxy.port, '/editor/7/x', {
+          headers: { origin: `http://127.0.0.1:${proxy.port}` },
+        });
+        assert.equal(sameHost.status, 200);
+        assert.equal(contacted, 1);
+      }),
+  );
+});
+
+test('HTTP: an opaque Origin is refused before Code Server is contacted', async () => {
+  let contacted = 0;
+  await withUpstream(
+    {
+      request: (_request, response) => {
+        contacted += 1;
+        response.end('ok');
+      },
+    },
+    (target) =>
+      withProxy(new Map([[7, target]]), async (proxy) => {
+        const refused = await send(proxy.port, '/editor/7/x', { headers: { origin: 'null' } });
+        assert.equal(refused.status, 403);
+        assert.equal(contacted, 0);
+      }),
+  );
+});
+
+test('HTTP: client-sent Forwarded and X-Forwarded-Host never reach Code Server', async () => {
+  let seen: http.IncomingHttpHeaders | undefined;
+  await withUpstream(
+    {
+      request: (request, response) => {
+        seen = request.headers;
+        response.end('ok');
+      },
+    },
+    (target) =>
+      withProxy(new Map([[7, target]]), async (proxy) => {
+        const response = await send(proxy.port, '/editor/7/x', {
+          headers: { 'x-forwarded-host': 'evil.test', forwarded: 'host=evil.test' },
+        });
+        assert.equal(response.status, 200);
+      }),
+  );
+  assert.equal(seen?.host, 'localhost');
+  assert.equal(seen?.['x-forwarded-host'], undefined);
+  assert.equal(seen?.forwarded, undefined);
 });
 
 test('HTTP: the runtime login cookie and Authorization never reach Code Server; other cookies do', async () => {
@@ -397,11 +582,11 @@ test('HTTP: a 1 MiB POST body with a non-JSON content type arrives intact', asyn
 });
 
 test('HTTP: two sequential requests on one keep-alive client connection both succeed', async () => {
-  const upstreamPeers: number[] = [];
+  const upstreamPeers: Socket[] = [];
   await withUpstream(
     {
       request: (request, response) => {
-        upstreamPeers.push(request.socket.remotePort ?? -1);
+        upstreamPeers.push(request.socket);
         response.end(request.url);
       },
     },
@@ -481,23 +666,24 @@ test('HTTP: an unknown context gets 503 not_running, unlogged', async () => {
   });
 });
 
-test('HTTP: a closed upstream port gets 502 upstream_unreachable and a warning', async () => {
-  const port = await closedPort();
-  await withProxy(new Map([[4, { host: '127.0.0.1', port }]]), async (proxy) => {
-    const response = await send(proxy.port, '/editor/4/');
-    assert.equal(response.status, 502);
-    const error = unavailableBody(response.body);
-    assert.deepEqual(error.data, { reason: 'upstream_unreachable', editorContextId: 4 });
-    assert.equal(error.message, 'The editor for context 4 did not answer.');
-    assert.equal(proxy.logs.length, 1);
-    const [entry] = proxy.logs;
-    assert.equal(entry?.level, 'Warn');
-    assert.deepEqual(entry?.message, ['Editor proxy could not reach Code Server']);
-    assert.equal(entry?.annotations.editorContextId, 4);
-    assert.equal(entry?.annotations.port, port);
-    assert.equal(entry?.annotations.upgrade, false);
-    assert.match(String(entry?.annotations.cause), /ECONNREFUSED/u);
-  });
+test('HTTP: an upstream socket nothing listens on gets 502 upstream_unreachable and a warning', async () => {
+  await withAbsentUpstream((target) =>
+    withProxy(new Map([[4, target]]), async (proxy) => {
+      const response = await send(proxy.port, '/editor/4/');
+      assert.equal(response.status, 502);
+      const error = unavailableBody(response.body);
+      assert.deepEqual(error.data, { reason: 'upstream_unreachable', editorContextId: 4 });
+      assert.equal(error.message, 'The editor for context 4 did not answer.');
+      assert.equal(proxy.logs.length, 1);
+      const [entry] = proxy.logs;
+      assert.equal(entry?.level, 'Warn');
+      assert.deepEqual(entry?.message, ['Editor proxy could not reach Code Server']);
+      assert.equal(entry?.annotations.editorContextId, 4);
+      assert.equal(entry?.annotations.socketPath, target.socketPath);
+      assert.equal(entry?.annotations.upgrade, false);
+      assert.match(String(entry?.annotations.cause), /ENOENT|ECONNREFUSED/u);
+    }),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -537,7 +723,7 @@ test('upgrade: a binary WebSocket echo works both ways through the proxy', async
   );
 });
 
-test('upgrade: the request line and every header reach Code Server verbatim', async () => {
+test('upgrade: the request line reaches Code Server verbatim, with the headers presented as same-origin', async () => {
   let seen: { url?: string | undefined; headers?: http.IncomingHttpHeaders } = {};
   await withUpstream(
     {
@@ -583,8 +769,8 @@ test('upgrade: the request line and every header reach Code Server verbatim', as
       }),
   );
   assert.equal(seen.url, '/stable/socket?reconnection=true');
-  assert.equal(seen.headers?.host, 'vm.tail.ts.net');
-  assert.equal(seen.headers?.origin, 'https://vm.tail.ts.net');
+  assert.equal(seen.headers?.host, 'localhost');
+  assert.equal(seen.headers?.origin, 'http://localhost');
   assert.equal(seen.headers?.cookie, 'session=abc');
   assert.equal(seen.headers?.upgrade, 'websocket');
   assert.equal(seen.headers?.connection, 'Upgrade');
@@ -619,7 +805,7 @@ test('upgrade: the runtime login cookie and Authorization never reach Code Serve
   assert.equal(seen?.upgrade, 'websocket');
 });
 
-test('upgrade: a non-WebSocket upgrade is forwarded verbatim too', async () => {
+test('upgrade: a non-WebSocket upgrade is forwarded too', async () => {
   let seenUpgrade: string | undefined;
   await withUpstream(
     {
@@ -714,21 +900,119 @@ test('upgrade: an unknown context gets 503 and the socket closes', async () => {
   });
 });
 
-test('upgrade: a closed upstream port gets 502 and a warning', async () => {
-  const port = await closedPort();
-  await withProxy(new Map([[4, { host: '127.0.0.1', port }]]), async (proxy) => {
-    const { outcome } = upgradeRequest(proxy.port, '/editor/4/socket');
-    const result = await outcome;
-    assert.equal(result.kind, 'response');
-    if (result.kind !== 'response') return;
-    assert.equal(result.response.statusCode, 502);
-    assert.deepEqual(unavailableBody(result.body).data, {
-      reason: 'upstream_unreachable',
-      editorContextId: 4,
-    });
-    assert.equal(proxy.logs.length, 1);
-    assert.equal(proxy.logs[0]?.annotations.upgrade, true);
-  });
+test('upgrade: an upstream socket nothing listens on gets 502 and a warning', async () => {
+  await withAbsentUpstream((target) =>
+    withProxy(new Map([[4, target]]), async (proxy) => {
+      const { outcome } = upgradeRequest(proxy.port, '/editor/4/socket');
+      const result = await outcome;
+      assert.equal(result.kind, 'response');
+      if (result.kind !== 'response') return;
+      assert.equal(result.response.statusCode, 502);
+      assert.deepEqual(unavailableBody(result.body).data, {
+        reason: 'upstream_unreachable',
+        editorContextId: 4,
+      });
+      assert.equal(proxy.logs.length, 1);
+      assert.equal(proxy.logs[0]?.annotations.upgrade, true);
+      assert.equal(proxy.logs[0]?.annotations.socketPath, target.socketPath);
+    }),
+  );
+});
+
+/** A stub upgrade handler that records what Code Server saw and accepts. */
+function acceptingUpgrade(seen: http.IncomingHttpHeaders[]) {
+  return (request: http.IncomingMessage, socket: Socket) => {
+    seen.push(request.headers);
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+    );
+  };
+}
+
+test('upgrade: an allowed Origin on a different host is admitted and presented as same-origin', async () => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  await withUpstream({ upgrade: acceptingUpgrade(seen) }, (target) =>
+    withProxy(
+      new Map([[5, target]]),
+      async (proxy) => {
+        // Host is the server's own address; Origin is the dev UI's. Code Server's Origin-against-Host check would
+        // refuse this pair, so admission must be the runtime's alone.
+        const { outcome } = upgradeRequest(proxy.port, '/editor/5/socket', {
+          origin: 'http://127.0.0.1:5173',
+        });
+        const result = await outcome;
+        assert.equal(upgradeStatus(result), 101);
+        if (result.kind === 'upgraded') result.socket.destroy();
+      },
+      { allowedOrigins: ['http://127.0.0.1:5173'] },
+    ),
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.host, 'localhost');
+  assert.equal(seen[0]?.origin, 'http://localhost');
+});
+
+test('upgrade: a foreign Origin is refused with 403 and Code Server is never contacted', async () => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  await withUpstream({ upgrade: acceptingUpgrade(seen) }, (target) =>
+    withProxy(
+      new Map([[5, target]]),
+      async (proxy) => {
+        const { request, outcome } = upgradeRequest(proxy.port, '/editor/5/socket', {
+          origin: 'http://evil.test',
+        });
+        const socketClosed = new Promise<void>((resolve) =>
+          request.on('socket', (socket) => socket.once('close', () => resolve())),
+        );
+        const result = await outcome;
+        assert.equal(result.kind, 'response');
+        assert.equal(upgradeStatus(result), 403);
+        await within(socketClosed);
+      },
+      { allowedOrigins: ['http://127.0.0.1:5173'] },
+    ),
+  );
+  assert.equal(seen.length, 0);
+});
+
+test('upgrade: an opaque Origin is refused with 403 and Code Server is never contacted', async () => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  await withUpstream({ upgrade: acceptingUpgrade(seen) }, (target) =>
+    withProxy(new Map([[5, target]]), async (proxy) => {
+      const { request, outcome } = upgradeRequest(proxy.port, '/editor/5/socket', {
+        origin: 'null',
+      });
+      const socketClosed = new Promise<void>((resolve) =>
+        request.on('socket', (socket) => socket.once('close', () => resolve())),
+      );
+      const result = await outcome;
+      assert.equal(result.kind, 'response');
+      assert.equal(upgradeStatus(result), 403);
+      await within(socketClosed);
+    }),
+  );
+  assert.equal(seen.length, 0);
+});
+
+test('upgrade: client-sent Forwarded and X-Forwarded-* never reach Code Server', async () => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  await withUpstream({ upgrade: acceptingUpgrade(seen) }, (target) =>
+    withProxy(new Map([[5, target]]), async (proxy) => {
+      const { outcome } = upgradeRequest(proxy.port, '/editor/5/socket', {
+        'x-forwarded-host': 'evil.test',
+        'x-forwarded-proto': 'https',
+        forwarded: 'host=evil.test;proto=https',
+      });
+      const result = await outcome;
+      assert.equal(upgradeStatus(result), 101);
+      if (result.kind === 'upgraded') result.socket.destroy();
+    }),
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.host, 'localhost');
+  assert.equal(seen[0]?.['x-forwarded-host'], undefined);
+  assert.equal(seen[0]?.['x-forwarded-proto'], undefined);
+  assert.equal(seen[0]?.forwarded, undefined);
 });
 
 test('upgrade: interrupting the routes destroys a live piped socket', async () => {

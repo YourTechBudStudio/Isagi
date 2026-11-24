@@ -20,7 +20,6 @@ import {
 } from '../harnesses/index.js';
 import { InternalEvents } from '../platform/events/index.js';
 import { EntityLock } from '../platform/locks/index.js';
-import { LoopbackPortProbe } from '../platform/net/index.js';
 import { DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
 import { ProjectRepository } from '../projects/index.js';
@@ -392,7 +391,6 @@ export function testLayer(
       options.editorProvisioning === 'unavailable'
         ? UnavailableEditorProvisioningLayer
         : readyEditorProvisioningLayer(testInstallation(dataRoot)),
-    portProbe: LoopbackPortProbe.layer,
     entityLock,
     bus: internalEventsLayer,
   });

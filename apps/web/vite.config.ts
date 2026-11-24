@@ -28,10 +28,11 @@ export default defineConfig({
     ? {
         server: {
           proxy: {
-            // `changeOrigin` makes the Host header the runtime's own, so its Host guard admits it; the Origin header
-            // stays the Vite origin, which the desktop passes to the runtime as an allowed origin.
-            '/api': { target: runtimeUrl, changeOrigin: true, ws: true },
-            '/editor': { target: runtimeUrl, changeOrigin: true, ws: true },
+            // No `changeOrigin`: the runtime sees the page's own Host (Vite's loopback address, which its Host guard
+            // admits) beside the page's own Origin, so its same-host rule admits the page exactly as it admits a page
+            // it serves itself. The runtime alone decides origin admission, for `/api` and `/editor` alike.
+            '/api': { target: runtimeUrl, ws: true },
+            '/editor': { target: runtimeUrl, ws: true },
           },
         },
       }

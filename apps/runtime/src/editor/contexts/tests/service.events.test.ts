@@ -116,7 +116,7 @@ test('a terminal event for an owned incarnation ends its probe and publishes', a
   // The readiness entry is dropped, so the projection can no longer report the
   // dead incarnation as ready no matter what the probe had observed.
   assert.equal(result.observations.size, 0);
-  // And the proxy stops forwarding to it, though the row still names its endpoint.
+  // And the proxy stops forwarding to it, though the row still names its session socket.
   assert.notEqual(result.targetBefore, null);
   assert.equal(result.targetAfter, null);
   assert.equal(result.newEvents, 1);

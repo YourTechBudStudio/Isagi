@@ -46,8 +46,6 @@ export function editorContextRow(
     id: record.id,
     worktreeId: record.worktreeId,
     activePtyProcessId: record.activePtyProcessId,
-    endpointHost: record.endpointHost,
-    endpointPort: record.endpointPort,
     sessionSocketPath: record.sessionSocketPath,
     attempt,
     createdAt: record.createdAt,
@@ -86,9 +84,9 @@ function decodeAttempt(record: EditorContextRecord): EditorAttemptRecord {
 }
 
 /**
- * Invariants 1, 2, and 5. The pointer and the two endpoint facts plus the
- * socket are installed and cleared in single statements, so a partial set means
- * something wrote them another way. `failed` beside a live pointer is legal in
+ * Invariants 1, 2, and 5. The pointer and the session socket are installed and
+ * cleared in single statements, so one without the other means something wrote
+ * them another way. `failed` beside a live pointer is legal in
  * exactly one case — a replacement refused because its predecessor could not be
  * affirmatively stopped — because that is the only transition that records a
  * failure without first clearing ownership.
@@ -97,18 +95,9 @@ function assertPointerInvariants(record: EditorContextRecord, attempt: EditorAtt
   const violation = (invariant: string) =>
     new EditorContextRowInvariantViolation(record.id, invariant);
   const hasPointer = record.activePtyProcessId !== null;
-  const endpointSet =
-    record.endpointHost !== null &&
-    record.endpointPort !== null &&
-    record.sessionSocketPath !== null;
-  const endpointClear =
-    record.endpointHost === null &&
-    record.endpointPort === null &&
-    record.sessionSocketPath === null;
-  if (hasPointer && !endpointSet)
-    throw violation('a pointer without a complete endpoint and session socket');
-  if (!hasPointer && !endpointClear)
-    throw violation('an endpoint or session socket without a pointer');
+  const socketSet = record.sessionSocketPath !== null;
+  if (hasPointer && !socketSet) throw violation('a pointer without a session socket');
+  if (!hasPointer && socketSet) throw violation('a session socket without a pointer');
   if (attempt.state === 'in_progress' && hasPointer)
     throw violation('attempt=in_progress beside a pointer');
   if (

@@ -20,7 +20,6 @@ import {
 } from './index.js';
 
 const ATTEMPT_REASONS: readonly EditorAttemptFailureReason[] = [
-  'port_allocation_failed',
   'session_socket_unavailable',
   'launch_allocation_failed',
   'launch_interrupted',

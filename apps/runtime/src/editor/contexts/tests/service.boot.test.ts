@@ -107,8 +107,6 @@ test('layer construction releases incarnations the runtime ended and keeps every
             editorContextId: context.id,
             handoff: {
               ptyProcessId,
-              endpointHost: '127.0.0.1',
-              endpointPort: 40_000,
               sessionSocketPath: `/tmp/editor-${context.id}.sock`,
             },
           });
@@ -161,7 +159,7 @@ test('layer construction releases incarnations the runtime ended and keeps every
     // Both runtime endings return to idle, so the pane's `reuse` relaunches.
     for (const row of [rows.crashed, rows.shutDown]) {
       assert.equal(row?.activePtyProcessId, null);
-      assert.equal(row?.endpointPort, null);
+      assert.equal(row?.sessionSocketPath, null);
       assert.deepEqual(row?.attempt, { state: 'none' });
     }
     // An exit is the editor's own outcome and stays visible.

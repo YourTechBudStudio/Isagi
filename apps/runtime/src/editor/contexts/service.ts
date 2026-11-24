@@ -10,7 +10,6 @@ import {
   type EntityLockHeld,
   type EntityLockKey,
 } from '../../platform/locks/index.js';
-import { LoopbackPortProbe } from '../../platform/net/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
 import {
@@ -66,7 +65,6 @@ const make = Effect.gen(function* () {
   const workspace = yield* ProjectRepository;
   const pty = yield* PtyService;
   const provisioning = yield* EditorProvisioning;
-  const portProbe = yield* LoopbackPortProbe;
   const entityLock = yield* EntityLock;
   const eventBus = yield* InternalEvents;
   const probe = yield* EditorReadinessProbe;
@@ -79,11 +77,11 @@ const make = Effect.gen(function* () {
   // database read per event, and its emptiness after a restart is exactly
   // right: an incarnation this runtime did not launch is not one it adopts.
   // It also keeps where the incarnation listens, because it is the editor
-  // proxy's only source of a forwarding target: the row's stored endpoint
-  // outlives the process, and its port may since belong to another one.
+  // proxy's only source of a forwarding target: only a process this runtime
+  // launched and still owns may be forwarded to.
   const incarnations = new Map<
     number,
-    { readonly editorContextId: number; readonly host: string; readonly port: number }
+    { readonly editorContextId: number; readonly listenSocketPath: string }
   >();
 
   // Construction step 3, registered first so it runs last: once the probe map
@@ -186,8 +184,7 @@ const make = Effect.gen(function* () {
   const registerProbe = Effect.fnUntraced(function* (input: {
     readonly editorContextId: number;
     readonly ptyProcessId: number;
-    readonly host: string;
-    readonly port: number;
+    readonly listenSocketPath: string;
   }) {
     readiness.set(input.ptyProcessId, {
       ptyProcessId: input.ptyProcessId,
@@ -197,8 +194,7 @@ const make = Effect.gen(function* () {
     });
     incarnations.set(input.ptyProcessId, {
       editorContextId: input.editorContextId,
-      host: input.host,
-      port: input.port,
+      listenSocketPath: input.listenSocketPath,
     });
 
     // Uninterruptible, so a supersession landing mid settlement waits for the
@@ -222,7 +218,7 @@ const make = Effect.gen(function* () {
     yield* FiberMap.run(
       probes,
       input.ptyProcessId,
-      probe.run({ host: input.host, port: input.port, onSettled }),
+      probe.run({ socketPath: input.listenSocketPath, onSettled }),
       { startImmediately: false },
     );
   });
@@ -250,7 +246,6 @@ const make = Effect.gen(function* () {
     repository,
     workspace,
     pty,
-    portProbe,
     commitAttemptFailure,
     publishChanged,
     registerProbe,
@@ -426,7 +421,7 @@ const make = Effect.gen(function* () {
       Effect.sync(() => {
         for (const incarnation of incarnations.values()) {
           if (incarnation.editorContextId === editorContextId) {
-            return { host: incarnation.host, port: incarnation.port };
+            return { socketPath: incarnation.listenSocketPath };
           }
         }
         return null;
@@ -579,7 +574,7 @@ export class EditorContextService extends Context.Service<
      */
     readonly proxyTarget: (
       editorContextId: number,
-    ) => Effect.Effect<{ readonly host: string; readonly port: number } | null>;
+    ) => Effect.Effect<{ readonly socketPath: string } | null>;
     /** The in-memory half of the read projection, composed by surface detail. */
     readonly readinessFor: (
       ptyProcessIds: readonly number[],
@@ -604,7 +599,6 @@ export class EditorContextService extends Context.Service<
       EditorProvisioning.layer,
       EntityLock.layer,
       InternalEvents.layer,
-      LoopbackPortProbe.layer,
       ProjectRepository.layer,
       PtyService.layer,
     ]),

@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import {
   enforceRuntimeWebSocketOrigin,
   installAllowedOrigins,
+  isAdmittedRuntimeOrigin,
   isAllowedRuntimeOrigin,
   isSameHostOrigin,
 } from './origin.js';
@@ -73,4 +74,42 @@ test('a same-host origin matches the Host whatever its scheme', () => {
   assert.equal(isSameHostOrigin('not a url', 'vm.ts.net'), false);
   assert.equal(isSameHostOrigin('null', 'vm.ts.net'), false);
   assert.equal(isSameHostOrigin('https://vm.ts.net', undefined), false);
+});
+
+test("admission is the allowed-origin set, an absent or opaque origin, or the request's own host", async () => {
+  const fastify = Fastify({ logger: false });
+  installAllowedOrigins(fastify, ['http://127.0.0.1:5173']);
+  await fastify.register(async (scoped) => {
+    scoped.get('/admitted', (request) => ({ admitted: isAdmittedRuntimeOrigin(request) }));
+  });
+  const admitted = async (headers: Record<string, string>) =>
+    (await fastify.inject({ url: '/admitted', headers })).json<{ admitted: boolean }>().admitted;
+  try {
+    // An allowed origin is admitted whatever host the request names.
+    assert.equal(
+      await admitted({ host: '127.0.0.1:11299', origin: 'http://127.0.0.1:5173' }),
+      true,
+    );
+    // A page served from the runtime's own address, scheme ignored.
+    assert.equal(await admitted({ host: 'vm.ts.net', origin: 'https://vm.ts.net' }), true);
+    assert.equal(
+      await admitted({ host: '127.0.0.1:11299', origin: 'http://127.0.0.1:11299' }),
+      true,
+    );
+    // Local non-browser and opaque clients.
+    assert.equal(await admitted({ host: '127.0.0.1:11299' }), true);
+    assert.equal(await admitted({ host: '127.0.0.1:11299', origin: 'null' }), true);
+    // Anything else, including another loopback port and a host the Origin merely resembles.
+    assert.equal(await admitted({ host: '127.0.0.1:11299', origin: 'http://evil.test' }), false);
+    assert.equal(
+      await admitted({ host: '127.0.0.1:11299', origin: 'http://127.0.0.1:5174' }),
+      false,
+    );
+    assert.equal(
+      await admitted({ host: '127.0.0.1:11299', origin: 'http://localhost:11299' }),
+      false,
+    );
+  } finally {
+    await fastify.close();
+  }
 });

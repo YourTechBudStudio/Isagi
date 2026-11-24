@@ -26,16 +26,13 @@ export type EditorAttemptRecord =
 
 /**
  * The durable editor context: one per worktree, sitting above zero or one
- * replaceable process incarnation (ADR 0006). The pointer, the endpoint, and
- * the session socket are installed and cleared together, so they are all null
- * or all set.
+ * replaceable process incarnation (ADR 0006). The pointer and the session
+ * socket are installed and cleared together, so they are both null or both set.
  */
 export interface EditorContextRow {
   readonly id: number;
   readonly worktreeId: number;
   readonly activePtyProcessId: number | null;
-  readonly endpointHost: string | null;
-  readonly endpointPort: number | null;
   readonly sessionSocketPath: string | null;
   readonly attempt: EditorAttemptRecord;
   readonly createdAt: string;
@@ -49,14 +46,12 @@ export interface EditorContextRow {
 }
 
 /**
- * The three facts a launch chooses for an incarnation and hands to the
- * repository in one transition, alongside the pointer. Grouped so no call site
- * can install a pointer without the endpoint it was reached at.
+ * What a launch chooses for an incarnation and hands to the repository in one
+ * transition. Grouped so no call site can install a pointer without the session
+ * socket that belongs to it.
  */
 export interface EditorIncarnationHandoff {
   readonly ptyProcessId: number;
-  readonly endpointHost: string;
-  readonly endpointPort: number;
   readonly sessionSocketPath: string;
 }
 

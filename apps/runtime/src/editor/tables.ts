@@ -14,16 +14,15 @@ export const editorContexts = sqliteTable(
     // the same transition that records an affirmatively terminated predecessor.
     activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
     // What the runtime *chose* for this incarnation, written in the same durable
-    // transition as the pointer. All three are null exactly when the pointer is.
-    endpointHost: text('endpoint_host'),
-    endpointPort: integer('endpoint_port'),
+    // transition as the pointer. Null exactly when the pointer is. The HTTP
+    // listen socket is not stored: only the runtime that launched an
+    // incarnation forwards to it, from memory.
     sessionSocketPath: text('session_socket_path'),
     // The launch-attempt record. `in_progress` never coexists with a pointer;
     // that invariant is what makes boot's reading of it sound.
     attemptState: text('attempt_state', { enum: ['none', 'in_progress', 'failed'] }).notNull(),
     attemptReason: text('attempt_reason', {
       enum: [
-        'port_allocation_failed',
         'session_socket_unavailable',
         'launch_allocation_failed',
         'launch_interrupted',

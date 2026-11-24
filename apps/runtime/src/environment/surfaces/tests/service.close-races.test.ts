@@ -124,8 +124,6 @@ test('an editor placed into an empty surface after a close looked at it is still
           editorContextId: opened.editorContextId,
           handoff: {
             ptyProcessId,
-            endpointHost: '127.0.0.1',
-            endpointPort: 41_234,
             sessionSocketPath: '/tmp/isagi-editor-test.sock',
           },
         });
