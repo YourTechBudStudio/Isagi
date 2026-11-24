@@ -34,14 +34,16 @@ test('branch 2: a fresh context launches exactly once and lands an owned incarna
   );
 
   assert.notEqual(result.row?.activePtyProcessId, null);
-  assert.equal(result.row?.endpointHost, '127.0.0.1');
-  assert.notEqual(result.row?.endpointPort, null);
+  assert.notEqual(result.row?.sessionSocketPath, null);
   // The handoff resets the attempt: ownership and an in-flight attempt never coexist.
   assert.deepEqual(result.row?.attempt, { state: 'none' });
   assert.equal(result.facts.workbenchReadiness, 'pending');
-  // The client gets the proxy path; only the runtime's memory knows the port.
+  // The client gets the proxy path; only the runtime's memory knows the listen socket,
+  // which shares the incarnation's token with the stored session socket.
   assert.deepEqual(result.facts.endpoint, { path: `/editor/${result.facts.id}/` });
-  assert.deepEqual(result.target, { host: '127.0.0.1', port: result.row?.endpointPort });
+  assert.deepEqual(result.target, {
+    socketPath: result.row?.sessionSocketPath?.replace(/\.sock$/u, '-w.sock'),
+  });
   // in_progress, the handoff, and the post-start transition.
   assert.equal(result.changed.length, 3);
 });

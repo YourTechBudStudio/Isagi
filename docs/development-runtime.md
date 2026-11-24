@@ -10,7 +10,7 @@ This document describes how Isagi starts, owns, and diagnoses its development ru
 | `pnpm dev:install-launcher`                                    | Installs or updates this worktree's user-level Linux launcher so GNOME can resolve the development icon and name. |
 | `pnpm dev:prepare`                                             | Builds the workspace in dependency order and assembles the canonical Electron-targeted runtime stage.             |
 | `pnpm dev:uninstall-launcher`                                  | Removes the user-level Linux launcher only when it is owned by Isagi development integration.                     |
-| `pnpm --filter @isagi/web dev`                                 | Starts only Vite, prints its resolved URL, and keeps HMR available. It does not start or proxy the runtime.       |
+| `pnpm --filter @isagi/web dev`                                 | Starts only Vite with HMR. It proxies `/api` and `/editor` to `ISAGI_DEV_RUNTIME_URL` when that is set.           |
 | `pnpm --filter @isagi/runtime dev`                             | Builds required workflow assets and starts one non-watching runtime on an ephemeral loopback port.                |
 | `pnpm --filter @isagi/desktop stage:runtime`                   | Builds the runtime and assembles the canonical Electron-targeted runtime stage.                                   |
 | `pnpm --filter @isagi/desktop stage:runtime -- --force-native` | Removes and rebuilds the matching Electron-native cache before assembling the stage.                              |
@@ -26,7 +26,7 @@ Every packaging invocation must pass `--publish never` exactly once, and the wra
 
 The wrapper recognizes one exact long-form spelling per flag — `--linux`, `--mac`, `--win`, `--x64`, `--arm64`, `--ia32`, `--armv7l`, `--universal`, `--dir`, and `--publish` — and refuses anything else. Alternative Electron Builder syntax such as `--linux=AppImage`, `-l=AppImage`, `--x64=true`, a combined `-mwl`, or short aliases such as `-l` and `-p` is rejected rather than guessed at. Only the argument combinations used by the documented commands are accepted.
 
-Direct package commands are composable primitives, not replacements for root supervision. A direct desktop launch needs an already running web origin, for example `ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm --filter @isagi/desktop dev`. Plain-browser web development needs an explicit `VITE_ISAGI_RUNTIME_URL`; Electron never uses that value for runtime discovery.
+Direct package commands are composable primitives, not replacements for root supervision. A direct desktop launch needs an already running web origin, for example `ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm --filter @isagi/desktop dev`. Plain-browser web development starts the runtime with a fixed `ISAGI_PORT` and Vite with `ISAGI_DEV_RUNTIME_URL` naming it (see `apps/web/vite.config.ts`).
 
 For plain-browser development only, `VITE_ISAGI_RUNTIME_LOCAL=true` asserts that the runtime addressed by `VITE_ISAGI_RUNTIME_URL` runs on the browser's machine. Only the exact literal `true` enables copyable localhost command URLs; an absent value, an empty value, or any other spelling is conservatively non-local. A wrong assertion produces URLs whose `localhost` points at the wrong machine.
 

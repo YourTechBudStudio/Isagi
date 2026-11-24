@@ -28,6 +28,7 @@ export { hostnameFromHostHeader, installHostGuard, isLoopbackHostname } from './
 export {
   enforceRuntimeWebSocketOrigin,
   installAllowedOrigins,
+  isAdmittedRuntimeOrigin,
   isAllowedRuntimeOrigin,
 } from './origin.js';
 export { acquireWsConnection } from './websocket.js';

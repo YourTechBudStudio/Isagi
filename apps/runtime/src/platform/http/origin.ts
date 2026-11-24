@@ -44,20 +44,27 @@ export function isSameHostOrigin(origin: string, hostHeader: string | undefined)
 }
 
 /**
- * The WebSocket `preValidation` guard: admits the origins of the instance serving the request (see
- * `isAllowedRuntimeOrigin`), and a page served from the runtime's own address (same host).
+ * The runtime's browser-origin admission rule, the one every WebSocket it terminates or proxies is held to: the origins
+ * of the instance serving the request (see `isAllowedRuntimeOrigin`), and a page served from the runtime's own address
+ * (same host). Proxied backends never decide this themselves; the editor proxy applies it before Code Server sees the
+ * request.
  */
+export function isAdmittedRuntimeOrigin(request: FastifyRequest): boolean {
+  const header = request.headers.origin;
+  const origin = Array.isArray(header) ? header[0] : header;
+  return (
+    isAllowedRuntimeOrigin(origin, request.server.isagiAllowedOrigins ?? noOrigins) ||
+    (origin !== undefined && isSameHostOrigin(origin, request.headers.host))
+  );
+}
+
+/** The WebSocket `preValidation` guard: refuses an origin `isAdmittedRuntimeOrigin` does not admit. */
 export function enforceRuntimeWebSocketOrigin(
   request: FastifyRequest,
   reply: FastifyReply,
   done: () => void,
 ) {
-  const header = request.headers.origin;
-  const origin = Array.isArray(header) ? header[0] : header;
-  const admitted =
-    isAllowedRuntimeOrigin(origin, request.server.isagiAllowedOrigins ?? noOrigins) ||
-    (origin !== undefined && isSameHostOrigin(origin, request.headers.host));
-  if (!admitted) {
+  if (!isAdmittedRuntimeOrigin(request)) {
     reply.code(403).send('Forbidden');
     return;
   }

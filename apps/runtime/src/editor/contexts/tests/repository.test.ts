@@ -35,12 +35,10 @@ function exitInDatabase<A, E>(effect: Effect.Effect<A, E, TestServices>) {
 
 const HANDOFF = {
   ptyProcessId: 0,
-  endpointHost: '127.0.0.1',
-  endpointPort: 41_234,
   sessionSocketPath: '/tmp/isagi/editors/code-server/sock/1-abc123.sock',
 };
 
-test('a created context is idle: no pointer, no endpoint, no attempt', async () => {
+test('a created context is idle: no pointer, no socket, no attempt', async () => {
   const { created, found } = await inDatabase(
     Effect.gen(function* () {
       const repository = yield* EditorContextRepository;
@@ -52,8 +50,6 @@ test('a created context is idle: no pointer, no endpoint, no attempt', async () 
 
   assert.deepEqual(created.attempt, { state: 'none' });
   assert.equal(created.activePtyProcessId, null);
-  assert.equal(created.endpointHost, null);
-  assert.equal(created.endpointPort, null);
   assert.equal(created.sessionSocketPath, null);
   assert.equal(created.activePtyProcess, null);
   assert.deepEqual(found, created);
@@ -133,7 +129,7 @@ test('marking an attempt in progress records a started-at and no reason', async 
   if (row?.attempt.state === 'in_progress') assert.ok(row.attempt.startedAt.length > 0);
 });
 
-test('the handoff installs pointer, endpoint, and socket and closes the attempt', async () => {
+test('the handoff installs pointer and socket and closes the attempt', async () => {
   const row = await inDatabase(
     Effect.gen(function* () {
       const repository = yield* EditorContextRepository;
@@ -151,8 +147,6 @@ test('the handoff installs pointer, endpoint, and socket and closes the attempt'
   );
 
   assert.deepEqual(row?.attempt, { state: 'none' });
-  assert.equal(row?.endpointHost, '127.0.0.1');
-  assert.equal(row?.endpointPort, 41_234);
   assert.equal(row?.sessionSocketPath, HANDOFF.sessionSocketPath);
   assert.equal(row?.activePtyProcess?.status, 'running');
   assert.equal(row?.activePtyProcessId, row?.activePtyProcess?.id);
@@ -179,7 +173,7 @@ test('an installed incarnation is findable by the process it points at', async (
     }),
   );
 
-  assert.equal(found?.endpointPort, 41_234);
+  assert.equal(found?.sessionSocketPath, HANDOFF.sessionSocketPath);
   assert.equal(unrelated, null);
 });
 
@@ -204,8 +198,6 @@ test('a replacement clears ownership and opens the next attempt in one transitio
   // no pointer beside it.
   assert.equal(row?.attempt.state, 'in_progress');
   assert.equal(row?.activePtyProcessId, null);
-  assert.equal(row?.endpointHost, null);
-  assert.equal(row?.endpointPort, null);
   assert.equal(row?.sessionSocketPath, null);
 });
 
@@ -219,8 +211,8 @@ test('a failure without ownership records its reason and clears the started-at',
       yield* repository.markAttemptInProgress(context.id);
       yield* repository.markAttemptFailed({
         editorContextId: context.id,
-        reason: 'port_allocation_failed',
-        detail: 'no loopback port was free',
+        reason: 'launch_allocation_failed',
+        detail: 'spawn failed',
       });
       return yield* repository.find(context.id);
     }),
@@ -228,8 +220,8 @@ test('a failure without ownership records its reason and clears the started-at',
 
   assert.deepEqual(row?.attempt, {
     state: 'failed',
-    reason: 'port_allocation_failed',
-    detail: 'no loopback port was free',
+    reason: 'launch_allocation_failed',
+    detail: 'spawn failed',
   });
   assert.equal(row?.activePtyProcessId, null);
 });
@@ -260,7 +252,7 @@ test('a refused replacement reports a live incarnation and a failed attempt at o
 
   assert.equal(row?.attempt.state, 'failed');
   assert.equal(row?.activePtyProcessId !== null, true);
-  assert.equal(row?.endpointPort, 41_234);
+  assert.equal(row?.sessionSocketPath, HANDOFF.sessionSocketPath);
   assert.equal(row?.activePtyProcess?.status, 'running');
 });
 
@@ -399,8 +391,8 @@ test('a failure that is not a refused replacement cannot be recorded beside a po
       const refusal = yield* Effect.exit(
         repository.markAttemptFailed({
           editorContextId: context.id,
-          reason: 'port_allocation_failed',
-          detail: 'no loopback port was free',
+          reason: 'launch_allocation_failed',
+          detail: 'spawn failed',
         }),
       );
       return { exit: refusal, row: yield* repository.find(context.id) };
@@ -492,8 +484,6 @@ test('an impossible persisted row fails as a defect, not as a database error', a
         attemptState: 'in_progress',
         attemptStartedAt: new Date().toISOString(),
         activePtyProcessId: yield* insertPtyProcess('running'),
-        endpointHost: '127.0.0.1',
-        endpointPort: 41_234,
         sessionSocketPath: '/tmp/a.sock',
       });
       return yield* repository.find(context.id);

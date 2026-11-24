@@ -202,8 +202,6 @@ function seedEditorContextReference(
       .values({
         worktreeId: worktree.id,
         activePtyProcessId: ptyProcessId,
-        endpointHost: ptyProcessId === null ? null : '127.0.0.1',
-        endpointPort: ptyProcessId === null ? null : 41_287,
         sessionSocketPath: ptyProcessId === null ? null : '/tmp/sock/1-abc123.sock',
         attemptState: 'none',
         attemptReason: null,

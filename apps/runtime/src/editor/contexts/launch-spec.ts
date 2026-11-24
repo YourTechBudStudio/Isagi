@@ -3,12 +3,16 @@ import path from 'node:path';
 import type { ResolvedEditorInstallation } from '../provisioning/install.js';
 
 /**
- * The loopback host every editor incarnation binds to. IPv4 rather than
- * `localhost`, so the bind address, the probe origin, and the URL the pane
- * frames are the same literal string and cannot diverge through name
- * resolution.
+ * The host every request to an incarnation names. Code Server listens on a UNIX
+ * socket, not a TCP port, so this names no address: it is the one authority the
+ * runtime presents to Code Server, on proxied requests and on the readiness
+ * probe alike, so Code Server's own Origin-against-Host check always sees a
+ * same-origin request once the runtime has admitted it.
  */
-export const editorLoopbackHost = '127.0.0.1';
+export const editorUpstreamHost = 'localhost';
+
+/** The origin matching `editorUpstreamHost`. */
+export const editorUpstreamOrigin = `http://${editorUpstreamHost}`;
 
 /**
  * The longest a UNIX domain socket path may be before the platform refuses it.
@@ -23,6 +27,33 @@ export const maxSessionSocketPathBytes = 100;
 export interface EditorLaunchSpec {
   readonly command: string;
   readonly args: readonly string[];
+}
+
+/**
+ * The two sockets one incarnation owns: Code Server's HTTP listen socket and its
+ * session socket.
+ *
+ * Listening on a socket rather than a loopback TCP port is what makes "Code
+ * Server is reached only through the runtime" enforced rather than a
+ * convention: the socket directory is private to the runtime's user (`0700`), so
+ * no web page, through DNS rebinding or otherwise, can reach Code Server
+ * directly.
+ *
+ * Both share one random token, so they are per-incarnation rather than
+ * per-context: a replacement must not inherit a path a predecessor may still
+ * hold open, and the context id alone would guarantee that it did. Every
+ * character spent here comes out of `maxSessionSocketPathBytes`; the listen
+ * socket is the longer of the two, so it is the one checked against the cap.
+ */
+export function editorIncarnationSockets(
+  socketDirectory: string,
+  editorContextId: number,
+  token: string,
+): { readonly listenSocketPath: string; readonly sessionSocketPath: string } {
+  return {
+    listenSocketPath: path.join(socketDirectory, `${editorContextId}-${token}-w.sock`),
+    sessionSocketPath: editorSessionSocketPath(socketDirectory, editorContextId, token),
+  };
 }
 
 /**
@@ -42,11 +73,6 @@ export function editorSessionSocketPath(
   return path.join(socketDirectory, `${editorContextId}-${token}.sock`);
 }
 
-/** The absolute loopback origin the workbench is probed at. */
-export function editorOrigin(host: string, port: number): string {
-  return `http://${host}:${port}`;
-}
-
 /**
  * The exact argument set for one Code Server incarnation.
  *
@@ -63,15 +89,16 @@ export function editorOrigin(host: string, port: number): string {
 export function editorLaunchSpec(input: {
   readonly installation: ResolvedEditorInstallation;
   readonly worktreePath: string;
-  readonly port: number;
-  readonly socketPath: string;
+  readonly listenSocketPath: string;
+  readonly sessionSocketPath: string;
 }): EditorLaunchSpec {
   const { installation } = input;
   return {
     command: installation.executablePath,
     args: [
-      '--bind-addr',
-      `${editorLoopbackHost}:${input.port}`,
+      // `--bind-addr` is ignored when a socket is named; see `editorIncarnationSockets`.
+      '--socket',
+      input.listenSocketPath,
       '--auth',
       'none',
       '--disable-telemetry',
@@ -90,7 +117,7 @@ export function editorLaunchSpec(input: {
       '--config',
       installation.configPath,
       '--session-socket',
-      input.socketPath,
+      input.sessionSocketPath,
       // This flag and the positional path are a pair: the worktree opens with no
       // second folder step, and a fresh launch does not restore whatever folder
       // a previous incarnation had open.

@@ -9,7 +9,6 @@ import { CliAccessNone } from '../cli-access/testing.js';
 import type { InternalEvent, InternalEvents } from '../platform/events/index.js';
 import { recordingInternalEventBusLayer } from '../platform/events/testing.js';
 import { EntityLock } from '../platform/locks/index.js';
-import { LoopbackPortProbe } from '../platform/net/index.js';
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../platform/persistence/testing.js';
 import { testUserShellLayer } from '../platform/process/testing.js';
@@ -224,7 +223,6 @@ export interface EditorServiceHarnessInput {
   readonly tmux?: PtyBackend | undefined;
   readonly events: InternalEvent[];
   readonly options?: EditorContextServiceOptions | undefined;
-  readonly portProbe?: LoopbackPortProbe['Service'] | undefined;
 }
 
 /**
@@ -241,7 +239,6 @@ export function editorContextServiceLayer<E>(input: {
   readonly workspace: Layer.Layer<ProjectRepository, E>;
   readonly pty: Layer.Layer<PtyService, E>;
   readonly provisioning: Layer.Layer<EditorProvisioning, E>;
-  readonly portProbe: Layer.Layer<LoopbackPortProbe, E>;
   readonly entityLock: Layer.Layer<EntityLock, E>;
   readonly bus: Layer.Layer<InternalEvents, E>;
   readonly options?: EditorContextServiceOptions | undefined;
@@ -255,7 +252,6 @@ export function editorContextServiceLayer<E>(input: {
     Layer.provide(input.workspace),
     Layer.provide(input.pty),
     Layer.provide(input.provisioning),
-    Layer.provide(input.portProbe),
     Layer.provide(input.entityLock),
     Layer.provide(input.bus),
   );
@@ -302,9 +298,6 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
   const provisioning = readyEditorProvisioningLayer(
     input.installation ?? testInstallation(input.dataRoot),
   );
-  const portProbe = input.portProbe
-    ? Layer.succeed(LoopbackPortProbe, input.portProbe)
-    : LoopbackPortProbe.layer;
   // The same lock value the service is built on, so a test can take the lock the
   // way the placement path will and hand the service a genuine witness.
   const entityLock = EntityLock.layer;
@@ -313,7 +306,6 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
     workspace,
     pty,
     provisioning,
-    portProbe,
     entityLock,
     bus,
     ...(input.options === undefined ? {} : { options: input.options }),

@@ -178,7 +178,7 @@ describe('the editor error union covers every branch its mapper can emit', () =>
       status: 409,
       message: 'no',
       requestId,
-      data: { reason: 'port_allocation_failed', editorContextId: 4 },
+      data: { reason: 'launch_allocation_failed', editorContextId: 4 },
     },
     {
       code: 'editor_diagnostics_unavailable',

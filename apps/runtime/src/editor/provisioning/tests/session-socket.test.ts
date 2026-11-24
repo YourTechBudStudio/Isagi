@@ -7,7 +7,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { editorSessionSocketPath, maxSessionSocketPathBytes } from '../../contexts/launch-spec.js';
+import { editorIncarnationSockets, maxSessionSocketPathBytes } from '../../contexts/launch-spec.js';
 import { EditorInstallIo, runtimeSessionSocketDirectory } from '../install-io.js';
 
 /**
@@ -32,7 +32,7 @@ test('two runtimes never share a session socket directory', () => {
  * The regression this fixes. Every one of these launched before only by
  * accident of path length; the deep-worktree case did not launch at all.
  */
-test('a socket path fits the cap regardless of how deep the data directory is', () => {
+test('both incarnation socket paths fit the cap regardless of how deep the data directory is', () => {
   for (const dataDirectory of [
     '/Users/somebody/Library/Application Support/Isagi',
     '/Users/somebody/Work/projects/Isagi/data/.isagi/worktrees/1/eefa16ee8e081094/data/.isagi',
@@ -40,11 +40,15 @@ test('a socket path fits the cap regardless of how deep the data directory is', 
   ]) {
     // The data directory is now irrelevant to the socket budget, which is the
     // point: the assertion is that its depth cannot influence the result.
-    const socketPath = editorSessionSocketPath(runtimeSessionSocketDirectory(), 999_999, 'abcdef');
-    assert.ok(
-      Buffer.byteLength(socketPath) <= maxSessionSocketPathBytes,
-      `${socketPath} (${Buffer.byteLength(socketPath)} bytes) for ${dataDirectory}`,
-    );
+    // Both of an incarnation's sockets live there; the listen socket is the
+    // longer of the two, so it is the binding case.
+    const sockets = editorIncarnationSockets(runtimeSessionSocketDirectory(), 999_999, 'abcdef');
+    for (const socketPath of [sockets.listenSocketPath, sockets.sessionSocketPath]) {
+      assert.ok(
+        Buffer.byteLength(socketPath) <= maxSessionSocketPathBytes,
+        `${socketPath} (${Buffer.byteLength(socketPath)} bytes) for ${dataDirectory}`,
+      );
+    }
   }
 });
 

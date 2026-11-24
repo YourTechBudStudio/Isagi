@@ -284,8 +284,8 @@ test('EditorLaunchFailed maps to a 409 carrying the same reason the row recorded
           Effect.fail(
             new EditorLaunchFailed({
               editorContextId: 5,
-              reason: 'port_allocation_failed',
-              detail: 'no free port in range',
+              reason: 'launch_allocation_failed',
+              detail: 'spawn failed',
             }),
           ),
       },
@@ -296,9 +296,9 @@ test('EditorLaunchFailed maps to a 409 carrying the same reason the row recorded
   // and failed, so the caller's correct response is to re-read the context.
   assert.equal(response.statusCode, 409);
   assert.equal(response.code, 'editor_launch_failed');
-  assert.equal(response.data.reason, 'port_allocation_failed');
+  assert.equal(response.data.reason, 'launch_allocation_failed');
   assert.equal(response.data.editorContextId, 5);
-  assert.equal(response.data.detail, 'no free port in range');
+  assert.equal(response.data.detail, 'spawn failed');
 });
 
 test('EditorDiagnosticsUnavailable maps to a 500 carrying its detail', async () => {

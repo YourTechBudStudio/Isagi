@@ -8,12 +8,13 @@ import type { EditorProxyUnavailableError } from '@isagi/shared/contracts';
 
 import { stripSessionCookie } from '../../access/index.js';
 import { errorMessage } from '../../platform/http/index.js';
+import { editorUpstreamHost, editorUpstreamOrigin } from '../contexts/launch-spec.js';
 import { EditorContextService } from '../contexts/service.js';
 import { editorProxyRequestTarget } from './target.js';
 
 /**
- * One proxied exchange, run after the route hook hijacked the reply: resolve the context's live incarnation, then
- * forward the request to it byte for byte, as plain HTTP or as an upgrade.
+ * One proxied exchange, run after the route hook admitted the origin and hijacked the reply: resolve the context's live
+ * incarnation, then forward the request to its listen socket, as plain HTTP or as an upgrade.
  *
  * Hijacking removed Fastify's own abort and timeout handling, so each forward owns client-disconnect handling from its
  * first moment (the lifecycle rule on `forwardHttp` and `forwardUpgrade`). There is no timeout and no retry; shutdown
@@ -47,7 +48,7 @@ export const proxyExchange = (input: {
     if (ending._tag === 'unreachable') {
       yield* Effect.logWarning('Editor proxy could not reach Code Server').pipe(
         Effect.annotateLogs({
-          port: location.port,
+          socketPath: location.socketPath,
           upgrade,
           cause: errorMessage(ending.cause),
         }),
@@ -79,16 +80,41 @@ interface Forward {
   readonly reply: FastifyReply;
   /** The upstream path and query, as cut from the raw URL. */
   readonly path: string;
-  readonly host: string;
-  readonly port: number;
+  /** The incarnation's HTTP listen socket. */
+  readonly socketPath: string;
 }
 
 /**
- * Connection-level headers that describe one leg, not the message. Node frames each leg itself. Everything else,
- * including `Host`, `Origin`, other cookies and `X-Forwarded-*`, passes unchanged, because Code Server checks Origin
- * against Host. Request legs also drop the runtime's own credentials first (`withoutRuntimeCredentials`).
+ * Connection-level headers that describe one leg, not the message. Node frames each leg itself. Request legs are also
+ * rewritten for Code Server first (`upstreamRequestHeaders`).
  */
 const hopByHopHeaders = new Set(['connection', 'keep-alive', 'transfer-encoding']);
+
+/**
+ * A request's raw headers as Code Server receives them, for both proxy legs.
+ *
+ * The runtime has already admitted the request's origin (`route.ts`), so Code Server's own Origin-against-Host check
+ * must not decide it a second time by a different rule: `Host` becomes the incarnation's fixed upstream host, and an
+ * `Origin`, when the client sent one, becomes the matching upstream origin. `Forwarded` and every `X-Forwarded-*`
+ * header are dropped: the runtime does not vouch for them, and Code Server would otherwise trust a client-supplied
+ * host over the one the runtime presents. The runtime's own credentials are dropped too (`withoutRuntimeCredentials`).
+ * Everything else, including other cookies, passes unchanged.
+ */
+export function upstreamRequestHeaders(rawHeaders: readonly string[]): string[] {
+  const kept: string[] = ['Host', editorUpstreamHost];
+  const credentialless = withoutRuntimeCredentials(rawHeaders);
+  for (let index = 0; index + 1 < credentialless.length; index += 2) {
+    const name = credentialless[index]!;
+    const lower = name.toLowerCase();
+    if (lower === 'host' || lower === 'forwarded' || lower.startsWith('x-forwarded-')) continue;
+    if (lower === 'origin') {
+      kept.push(name, editorUpstreamOrigin);
+      continue;
+    }
+    kept.push(name, credentialless[index + 1]!);
+  }
+  return kept;
+}
 
 /**
  * A request's raw headers without the runtime's credentials, for both proxy legs: `Authorization` (the desktop's
@@ -153,11 +179,10 @@ function forwardHttp(
 
     try {
       upstream = http.request({
-        host: input.host,
-        port: input.port,
+        socketPath: input.socketPath,
         method: request.raw.method,
         path: input.path,
-        headers: endToEndHeaders(withoutRuntimeCredentials(request.raw.rawHeaders)),
+        headers: endToEndHeaders(upstreamRequestHeaders(request.raw.rawHeaders)),
         agent: input.agent,
       });
     } catch (cause) {
@@ -187,8 +212,8 @@ function forwardHttp(
 }
 
 /**
- * An upgrade forwarded byte for byte: the request line and headers verbatim on a fresh connection (`agent: false`),
- * then, after Code Server's `101`, the two sockets piped together.
+ * An upgrade forwarded on a fresh connection (`agent: false`), with the request line verbatim and the headers as
+ * `upstreamRequestHeaders` presents them; after Code Server's `101`, the two sockets are piped together.
  *
  * Lifecycle rule: the client socket's `close` and `error` listeners are attached before the upstream request exists,
  * and cover the pending, refused and established phases alike. Until a `101`, the client's `end` counts too: the HTTP
@@ -227,11 +252,10 @@ function forwardUpgrade(input: Forward): Effect.Effect<ForwardEnding> {
 
     try {
       upstream = http.request({
-        host: input.host,
-        port: input.port,
+        socketPath: input.socketPath,
         method: request.raw.method,
         path: input.path,
-        headers: withoutRuntimeCredentials(request.raw.rawHeaders),
+        headers: upstreamRequestHeaders(request.raw.rawHeaders),
         agent: false,
       });
     } catch (cause) {
@@ -263,8 +287,7 @@ function forwardUpgrade(input: Forward): Effect.Effect<ForwardEnding> {
       client.pipe(socket);
     });
     upstream.on('response', (upstreamResponse) => {
-      // Code Server declined the upgrade (for example its own Origin check): its answer passes through, and the
-      // client socket closes once it is sent.
+      // Code Server declined the upgrade: its answer passes through, and the client socket closes once it is sent.
       written = true;
       upstreamResponse.on('close', () => {
         if (!upstreamResponse.complete) end(finished);

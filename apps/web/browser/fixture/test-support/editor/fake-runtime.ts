@@ -199,13 +199,13 @@ export function installFakeRuntime(): EditorRuntimeControls {
         // pane must render it once, from the projection, not twice.
         editor = {
           ...editor,
-          attempt: { state: 'failed', reason: 'port_allocation_failed', detail: 'no free port' },
+          attempt: { state: 'failed', reason: 'launch_allocation_failed', detail: 'spawn failed' },
           activePtyProcessId: null,
         };
         return failure(409, 'editor_launch_failed', 'The editor did not start.', {
-          reason: 'port_allocation_failed',
+          reason: 'launch_allocation_failed',
           editorContextId,
-          detail: 'no free port',
+          detail: 'spawn failed',
         });
       }
       if (refusal === 'database') {

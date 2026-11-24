@@ -174,8 +174,6 @@ const make = Effect.gen(function* () {
           .values({
             worktreeId: input.worktreeId,
             activePtyProcessId: null,
-            endpointHost: null,
-            endpointPort: null,
             sessionSocketPath: null,
             attemptState: 'none',
             attemptReason: null,
@@ -220,8 +218,6 @@ const make = Effect.gen(function* () {
         transitionName: 'release its incarnation and open a launch attempt',
         values: {
           activePtyProcessId: null,
-          endpointHost: null,
-          endpointPort: null,
           sessionSocketPath: null,
           attemptState: 'in_progress',
           attemptReason: null,
@@ -245,8 +241,6 @@ const make = Effect.gen(function* () {
         },
         values: {
           activePtyProcessId: input.handoff.ptyProcessId,
-          endpointHost: input.handoff.endpointHost,
-          endpointPort: input.handoff.endpointPort,
           sessionSocketPath: input.handoff.sessionSocketPath,
           attemptState: 'none',
           attemptReason: null,
@@ -283,8 +277,6 @@ const make = Effect.gen(function* () {
           transitionName: 'return to idle',
           values: {
             activePtyProcessId: null,
-            endpointHost: null,
-            endpointPort: null,
             sessionSocketPath: null,
             attemptState: 'none',
             attemptReason: null,
@@ -317,7 +309,7 @@ const make = Effect.gen(function* () {
 
 /**
  * The durable editor context's storage. It owns the pointer to the current
- * process incarnation, the endpoint that incarnation was reached at, and the
+ * process incarnation, that incarnation's session socket, and the
  * record of the launch attempt in flight or last failed.
  *
  * Every state change below is one SQL statement with one timestamp. That is not
@@ -366,14 +358,14 @@ export class EditorContextRepository extends Context.Service<
     }) => Effect.Effect<EditorContextRow, DatabaseError>;
     /**
      * Transition 1. Guarded on the context holding no incarnation, which is what
-     * makes "pointer and endpoint are already null" invariant 2 rather than a
+     * makes "pointer and socket are already null" invariant 2 rather than a
      * caller's habit: opening an attempt on an owned context cannot commit.
      */
     readonly markAttemptInProgress: (
       editorContextId: number,
     ) => Effect.Effect<EditorContextTransitionOutcome, DatabaseError>;
     /**
-     * Transition 2. Clears pointer, endpoint, and socket *and* opens the attempt
+     * Transition 2. Clears pointer and socket *and* opens the attempt
      * in one statement. Used only by a replacement, only after an affirmative
      * termination, so ownership is never dropped on an uncertain predecessor.
      */
@@ -381,7 +373,7 @@ export class EditorContextRepository extends Context.Service<
       editorContextId: number,
     ) => Effect.Effect<EditorContextTransitionOutcome, DatabaseError>;
     /**
-     * Transition 3, the handoff: pointer, endpoint, and socket set and the
+     * Transition 3, the handoff: pointer and socket set and the
      * attempt closed, in one statement. Committed before the process starts, so
      * a crash between commit and start leaves an owned row rather than an
      * unowned live process.
@@ -396,7 +388,7 @@ export class EditorContextRepository extends Context.Service<
       readonly handoff: EditorIncarnationHandoff;
     }) => Effect.Effect<EditorContextTransitionOutcome, DatabaseError>;
     /**
-     * Transition 4. Pointer and endpoint are left exactly as they are, which is
+     * Transition 4. Pointer and socket are left exactly as they are, which is
      * what lets a refused replacement report both a live incarnation and a failed
      * attempt. Any reason recorded while a pointer is retained must therefore be
      * `previous_incarnation_not_stopped`, so every other reason is guarded on an
@@ -408,7 +400,7 @@ export class EditorContextRepository extends Context.Service<
       readonly reason: EditorAttemptFailureReason;
       readonly detail: string | null;
     }) => Effect.Effect<EditorContextTransitionOutcome, DatabaseError>;
-    /** Transition 5. Pointer, endpoint, socket cleared and the attempt reset. */
+    /** Transition 5. Pointer and socket cleared and the attempt reset. */
     readonly clearIncarnation: (
       editorContextId: number,
     ) => Effect.Effect<EditorContextTransitionOutcome, DatabaseError>;

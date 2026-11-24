@@ -43,15 +43,15 @@ describe('editorPaneView precedence', () => {
   it('rule 1 — a failed attempt that left nothing running owns the pane', () => {
     const view = editorPaneView(
       facts({
-        attempt: { state: 'failed', reason: 'port_allocation_failed', detail: 'no free port' },
+        attempt: { state: 'failed', reason: 'launch_allocation_failed', detail: 'spawn failed' },
       }),
       RUNTIME_URL,
     );
 
     assert.deepEqual(view, {
       kind: 'settled',
-      reason: { kind: 'attempt_failed', reason: 'port_allocation_failed' },
-      detail: 'no free port',
+      reason: { kind: 'attempt_failed', reason: 'launch_allocation_failed' },
+      detail: 'spawn failed',
     });
   });
 

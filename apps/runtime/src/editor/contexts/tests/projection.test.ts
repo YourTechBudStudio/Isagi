@@ -39,8 +39,6 @@ function contextRow(overrides: Partial<EditorContextRow> = {}): EditorContextRow
     id: 7,
     worktreeId: 3,
     activePtyProcessId: null,
-    endpointHost: null,
-    endpointPort: null,
     sessionSocketPath: null,
     attempt: { state: 'none' },
     createdAt: NOW,
@@ -53,8 +51,6 @@ function contextRow(overrides: Partial<EditorContextRow> = {}): EditorContextRow
 function owned(process: PtyProcessRow, attempt: EditorAttemptRecord = { state: 'none' }) {
   return contextRow({
     activePtyProcessId: process.id,
-    endpointHost: '127.0.0.1',
-    endpointPort: 41_287,
     sessionSocketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
     attempt,
     activePtyProcess: process,
@@ -107,8 +103,8 @@ test('no pointer with a failed attempt carries the reason and no readiness', () 
     contextRow({
       attempt: {
         state: 'failed',
-        reason: 'port_allocation_failed',
-        detail: 'no free port',
+        reason: 'launch_allocation_failed',
+        detail: 'spawn failed',
       },
     }),
     undefined,
@@ -116,8 +112,8 @@ test('no pointer with a failed attempt carries the reason and no readiness', () 
 
   assert.deepEqual(facts.attempt, {
     state: 'failed',
-    reason: 'port_allocation_failed',
-    detail: 'no free port',
+    reason: 'launch_allocation_failed',
+    detail: 'spawn failed',
   });
   assert.equal(facts.workbenchReadiness, null);
   assert.equal(facts.readinessDetail, null);
@@ -136,15 +132,12 @@ test('a live process with a matching observation projects ready and its endpoint
   assert.deepEqual(facts.endpoint, { path: '/editor/7/' });
 });
 
-test('the proxy path is projected only for an incarnation with a stored endpoint', () => {
-  const process = ptyRow();
-  for (const endpoint of [
-    { endpointHost: null, endpointPort: 41_287 },
-    { endpointHost: '127.0.0.1', endpointPort: null },
-  ]) {
-    const facts = deriveEditorContextFacts({ ...owned(process), ...endpoint }, observation());
-    assert.equal(facts.endpoint, null);
-  }
+test('the proxy path is projected only for an incarnation with a stored session socket', () => {
+  const facts = deriveEditorContextFacts(
+    { ...owned(ptyRow()), sessionSocketPath: null },
+    observation(),
+  );
+  assert.equal(facts.endpoint, null);
 });
 
 test('a ready observation beside an exited process is NOT ready', () => {
@@ -208,8 +201,7 @@ test('a pointer to a vanished process row projects process_missing', () => {
   const facts = deriveEditorContextFacts(
     contextRow({
       activePtyProcessId: 42,
-      endpointHost: '127.0.0.1',
-      endpointPort: 41_287,
+      sessionSocketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
       activePtyProcess: null,
     }),
     observation(),

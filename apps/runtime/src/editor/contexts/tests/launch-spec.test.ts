@@ -3,10 +3,11 @@ import test from 'node:test';
 
 import type { ResolvedEditorInstallation } from '../../provisioning/install.js';
 import {
+  editorIncarnationSockets,
   editorLaunchSpec,
-  editorLoopbackHost,
-  editorOrigin,
   editorSessionSocketPath,
+  editorUpstreamHost,
+  editorUpstreamOrigin,
   maxSessionSocketPathBytes,
 } from '../launch-spec.js';
 
@@ -29,14 +30,14 @@ test('the launch spec is the executable and the exact argument set, in order', (
   const spec = editorLaunchSpec({
     installation: installation(),
     worktreePath: '/repo/isagi',
-    port: 41_287,
-    socketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
+    listenSocketPath: '/data/editors/code-server/sock/7-a1b2c3-w.sock',
+    sessionSocketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
   });
 
   assert.equal(spec.command, '/data/tools/code-server/4.135.0/bin/code-server');
   assert.deepEqual(spec.args, [
-    '--bind-addr',
-    '127.0.0.1:41287',
+    '--socket',
+    '/data/editors/code-server/sock/7-a1b2c3-w.sock',
     '--auth',
     'none',
     '--disable-telemetry',
@@ -59,8 +60,8 @@ test('the worktree path is the last argument and is never quoted or escaped', ()
   const spec = editorLaunchSpec({
     installation: installation(),
     worktreePath: '/repo/my project/isagi',
-    port: 41_287,
-    socketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
+    listenSocketPath: '/data/editors/code-server/sock/7-a1b2c3-w.sock',
+    sessionSocketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
   });
 
   // Structured argv is what makes a path containing a space a path rather than
@@ -73,8 +74,8 @@ test('the two flags that carry the story requirements are present', () => {
   const spec = editorLaunchSpec({
     installation: installation(),
     worktreePath: '/repo/isagi',
-    port: 41_287,
-    socketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
+    listenSocketPath: '/data/editors/code-server/sock/7-a1b2c3-w.sock',
+    sessionSocketPath: '/data/editors/code-server/sock/7-a1b2c3.sock',
   });
 
   const flagValue = (flag: string) => spec.args[spec.args.indexOf(flag) + 1];
@@ -83,29 +84,54 @@ test('the two flags that carry the story requirements are present', () => {
   assert.ok(spec.args.includes('--disable-workspace-trust'));
 });
 
-test('the bind address and the framed origin agree on the loopback host', () => {
+test('Code Server listens on its listen socket and binds no TCP address', () => {
   const spec = editorLaunchSpec({
     installation: installation(),
     worktreePath: '/repo/isagi',
-    port: 41_287,
-    socketPath: '/s.sock',
+    listenSocketPath: '/s-w.sock',
+    sessionSocketPath: '/s.sock',
   });
 
-  assert.equal(spec.args[spec.args.indexOf('--bind-addr') + 1], `${editorLoopbackHost}:41287`);
-  assert.equal(editorOrigin(editorLoopbackHost, 41_287), 'http://127.0.0.1:41287');
+  const flagValue = (flag: string) => spec.args[spec.args.indexOf(flag) + 1];
+  assert.equal(flagValue('--socket'), '/s-w.sock');
+  assert.equal(flagValue('--session-socket'), '/s.sock');
+  // Code Server ignores `--bind-addr` beside `--socket`; naming one anyway would
+  // only suggest a TCP listener that does not exist.
+  assert.equal(spec.args.includes('--bind-addr'), false);
 });
 
-test('the socket path is per incarnation, not per context', () => {
-  const first = editorSessionSocketPath('/data/editors/code-server/sock', 7, 'a1b2c3');
-  const second = editorSessionSocketPath('/data/editors/code-server/sock', 7, 'd4e5f6');
+test('the upstream origin is the upstream host over plain HTTP', () => {
+  assert.equal(editorUpstreamHost, 'localhost');
+  assert.equal(editorUpstreamOrigin, 'http://localhost');
+});
 
-  assert.equal(first, '/data/editors/code-server/sock/7-a1b2c3.sock');
-  assert.notEqual(first, second);
+test("an incarnation's two sockets share one token and are distinct paths", () => {
+  const sockets = editorIncarnationSockets('/data/editors/code-server/sock', 7, 'a1b2c3');
+
+  assert.deepEqual(sockets, {
+    listenSocketPath: '/data/editors/code-server/sock/7-a1b2c3-w.sock',
+    sessionSocketPath: editorSessionSocketPath('/data/editors/code-server/sock', 7, 'a1b2c3'),
+  });
+  assert.notEqual(sockets.listenSocketPath, sockets.sessionSocketPath);
+  // The listen socket is the longer one, so it is the one the launch checks
+  // against the cap.
+  assert.ok(
+    Buffer.byteLength(sockets.listenSocketPath) > Buffer.byteLength(sockets.sessionSocketPath),
+  );
+});
+
+test('the socket paths are per incarnation, not per context', () => {
+  const first = editorIncarnationSockets('/data/editors/code-server/sock', 7, 'a1b2c3');
+  const second = editorIncarnationSockets('/data/editors/code-server/sock', 7, 'd4e5f6');
+
+  assert.equal(first.sessionSocketPath, '/data/editors/code-server/sock/7-a1b2c3.sock');
+  assert.notEqual(first.sessionSocketPath, second.sessionSocketPath);
+  assert.notEqual(first.listenSocketPath, second.listenSocketPath);
 });
 
 test('a deep editors path produces a socket path over the byte cap', () => {
   const deep = `/Users/somebody/Library/Application Support/Isagi/${'nested/'.repeat(8)}editors/code-server/sock`;
-  const socketPath = editorSessionSocketPath(deep, 1_234, 'a1b2c3');
+  const { listenSocketPath: socketPath } = editorIncarnationSockets(deep, 1_234, 'a1b2c3');
 
   // The refusal itself lives in the launch sequence; what this pins is that a
   // realistic deep data directory genuinely crosses the cap, so that guard is

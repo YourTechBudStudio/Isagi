@@ -103,7 +103,6 @@ export const editorProvisioningCopy = {
  * response or is read back from the durable projection.
  */
 export const editorAttemptFailureCopy = {
-  port_allocation_failed: "Couldn't reserve a local port for the editor.",
   session_socket_unavailable: "Couldn't create the editor's local socket.",
   launch_allocation_failed: "Couldn't start the editor process.",
   launch_interrupted: 'The launch was interrupted before the editor came up.',

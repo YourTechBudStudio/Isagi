@@ -419,8 +419,6 @@ function openEditorWithIncarnation(worktreeId: number) {
       editorContextId: opened.editorContextId,
       handoff: {
         ptyProcessId,
-        endpointHost: '127.0.0.1',
-        endpointPort: 41_234,
         sessionSocketPath: '/tmp/isagi-editor-test.sock',
       },
     });
@@ -468,7 +466,7 @@ test('deleting an editor surface clears ownership when termination is affirmativ
     // is released.
     assert.ok(output.row);
     assert.equal(output.row?.activePtyProcessId, null);
-    assert.equal(output.row?.endpointHost, null);
+    assert.equal(output.row?.sessionSocketPath, null);
     assert.deepEqual(output.row?.attempt, { state: 'none' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -513,7 +511,7 @@ test('a refused editor termination still deletes the surface and retains ownersh
     // Ownership is retained rather than dropped on an unconfirmed stop, and the
     // reason is the one the row mapper permits beside a live pointer.
     assert.equal(output.row?.activePtyProcessId, output.ptyProcessId);
-    assert.equal(output.row?.endpointHost, '127.0.0.1');
+    assert.equal(output.row?.sessionSocketPath, '/tmp/isagi-editor-test.sock');
     assert.equal(output.row?.attempt.state, 'failed');
     assert.equal(
       output.row?.attempt.state === 'failed' ? output.row.attempt.reason : null,

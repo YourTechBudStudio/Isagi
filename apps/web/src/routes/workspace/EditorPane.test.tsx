@@ -104,13 +104,13 @@ describe('EditorPane state rendering', () => {
 
   it('reports a failed attempt with its reason, its detail, and a retry', () => {
     const markup = render({
-      attempt: { state: 'failed', reason: 'port_allocation_failed', detail: 'no free port' },
+      attempt: { state: 'failed', reason: 'launch_allocation_failed', detail: 'spawn failed' },
     });
 
-    assert.match(markup, /Couldn&#x27;t reserve a local port for the editor\./);
+    assert.match(markup, /Couldn&#x27;t start the editor process\./);
     // The runtime's own string, labelled with the code it failed under rather
     // than run into our sentence — a reader has to be able to tell the two apart.
-    assert.match(markup, /port_allocation_failed<\/span> · no free port/);
+    assert.match(markup, /launch_allocation_failed<\/span> · spawn failed/);
     assert.match(markup, />Retry</);
     assert.match(markup, /border-error/);
   });

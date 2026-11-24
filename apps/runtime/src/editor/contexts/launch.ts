@@ -5,16 +5,14 @@ import { Effect } from 'effect';
 import type { EditorAttemptFailureReason } from '@isagi/shared/contracts';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
-import type { LoopbackPortProbe } from '../../platform/net/index.js';
 import type { DatabaseError } from '../../platform/persistence/index.js';
 import type { ProjectRepository } from '../../projects/index.js';
 import type { PtyService } from '../../pty-processes/index.js';
 import type { ResolvedEditorInstallation } from '../provisioning/install.js';
 import { EditorError, EditorLaunchFailed } from './errors.js';
 import {
+  editorIncarnationSockets,
   editorLaunchSpec,
-  editorLoopbackHost,
-  editorSessionSocketPath,
   maxSessionSocketPathBytes,
 } from './launch-spec.js';
 import type { EditorContextRepository } from './repository.js';
@@ -49,8 +47,7 @@ export interface EditorLaunchCapabilities {
   readonly registerProbe: (input: {
     readonly editorContextId: number;
     readonly ptyProcessId: number;
-    readonly host: string;
-    readonly port: number;
+    readonly listenSocketPath: string;
   }) => Effect.Effect<void>;
 }
 
@@ -58,7 +55,6 @@ export interface EditorLaunchDependencies extends EditorLaunchCapabilities {
   readonly repository: EditorContextRepository['Service'];
   readonly workspace: ProjectRepository['Service'];
   readonly pty: PtyService['Service'];
-  readonly portProbe: LoopbackPortProbe['Service'];
 }
 
 /**
@@ -119,33 +115,27 @@ export const launchEditorIncarnation = Effect.fn('EditorContextService.launchInc
       const worktree = yield* deps.workspace.findWorktree(row.worktreeId);
       if (!worktree) return yield* fail('launch_target_missing', null);
 
-      const port = yield* deps.portProbe.obtainEphemeralPort.pipe(
-        Effect.catchTag('LoopbackPortUnavailable', (error) =>
-          fail('port_allocation_failed', describeOperationalCause(error.cause)),
-        ),
-      );
-
-      const socketPath = editorSessionSocketPath(
+      const sockets = editorIncarnationSockets(
         installation.sessionSocketDirectory,
         row.id,
         randomBytes(3).toString('hex'),
       );
-      if (Buffer.byteLength(socketPath) > maxSessionSocketPathBytes) {
+      if (Buffer.byteLength(sockets.listenSocketPath) > maxSessionSocketPathBytes) {
         // Refused before anything is allocated: the platform would reject the
         // bind, and a spawn that is certain to fail is not worth a process row.
         return yield* fail(
           'session_socket_unavailable',
-          `session socket path exceeds ${maxSessionSocketPathBytes} bytes`,
+          `editor socket path exceeds ${maxSessionSocketPathBytes} bytes`,
         );
       }
 
       const spec = editorLaunchSpec({
         installation,
         worktreePath: worktree.path,
-        port,
-        socketPath,
+        listenSocketPath: sockets.listenSocketPath,
+        sessionSocketPath: sockets.sessionSocketPath,
       });
-      return { cwd: worktree.path, port, socketPath, spec };
+      return { cwd: worktree.path, ...sockets, spec };
     }).pipe(
       // Nothing is allocated yet, so an interruption here has exactly one durable
       // consequence to record: the attempt never happened. Without this the row
@@ -171,7 +161,7 @@ export const launchEditorIncarnation = Effect.fn('EditorContextService.launchInc
             launchMode: 'direct',
             // Never the configured backend. A tmux incarnation would retain no
             // startup output for diagnostics and would survive a runtime restart
-            // holding its port and socket — a live process this runtime does not
+            // holding its sockets — a live process this runtime does not
             // own, which is exactly the hazard the lifecycle is built to avoid.
             backend: 'node_pty',
           }),
@@ -191,9 +181,7 @@ export const launchEditorIncarnation = Effect.fn('EditorContextService.launchInc
             editorContextId: row.id,
             handoff: {
               ptyProcessId: allocation.ptyProcessId,
-              endpointHost: editorLoopbackHost,
-              endpointPort: prepared.port,
-              sessionSocketPath: prepared.socketPath,
+              sessionSocketPath: prepared.sessionSocketPath,
             },
           })
           .pipe(
@@ -213,8 +201,7 @@ export const launchEditorIncarnation = Effect.fn('EditorContextService.launchInc
           deps.registerProbe({
             editorContextId: row.id,
             ptyProcessId: allocation.ptyProcessId,
-            host: editorLoopbackHost,
-            port: prepared.port,
+            listenSocketPath: prepared.listenSocketPath,
           }),
         );
 

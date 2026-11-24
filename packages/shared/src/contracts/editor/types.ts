@@ -45,7 +45,6 @@ export const editorProvisioningStateSchema = Schema.Union([
  * error, so the record and the wire can never drift.
  */
 export const editorAttemptFailureReasonSchema = Schema.Literals([
-  'port_allocation_failed',
   'session_socket_unavailable',
   'launch_allocation_failed',
   'launch_interrupted',

@@ -62,11 +62,9 @@ test('a launch that fails during start keeps its ownership and reports through t
 test('an interruption during preparation lands launch_interrupted, not a stuck attempt', async () => {
   const result = await withEditorService(
     {
-      portProbe: {
-        probeInactive: () => Effect.succeed(true),
-        // Never answers, so the request is cancelled while still preparing.
-        obtainEphemeralPort: Effect.never,
-      },
+      // Never answers, so the request is cancelled while still preparing: the
+      // worktree re-read is the first step of preparation.
+      findWorktree: () => Effect.never,
       options: { probe: neverSettlingProbe },
     },
     () =>

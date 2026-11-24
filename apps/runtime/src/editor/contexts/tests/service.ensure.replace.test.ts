@@ -37,7 +37,7 @@ test('replace stops the previous incarnation and launches a new one', async () =
       const row = yield* repository.find(created.id);
 
       return {
-        firstPort: firstRow?.endpointPort,
+        firstSessionSocketPath: firstRow?.sessionSocketPath,
         target: yield* service.proxyTarget(created.id),
         firstPtyProcessId: first.activePtyProcessId,
         secondPtyProcessId: second.activePtyProcessId,
@@ -50,8 +50,11 @@ test('replace stops the previous incarnation and launches a new one', async () =
   assert.notEqual(result.firstPtyProcessId, result.secondPtyProcessId);
   assert.equal(result.row?.activePtyProcessId, result.secondPtyProcessId);
   // The proxy forwards to the replacement only; the old incarnation is never a target again.
-  assert.deepEqual(result.target, { host: '127.0.0.1', port: result.row?.endpointPort });
-  assert.notEqual(result.target?.port, result.firstPort);
+  assert.deepEqual(result.target, {
+    socketPath: result.row?.sessionSocketPath?.replace(/\.sock$/u, '-w.sock'),
+  });
+  // Per incarnation, not per context: the replacement never inherits a path.
+  assert.notEqual(result.row?.sessionSocketPath, result.firstSessionSocketPath);
   assert.deepEqual(result.row?.attempt, { state: 'none' });
   // clear+in_progress, the handoff, and the post-start transition.
   assert.equal(result.newEvents, 3);
@@ -88,7 +91,7 @@ test('a termination failure launches nothing and retains the previous ownership'
 
         return {
           first,
-          firstPort: firstRow?.endpointPort,
+          firstSessionSocketPath: firstRow?.sessionSocketPath,
           failure,
           row,
           target: yield* service.proxyTarget(created.id),
@@ -103,9 +106,11 @@ test('a termination failure launches nothing and retains the previous ownership'
   // Nothing was cleared: a second incarnation beside a process that may still be
   // alive is the one outcome this path must never produce.
   assert.equal(result.row?.activePtyProcessId, result.first.activePtyProcessId);
-  assert.equal(result.row?.endpointPort, result.firstPort);
+  assert.equal(result.row?.sessionSocketPath, result.firstSessionSocketPath);
   // The surviving incarnation is still the proxy's target.
-  assert.deepEqual(result.target, { host: '127.0.0.1', port: result.firstPort });
+  assert.deepEqual(result.target, {
+    socketPath: result.firstSessionSocketPath?.replace(/\.sock$/u, '-w.sock'),
+  });
   assert.equal(result.ownedBy, result.row?.id);
   const attempt = result.row?.attempt;
   assert.ok(attempt !== undefined && attempt.state === 'failed');

@@ -47,8 +47,6 @@ test('an affirmative stop clears the pointer, endpoint, and attempt', async () =
 
   assert.equal(result.target, null);
   assert.equal(result.row?.activePtyProcessId, null);
-  assert.equal(result.row?.endpointHost, null);
-  assert.equal(result.row?.endpointPort, null);
   assert.equal(result.row?.sessionSocketPath, null);
   assert.deepEqual(result.row?.attempt, { state: 'none' });
   assert.equal(result.observations.size, 0);

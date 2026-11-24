@@ -1,14 +1,16 @@
+import http from 'node:http';
+
 import { Context, Duration, Effect } from 'effect';
 
-import { editorOrigin } from './launch-spec.js';
+import { editorUpstreamHost, editorUpstreamOrigin } from './launch-spec.js';
 
 /**
  * Runs one incarnation's readiness probe and reports its settlement through `onSettled`. Never fails; it ends by
  * settling or by interruption.
  */
 export type EditorProbeRunner = (input: {
-  readonly host: string;
-  readonly port: number;
+  /** The incarnation's HTTP listen socket. */
+  readonly socketPath: string;
   readonly onSettled: (settlement: EditorReadinessSettlement) => Effect.Effect<void>;
 }) => Effect.Effect<void>;
 
@@ -72,14 +74,16 @@ export type EditorProbeOutcome =
   | { readonly kind: 'ok' }
   | { readonly kind: 'http_status'; readonly status: number }
   | { readonly kind: 'not_html' }
-  /** A 3xx whose `Location` left the origin this runtime allocated and bound. */
+  /** A 3xx whose `Location` left the incarnation's own origin. */
   | { readonly kind: 'redirected_away' }
   | { readonly kind: 'marker_absent' }
   | { readonly kind: 'timed_out' }
   | { readonly kind: 'no_response' };
 
 export type EditorProbeRequest = (input: {
-  readonly url: string;
+  readonly socketPath: string;
+  /** The request path, from the incarnation's root. */
+  readonly path: string;
   /** Stage 2 only: the response must be HTML *and* carry the workbench marker. */
   readonly requireMarker: boolean;
 }) => Effect.Effect<EditorProbeOutcome>;
@@ -90,7 +94,7 @@ export interface EditorReadinessSettlement {
 }
 
 /**
- * Poll one incarnation's loopback origin until the workbench answers, or until
+ * Poll one incarnation's listen socket until the workbench answers, or until
  * the deadline says it never will.
  *
  * Two properties make this safe to fork and forget. It always settles — there is
@@ -105,15 +109,13 @@ export interface EditorReadinessSettlement {
  * detail would then name the wrong stage.
  */
 export function probeWorkbench(input: {
-  readonly host: string;
-  readonly port: number;
+  readonly socketPath: string;
   readonly onSettled: (settlement: EditorReadinessSettlement) => Effect.Effect<void>;
   readonly request?: EditorProbeRequest | undefined;
   readonly timing?: Partial<EditorProbeTiming> | undefined;
 }): Effect.Effect<void> {
   const timing = { ...editorProbeTiming, ...input.timing };
   const request = input.request ?? defaultEditorProbeRequest;
-  const origin = editorOrigin(input.host, input.port);
 
   // The furthest stage reached and what last happened there. Read only after the
   // loop has ended, to compose the settled detail.
@@ -122,7 +124,8 @@ export function probeWorkbench(input: {
 
   const attempt = Effect.suspend(() =>
     request({
-      url: stage === 'healthz' ? `${origin}/healthz` : `${origin}/`,
+      socketPath: input.socketPath,
+      path: stage === 'healthz' ? '/healthz' : '/',
       requireMarker: stage === 'workbench',
     }).pipe(
       // The per-request bound lives here rather than inside the request, so the
@@ -167,8 +170,7 @@ export function probeWorkbench(input: {
         Effect.sync((): EditorReadinessSettlement => ({
           state: 'unreachable',
           detail: describeUnreachable({
-            host: input.host,
-            port: input.port,
+            socketPath: input.socketPath,
             stage,
             outcome: lastOutcome,
             deadlineMs: timing.deadlineMs,
@@ -182,21 +184,20 @@ export function probeWorkbench(input: {
 /**
  * The settled diagnostic, rendered verbatim to a user as evidence.
  *
- * Every component is authored by this codebase: the host and port are the values
- * we allocated and bound, the stage is a two-member literal, and the outcome is
+ * Every component is authored by this codebase: the socket path is the one we
+ * chose and Code Server listens on, the stage is a two-member literal, and the outcome is
  * a closed union. Nothing from a foreign error, a response header, or a response
  * body appears — which is the whole reason the outcome union exists instead of a
  * caught error being formatted here.
  */
 export function describeUnreachable(input: {
-  readonly host: string;
-  readonly port: number;
+  readonly socketPath: string;
   readonly stage: EditorProbeStage;
   readonly outcome: EditorProbeOutcome;
   readonly deadlineMs: number;
 }): string {
   return [
-    `${input.host}:${input.port}`,
+    input.socketPath,
     input.stage,
     describeOutcome(input.outcome),
     `gave up after ${Math.round(input.deadlineMs / 1_000)}s`,
@@ -235,13 +236,14 @@ function describeOutcome(outcome: EditorProbeOutcome): string {
 const maxProbeRedirects = 3;
 
 /**
- * The real HTTP probe.
+ * The real HTTP probe, over the incarnation's listen socket.
  *
- * `redirect: 'manual'` because readiness is a statement about the origin this
- * runtime allocated and bound, and a followed redirect could otherwise satisfy
- * the check from somewhere else entirely. Redirects are then followed by hand,
- * but only while they stay on that origin — a `Location` that leaves it settles
- * as `redirected_away` rather than being chased.
+ * Every request names `editorUpstreamHost`, the authority the proxy presents
+ * too, and redirects are never followed blindly: readiness is a statement about
+ * this incarnation, and a followed redirect could otherwise satisfy the check
+ * from somewhere else entirely. Redirects are followed by hand, but only while
+ * they stay on the upstream origin — a `Location` that leaves it settles as
+ * `redirected_away` rather than being chased.
  *
  * Following at all is required, not a convenience. Code Server answers `GET /`
  * with a same-origin 302 to `?folder=…` whenever a folder was given on the
@@ -253,47 +255,51 @@ const maxProbeRedirects = 3;
  * decoded stream with a rolling overlap so a marker split across chunks still
  * matches, and stops reading as soon as it does.
  */
-export const defaultEditorProbeRequest: EditorProbeRequest = ({ url, requireMarker }) =>
+export const defaultEditorProbeRequest: EditorProbeRequest = ({
+  socketPath,
+  path,
+  requireMarker,
+}) =>
   Effect.tryPromise({
     try: async (signal): Promise<EditorProbeOutcome> => {
-      const allocatedOrigin = new URL(url).origin;
-      let target = url;
+      let target = path;
 
       for (let hop = 0; ; hop += 1) {
-        const response = await fetch(target, { signal, redirect: 'manual' });
+        const response = await probeGet({ socketPath, path: target, signal });
+        const status = response.statusCode ?? 0;
 
-        if (response.status >= 300 && response.status < 400) {
-          const location = response.headers.get('location');
-          await discardBody(response);
+        if (status >= 300 && status < 400) {
+          const location = response.headers.location;
+          response.destroy();
           if (!location || hop >= maxProbeRedirects) {
-            return { kind: 'http_status', status: response.status };
+            return { kind: 'http_status', status };
           }
           let next;
           try {
-            next = new URL(location, target);
+            next = new URL(location, `${editorUpstreamOrigin}${target}`);
           } catch {
             // An unparseable `Location` is the server's answer being unusable,
             // not a transport fault; the status is the honest report.
-            return { kind: 'http_status', status: response.status };
+            return { kind: 'http_status', status };
           }
-          // The whole point of `manual`: readiness may only ever be satisfied by
-          // the origin this runtime bound.
-          if (next.origin !== allocatedOrigin) return { kind: 'redirected_away' };
-          target = next.href;
+          // The whole point of following by hand: readiness may only ever be
+          // satisfied by this incarnation.
+          if (next.origin !== editorUpstreamOrigin) return { kind: 'redirected_away' };
+          target = `${next.pathname}${next.search}`;
           continue;
         }
 
-        if (response.status < 200 || response.status >= 300) {
-          await discardBody(response);
-          return { kind: 'http_status', status: response.status };
+        if (status < 200 || status >= 300) {
+          response.destroy();
+          return { kind: 'http_status', status };
         }
         if (!requireMarker) {
-          await discardBody(response);
+          response.destroy();
           return { kind: 'ok' };
         }
-        const contentType = response.headers.get('content-type');
+        const contentType = response.headers['content-type'];
         if (!contentType?.toLowerCase().includes('text/html')) {
-          await discardBody(response);
+          response.destroy();
           // The header value itself is never rendered; that it was not HTML is the
           // whole fact.
           return { kind: 'not_html' };
@@ -301,20 +307,33 @@ export const defaultEditorProbeRequest: EditorProbeRequest = ({ url, requireMark
         return (await bodyContainsMarker(response)) ? { kind: 'ok' } : { kind: 'marker_absent' };
       }
     },
-    // The rejection is never inspected. `fetch` rejects with a foreign error
-    // whose cause carries platform detail, and reading either would make this a
-    // second redaction policy.
+    // The rejection is never inspected. A transport failure carries platform
+    // detail, and reading it would make this a second redaction policy.
     catch: (): EditorProbeOutcome => ({ kind: 'no_response' }),
   }).pipe(Effect.catch(Effect.succeed));
 
-/** Drain rather than leak the socket; the status is the whole payload we needed. */
-async function discardBody(response: Response): Promise<void> {
-  await response.body?.cancel();
+/** One GET over the socket, resolving with the response head; aborting the signal destroys the request. */
+function probeGet(input: {
+  readonly socketPath: string;
+  readonly path: string;
+  readonly signal: AbortSignal;
+}): Promise<http.IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      socketPath: input.socketPath,
+      path: input.path,
+      method: 'GET',
+      headers: { host: editorUpstreamHost },
+      agent: false,
+      signal: input.signal,
+    });
+    request.on('response', resolve);
+    request.on('error', reject);
+    request.end();
+  });
 }
 
-async function bodyContainsMarker(response: Response): Promise<boolean> {
-  if (!response.body) return false;
-  const reader = response.body.getReader();
+async function bodyContainsMarker(response: http.IncomingMessage): Promise<boolean> {
   // Streaming decode, because the marker is ASCII but the surrounding document
   // is not guaranteed to be: decoding each chunk independently could corrupt a
   // code point split across a chunk boundary and, with it, the overlap.
@@ -322,19 +341,14 @@ async function bodyContainsMarker(response: Response): Promise<boolean> {
   const overlapLength = EDITOR_WORKBENCH_MARKER.length - 1;
   let overlap = '';
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return (overlap + decoder.decode()).includes(EDITOR_WORKBENCH_MARKER);
-      const window = overlap + decoder.decode(value, { stream: true });
-      if (window.includes(EDITOR_WORKBENCH_MARKER)) {
-        // Cancel through the reader: the body is locked while we hold one, so
-        // cancelling the stream itself would fail.
-        await reader.cancel();
-        return true;
-      }
+    for await (const chunk of response) {
+      const window = overlap + decoder.decode(chunk as Buffer, { stream: true });
+      if (window.includes(EDITOR_WORKBENCH_MARKER)) return true;
       overlap = window.slice(-overlapLength);
     }
+    return (overlap + decoder.decode()).includes(EDITOR_WORKBENCH_MARKER);
   } finally {
-    reader.releaseLock();
+    // Stops reading as soon as the answer is known; a no-op once the body ended.
+    response.destroy();
   }
 }

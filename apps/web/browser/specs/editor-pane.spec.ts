@@ -87,7 +87,7 @@ test('a launch failure is reported once, by the projection, never twice', async 
   // The runtime recorded it, so the request-local notice must stay silent: one
   // fact, said once. Both sentences are the same, so a duplicate is countable.
   const sentences = await pane(page)
-    .getByText(/Couldn't reserve a local port for the editor/i)
+    .getByText(/Couldn't start the editor process/i)
     .count();
   expect(sentences).toBe(1);
 });
@@ -123,7 +123,7 @@ test('a durable launch failure retires the notice the previous attempt left', as
   await page.evaluate(() => window.editorTestSupport!.failNextEnsure('launch'));
   await pane(page).getByRole('button', { name: 'Start editor' }).click();
 
-  await expect(pane(page).getByText(/Couldn't reserve a local port for the editor/i)).toBeVisible();
+  await expect(pane(page).getByText(/Couldn't start the editor process/i)).toBeVisible();
   await expect(pane(page).getByText(/local database didn't cooperate/i)).toHaveCount(0);
 });
 
