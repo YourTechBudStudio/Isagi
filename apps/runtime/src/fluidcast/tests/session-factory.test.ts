@@ -42,6 +42,10 @@ const answeredHistory: TranscriptEntry[] = [
   { _tag: 'prompt', source: 'earlier', text: 'Explain the plan.', parentToolUseId: null },
   { _tag: 'text', text: 'The plan has three steps.', parentToolUseId: null },
 ];
+const answered: FakeWorkerOptions = {
+  history: answeredHistory,
+  lastAnswer: 'The plan has three steps.',
+};
 
 const baseInput: FluidcastSessionInput = {
   agentSessionId: 7,
@@ -124,7 +128,7 @@ const awaitGeneration = (http: ReturnType<typeof recordingHttpClient>, ms = 2_00
   });
 
 test('a native session with an answer opens on a continuation start that waits for a tap', async () => {
-  const result = await scenario({ worker: { history: answeredHistory } }, (built, http) =>
+  const result = await scenario({ worker: answered }, (built, http) =>
     Effect.gen(function* () {
       const state = yield* firstSnapshot(built);
       assert.ok(state.start !== null, 'a preloaded start is waiting');
@@ -152,6 +156,26 @@ test('a native session with an answer opens on a continuation start that waits f
   );
   assert.ok(Exit.isSuccess(result.exit), String(Exit.isFailure(result.exit) && result.exit.cause));
   assert.deepEqual(result.calls.attach, ['native-1']);
+});
+
+test("the continuation start replays the worker's last answer, not the transcript's last text", async () => {
+  // A subagent's report rendered after the main agent's answer (as after a rewind) is not the answer.
+  const result = await scenario(
+    {
+      worker: {
+        history: [
+          ...answeredHistory,
+          { _tag: 'prompt', source: 'earlier', text: 'Research it.', parentToolUseId: null },
+          { _tag: 'text', text: 'A subagent report.', parentToolUseId: null },
+        ],
+        lastAnswer: 'The plan has three steps.',
+      },
+    },
+    (built) => Effect.map(firstSnapshot(built), (state) => JSON.stringify(state.start)),
+  );
+  assert.ok(Exit.isSuccess(result.exit), String(Exit.isFailure(result.exit) && result.exit.cause));
+  assert.match(result.exit.value, /The plan has three steps\./);
+  assert.doesNotMatch(result.exit.value, /A subagent report/);
 });
 
 test('a native session without an answer opens on the composer', async () => {
@@ -301,13 +325,11 @@ test('a missing Claude executable and an instrumentation failure fail the start'
 });
 
 test("with structured output only the voice's requests carry the session's JSON Schema", async () => {
-  const structured = await scenario(
-    { worker: { history: answeredHistory }, structuredOutput: true },
-    (built, http) =>
-      Effect.gen(function* () {
-        yield* Effect.orDie(built.session.command({ _tag: 'Start' }));
-        return yield* awaitGeneration(http);
-      }),
+  const structured = await scenario({ worker: answered, structuredOutput: true }, (built, http) =>
+    Effect.gen(function* () {
+      yield* Effect.orDie(built.session.command({ _tag: 'Start' }));
+      return yield* awaitGeneration(http);
+    }),
   );
   assert.ok(Exit.isSuccess(structured.exit));
   const format = structured.exit.value.response_format as {
@@ -323,7 +345,7 @@ test("with structured output only the voice's requests carry the session's JSON 
     assert.ok(schema.includes(`"${name}"`), `the schema names ${name}`);
   }
 
-  const plain = await scenario({ worker: { history: answeredHistory } }, (built, http) =>
+  const plain = await scenario({ worker: answered }, (built, http) =>
     Effect.gen(function* () {
       yield* Effect.orDie(built.session.command({ _tag: 'Start' }));
       return yield* awaitGeneration(http);

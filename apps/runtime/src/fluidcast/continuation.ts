@@ -4,7 +4,6 @@
 // copied: Isagi adds no modifier of its own, while a skill the listener types as `/name` passes
 // through to the worker.
 import type { SessionConfig } from '@yourtechbudstudio/fluidcast-harness';
-import type { TranscriptEntry } from '@yourtechbudstudio/fluidcast-tool-agent';
 import {
   forwardToolName,
   type ForwardResult,
@@ -30,17 +29,3 @@ export const continueStart = (answer: string): NonNullable<SessionConfig['start'
     result: { messages: [answer] } satisfies ForwardResult,
   },
 });
-
-/**
- * The agent's last answer: every top-level `text` entry after the last top-level `prompt`, joined
- * with a blank line as a forward result reads, or `undefined` when there is none.
- */
-export const lastAnswer = (entries: ReadonlyArray<TranscriptEntry>): string | undefined => {
-  const topLevel = entries.filter((entry) => entry.parentToolUseId === null);
-  const start = topLevel.findLastIndex((entry) => entry._tag === 'prompt');
-  const answer = topLevel
-    .slice(start + 1)
-    .flatMap((entry) => (entry._tag === 'text' ? [entry.text] : []))
-    .join('\n\n');
-  return answer === '' ? undefined : answer;
-};
