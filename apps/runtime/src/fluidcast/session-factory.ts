@@ -27,7 +27,7 @@ import {
 } from '@yourtechbudstudio/fluidcast-tool-agent/codex';
 import { askTool } from '@yourtechbudstudio/fluidcast-tool-ask';
 import { showTool } from '@yourtechbudstudio/fluidcast-tool-show';
-import { Context, Effect, Layer, Option, type Schedule, type Scope, Stream } from 'effect';
+import { Context, Effect, Layer, type Schedule, type Scope } from 'effect';
 import { LanguageModel } from 'effect/ai';
 
 import { ProcessTokens } from '../access/index.js';
@@ -40,7 +40,7 @@ import {
 import { resolveExecutableOnPath } from '../platform/process/index.js';
 import { LaunchEnvironment } from '../pty-processes/index.js';
 import type { FluidcastConfig } from '../runtime-config/index.js';
-import { continueStart, lastAnswer } from './continuation.js';
+import { continueStart } from './continuation.js';
 import { FluidcastSessionUnreadable, FluidcastStartFailed } from './errors.js';
 import type { FluidcastSessionId } from './ids.js';
 import type { FluidcastModels } from './models.js';
@@ -153,16 +153,9 @@ export const buildFluidcastSession = (
       Effect.mapError((error) => new FluidcastSessionUnreadable({ reason: error.reason })),
     );
 
-    const answer =
-      input.harnessSessionId === null
-        ? undefined
-        : Option.getOrUndefined(
-            Option.flatMap(yield* Stream.runHead(tool.worker.transcript), (message) =>
-              message._tag === 'TranscriptSnapshot'
-                ? Option.fromNullishOr(lastAnswer(message.entries))
-                : Option.none(),
-            ),
-          );
+    // Read from the native session's main agent when it was attached, never from the rendered
+    // transcript, whose subagent entries are not the agent's answer.
+    const answer = tool.worker.lastAnswer;
     const { name, instructions } = config.preset.voice;
     const preset = guidedWalkthrough({
       profile: config.preset.profile,

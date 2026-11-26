@@ -175,6 +175,8 @@ export function recordingHttpClient() {
 export interface FakeWorkerOptions {
   /** The attached session's history; `attach` fails with this reason instead when set. */
   readonly history?: ReadonlyArray<TranscriptEntry>;
+  /** The attached session's last answer, as the worker type reads it from the main agent. */
+  readonly lastAnswer?: string;
   readonly attachFails?: 'SessionNotFound' | 'SessionUnreadable';
   /** Set: `attach` never returns, so a session build that attaches hangs past its environment. */
   readonly attachHangs?: boolean;
@@ -188,7 +190,7 @@ export interface FakeWorkerOptions {
 }
 
 /**
- * A worker type that never starts a process: attach returns `history`, a connection idles or
+ * A worker type that never starts a process: attach returns `history` and `lastAnswer`, a connection idles or
  * answers, and listing returns `skills`. Each call is recorded, listing by the `cwd` it was given.
  */
 export function fakeWorkerType(options: FakeWorkerOptions = {}) {
@@ -201,7 +203,11 @@ export function fakeWorkerType(options: FakeWorkerOptions = {}) {
       calls.attach.push(sessionId);
       if (options.attachHangs) return Effect.never;
       return options.attachFails === undefined
-        ? Effect.succeed({ cwd: '/repo', history: options.history ?? [] })
+        ? Effect.succeed({
+            cwd: '/repo',
+            history: options.history ?? [],
+            lastAnswer: options.lastAnswer,
+          })
         : Effect.fail(new WorkerSetupError({ sessionId, reason: options.attachFails }));
     },
     connect: (connection, input) => {
@@ -437,6 +443,7 @@ export function fakeBuiltSession() {
     skills: Effect.suspend(() => skills),
     fault: Deferred.await(fault),
     sessionId: Ref.get(nativeId),
+    lastAnswer: undefined,
   };
   return {
     built: { session, worker } satisfies BuiltFluidcastSession,
