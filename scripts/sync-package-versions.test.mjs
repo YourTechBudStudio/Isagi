@@ -71,6 +71,17 @@ test('discovers every private workspace by exclusion and leaves workflow package
   );
 });
 
+test('ignores workspace directories without a package.json, like pnpm', async (context) => {
+  const repoRoot = await createFixtureRepository(context, { patterns: ['apps/*', 'packages/*'] });
+  await mkdir(join(repoRoot, 'packages/removed/dist'), { recursive: true });
+
+  const plan = await Effect.runPromise(
+    createPackageVersionPlan({ repoRoot, requestedVersion: '2.0.0' }),
+  );
+
+  assert.deepEqual(plan.synchronizedManifestPaths, ['package.json', 'apps/runtime/package.json']);
+});
+
 test('normalizes duplicate manifest paths from overlapping workspace patterns', async (context) => {
   const repoRoot = await createFixtureRepository(context, {
     patterns: ['apps/*', 'apps/*', 'packages/*'],

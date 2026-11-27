@@ -145,8 +145,17 @@ function discoverWorkspaceManifestPaths(repoRoot, fileSystem) {
         fileSystem.readdir(workspaceDirectory, { withFileTypes: true }),
       );
       for (const entry of entries) {
-        if (entry.isDirectory()) {
-          packageJsonPaths.add(resolve(workspaceDirectory, entry.name, 'package.json'));
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        // Like pnpm, a directory without a package.json (for example a leftover build folder
+        // from a removed package) is not a workspace package.
+        const packageDirectory = join(workspaceDirectory, entry.name);
+        const packageEntries = yield* tryOperation(packageDirectory, 'list', () =>
+          fileSystem.readdir(packageDirectory, { withFileTypes: true }),
+        );
+        if (packageEntries.some((child) => child.isFile() && child.name === 'package.json')) {
+          packageJsonPaths.add(resolve(packageDirectory, 'package.json'));
         }
       }
     }

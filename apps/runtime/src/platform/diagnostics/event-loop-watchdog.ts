@@ -18,11 +18,14 @@ const watch = Effect.gen(function* () {
   const { interval, lagThreshold } = yield* EventLoopWatchdogSettings;
   const intervalMs = Duration.toMillis(interval);
   const thresholdMs = Duration.toMillis(lagThreshold);
+  // Carried across samples rather than read again at the start of each one: `Effect.forever` yields between samples,
+  // and a block that starts while the watchdog waits in that yield would otherwise move the baseline past itself.
+  let expectedAt = (yield* Clock.currentTimeMillis) + intervalMs;
   const sample = Effect.fnUntraced(function* () {
-    const expectedAt = (yield* Clock.currentTimeMillis) + intervalMs;
     yield* Effect.sleep(interval);
     const now = yield* Clock.currentTimeMillis;
     const lagMs = now - expectedAt;
+    expectedAt = now + intervalMs;
     if (lagMs < thresholdMs) return;
 
     const marker = getDiagnosticMarker();
