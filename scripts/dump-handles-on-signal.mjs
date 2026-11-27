@@ -1,5 +1,5 @@
-// Preloaded into the runtime test process with `--import`. When the exit watchdog
-// (`scripts/test-exit-watchdog.mjs`) sends SIGUSR2, this prints what keeps the event
+// Preloaded into a test process with `--import`. When the exit watchdog
+// (`test-exit-watchdog.mjs`, beside this file) sends SIGUSR2, this prints what keeps the event
 // loop alive, so a hung suite names its leak instead of only timing out.
 import process from 'node:process';
 

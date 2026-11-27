@@ -2,9 +2,8 @@ import type { AddressInfo } from 'node:net';
 
 import { Data } from 'effect';
 
-import type { SourcedValue } from '@isagi/cli/serve-launch';
-
 import type { AuthMode } from '../access/index.js';
+import type { SourcedValue } from '../launch-contract.js';
 import { isLoopbackHostname } from '../platform/http/index.js';
 import type { RuntimeConfigShape } from '../runtime-config/index.js';
 import type { ServerLaunch } from './launch.js';

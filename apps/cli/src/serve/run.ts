@@ -3,9 +3,11 @@ import process from 'node:process';
 
 import { Effect } from 'effect';
 
+import type { RuntimeEntryModule } from '@isagi/runtime/launch';
+
 import type { CliIo } from '../context.js';
 import { causeText, CliFailure } from '../errors.js';
-import type { RuntimeEntry, RuntimeEntryModule } from './launch.js';
+import type { RuntimeEntry } from './launch.js';
 import { resolveServeLaunch, type ServeFlags } from './settings.js';
 
 /**

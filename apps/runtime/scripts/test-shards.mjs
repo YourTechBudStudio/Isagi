@@ -24,6 +24,7 @@ if (!Number.isSafeInteger(shardCount) || shardCount < 1) {
 
 const runtimeRoot = fileURLToPath(new URL('..', import.meta.url));
 const watchdog = fileURLToPath(new URL('../../../scripts/test-exit-watchdog.mjs', import.meta.url));
+const dumpHandles = new URL('../../../scripts/dump-handles-on-signal.mjs', import.meta.url).href;
 const watchdogSeconds = '240';
 const testFiles = ['src/**/*.test.ts', 'test/**/*.test.ts'];
 
@@ -48,7 +49,7 @@ function runShard(index) {
         '--import',
         'tsx',
         '--import',
-        './test/dump-handles-on-signal.mjs',
+        dumpHandles,
         '--test',
         '--experimental-test-isolation=none',
         `--test-shard=${shard}`,

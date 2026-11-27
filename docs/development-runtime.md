@@ -11,7 +11,7 @@ This document describes how Isagi starts, owns, and diagnoses its development ru
 | `pnpm dev:prepare`                                             | Builds the workspace in dependency order and assembles the canonical Electron-targeted runtime stage.             |
 | `pnpm dev:uninstall-launcher`                                  | Removes the user-level Linux launcher only when it is owned by Isagi development integration.                     |
 | `pnpm --filter @isagi/web dev`                                 | Starts only Vite with HMR. It proxies `/api` and `/editor` to `ISAGI_DEV_RUNTIME_URL` when that is set.           |
-| `pnpm --filter @isagi/runtime dev`                             | Builds required workflow assets and starts one non-watching runtime on an ephemeral loopback port.                |
+| `pnpm dev:runtime`                                             | Starts one runtime from source through the CLI's `serve`, on an ephemeral loopback port.                          |
 | `pnpm --filter @isagi/desktop stage:runtime`                   | Builds the runtime and assembles the canonical Electron-targeted runtime stage.                                   |
 | `pnpm --filter @isagi/desktop stage:runtime -- --force-native` | Removes and rebuilds the matching Electron-native cache before assembling the stage.                              |
 | `pnpm --filter @isagi/desktop smoke:runtime-stage`             | Validates and smokes the canonical stage and a relocated copy under Electron Node mode.                           |

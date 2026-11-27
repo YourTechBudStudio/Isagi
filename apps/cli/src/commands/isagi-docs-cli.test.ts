@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { checkCommandLine } from '@isagi/cli/commands';
-import { cliErrorCodeSchema } from '@isagi/cli/error-codes';
+import { isagiDocsPackageFiles } from '@isagi/runtime/testing';
 
-import { isagiDocsPackageFiles } from './isagi-docs.js';
+import { cliErrorCodeSchema } from '../error-codes.js';
+import { checkCommandLine } from './check.js';
 
 /**
  * The shipped skill and the `isagi` CLI must agree.

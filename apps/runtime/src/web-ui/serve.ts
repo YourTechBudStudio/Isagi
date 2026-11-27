@@ -5,10 +5,10 @@ import fastifyStatic from '@fastify/static';
 import { Data, Effect } from 'effect';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import type { SourcedValue } from '@isagi/cli/serve-launch';
 import type { AppearanceTheme } from '@isagi/shared/contracts';
 
 import { publicRoute } from '../access/index.js';
+import type { SourcedValue } from '../launch-contract.js';
 import { webUiContentSecurityPolicy } from './policy.js';
 
 const documentFile = 'index.html';

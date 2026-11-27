@@ -1,7 +1,8 @@
 import { Redacted } from 'effect';
 
+import type { SourcedValue } from '@isagi/runtime/launch';
+
 import { CliFailure } from './errors.js';
-import type { SourcedValue } from './serve/launch.js';
 import { fromFlagOrEnv } from './settings.js';
 
 /**
