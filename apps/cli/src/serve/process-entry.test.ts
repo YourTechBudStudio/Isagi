@@ -10,10 +10,10 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const RUNTIME_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const CLI_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const READY_PREFIX = 'ISAGI_RUNTIME_READY ';
-/** The minimal web root the runtime harness uses too; every runtime serves one. */
-const TEST_WEB_ROOT = join(RUNTIME_ROOT, 'test', 'fixtures', 'web-root');
+/** A minimal web root; every runtime serves one. */
+const TEST_WEB_ROOT = join(CLI_ROOT, 'test', 'fixtures', 'web-root');
 
 interface RuntimeProcessRun {
   readonly code: number | null;
@@ -80,7 +80,7 @@ describe(
           process.execPath,
           ['--import', 'tsx', 'scripts/serve-from-source.ts', ...args],
           {
-            cwd: RUNTIME_ROOT,
+            cwd: CLI_ROOT,
             env: childEnv,
             stdio: ['ignore', 'pipe', 'pipe'],
           },

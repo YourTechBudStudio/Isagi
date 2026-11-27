@@ -2,30 +2,33 @@
 
 // Installs a packed `@yourtechbudstudio/isagi` tarball into a clean prefix and exercises it as a user would: help
 // without native modules, the error documents, and a real `isagi serve` on a free port. The release job publishes only
-// a tarball this script passed. Usage: node scripts/npm-package/verify.mjs <tarball>
+// a tarball this script passed. Usage: node apps/cli/scripts/verify.mjs <tarball>
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, resolve } from 'node:path';
+import { delimiter, dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
-import { packageName } from './package.mjs';
+import {
+  runtimeNativeExternals,
+  runtimePackageExternals,
+} from '../../runtime/runtime-externals.mjs';
+import { serveDistributionFiles } from '../distribution.mjs';
 import { readyUrl } from './ready-line.mjs';
 
 const commandTimeoutMs = 15_000;
 const installTimeoutMs = 10 * 60_000;
 const readyTimeoutMs = 60_000;
-const nativeModules = ['better-sqlite3', 'node-pty'];
+const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const packageName = JSON.parse(readFileSync(resolve(cliRoot, 'package.json'), 'utf8')).name;
 const requiredEntries = [
   'package.json',
   'README.md',
   'LICENSE',
-  'dist/isagi.mjs',
-  'dist/index.js',
-  'dist/assets/manifest.json',
-  'dist/drizzle/meta/_journal.json',
+  ...serveDistributionFiles.map((file) => `dist/${file}`),
   'web/index.html',
 ];
 const allowedTopLevel = new Set(['package.json', 'README.md', 'LICENSE', 'dist', 'web']);
@@ -39,7 +42,7 @@ class StepFailure extends Error {
 
 const tarballArgument = process.argv[2];
 if (!tarballArgument) {
-  console.error('usage: node scripts/npm-package/verify.mjs <tarball>');
+  console.error('usage: node apps/cli/scripts/verify.mjs <tarball>');
   process.exit(2);
 }
 const tarball = resolve(tarballArgument);
@@ -57,6 +60,7 @@ let exitCode = 0;
 try {
   await step('tarball contents', checkTarballContents);
   await step('install into a clean prefix', install);
+  await step('installed manifest', checkInstalledManifest);
   const version = JSON.parse(readFileSync(resolve(installedRoot, 'package.json'), 'utf8')).version;
   await step('help and version', () => checkHelp(version));
   await step('help without native modules, serve reports runtime_load_failed', () =>
@@ -116,6 +120,30 @@ async function install() {
   }
 }
 
+/**
+ * The published manifest ships only the runtime's externals as `dependencies`, and packing rewrote every workspace and
+ * catalog specifier (the bundled packages remain as `devDependencies`, which consumers never install).
+ */
+async function checkInstalledManifest() {
+  const manifestPath = resolve(installedRoot, 'package.json');
+  const text = readFileSync(manifestPath, 'utf8');
+  const manifest = JSON.parse(text);
+  const names = Object.keys(manifest.dependencies ?? {}).sort();
+  if (JSON.stringify(names) !== JSON.stringify([...runtimePackageExternals].sort())) {
+    throw new StepFailure(
+      `dependencies are ${names.join(', ') || 'empty'}, expected exactly ${runtimePackageExternals.join(', ')}`,
+      text,
+    );
+  }
+  if (/"(?:workspace|catalog):/u.test(text)) {
+    throw new StepFailure('a workspace: or catalog: specifier survived packing', text);
+  }
+  if (manifest.private !== undefined) throw new StepFailure('the manifest sets private', text);
+  if (manifest.bin?.isagi !== `dist/${serveDistributionFiles[0]}`) {
+    throw new StepFailure(`bin.isagi is ${manifest.bin?.isagi}`, text);
+  }
+}
+
 async function checkHelp(version) {
   const versionResult = await isagi(['--version']);
   expectExit(versionResult, 0, 'isagi --version');
@@ -140,7 +168,7 @@ async function checkServeLoadFailure() {
 async function withoutNativeModules(check) {
   const moved = [];
   try {
-    for (const name of nativeModules) {
+    for (const name of runtimeNativeExternals) {
       const path = resolve(installedRoot, 'node_modules', name);
       if (!existsSync(path)) throw new StepFailure(`${name} is not installed at ${path}`);
       renameSync(path, `${path}.aside`);
@@ -222,8 +250,15 @@ async function checkServe() {
     if (!page.headers.get('content-security-policy')) {
       throw new StepFailure('GET / has no content-security-policy header');
     }
+    // The runtime serves `index.html` with its theme set as `data-theme` on `<html>`; apart from that attribute the
+    // document is the packed one.
     const packedDocument = readFileSync(resolve(installedRoot, 'web/index.html'), 'utf8');
-    if ((await page.text()) !== packedDocument) {
+    const servedDocument = await page.text();
+    const themeAttribute = /(<html\b[^>]*?)\sdata-theme="[^"]*"/iu;
+    if (!themeAttribute.test(servedDocument)) {
+      throw new StepFailure('GET / has no data-theme on <html>');
+    }
+    if (servedDocument.replace(themeAttribute, '$1') !== packedDocument) {
       throw new StepFailure('GET / is not the packed web/index.html');
     }
     console.log('     web UI served from the bundled web root, with its CSP');

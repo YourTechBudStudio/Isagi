@@ -34,13 +34,14 @@ test('rejects non-canonical app versions', () => {
   }
 });
 
-test('discovers every private workspace by exclusion and leaves workflow packages unchanged', async (context) => {
+test('synchronizes every private workspace and the public CLI package, and leaves workflow packages unchanged', async (context) => {
   const repoRoot = await createFixtureRepository(context, {
     patterns: ['apps/*', 'packages/*'],
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
       ['apps/future', { name: '@isagi/future', private: true, version: '1.5.0' }],
       ['packages/shared', { name: '@isagi/shared', private: true, version: '1.0.0' }],
+      cliPackage(),
       workflowSdk('4.0.0'),
       workflowVerifier('5.0.0'),
     ],
@@ -52,6 +53,7 @@ test('discovers every private workspace by exclusion and leaves workflow package
 
   assert.deepEqual(plan.synchronizedManifestPaths, [
     'package.json',
+    'apps/cli/package.json',
     'apps/future/package.json',
     'apps/runtime/package.json',
     'packages/shared/package.json',
@@ -61,6 +63,7 @@ test('discovers every private workspace by exclusion and leaves workflow package
     'packages/workflow-verifier/package.json',
   ]);
   assert.equal((await readPackageJson(repoRoot)).version, '2.0.0');
+  assert.equal((await readPackageJson(join(repoRoot, 'apps/cli'))).version, '2.0.0');
   assert.equal((await readPackageJson(join(repoRoot, 'apps/future'))).version, '2.0.0');
   assert.equal((await readPackageJson(join(repoRoot, 'apps/runtime'))).version, '2.0.0');
   assert.equal((await readPackageJson(join(repoRoot, 'packages/shared'))).version, '2.0.0');
@@ -79,7 +82,11 @@ test('ignores workspace directories without a package.json, like pnpm', async (c
     createPackageVersionPlan({ repoRoot, requestedVersion: '2.0.0' }),
   );
 
-  assert.deepEqual(plan.synchronizedManifestPaths, ['package.json', 'apps/runtime/package.json']);
+  assert.deepEqual(plan.synchronizedManifestPaths, [
+    'package.json',
+    'apps/cli/package.json',
+    'apps/runtime/package.json',
+  ]);
 });
 
 test('normalizes duplicate manifest paths from overlapping workspace patterns', async (context) => {
@@ -87,6 +94,7 @@ test('normalizes duplicate manifest paths from overlapping workspace patterns', 
     patterns: ['apps/*', 'apps/*', 'packages/*'],
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
+      cliPackage(),
       workflowSdk(),
       workflowVerifier(),
     ],
@@ -94,7 +102,11 @@ test('normalizes duplicate manifest paths from overlapping workspace patterns', 
 
   const plan = await Effect.runPromise(createPackageVersionPlan({ repoRoot }));
 
-  assert.deepEqual(plan.synchronizedManifestPaths, ['package.json', 'apps/runtime/package.json']);
+  assert.deepEqual(plan.synchronizedManifestPaths, [
+    'package.json',
+    'apps/cli/package.json',
+    'apps/runtime/package.json',
+  ]);
 });
 
 test('rejects duplicate package names across distinct manifests', async (context) => {
@@ -102,6 +114,7 @@ test('rejects duplicate package names across distinct manifests', async (context
     workspaces: [
       ['apps/one', { name: '@isagi/duplicate', private: true, version: '1.0.0' }],
       ['apps/two', { name: '@isagi/duplicate', private: true, version: '1.0.0' }],
+      cliPackage(),
       workflowSdk(),
       workflowVerifier(),
     ],
@@ -117,6 +130,7 @@ test('requires each independently versioned package exactly once', async (contex
   const repoRoot = await createFixtureRepository(context, {
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
+      cliPackage(),
       workflowSdk(),
     ],
   });
@@ -132,6 +146,7 @@ test('rejects any other public workspace before writing', async (context) => {
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
       ['packages/public', { name: '@isagi/unexpected-public', version: '1.0.0' }],
+      cliPackage(),
       workflowSdk(),
       workflowVerifier(),
     ],
@@ -149,6 +164,54 @@ test('rejects any other public workspace before writing', async (context) => {
 
   assert.deepEqual(writes, []);
   assert.equal((await readPackageJson(repoRoot)).version, '1.0.0');
+});
+
+test('requires the app-versioned public CLI package exactly once', async (context) => {
+  const repoRoot = await createFixtureRepository(context, {
+    workspaces: [
+      ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
+      workflowSdk(),
+      workflowVerifier(),
+    ],
+  });
+
+  await assertEffectFailure(
+    createPackageVersionPlan({ repoRoot }),
+    "Missing app-versioned public workspace package '@yourtechbudstudio/isagi'",
+  );
+});
+
+test('allows the CLI package to be public and names every allowed public package otherwise', async (context) => {
+  const repoRoot = await createFixtureRepository(context, {
+    workspaces: [
+      ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
+      ['packages/public', { name: '@isagi/unexpected-public', version: '1.0.0' }],
+      cliPackage(),
+      workflowSdk(),
+      workflowVerifier(),
+    ],
+  });
+
+  await assertEffectFailure(
+    createPackageVersionPlan({ repoRoot }),
+    "Only '@yourtechbudstudio/isagi', '@yourtechbudstudio/isagi-workflow-sdk', '@yourtechbudstudio/isagi-workflow-verifier' may be public.",
+  );
+});
+
+test('verification reports an unsynchronized CLI package', async (context) => {
+  const repoRoot = await createFixtureRepository(context, {
+    workspaces: [
+      ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
+      cliPackage('0.9.0'),
+      workflowSdk(),
+      workflowVerifier(),
+    ],
+  });
+
+  await assertEffectFailure(
+    verifyPackageVersions({ repoRoot }),
+    'Package versions are not synchronized to 1.0.0: apps/cli/package.json.',
+  );
 });
 
 test('rejects invalid requested versions before writing', async (context) => {
@@ -220,6 +283,7 @@ test('verification reports mismatches without writing', async (context) => {
   const repoRoot = await createFixtureRepository(context, {
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '0.9.0' }],
+      cliPackage(),
       workflowSdk(),
       workflowVerifier(),
     ],
@@ -260,6 +324,7 @@ test('discovery spans package patterns separated by blank lines and comments', a
     ].join('\n'),
     workspaces: [
       ['apps/runtime', { name: '@isagi/runtime', private: true, version: '0.9.0' }],
+      cliPackage(),
       workflowSdk(),
       workflowVerifier(),
     ],
@@ -267,7 +332,11 @@ test('discovery spans package patterns separated by blank lines and comments', a
 
   const plan = await Effect.runPromise(createPackageVersionPlan({ repoRoot }));
 
-  assert.deepEqual(plan.synchronizedManifestPaths, ['package.json', 'apps/runtime/package.json']);
+  assert.deepEqual(plan.synchronizedManifestPaths, [
+    'package.json',
+    'apps/cli/package.json',
+    'apps/runtime/package.json',
+  ]);
   assert.deepEqual(
     plan.changes.map(({ relativePath }) => relativePath),
     ['apps/runtime/package.json'],
@@ -315,6 +384,7 @@ async function createFixtureRepository(
 
   const fixtureWorkspaces = workspaces ?? [
     ['apps/runtime', { name: '@isagi/runtime', private: true, version: '1.0.0' }],
+    cliPackage(),
     workflowSdk(),
     workflowVerifier(),
   ];
@@ -328,6 +398,11 @@ async function createFixtureRepository(
     }
   }
   return repoRoot;
+}
+
+/** @returns {[string, Record<string, unknown>]} */
+function cliPackage(version = '1.0.0') {
+  return ['apps/cli', { name: '@yourtechbudstudio/isagi', version }];
 }
 
 /** @returns {[string, Record<string, unknown>]} */

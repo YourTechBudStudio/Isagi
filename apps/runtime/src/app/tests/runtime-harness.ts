@@ -4,9 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import type { RuntimeLaunch, SourcedValue } from '@isagi/cli/serve-launch';
-
 import { EditorProvisioningSettings, editorProvisioningDeadline } from '../../editor/index.js';
+import type { RuntimeLaunch, SourcedValue } from '../../launch-contract.js';
 import type { UserShell } from '../../platform/process/index.js';
 import { userShellBaseEnv } from '../../platform/process/index.js';
 import { commandNotFound, testUserShellLayer } from '../../platform/process/testing.js';
@@ -62,8 +61,11 @@ export function testAppLayer(userShell: Layer.Layer<UserShell> = testRuntimeUser
   return appLayer(platformLayer(userShell));
 }
 
-/** The CLI bundle a source-mode runtime's shim runs, as `scripts/serve-from-source.ts` passes it. */
-const cliEntryPath = fileURLToPath(new URL('../../../../cli/dist/isagi.mjs', import.meta.url));
+/**
+ * The CLI file the shim names. No runtime test runs the shim, so a fixed placeholder stands in for the real bundle,
+ * which belongs to the CLI package.
+ */
+const cliEntryPath = '/opt/isagi/isagi.mjs';
 
 /** A minimal built-workbench stand-in: one `index.html`. Every runtime serves a web root, so every test boot has one. */
 export const testWebRoot: SourcedValue<string> = {

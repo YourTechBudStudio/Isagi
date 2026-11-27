@@ -2,6 +2,7 @@ import { Writable } from 'node:stream';
 
 import { Effect, Layer, Stream } from 'effect';
 
+import type { RuntimeLaunch } from '@isagi/runtime/launch';
 import {
   RuntimeClient,
   RuntimeTransportError,
@@ -10,7 +11,7 @@ import {
 } from '@isagi/shared/runtime-client';
 
 import { runCli, type RuntimeTarget } from '../main.js';
-import type { RuntimeEntry, RuntimeLaunch } from '../serve/launch.js';
+import type { RuntimeEntry } from '../serve/launch.js';
 
 /**
  * A fake `RuntimeClient` keyed by endpoint id. A route answers with the value its handler returns

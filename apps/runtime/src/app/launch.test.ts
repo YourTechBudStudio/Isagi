@@ -3,10 +3,9 @@ import test from 'node:test';
 
 import { Effect, Redacted } from 'effect';
 
-import type { RuntimeLaunch } from '@isagi/cli/serve-launch';
-
 import { LauncherToken } from '../access/index.js';
 import { CliEntry } from '../cli-access/index.js';
+import type { RuntimeLaunch } from '../launch-contract.js';
 import { DataDirectoryRoot } from '../platform/persistence/index.js';
 import { launchInputsLayer, ServerLaunch } from './launch.js';
 

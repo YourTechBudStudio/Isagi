@@ -2,13 +2,12 @@ import process from 'node:process';
 
 import { Cause, Effect, Layer } from 'effect';
 
-import type { RuntimeEntryModule } from '@isagi/cli/serve-launch';
-
 import { MainLayer } from './app/http-server.js';
 import { launchInputsLayer } from './app/launch.js';
 import { RuntimeLogger } from './app/logger.js';
 import { runMain } from './app/run-main.js';
 import { formatStartupFailure } from './app/startup-diagnostics.js';
+import type { RuntimeEntryModule } from './launch-contract.js';
 
 /**
  * The runtime process, started by `isagi serve` (the only way a runtime starts): build the server and every service

@@ -18,26 +18,26 @@ import process from 'node:process';
 
 import { Effect } from 'effect';
 
+import { serveDistributionFiles } from '../../../cli/distribution.mjs';
 import {
   runtimeNativeExternals,
   runtimePackageExternals,
-  serveDistributionFiles,
 } from '../../../runtime/runtime-externals.mjs';
 import { prepareElectronExecutable } from '../electron-runtime.mjs';
 import { StageOperationError, StageValidationError } from './errors.mjs';
 import {
+  cliRoot,
   electronBuildCacheRoot,
   generatedRoot,
   nativeCacheRoot,
   rebuildWorkerPath,
   repoRoot,
-  runtimeRoot,
   stageBackupRoot,
   stageRoot,
 } from './paths.mjs';
 import { runCommand } from './process.mjs';
 
-export const stagingRecipeVersion = 3;
+export const stagingRecipeVersion = 4;
 const completionFileName = 'runtime-native-cache.json';
 const stageMetadataFileName = 'runtime-stage.json';
 
@@ -45,12 +45,15 @@ export function prepareRuntimeStage({ buildRuntime = true, forceNative = false }
   return Effect.gen(function* () {
     yield* tryOperation('recovery', generatedRoot, () => recoverGeneratedState());
     if (buildRuntime) {
-      yield* runCommand('pnpm', ['--filter', '@isagi/runtime', 'build'], { cwd: repoRoot });
+      // The CLI and every workspace package it bundles; the CLI build assembles the serve distribution.
+      yield* runCommand('pnpm', ['--filter', '@yourtechbudstudio/isagi...', 'build'], {
+        cwd: repoRoot,
+      });
     }
 
     const electron = yield* readElectronRuntime();
-    const dependencyVersions = yield* tryOperation('dependency resolution', runtimeRoot, () =>
-      resolveExternalVersions(runtimeRoot),
+    const dependencyVersions = yield* tryOperation('dependency resolution', cliRoot, () =>
+      resolveExternalVersions(cliRoot),
     );
     const rebuildVersion = yield* tryOperation('rebuild version resolution', repoRoot, () =>
       resolvePackageVersion('@electron/rebuild', resolve(repoRoot, 'apps/desktop/package.json')),
@@ -163,7 +166,7 @@ function prepareNativeCache({
     const nextCache = resolve(nativeCacheRoot, `.next-${fingerprint}-${randomUUID()}`);
     const deployArgs = [
       '--filter',
-      '@isagi/runtime-stage-dependencies',
+      '@yourtechbudstudio/isagi',
       'deploy',
       nextCache,
       '--prod',
@@ -278,9 +281,9 @@ function readElectronRuntime() {
 function assembleStage({ cacheRoot, dependencyVersions, electron, fingerprint, nextRoot }) {
   rmSync(nextRoot, { recursive: true, force: true });
   mkdirSync(nextRoot, { recursive: true });
-  // The serve distribution as the runtime build wrote it: `isagi.mjs`,
+  // The serve distribution as the CLI build assembled it: `isagi.mjs`,
   // `index.js`, `assets/` and `drizzle/`.
-  cpSync(resolve(runtimeRoot, 'dist'), nextRoot, {
+  cpSync(resolve(cliRoot, 'dist'), nextRoot, {
     recursive: true,
     verbatimSymlinks: true,
   });
@@ -464,7 +467,7 @@ function findPackageRoot(entry, expectedName) {
 function stagedPackageManifest(dependencyVersions) {
   return {
     name: '@isagi/electron-runtime-stage',
-    version: readJson(resolve(runtimeRoot, 'package.json')).version,
+    version: readJson(resolve(cliRoot, 'package.json')).version,
     private: true,
     type: 'module',
     main: 'index.js',

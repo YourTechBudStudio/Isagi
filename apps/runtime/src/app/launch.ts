@@ -1,9 +1,8 @@
 import { Context, Layer, Redacted } from 'effect';
 
-import type { RuntimeLaunch, SourcedValue } from '@isagi/cli/serve-launch';
-
 import { LauncherToken } from '../access/index.js';
 import { CliEntry } from '../cli-access/index.js';
+import type { RuntimeLaunch, SourcedValue } from '../launch-contract.js';
 import { DataDirectoryRoot } from '../platform/persistence/index.js';
 
 /** The listening inputs from `serve`; read only by `HttpServerLayer`. */

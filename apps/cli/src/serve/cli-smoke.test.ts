@@ -2,18 +2,18 @@
 // and error codes are a public surface (agents script against them through the shipped skill), so
 // this pins what `workflows runs list` and `workflows runs show` print and return end to end.
 //
-// It lives in the runtime package because the CLI cannot import the runtime (the runtime already
-// depends on `@isagi/cli`). The bundle is `apps/cli/dist/isagi.mjs`, built by the runtime's
-// `workspace-deps` step before every runtime test run.
+// It lives in the CLI package, which depends on the runtime: the runtime is booted in-process
+// through `@isagi/runtime/testing`. The bundle is this package's `dist/isagi.mjs`, built by
+// `pnpm build` before `test:built` runs.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { bootRuntime, type BootedRuntime } from './runtime-harness.js';
+import { bootRuntime, type BootedRuntime } from '@isagi/runtime/testing';
 
 describe('cli smoke', () => {
   let runtime: BootedRuntime | undefined;
@@ -80,11 +80,8 @@ describe('cli smoke', () => {
   });
 });
 
-/** The bundle next to the CLI package, located through the package so it survives file moves. */
-const cliBundlePath = resolve(
-  dirname(createRequire(import.meta.url).resolve('@isagi/cli/commands')),
-  '../../dist/isagi.mjs',
-);
+/** This package's built bundle. */
+const cliBundlePath = fileURLToPath(new URL('../../dist/isagi.mjs', import.meta.url));
 
 interface CliResult {
   readonly exitCode: number;

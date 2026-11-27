@@ -6,6 +6,7 @@ build/
 /.generated/
 apps/runtime/.generated/
 apps/desktop/.generated/
+apps/cli/web/
 release/
 .turbo/
 coverage/

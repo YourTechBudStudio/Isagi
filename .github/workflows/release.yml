@@ -179,18 +179,18 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.release.tag_name }}
+      # No `registry-url`: it sets NODE_AUTH_TOKEN, which overrides the trusted publishing (OIDC) exchange.
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or later (https://docs.npmjs.com/trusted-publishers/).
       - name: Install an npm CLI with trusted publishing
         run: npm install --global npm@11.5.1
       - name: Skip a version already on npm
         id: published
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="$(node -p "require('./apps/cli/package.json').version")"
           echo "tarball=.generated/npm-package/yourtechbudstudio-isagi-${VERSION}.tgz" >> "$GITHUB_OUTPUT"
           if npm view "@yourtechbudstudio/isagi@${VERSION}" version >/dev/null 2>&1; then
             echo "::notice::@yourtechbudstudio/isagi@${VERSION} is already on npm; skipping."

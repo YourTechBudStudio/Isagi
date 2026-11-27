@@ -1,4 +1,4 @@
-import type { SourcedValue } from './serve/launch.js';
+import type { SourcedValue } from '@isagi/runtime/launch';
 
 /**
  * The one flag-then-environment rule: a flag if given (even empty, so it fails validation rather

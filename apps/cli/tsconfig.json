@@ -4,8 +4,10 @@
     "composite": true,
     "lib": ["DOM", "ES2024"],
     "outDir": "dist",
+    // `dist` is the published distribution; keep TypeScript's build cache out of it.
+    "tsBuildInfoFile": "node_modules/.cache/tsc/tsconfig.tsbuildinfo",
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src", "vite.config.ts", "package.json"]
+  "include": ["src", "scripts", "test", "vite.config.ts", "package.json"]
 }

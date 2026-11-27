@@ -9,10 +9,14 @@ import { Cause, Data, Effect, Exit } from 'effect';
 
 import { parseCanonicalVersion } from './release-version-contract.mjs';
 
+// Public, published on their own release cadence, and never synchronized to the app version.
 const independentlyVersionedPackages = new Set([
   '@yourtechbudstudio/isagi-workflow-sdk',
   '@yourtechbudstudio/isagi-workflow-verifier',
 ]);
+// Public and synchronized to the app version: the CLI package the GitHub release publishes to npm.
+const appVersionedPublicPackages = new Set(['@yourtechbudstudio/isagi']);
+const allowedPublicPackages = [...appVersionedPublicPackages, ...independentlyVersionedPackages];
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const defaultFileSystem = { readFile, readdir, writeFile };
 
@@ -247,21 +251,26 @@ function validateInventory(workspaceManifests) {
       manifestsByName.set(manifest.packageJson.name, manifest);
     }
 
-    for (const packageName of independentlyVersionedPackages) {
-      if (!manifestsByName.has(packageName)) {
-        return yield* fail(
-          `Missing independently versioned workspace package '${packageName}'. It must appear exactly once.`,
-        );
+    for (const [kind, packageNames] of [
+      ['independently versioned', independentlyVersionedPackages],
+      ['app-versioned public', appVersionedPublicPackages],
+    ]) {
+      for (const packageName of packageNames) {
+        if (!manifestsByName.has(packageName)) {
+          return yield* fail(
+            `Missing ${kind} workspace package '${packageName}'. It must appear exactly once.`,
+          );
+        }
       }
     }
 
     for (const manifest of workspaceManifests) {
       if (
-        !independentlyVersionedPackages.has(manifest.packageJson.name) &&
+        !allowedPublicPackages.includes(manifest.packageJson.name) &&
         manifest.packageJson.private !== true
       ) {
         return yield* fail(
-          `Unexpected public workspace package '${manifest.packageJson.name}' in ${manifest.relativePath}. Only the workflow SDK and workflow verifier may be public.`,
+          `Unexpected public workspace package '${manifest.packageJson.name}' in ${manifest.relativePath}. Only ${allowedPublicPackages.map((name) => `'${name}'`).join(', ')} may be public.`,
         );
       }
     }
@@ -326,7 +335,7 @@ export function syncHelpText() {
   return [
     'Usage: pnpm versions:sync [-- MAJOR.MINOR.PATCH]',
     '',
-    'Synchronize the root and all private workspace package versions.',
+    'Synchronize the root, all private workspace packages and the public @yourtechbudstudio/isagi package.',
     'Review and commit the resulting manifest changes, then push them to origin/main.',
     '',
     'This does not tag or release anything. Create and review a draft GitHub release, then',
