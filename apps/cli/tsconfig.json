@@ -4,6 +4,8 @@
     "composite": true,
     "lib": ["DOM", "ES2024"],
     "outDir": "dist",
+    // `dist` is the published distribution; keep TypeScript's build cache out of it.
+    "tsBuildInfoFile": "node_modules/.cache/tsc/tsconfig.tsbuildinfo",
     "resolveJsonModule": true,
     "types": ["node"]
   },

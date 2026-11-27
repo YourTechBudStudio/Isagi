@@ -8,7 +8,6 @@ import test from 'node:test';
 import { Cause, Effect, Exit, Option } from 'effect';
 
 import { runtimePackageExternals } from '../../../runtime/runtime-externals.mjs';
-import { repoRoot, runtimeRoot } from './paths.mjs';
 import { runCommand } from './process.mjs';
 import { takeCompleteLines } from './smoke.mjs';
 import {
@@ -127,24 +126,6 @@ test('node-pty staging removes an empty prebuild set when no target exists', () 
     assert.equal(existsSync(prebuildsRoot), false);
   } finally {
     rmSync(packageRoot, { recursive: true, force: true });
-  }
-});
-
-test('the staging importer owns exactly the declared runtime externals', () => {
-  const runtimeManifest = JSON.parse(readFileSync(resolve(runtimeRoot, 'package.json'), 'utf8'));
-  const stagingManifest = JSON.parse(
-    readFileSync(resolve(repoRoot, 'packages/runtime-stage-dependencies/package.json'), 'utf8'),
-  );
-  assert.deepEqual(
-    Object.keys(stagingManifest.dependencies).sort(),
-    [...runtimePackageExternals].sort(),
-  );
-  for (const name of runtimePackageExternals) {
-    assert.equal(
-      stagingManifest.dependencies[name],
-      runtimeManifest.dependencies[name],
-      `${name} must use the runtime dependency specifier`,
-    );
   }
 });
 

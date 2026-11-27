@@ -1,28 +1,52 @@
 {
-  "name": "@isagi/cli",
+  "name": "@yourtechbudstudio/isagi",
   "version": "0.0.7",
-  "private": true,
+  "description": "Isagi: resumable worktree-based development environments. `isagi serve` runs the runtime.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YourTechBudStudio/Isagi.git"
+  },
+  "bin": {
+    "isagi": "dist/isagi.mjs"
+  },
+  "files": [
+    "dist",
+    "web"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "vite build",
-    "check": "pnpm -C ../runtime prepare:source && pnpm typecheck:built && pnpm build && pnpm test:built",
-    "dev": "pnpm -C ../runtime prepare:source && pnpm build && cross-env ISAGI_RUNTIME_DEBUG=1 tsx scripts/serve-from-source.ts --data-dir ../../data/.isagi --web-root ../web/dist",
+    "build": "pnpm bundle && node scripts/assemble-distribution.mjs",
+    "bundle": "vite build",
+    "check": "pnpm -C ../runtime prepare:source && pnpm typecheck:built && pnpm bundle && pnpm test:built",
+    "dev": "pnpm -C ../runtime prepare:source && pnpm bundle && cross-env ISAGI_RUNTIME_DEBUG=1 tsx scripts/serve-from-source.ts --data-dir ../../data/.isagi --web-root ../web/dist",
+    "prepack": "node scripts/assemble-distribution.mjs --check",
     "start": "node dist/isagi.mjs serve",
-    "test": "pnpm -C ../runtime prepare:source && pnpm build && pnpm test:built",
-    "test:built": "node ../../scripts/test-exit-watchdog.mjs 240 -- node --import tsx --import ../../scripts/dump-handles-on-signal.mjs --test --experimental-test-isolation=none \"src/**/*.test.ts\" \"scripts/**/*.test.ts\" \"test/**/*.test.ts\"",
+    "test": "pnpm -C ../runtime prepare:source && pnpm bundle && pnpm test:built",
+    "test:built": "node ../../scripts/test-exit-watchdog.mjs 240 -- node --import tsx --import ../../scripts/dump-handles-on-signal.mjs --test --experimental-test-isolation=none \"src/**/*.test.ts\" \"scripts/**/*.test.ts\" \"scripts/**/*.test.mjs\" \"test/**/*.test.ts\"",
     "typecheck": "pnpm -C ../runtime workspace-deps && pnpm typecheck:built",
     "typecheck:built": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@isagi/shared": "workspace:*",
-    "effect": "catalog:"
+    "@fastify/websocket": "^11.2.0",
+    "better-sqlite3": "^12.11.1",
+    "node-pty": "1.2.0-beta.15"
   },
   "devDependencies": {
     "@isagi/runtime": "workspace:*",
+    "@isagi/shared": "workspace:*",
+    "@isagi/web": "workspace:*",
     "@types/node": "^24.10.1",
     "cross-env": "^10.1.0",
+    "effect": "catalog:",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
+  },
+  "engines": {
+    "node": "^24 || ^26"
   }
 }

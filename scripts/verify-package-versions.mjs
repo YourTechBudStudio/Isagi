@@ -22,7 +22,7 @@ export function verifyHelpText() {
   return [
     'Usage: pnpm versions:verify',
     '',
-    'Verify that the root and all private workspace package versions are synchronized.',
+    'Verify that the root, all private workspace packages and the public @yourtechbudstudio/isagi package are synchronized.',
     'Print one JSON object on success and never modify repository files.',
   ].join('\n');
 }

@@ -77,7 +77,7 @@ test('the npm job publishes, without an environment, the tarball it verified', (
     job,
     /^\n  npm:\n    name: Publish npm package\n    needs: \[linux, mac_arm64, mac_x64\]\n    runs-on: ubuntu-24\.04\n    permissions:\n      contents: read\n      id-token: write\n    steps:\n/u,
   );
-  assert.doesNotMatch(job, /environment:/u);
+  assert.doesNotMatch(job, /environment:|registry-url:|NODE_AUTH_TOKEN:/u);
   assert.equal(workflow.match(/id-token: write/gu)?.length, 1);
   assert.match(workflow, /^permissions:\n  contents: read\n\njobs:/mu);
   const skip = job.indexOf('name: Skip a version already on npm');
@@ -86,6 +86,10 @@ test('the npm job publishes, without an environment, the tarball it verified', (
     'run: npm publish "${{ steps.published.outputs.tarball }}" --access public',
   );
   assert.ok(skip > 0 && skip < verify && verify < publish, 'skip, then verify, then publish');
+  assert.match(
+    job,
+    /VERSION="\$\(node -p "require\('\.\/apps\/cli\/package\.json'\)\.version"\)"/u,
+  );
   assert.match(job, /npm view "@yourtechbudstudio\/isagi@\$\{VERSION\}" version/u);
   assert.match(
     job,

@@ -5,7 +5,7 @@ const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 
 export const desktopRoot = resolve(moduleDirectory, '../..');
 export const repoRoot = resolve(desktopRoot, '../..');
-export const runtimeRoot = resolve(repoRoot, 'apps/runtime');
+export const cliRoot = resolve(repoRoot, 'apps/cli');
 export const generatedRoot = resolve(desktopRoot, '.generated');
 export const stageRoot = resolve(generatedRoot, 'runtime');
 export const stageBackupRoot = resolve(generatedRoot, 'runtime.previous');
