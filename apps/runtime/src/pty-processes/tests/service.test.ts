@@ -16,7 +16,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
@@ -376,9 +376,7 @@ test('PTY read-only supersede awaits displaced detach before replacement attach'
 });
 
 function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -404,24 +402,16 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
         return Effect.sync(() => clearTimeout(timer));
       }),
     writeInput: () => Effect.void,
-    replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: 0 });
-        input.send({ type: 'replay_end' });
-      }),
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
-  } satisfies PtyBackendShape;
+  });
 }
 
 function launchCaptureBackend(
   onLaunch: (environment: NodeJS.ProcessEnv) => void,
   overrides: Partial<PtyBackendShape> = {},
 ): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.sync(() => {
         onLaunch(input.env);
@@ -437,19 +427,15 @@ function launchCaptureBackend(
       }),
     attach: () => Effect.die('launch environment test should not attach'),
     writeInput: () => Effect.void,
-    replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
     ...overrides,
-  } satisfies PtyBackendShape;
+  });
 }
 
 function singleAttachmentBackend(events: string[]): PtyBackendShape {
   let attached = false;
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -480,21 +466,13 @@ function singleAttachmentBackend(events: string[]): PtyBackendShape {
           }),
       ),
     writeInput: () => Effect.void,
-    replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: 0 });
-        input.send({ type: 'replay_end' });
-      }),
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
-  } satisfies PtyBackendShape;
+  });
 }
 
 function writeInputBackend(writes: string[]): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -510,15 +488,9 @@ function writeInputBackend(writes: string[]): PtyBackendShape {
         writes.push(data);
       }),
     attach: () => Effect.die('writeInput test should not attach'),
-    replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: 0 });
-        input.send({ type: 'replay_end' });
-      }),
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
-  } satisfies PtyBackendShape;
+  });
 }
 
 // The composed `launch` is now `allocateLaunch` plus a one-shot `start`. These

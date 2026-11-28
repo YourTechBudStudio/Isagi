@@ -38,7 +38,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService, SHUTDOWN_GRACEFUL_TIMEOUT_MS } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import {
   PtyServiceError,
   PtyStartError,
@@ -59,9 +59,7 @@ const lifecycleUserShell = testUserShellLayer({
 });
 
 function fakeNodePty(overrides: Partial<PtyBackendShape> = {}): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -72,14 +70,8 @@ function fakeNodePty(overrides: Partial<PtyBackendShape> = {}): PtyBackendShape 
         },
         events: Stream.empty,
       }),
-    writeInput: () => Effect.void,
-    attach: () => Effect.die('attach is not expected here'),
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
     ...overrides,
-  };
+  });
 }
 
 const realNodePtyCatalog = Layer.effect(

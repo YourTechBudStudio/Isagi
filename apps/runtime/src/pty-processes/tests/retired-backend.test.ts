@@ -27,7 +27,7 @@ import { decodeBackendRef } from '../service/backend-ref.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { reserveLaunch, type PtyReservations } from '../service/lifecycle.js';
 import { ptyProcesses } from '../tables.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import {
   interruptedByRuntime,
   type PtyBackend as PtyBackendShape,
@@ -44,28 +44,15 @@ const nodePtyRef = (id: number) =>
   JSON.stringify({ schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: 4242 });
 
 function backendStub(overrides: Partial<PtyBackendShape> = {}) {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
-    launch: () => Effect.die('launch is not expected here'),
-    writeInput: () => Effect.void,
-    attach: () => Effect.die('attach is not expected here'),
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-    ...overrides,
-  } satisfies PtyBackendShape;
+  return fakePtyBackend(overrides);
 }
 
 // The only adapter, forbidden from touching anything: any call through it would
 // be a retired row routed to the wrong transport.
 function forbiddenNodePty() {
   return backendStub({
-    available: Effect.die('node-pty must never be probed for a retired row'),
     inspect: () => Effect.die('node-pty must never inspect a retired row'),
     kill: () => Effect.die('node-pty must never kill a retired row'),
-    replay: () => Effect.die('node-pty must never replay a retired row'),
   });
 }
 
@@ -309,7 +296,6 @@ test('GC deletes an orphan terminal tmux row like any other ended process', () =
         yield* collectPtyGarbage(
           repository,
           fakeBackendCatalog({ nodePty: forbiddenNodePty() }),
-          'test-runtime',
           sessionsPath,
           { nowMs: Date.now() },
         );
@@ -431,29 +417,26 @@ test('a launch uses the configured node-pty adapter and keeps a file log', () =>
     assert.ok(row?.logPath);
   }));
 
-test('the backend-session sweep runs the registered adapter and skips it when unavailable', () =>
+test('the backend-session sweep runs the registered adapter', () =>
   withTempRoot('sweep', async (dataRoot) => {
-    for (const available of [true, false]) {
-      let swept = 0;
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          yield* PtyService;
-        }).pipe(
-          Effect.provide(
-            serviceLayer(
-              dataRoot,
-              backendStub({
-                available: Effect.succeed(available),
-                collectGarbage: () =>
-                  Effect.sync(() => {
-                    swept += 1;
-                    return [];
-                  }),
-              }),
-            ),
+    let swept = 0;
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* PtyService;
+      }).pipe(
+        Effect.provide(
+          serviceLayer(
+            dataRoot,
+            backendStub({
+              collectGarbage: () =>
+                Effect.sync(() => {
+                  swept += 1;
+                  return [];
+                }),
+            }),
           ),
         ),
-      );
-      assert.equal(swept, available ? 1 : 0);
-    }
+      ),
+    );
+    assert.equal(swept, 1);
   }));

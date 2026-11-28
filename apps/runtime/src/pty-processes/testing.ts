@@ -26,6 +26,25 @@ export function fakeBackendCatalog(input: {
 }
 
 /**
+ * A node-pty-named backend for tests: every member is inert (`inspect` answers `alive`, `kill` succeeds, GC finds
+ * nothing) and launch/attach die unless overridden. `terminate` defaults to the backend's own `kill`, so a test that
+ * overrides only `kill` controls every stop path.
+ */
+export function fakePtyBackend(overrides: Partial<PtyBackendShape> = {}): PtyBackendShape {
+  const backend = {
+    name: 'node_pty',
+    launch: () => Effect.die('launch is not expected here'),
+    writeInput: () => Effect.void,
+    attach: () => Effect.die('attach is not expected here'),
+    inspect: () => Effect.succeed({ status: 'alive' }),
+    kill: () => Effect.succeed({ terminated: true }),
+    collectGarbage: () => Effect.succeed([]),
+    ...overrides,
+  } satisfies Omit<PtyBackendShape, 'terminate'> & Partial<PtyBackendShape>;
+  return { terminate: (input) => backend.kill(input.ref), ...backend };
+}
+
+/**
  * A terminal-query filter for a test that calls a backend's `launch` directly, where the PTY service would otherwise
  * build one from the configured theme.
  */

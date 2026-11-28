@@ -16,10 +16,9 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import {
   PtyKillError,
-  PtyInspectError,
   type PtyBackend as PtyBackendShape,
   type PtyBackendName,
   type PtyProcessStatus,
@@ -32,18 +31,7 @@ import {
 // writes a command's terminal outcome, the other cascades a worktree away.
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
-  return {
-    name,
-    available: Effect.succeed(true),
-    launch: () => Effect.die(`${name} launch is not expected here`),
-    writeInput: () => Effect.void,
-    attach: () => Effect.die(`${name} attach is not expected here`),
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-    ...overrides,
-  } satisfies PtyBackendShape;
+  return fakePtyBackend({ name, ...overrides });
 }
 
 // Never-touched adapter. Any call through it is a bug, not a test failure to be
@@ -52,9 +40,6 @@ function forbiddenBackend(name: PtyBackendName) {
   return backendStub(name, {
     inspect: () => Effect.die(`${name} must never be inspected here`),
     kill: () => Effect.die(`${name} must never be killed here`),
-    available: Effect.sync(() => {
-      throw new Error(`${name} must never be probed here`);
-    }),
   });
 }
 
@@ -219,26 +204,6 @@ test(
 test(
   'every observable gating failure propagates instead of allowing a cascade',
   withTempRoot('terminal-gate-failures', async (dataRoot) => {
-    const unavailable = await Effect.runPromise(
-      Effect.flip(
-        withCleanup(
-          dataRoot,
-          catalogWith(backendStub('node_pty', { available: Effect.succeed(false) })),
-          ({ pty }) =>
-            Effect.gen(function* () {
-              const ptyProcessId = yield* seedRow({ status: 'exited' });
-              return yield* pty.cleanupProcess({
-                ptyProcessId,
-                reason: 'user_requested',
-                ensureBackendAbsence: true,
-              });
-            }),
-        ),
-      ),
-    );
-    assert.equal(unavailable._tag, 'PtyServiceError');
-    assert.equal(unavailable.code, 'backend_unavailable');
-
     const undecodable = await Effect.runPromise(
       Effect.flip(
         withCleanup(dataRoot, catalogWith(backendStub('node_pty')), ({ pty }) =>
@@ -313,39 +278,6 @@ test(
     // A node-pty process cannot outlive the runtime, so its absence is an
     // ephemeral loss rather than a backend that lost track of a process.
     assert.equal(result.row?.statusReason, 'runtime_ephemeral_lost');
-  }),
-);
-
-test(
-  'an unavailable adapter fails a nonterminal cleanup rather than declaring the process gone',
-  withTempRoot('nonterminal-unavailable', async (dataRoot) => {
-    const error = await Effect.runPromise(
-      Effect.flip(
-        withCleanup(
-          dataRoot,
-          catalogWith(
-            backendStub('node_pty', {
-              inspect: () =>
-                Effect.fail(new PtyInspectError({ cause: new Error('the backend is gone') })),
-            }),
-          ),
-          ({ pty, repository }) =>
-            Effect.gen(function* () {
-              const ptyProcessId = yield* seedRow({ status: 'running' });
-              const outcome = yield* pty.cleanupProcess({
-                ptyProcessId,
-                reason: 'runtime_shutdown',
-              });
-              // Unreachable: proves the row was not terminal-ized on the way out.
-              const row = yield* repository.findProcess(ptyProcessId);
-              return { outcome, row };
-            }),
-        ),
-      ),
-    );
-
-    assert.equal(error._tag, 'PtyServiceError');
-    assert.equal(error.code, 'backend_unavailable');
   }),
 );
 

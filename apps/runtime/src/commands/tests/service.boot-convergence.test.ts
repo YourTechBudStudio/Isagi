@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
-import { PtyServiceError } from '../../pty-processes/index.js';
+import { PtyKillError } from '../../pty-processes/index.js';
 import { terminalCommandOutcomeForPtyRow } from '../outcomes.js';
 import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
@@ -71,12 +71,8 @@ async function boot(
   }
 }
 
-const unavailable = (ptyProcessId: number) =>
-  new PtyServiceError({
-    code: 'backend_unavailable',
-    message: 'PTY backend node_pty is unavailable.',
-    ptyProcessId,
-  });
+const unstoppable = (ptyProcessId: number) =>
+  new PtyKillError({ ptyProcessId, cause: new Error('the process would not stop') });
 
 test('an ordinary crash suspends the command and fails its run with the interruption diagnostic', async () => {
   // The common case: the state still says running, and the incarnation's row is
@@ -256,7 +252,7 @@ test('a single unresolved incarnation is re-adopted and always announced', async
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
     ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
-    pty: { cleanupProcess: () => Effect.fail(unavailable(501)) },
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(501)) },
   });
 
   assert.equal(result.recorder.readopted.length, 1);
@@ -280,7 +276,7 @@ test('a re-adoption with no retained run still takes ownership', async () => {
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [],
     ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
-    pty: { cleanupProcess: () => Effect.fail(unavailable(501)) },
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(501)) },
   });
 
   assert.equal(result.recorder.readopted.length, 1);
@@ -299,7 +295,7 @@ test('out-of-model divergence is logged and left completely unrepaired', async (
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 601 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 602 })],
     ptyProcessById: (id) => rows.get(id) ?? null,
-    pty: { cleanupProcess: (input) => Effect.fail(unavailable(input.ptyProcessId)) },
+    pty: { cleanupProcess: (input) => Effect.fail(unstoppable(input.ptyProcessId)) },
   });
 
   assert.equal(result.recorder.cleaned.length, 2, 'every candidate is still attempted');
@@ -308,7 +304,7 @@ test('out-of-model divergence is logged and left completely unrepaired', async (
   assert.equal(result.runs[0]?.ptyProcessId, 602, 'both links survive for the next retry');
   assert.equal(result.runs[0]?.status, 'running');
   // The log is the only artifact this branch produces, so it has to name every
-  // incarnation *and* its transport — "the backend is unavailable" and "this ref is
+  // incarnation *and* its transport — "the kill failed" and "this ref is
   // corrupt" are different user problems with different recoveries.
   assert.ok(
     result.recorder.logs.some(
@@ -382,7 +378,7 @@ test('the residue sweep cannot undo a re-adoption', async () => {
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
     ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
-    pty: { cleanupProcess: () => Effect.fail(unavailable(501)) },
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(501)) },
   });
 
   assert.equal(result.recorder.readopted.length, 1);
@@ -412,7 +408,7 @@ commands:
       commandRun({ commandName: 'api', status: 'running', ptyProcessId: 702, id: 2 }),
     ],
     ptyProcessById: (id) => rows.get(id) ?? null,
-    pty: { cleanupProcess: () => Effect.fail(unavailable(0)) },
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(0)) },
     readoptFault: () =>
       new DatabaseError({ operation: 'boot_convergence', cause: new Error('unavailable') }),
   });

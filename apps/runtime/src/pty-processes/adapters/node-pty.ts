@@ -7,7 +7,6 @@ import { Context, Deferred, Effect, Exit, Layer, Queue, Stream, type Cause } fro
 import * as nodePty from 'node-pty';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
-import { replayUtf8LogFile } from '../log-replay.js';
 import {
   createShellIntegrationParser,
   foregroundStateFromEvent,
@@ -52,6 +51,7 @@ interface NodePtyAttachmentSink {
 const make = Effect.gen(function* () {
   yield* ensureNodePtyDarwinHelperExecutable;
   const liveSessions = new Map<number, LiveNodePtyProcess>();
+  // The live processes this runtime holds, for its own GC sweep.
   const listSessions = Effect.sync(() =>
     [...liveSessions.values()].flatMap((session) =>
       session.running
@@ -69,7 +69,6 @@ const make = Effect.gen(function* () {
 
   return {
     name: 'node_pty',
-    available: Effect.succeed(true),
     launch: Effect.fnUntraced(function* (input: LaunchBackendSessionInput) {
       // Created before the spawn, so nothing the process does can happen before there is somewhere to put it.
       const events = yield* Queue.unbounded<PtyProcessEvent, Cause.Done>();
@@ -150,14 +149,12 @@ const make = Effect.gen(function* () {
         });
       });
     },
-    replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
     inspect: (ref) =>
       Effect.succeed(
         liveSessions.get(ref.ptyProcessId)?.running
           ? { status: 'alive' as const }
           : { status: 'missing' as const },
       ),
-    listSessions,
     collectGarbage: (input) => collectNodePtyGarbage(input, listSessions),
     // Absence and signalling are reported separately: `terminated: false` means
     // no live handle existed for this ref, so the attempt terminated nothing
@@ -361,7 +358,6 @@ function startNodePtyProcess(
     backend: 'node_pty',
     ptyProcessId: input.ptyProcessId,
     pid: pty.pid,
-    shellIntegrationToken: input.shellIntegration?.token ?? null,
   } satisfies NodePtyBackendRef;
 }
 
@@ -396,19 +392,6 @@ function appendBackendLog(path: string | null, data: string): unknown {
   } catch (error) {
     return error;
   }
-}
-
-function replayBackendLog(
-  path: string | null,
-  limitBytes: number | null,
-  send: (message: import('@isagi/shared/contracts').PtyStreamOutputMessageSet) => void,
-) {
-  return replayUtf8LogFile({
-    logPath: path,
-    bytes: limitBytes,
-    send,
-    failureMessage: 'Could not replay this session log.',
-  });
 }
 
 function replayBytesForLog(path: string | null) {

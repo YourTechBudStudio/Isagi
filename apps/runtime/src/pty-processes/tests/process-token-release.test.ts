@@ -17,7 +17,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import {
   PtyStartError,
   type PtyBackend as PtyBackendShape,
@@ -47,22 +47,14 @@ const userShell = testUserShellLayer({
 });
 
 function backend(overrides: Partial<PtyBackendShape>): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: { schemaVersion: 1, backend: 'node_pty', ptyProcessId: input.ptyProcessId, pid: 1234 },
         events: Stream.never,
       }),
-    attach: () => Effect.die('not used'),
-    writeInput: () => Effect.void,
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
     ...overrides,
-  };
+  });
 }
 
 /** Runs `body` against the PTY service, the tokens and the repository over a fresh data root. */

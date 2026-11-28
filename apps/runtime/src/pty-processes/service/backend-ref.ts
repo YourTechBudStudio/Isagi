@@ -1,5 +1,3 @@
-import { join } from 'node:path';
-
 import { Effect, Schema } from 'effect';
 
 import type { PtyProcessRecord } from '../types.js';
@@ -10,7 +8,6 @@ const nodePtyBackendRefSchema = Schema.Struct({
   backend: Schema.Literal('node_pty'),
   ptyProcessId: Schema.Int.check(Schema.isGreaterThan(0)),
   pid: Schema.NullOr(Schema.Int),
-  shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export function decodeBackendRef(
@@ -42,22 +39,4 @@ export function decodeBackendRef(
         cause,
       }),
   });
-}
-
-export function backendMetadataForLaunch(
-  metadata: { readonly ptyProcessId: number; readonly logPath: string | null },
-  sessionsPath: string,
-) {
-  const logPath = join(sessionsPath, `${metadata.ptyProcessId}.ptylog`);
-  return {
-    backendSessionName: null,
-    logMode: 'backend_file' as const,
-    logPath: metadata.logPath ?? logPath,
-    ref: {
-      schemaVersion: 1,
-      backend: 'node_pty',
-      ptyProcessId: metadata.ptyProcessId,
-      pid: null,
-    } as const,
-  };
 }

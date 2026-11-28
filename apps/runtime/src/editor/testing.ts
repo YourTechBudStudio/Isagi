@@ -24,7 +24,7 @@ import {
   PtyRepository,
   ptyTestRuntimeConfig,
 } from '../pty-processes/testing.js';
-import type { PtyBackendName } from '../pty-processes/testing.js';
+import { fakePtyBackend, type PtyBackendName } from '../pty-processes/testing.js';
 import { EditorReadinessProbe, type EditorProbeRunner } from './contexts/readiness.js';
 import { EditorContextRepository } from './contexts/repository.js';
 import { EditorContextService } from './contexts/service.js';
@@ -166,9 +166,8 @@ export function editorBackendStub(
   name: PtyBackendName,
   overrides: Partial<PtyBackend> = {},
 ): PtyBackend {
-  return {
+  return fakePtyBackend({
     name,
-    available: Effect.succeed(true),
     launch: ({ ptyProcessId }) =>
       Effect.succeed({
         ref: {
@@ -176,18 +175,12 @@ export function editorBackendStub(
           backend: name,
           ptyProcessId,
           pid: 4_242,
-        } as never,
+        },
         events: Stream.empty,
       }),
-    writeInput: () => Effect.void,
     attach: () => Effect.die(`${name} attach is not expected in editor tests`),
-    resize: () => Effect.void,
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ alive: true }),
-    kill: () => Effect.succeed({ terminated: true }),
-    collectGarbage: () => Effect.succeed([]),
     ...overrides,
-  } as PtyBackend;
+  });
 }
 
 /** What a test may change about the editor context service it builds. */

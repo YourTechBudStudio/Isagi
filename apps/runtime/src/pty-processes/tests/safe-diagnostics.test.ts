@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import { describeOperationalCause } from '../../platform/diagnostics/index.js';
 import {
-  PtyInspectError,
   PtyKillError,
   PtyLogError,
   PtyResizeError,
@@ -21,7 +20,7 @@ import {
  */
 
 const SENTINEL = 'SUPERSECRETTOKEN12345';
-const SESSION_NAME = 'isagi_testruntime_801';
+const REF_VALUE = 'ref-derived-801';
 
 test('every PTY error renders its authored label and coordinates', () => {
   assert.equal(
@@ -57,10 +56,6 @@ test('every PTY error renders its authored label and coordinates', () => {
     'PTY kill error: UnknownError',
   );
   assert.equal(
-    describeOperationalCause(new PtyInspectError({ ptyProcessId: 6, cause: new Error(SENTINEL) })),
-    'PTY inspect error (ptyProcess=6): Error',
-  );
-  assert.equal(
     describeOperationalCause(new PtyTerminationInProgressError({ ptyProcessId: 7 })),
     'PTY termination already in progress (ptyProcess=7)',
   );
@@ -76,14 +71,14 @@ test('a PTY service error renders its code and coordinates, never its message', 
   // Two authored messages embed ref-derived values today, so even ours is not read.
   const rendered = describeOperationalCause(
     new PtyServiceError({
-      code: 'backend_unavailable',
-      message: `Could not replay PTY session ${SESSION_NAME}.`,
+      code: 'backend_session_missing',
+      message: `PTY process ref ${REF_VALUE} is invalid.`,
       ptyProcessId: 7,
       worktreeId: 9,
     }),
   );
-  assert.equal(rendered, 'PTY service error backend_unavailable (ptyProcess=7, worktree=9)');
-  assert.ok(!rendered.includes(SESSION_NAME));
+  assert.equal(rendered, 'PTY service error backend_session_missing (ptyProcess=7, worktree=9)');
+  assert.ok(!rendered.includes(REF_VALUE));
 });
 
 test('a PTY error beneath another recognized error keeps its label', () => {
@@ -91,9 +86,9 @@ test('a PTY error beneath another recognized error keeps its label', () => {
     describeOperationalCause(
       new PtyKillError({
         ptyProcessId: 801,
-        cause: new PtyInspectError({ ptyProcessId: 801, cause: new Error(SENTINEL) }),
+        cause: new PtyWriteError({ ptyProcessId: 801, cause: new Error(SENTINEL) }),
       }),
     ),
-    'PTY kill error (ptyProcess=801): PTY inspect error (ptyProcess=801): Error',
+    'PTY kill error (ptyProcess=801): PTY write error (ptyProcess=801): Error',
   );
 });

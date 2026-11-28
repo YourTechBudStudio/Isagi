@@ -209,7 +209,6 @@ test('command log stream replays to the attach cursor without a gap or duplicate
             session: fakePtyProcess(),
             replayBytes: 4,
             live: true,
-            replaySource: 'file_log',
           }),
         attach: (input) =>
           Effect.sync(() => {
@@ -414,13 +413,11 @@ test('command log stream falls back to replay-only output after stale live attac
                   session: fakePtyProcess(),
                   replayBytes: 4,
                   live: true,
-                  replaySource: 'file_log',
                 }
               : {
                   session: fakePtyProcess({ status: 'failed' }),
                   replayBytes: 12,
                   live: false,
-                  replaySource: 'file_log',
                 },
           ),
         attach: () =>
@@ -488,80 +485,12 @@ test('command log stream replays an exited command without taking a live attachm
             session: fakePtyProcess({ status: 'exited' }),
             replayBytes: 12,
             live: false,
-            replaySource: 'file_log',
           }),
         attach: () => Effect.die('exited command logs must not attach'),
         replay: (input) =>
           Effect.sync(() => {
             input.send({ type: 'replay_start', bytes: input.bytes ?? 0 });
             input.send({ type: 'output', data: 'completed\nlog', replay: true });
-            input.send({ type: 'replay_end' });
-          }),
-      }),
-    },
-  );
-});
-
-test('command log stream preserves replay-before-attach for null-cursor live backends', async () => {
-  const events: string[] = [];
-  const latestRun = {
-    id: 1,
-    startedAt: '2026-06-19T00:00:00.000Z',
-    completedAt: null,
-    status: 'running' as const,
-    ptyProcessId: 20,
-    hasPtyProcess: true,
-    diagnostic: null,
-  };
-
-  await withCommandsApi(
-    commandService({
-      readLogMetadata: () =>
-        Effect.succeed({
-          worktreeId: 10,
-          commandName: 'dev',
-          status: 'running',
-          latestRun,
-        }),
-    }),
-    async (fastify) => {
-      const ws = await fastify.injectWS('/api/v1/worktrees/10/commands/log-stream?commandName=dev');
-      const messages = await receiveMessagesUntilClose(ws);
-
-      assert.deepEqual(events, ['replay', 'attach']);
-      assert.deepEqual(messages, [
-        {
-          type: 'command_log_state',
-          worktreeId: 10,
-          commandName: 'dev',
-          status: 'running',
-          latestRun,
-          live: true,
-        },
-        { type: 'replay_start', bytes: 0 },
-        { type: 'replay_end' },
-        { type: 'exit', exitCode: 0, signal: null },
-      ]);
-    },
-    {
-      pty: fakeCommandLogPtyService({
-        getAttachmentPlan: () =>
-          Effect.succeed({
-            session: fakePtyProcess({ backend: 'node_pty', logMode: 'none' }),
-            replayBytes: null,
-            live: true,
-            replaySource: 'backend',
-          }),
-        attach: (input) =>
-          Effect.sync(() => {
-            events.push('attach');
-            input.send({ type: 'exit', exitCode: 0, signal: null });
-            return fakeAttachment({ replayBytes: null });
-          }),
-        replay: (input) =>
-          Effect.sync(() => {
-            events.push('replay');
-            input.send({ type: 'replay_start', bytes: 0 });
             input.send({ type: 'replay_end' });
           }),
       }),
@@ -710,7 +639,6 @@ test('command log stream replays exited command logs independently for multiple 
             session: fakePtyProcess({ status: 'exited' }),
             replayBytes: 5,
             live: false,
-            replaySource: 'file_log',
           }),
         attach: () => Effect.die('exited command logs must not attach'),
         replay: (input) =>

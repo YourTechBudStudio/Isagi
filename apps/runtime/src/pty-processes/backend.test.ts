@@ -80,13 +80,12 @@ function builtCatalog() {
 function fakeBackend(): PtyBackendShape {
   return {
     name: 'node_pty',
-    available: Effect.succeed(true),
     launch: () => Effect.die('launch is not used by backend catalog tests'),
     writeInput: () => Effect.die('writeInput is not used by backend catalog tests'),
     attach: () => Effect.die('attach is not used by backend catalog tests'),
-    replay: () => Effect.die('replay is not used by backend catalog tests'),
     inspect: () => Effect.die('inspect is not used by backend catalog tests'),
-    listSessions: Effect.die('listSessions is not used by backend catalog tests'),
+    terminate: () => Effect.die('terminate is not used by backend catalog tests'),
     kill: () => Effect.die('kill is not used by backend catalog tests'),
+    collectGarbage: () => Effect.die('collectGarbage is not used by backend catalog tests'),
   };
 }

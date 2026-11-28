@@ -18,7 +18,7 @@ import type { ActiveAttachment } from '../service/attachments.js';
 import { cleanupPtyProcess } from '../service/cleanup.js';
 import { handleExit, type PtyPendingExits, type PtyTerminations } from '../service/lifecycle.js';
 import { terminatePtyProcess } from '../service/termination.js';
-import { fakeBackendCatalog, manualPtyPersistenceRetry } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, manualPtyPersistenceRetry } from '../testing.js';
 import {
   PtyKillError,
   PtyTerminationInProgressError,
@@ -31,18 +31,7 @@ import {
 // opposed to what the row happens to say afterwards.
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
-  return {
-    name,
-    available: Effect.succeed(true),
-    launch: () => Effect.die(`${name} launch is not expected here`),
-    writeInput: () => Effect.void,
-    attach: () => Effect.die(`${name} attach is not expected here`),
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-    ...overrides,
-  } satisfies PtyBackendShape;
+  return fakePtyBackend({ name, ...overrides });
 }
 
 function catalogWith(nodePty: PtyBackendShape) {
@@ -437,13 +426,8 @@ test('a captured-exit retry keeps trying until it settles', async () => {
 test('a second termination attempt is rejected and never reaches the backend', async () => {
   await withHarness((harness) =>
     Effect.gen(function* () {
-      let availabilityProbes = 0;
       let kills = 0;
       const backend = backendStub('node_pty', {
-        available: Effect.sync(() => {
-          availabilityProbes += 1;
-          return true;
-        }),
         kill: () =>
           Effect.gen(function* () {
             kills += 1;
@@ -462,9 +446,8 @@ test('a second termination attempt is rejected and never reaches the backend', a
       assert.ok(
         Result.isFailure(second) && second.failure instanceof PtyTerminationInProgressError,
       );
-      // Rejected before decode, availability, detach, and the backend — the loser
-      // must not be handed the winner's affirmative result either.
-      assert.equal(availabilityProbes, 1);
+      // Rejected before decode, detach, and the backend — the loser must not be
+      // handed the winner's affirmative result either.
       assert.equal(kills, 1);
     }),
   );
@@ -474,9 +457,9 @@ test('interrupting a termination releases its reservation instead of stranding t
   await withHarness((harness) =>
     Effect.gen(function* () {
       const backend = backendStub('node_pty', {
-        // Cancellation reaches an ordinary request through the availability probe
-        // and the backend call; neither has produced an affirmative result yet.
-        available: Effect.never,
+        // Cancellation reaches an ordinary request through the backend call, which
+        // has not produced an affirmative result yet.
+        kill: () => Effect.never,
       });
 
       const fiber = yield* Effect.forkChild(terminate(harness, backend));

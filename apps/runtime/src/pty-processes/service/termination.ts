@@ -135,33 +135,19 @@ function runReservedTermination(
   restore: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
-    // Ref decoding, the availability probe, and the backend call stay
-    // cancellable; everything else — detaching, and every path after the backend
+    // Ref decoding and the backend call stay cancellable; everything else — detaching, and every path after the backend
     // answers — runs uninterruptibly, so an affirmative kill is always converted
     // into a durable fact or into retry ownership rather than being lost to a
     // cancelled request.
     const ref = yield* restore(decodeBackendRef(session));
     // The incarnation is operated through the transport that created it, not the
-    // current launch preference. Termination has no `unavailable` outcome of its
-    // own, so the adapter is probed first to keep a genuinely missing backend a
-    // structured `backend_unavailable` rather than a raw kill failure.
+    // current launch preference.
     const backend = yield* input.catalog.forBackend(session.backend);
-    if (!(yield* restore(backend.available))) {
-      return yield* Effect.fail(
-        new PtyServiceError({
-          code: 'backend_unavailable',
-          message: `PTY backend ${session.backend} is unavailable.`,
-          ptyProcessId: session.id,
-        }),
-      );
-    }
 
     yield* detachActiveAttachment(input.activeAttachments, session.id);
 
     const killResult = yield* restore(
-      backend.terminate
-        ? backend.terminate({ ref, gracefulTimeoutMs: input.gracefulTimeoutMs ?? 2_000 })
-        : backend.kill(ref),
+      backend.terminate({ ref, gracefulTimeoutMs: input.gracefulTimeoutMs ?? 2_000 }),
     ).pipe(Effect.result);
 
     // Affirmative kill. The captured exit, if any, describes the death this

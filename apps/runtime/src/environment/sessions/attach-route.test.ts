@@ -279,12 +279,12 @@ test('PTY websocket API lets a pending explicit attach land after an automatic r
   }
 });
 
-test('PTY websocket API refuses a rejoin whose process was replaced while it replayed', async () => {
+test('PTY websocket API refuses a rejoin whose process was replaced before it attached', async () => {
   const fastify = Fastify({ logger: false });
   let activePty = 20;
   let moved = 0;
-  const replayGate = Effect.runSync(Deferred.make<void>());
-  const replayStarted = Effect.runSync(Deferred.make<void>());
+  const planGate = Effect.runSync(Deferred.make<void>());
+  const planStarted = Effect.runSync(Deferred.make<void>());
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Layer.succeed(
@@ -297,11 +297,10 @@ test('PTY websocket API refuses a rejoin whose process was replaced while it rep
         fakePtyService({
           onAttachStarted: () => {},
           attachPromise: async () => fakeAttachment(),
-          // The rejoin socket has resolved `pty:20` and is replaying when the world moves on.
-          replay: () =>
-            Deferred.succeed(replayStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(replayGate)),
-            ),
+          // The rejoin socket has resolved `pty:20` and is planning its attach when the world moves on.
+          planGate: Deferred.succeed(planStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(planGate)),
+          ),
         }),
       ),
       sessionLifecycleLayer,
@@ -325,7 +324,7 @@ test('PTY websocket API refuses a rejoin whose process was replaced while it rep
       `/api/v1/agent-sessions/10/attach?attachToken=${rejoin.token}`,
     );
     const rejoinMessages = collectJsonMessages(rejoinWs);
-    await runtime.runPromise(Deferred.await(replayStarted));
+    await runtime.runPromise(Deferred.await(planStarted));
 
     // Process 20 exits; a Reconnect launches process 21 and attaches to it.
     activePty = 21;
@@ -339,7 +338,7 @@ test('PTY websocket API refuses a rejoin whose process was replaced while it rep
         });
       }),
     );
-    await runtime.runPromise(Deferred.succeed(replayGate, undefined));
+    await runtime.runPromise(Deferred.succeed(planGate, undefined));
 
     await rejoinMessages.waitForCount(2, 'rejoin refusal');
     assert.deepEqual(rejoinMessages.items[1], {
@@ -804,13 +803,13 @@ test('PTY websocket API refuses a token issued before the agent changed controll
   }
 });
 
-test('PTY websocket API refuses at final admission an attach whose controller changed while it replayed', async () => {
+test('PTY websocket API refuses at final admission an attach whose controller changed before it attached', async () => {
   const fastify = Fastify({ logger: false });
   const controller = fakeAgentController();
   let attachStarted = false;
   let holderMoved = 0;
-  const replayGate = Effect.runSync(Deferred.make<void>());
-  const replayStarted = Effect.runSync(Deferred.make<void>());
+  const planGate = Effect.runSync(Deferred.make<void>());
+  const planStarted = Effect.runSync(Deferred.make<void>());
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
       Layer.succeed(AgentSessionService, controller.service),
@@ -822,10 +821,9 @@ test('PTY websocket API refuses at final admission an attach whose controller ch
             attachStarted = true;
           },
           attachPromise: async () => fakeAttachment(),
-          replay: () =>
-            Deferred.succeed(replayStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(replayGate)),
-            ),
+          planGate: Deferred.succeed(planStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(planGate)),
+          ),
         }),
       ),
       sessionLifecycleLayer,
@@ -859,8 +857,8 @@ test('PTY websocket API refuses at final admission an attach whose controller ch
       `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
     );
     const messages = collectJsonMessages(ws);
-    // The token is consumed and the process resolved; the switch lands while the socket replays.
-    await runtime.runPromise(Deferred.await(replayStarted));
+    // The token is consumed and the process resolved; the switch lands before the socket attaches.
+    await runtime.runPromise(Deferred.await(planStarted));
     await runtime.runPromise(
       Effect.gen(function* () {
         const lifecycle = yield* SessionLifecycle;
@@ -872,7 +870,7 @@ test('PTY websocket API refuses at final admission an attach whose controller ch
         );
       }),
     );
-    await runtime.runPromise(Deferred.succeed(replayGate, undefined));
+    await runtime.runPromise(Deferred.succeed(planGate, undefined));
 
     await messages.waitForType('error', 'final admission refusal');
     assert.deepEqual(messages.items.at(-1), {
@@ -1030,8 +1028,10 @@ function fakeTerminalSessionService(): TerminalSessionService['Service'] {
 }
 
 function fakePtyService(input: {
-  /** The plan's replay cursor; `null` (the default) is a backend without one, which replays before attaching. */
+  /** The plan's replay cursor; `null` (the default) is a row that retained no log. */
   readonly planReplayBytes?: number | null | undefined;
+  /** Runs before the plan resolves, so a test can hold a stream between resolving its target and attaching. */
+  readonly planGate?: Effect.Effect<void> | undefined;
   readonly onAttachStarted: () => void;
   readonly attachPromise: () => Promise<ReturnType<typeof fakeAttachment>>;
   readonly onAttachSend?:
@@ -1050,12 +1050,13 @@ function fakePtyService(input: {
     readLogTail: () => Effect.die('readLogTail is not used'),
     launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
-      Effect.succeed({
-        session: fakeRunningProcess(),
-        replayBytes: input.planReplayBytes ?? null,
-        live: true,
-        replaySource: 'file_log',
-      }),
+      (input.planGate ?? Effect.void).pipe(
+        Effect.as({
+          session: fakeRunningProcess(),
+          replayBytes: input.planReplayBytes ?? null,
+          live: true,
+        }),
+      ),
     // Like the real service, the attachment lasts as long as the caller's scope.
     attach: ({ send }) =>
       Effect.acquireRelease(

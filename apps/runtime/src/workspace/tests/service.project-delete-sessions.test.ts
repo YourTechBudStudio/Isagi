@@ -9,7 +9,7 @@ import { InternalEvents } from '../../platform/events/index.js';
 import { Git } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
-import { PtyService, PtyServiceError } from '../../pty-processes/index.js';
+import { PtyKillError, PtyService } from '../../pty-processes/index.js';
 import { fakeTerminateMany } from '../../pty-processes/testing.js';
 import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
 import { WorkspaceError } from '../errors.js';
@@ -89,10 +89,9 @@ function deleteProjectWith(input: {
     Effect.gen(function* () {
       input.events.push(`pty:${request.ptyProcessId}`);
       if (request.ptyProcessId === input.failPtyProcessId) {
-        return yield* new PtyServiceError({
-          code: 'backend_unavailable',
-          message: 'PTY backend is unavailable.',
+        return yield* new PtyKillError({
           ptyProcessId: request.ptyProcessId,
+          cause: new Error('the process would not stop'),
         });
       }
       return 'terminated_live' as const;

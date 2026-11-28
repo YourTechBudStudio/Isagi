@@ -19,10 +19,11 @@ import { Effect, FiberMap, Layer } from 'effect';
 import { DatabaseError, DataDirectory, RuntimeDatabase } from '../../platform/persistence/index.js';
 import { makeTestDataDirectory } from '../../platform/persistence/testing.js';
 import { PtyRepository } from '../repository.js';
+import { decodeBackendRef } from '../service/backend-ref.js';
 import { collectPtyGarbage } from '../service/gc.js';
 import { ptyProcesses } from '../tables.js';
-import { fakeBackendCatalog } from '../testing.js';
-import { PtyInspectError, PtyKillError, type PtyBackend } from '../types.js';
+import { fakeBackendCatalog, fakePtyBackend } from '../testing.js';
+import { PtyKillError, type PtyBackend, type PtyBackendGcSession } from '../types.js';
 
 function testLayer(dataRoot: string) {
   const dataDirectory = makeTestDataDirectory(dataRoot);
@@ -90,15 +91,9 @@ test('PTY GC force-kills old orphan running processes and deletes their row and 
             }),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -140,16 +135,10 @@ test('PTY GC keeps pinned orphan running processes', async () => {
             }),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-            pinnedPtyProcessIds: new Set([process.id]),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+          pinnedPtyProcessIds: new Set([process.id]),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -187,15 +176,9 @@ test('PTY GC keeps orphan running processes when backend kill fails', async () =
             Effect.fail(new PtyKillError({ ptyProcessId: process.id, cause: new Error('nope') })),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -211,61 +194,6 @@ test('PTY GC keeps orphan running processes when backend kill fails', async () =
   }
 });
 
-test('PTY GC keeps orphan running processes when backend inspection is unavailable', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-inspect-unavailable-'));
-  try {
-    const output = await Effect.runPromise(
-      Effect.gen(function* () {
-        const repository = yield* PtyRepository;
-        const sessionsPath = join(dataRoot, 'sessions');
-        mkdirSync(sessionsPath, { recursive: true });
-        const process = yield* insertPtyProcess({
-          status: 'running',
-          logPath: join(sessionsPath, 'running.ptylog'),
-          updatedAt: oldIso(),
-        });
-        writeFileSync(process.logPath, 'session log', 'utf8');
-        let kills = 0;
-        const backend = fakeBackend({
-          inspect: () =>
-            Effect.fail(
-              new PtyInspectError({ ptyProcessId: process.id, cause: new Error('down') }),
-            ),
-          kill: () =>
-            Effect.sync(() => {
-              kills += 1;
-              return { terminated: true };
-            }),
-        });
-
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
-
-        return {
-          process: yield* repository.findProcess(process.id),
-          logExists: existsSync(process.logPath),
-          kills,
-        };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.notEqual(output.process, null);
-    assert.equal(output.logExists, true);
-    assert.equal(output.kills, 0);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-// node-pty drops a process from memory in its exit callback and only then enqueues `Exited`; the supervisor records it
-// on a later scheduler turn. A GC pass in between sees a `running` orphan whose backend answers `missing`.
 test('PTY GC keeps a missing orphan while its supervisor may still record the exit, and collects it afterwards', () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-exit-pending-'));
   return Effect.runPromise(
@@ -287,13 +215,10 @@ test('PTY GC keeps a missing orphan while its supervisor may still record the ex
         const supervisors = yield* FiberMap.make<number, void, never>();
         const deferredWrites = new Set<number>();
         yield* FiberMap.run(supervisors, process.id, Effect.never);
-        const collect = collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          { nowMs: nowMs(), pendingExits: { supervisors, deferredWrites } },
-        );
+        const collect = collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+          pendingExits: { supervisors, deferredWrites },
+        });
 
         yield* collect;
         assert.notEqual(yield* repository.findProcess(process.id), null);
@@ -339,15 +264,9 @@ test('PTY GC keeps orphan running processes whose backend ref cannot be decoded'
           kill: () => Effect.die('an undecodable ref must not be killed'),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -358,6 +277,68 @@ test('PTY GC keeps orphan running processes whose backend ref cannot be decoded'
 
     assert.notEqual(output.process, null);
     assert.equal(output.logExists, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+// Rows written before the token stopped being persisted still carry it in their ref. Decoding must tolerate the
+// excess field: a decode failure would silently drop the row from the backend sweep's persisted sessions, and the
+// sweep would then kill its live process as an orphan.
+test('PTY GC decodes a ref that still carries the retired shellIntegrationToken field', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-legacy-token-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'legacy.ptylog'),
+          updatedAt: recentIso(),
+          backendRefJson: (ptyProcessId) =>
+            JSON.stringify({
+              schemaVersion: 1,
+              backend: 'node_pty',
+              ptyProcessId,
+              pid: 4242,
+              shellIntegrationToken: 'legacy-secret-token',
+            }),
+        });
+        const row = yield* repository.findProcess(process.id);
+        assert.ok(row);
+        const decoded = yield* decodeBackendRef(row);
+        let swept: readonly PtyBackendGcSession[] = [];
+        yield* collectPtyGarbage(
+          repository,
+          nodePtyCatalog(
+            fakeBackend({
+              collectGarbage: (input) =>
+                Effect.sync(() => {
+                  swept = input.sessions;
+                  return [];
+                }),
+            }),
+          ),
+          sessionsPath,
+          { nowMs: nowMs() },
+        );
+        return { id: process.id, decoded, swept };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output.decoded, {
+      schemaVersion: 1,
+      backend: 'node_pty',
+      ptyProcessId: output.id,
+      pid: 4242,
+    });
+    assert.deepEqual(
+      output.swept.map((session) => session.ptyProcessId),
+      [output.id],
+    );
+    assert.ok(!JSON.stringify(output.swept).includes('legacy-secret-token'));
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -387,15 +368,9 @@ test('PTY GC keeps orphan processes whose retention window has not elapsed', asy
             }),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -430,15 +405,9 @@ test('PTY GC deletes old orphan terminal processes without backend inspection', 
           inspect: () => Effect.die('terminal rows should not be inspected'),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(backend),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(backend), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return yield* repository.findProcess(process.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
@@ -466,15 +435,9 @@ test('PTY GC keeps orphan rows when log deletion fails', async () => {
           updatedAt: oldIso(),
         });
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(fakeBackend()),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(fakeBackend()), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -503,15 +466,9 @@ test('PTY GC deletes stray orphan log files without a process row', async () => 
         const old = new Date(oldIso());
         utimesSync(logPath, old, old);
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(fakeBackend()),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(fakeBackend()), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return existsSync(logPath);
       }).pipe(Effect.provide(testLayer(dataRoot))),
@@ -540,15 +497,9 @@ test('PTY GC deletes orphan shell-integration folders and keeps live and young o
         plantShellIntegrationFolder(root, '900', oldDate());
         plantShellIntegrationFolder(root, '901', new Date(nowMs() - 60_000));
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(fakeBackend()),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(fakeBackend()), sessionsPath, {
+          nowMs: nowMs(),
+        });
         return { liveId: live.id };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -674,15 +625,9 @@ test('PTY GC contains a failure of the shell-integration phase', async () => {
               ? Effect.fail(new DatabaseError({ operation: 'list_pty_processes', cause: 'boom' }))
               : repository.listProcesses(input),
         };
-        yield* collectPtyGarbage(
-          failingMark,
-          nodePtyCatalog(fakeBackend()),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(failingMark, nodePtyCatalog(fakeBackend()), sessionsPath, {
+          nowMs: nowMs(),
+        });
         assert.equal(reads, 2);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -696,15 +641,9 @@ function collectShellIntegrationOnly(dataRoot: string, sessionsPath: string) {
   return Effect.runPromise(
     Effect.gen(function* () {
       const repository = yield* PtyRepository;
-      yield* collectPtyGarbage(
-        repository,
-        nodePtyCatalog(fakeBackend()),
-        'test-runtime',
-        sessionsPath,
-        {
-          nowMs: nowMs(),
-        },
-      );
+      yield* collectPtyGarbage(repository, nodePtyCatalog(fakeBackend()), sessionsPath, {
+        nowMs: nowMs(),
+      });
     }).pipe(Effect.provide(testLayer(dataRoot))),
   );
 }
@@ -733,7 +672,7 @@ function insertPtyProcess(input: {
   readonly status: 'running' | 'killed';
   readonly logPath: string;
   readonly updatedAt: string;
-  readonly backendRefJson?: string;
+  readonly backendRefJson?: string | ((ptyProcessId: number) => string);
 }) {
   return Effect.gen(function* () {
     const repository = yield* PtyRepository;
@@ -747,8 +686,10 @@ function insertPtyProcess(input: {
       ptyProcessId: id,
       backend: 'node_pty',
       backendRefJson:
-        input.backendRefJson ??
-        JSON.stringify({ schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: null }),
+        typeof input.backendRefJson === 'function'
+          ? input.backendRefJson(id)
+          : (input.backendRefJson ??
+            JSON.stringify({ schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: null })),
       logMode: 'backend_file',
       logPath: input.logPath,
     });
@@ -774,19 +715,10 @@ function nodePtyCatalog(nodePty: PtyBackend) {
 function fakeBackend(
   overrides: Partial<Pick<PtyBackend, 'name' | 'inspect' | 'kill' | 'collectGarbage'>> = {},
 ): PtyBackend {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
-    launch: () => Effect.die('launch is not used by PTY GC tests'),
-    writeInput: () => Effect.die('writeInput is not used by PTY GC tests'),
-    attach: () => Effect.die('attach is not used by PTY GC tests'),
-    replay: () => Effect.die('replay is not used by PTY GC tests'),
+  return fakePtyBackend({
     inspect: () => Effect.succeed({ status: 'missing' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-    collectGarbage: () => Effect.succeed([]),
     ...overrides,
-  };
+  });
 }
 
 function nowMs() {

@@ -93,14 +93,7 @@ export function cleanupPtyProcess(
       // could never pass.
       if (deps.catalog.isRetired(session.backend)) return 'already_terminal' as const;
 
-      // The gating check. `kill` has no `unavailable` outcome of its own, so
-      // the adapter is probed first to keep a genuinely missing backend a
-      // structured `backend_unavailable` rather than a raw kill failure — the
-      // same rule termination follows.
       const backend = yield* deps.catalog.forBackend(session.backend);
-      if (!(yield* backend.available)) {
-        return yield* Effect.fail(backendUnavailable(session.backend, session.id));
-      }
       const ref = yield* decodeBackendRef(session);
       const result = yield* backend.kill(ref);
       // `{terminated:false}` is verified absence, not a failure: the backend
@@ -110,18 +103,10 @@ export function cleanupPtyProcess(
       return result.terminated ? ('terminated' as const) : ('already_terminal' as const);
     }
 
-    // Nonterminal. No `available` pre-check here: `inspect` already answers
-    // alive | missing | unavailable, so probing first would only buy a second
-    // round-trip to the same backend for an outcome it is about to report.
+    // Nonterminal: ask the backend whether the process is still live.
     const ref = yield* decodeBackendRef(session);
     const backend = yield* deps.catalog.forBackend(session.backend);
-    const inspection = yield* backend
-      .inspect(ref)
-      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
-
-    if (inspection.status === 'unavailable') {
-      return yield* Effect.fail(backendUnavailable(session.backend, session.id));
-    }
+    const inspection = yield* backend.inspect(ref);
 
     if (inspection.status === 'missing') {
       // The backend has reported this exit but the row does not record it yet. Nothing is left to kill, and the real
@@ -162,13 +147,5 @@ export function cleanupPtyProcess(
     // its own independent terminal fact lands, and the caller is still entitled
     // to conclude that this incarnation is not something it has to stop.
     return outcome === 'terminated_live' ? ('terminated' as const) : ('already_terminal' as const);
-  });
-}
-
-function backendUnavailable(backend: string, ptyProcessId: number) {
-  return new PtyServiceError({
-    code: 'backend_unavailable',
-    message: `PTY backend ${backend} is unavailable.`,
-    ptyProcessId,
   });
 }

@@ -188,12 +188,12 @@ test('the command wrapper stays total over failures it does not own', () => {
   assert.equal(
     describeOperationalCause(
       new PtyServiceError({
-        code: 'backend_unavailable',
-        message: `Could not replay PTY session ${SESSION_NAME}.`,
+        code: 'backend_session_missing',
+        message: `PTY process ${SESSION_NAME} has an invalid backend ref.`,
         ptyProcessId: 7,
       }),
     ),
-    'PTY service error backend_unavailable (ptyProcess=7)',
+    'PTY service error backend_session_missing (ptyProcess=7)',
   );
   assert.equal(describeOperationalCause({ _tag: SENTINEL, message: SENTINEL }), 'UnknownError');
 });

@@ -17,7 +17,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js';
 
 /**
@@ -32,17 +32,12 @@ import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js
 // The tail reads a row and a file. No adapter is ever consulted, which is the
 // point: it works for an incarnation whose process is long gone.
 function unusedBackend(name: 'node_pty'): PtyBackendShape {
-  return {
+  return fakePtyBackend({
     name,
-    available: Effect.succeed(true),
     launch: () => Effect.die(`log-tail tests never launch (${name})`),
     writeInput: () => Effect.die(`log-tail tests never write (${name})`),
     attach: () => Effect.die(`log-tail tests never attach (${name})`),
-    replay: () => Effect.die(`log-tail tests never replay (${name})`),
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-  };
+  });
 }
 
 function serviceLayer(dataRoot: string) {

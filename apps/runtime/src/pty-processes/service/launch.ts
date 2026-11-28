@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Effect, FiberMap, Result, Stream } from 'effect';
 
@@ -17,6 +18,7 @@ import {
   PtyLogError,
   type LaunchedBackendSession,
   type LaunchPtyProcessInput,
+  type BackendSessionRef,
   type PtyBackend as PtyBackendShape,
   type PtyProcessAllocation,
   type PtyProcessEvent,
@@ -24,7 +26,6 @@ import {
   type PtyStartError,
 } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
-import { backendMetadataForLaunch } from './backend-ref.js';
 import { recordForegroundCommandState, transitionProcessByIdAndPublish } from './events.js';
 import {
   handleExit,
@@ -34,8 +35,7 @@ import {
   type PtyReservations,
 } from './lifecycle.js';
 import type { PtyPersistenceRetry } from './retry.js';
-import { spawnFailureMessage } from './runtime-namespace.js';
-import { prepareShellIntegration, refWithShellIntegrationToken } from './shell-integration.js';
+import { prepareShellIntegration } from './shell-integration.js';
 import type { ShellIntegrationConfig } from './shell-integration.js';
 import { createTerminalQueryFilter, type TerminalQueryFilter } from './terminal-queries.js';
 import { terminatePtyProcess } from './termination.js';
@@ -311,12 +311,8 @@ function prepareLaunch(
     // incarnation is created by the configured adapter, while every operation on
     // an existing one dispatches through its persisted backend.
     const backend = deps.catalog.configured;
-    const backendMetadata = backendMetadataForLaunch(
-      { ptyProcessId, logPath: null },
-      deps.sessionsPath,
-    );
-    const logPath = backendMetadata.logPath;
-    if (logPath && !existsSync(logPath)) {
+    const logPath = join(deps.sessionsPath, `${ptyProcessId}.ptylog`);
+    if (!existsSync(logPath)) {
       // A log that cannot be created is an expected launch failure (full disk, refused permission, a removed sessions
       // directory): it folds into the row like any other pre-spawn failure instead of dying as a defect.
       yield* Effect.try({
@@ -330,14 +326,18 @@ function prepareLaunch(
     yield* deps.repository.updateBackendMetadata({
       ptyProcessId,
       backend: backend.name,
-      backendRefJson: JSON.stringify(backendMetadata.ref),
-      logMode: backendMetadata.logMode,
-      logPath: backendMetadata.logPath,
+      backendRefJson: JSON.stringify({
+        schemaVersion: 1,
+        backend: backend.name,
+        ptyProcessId,
+        pid: null,
+      } satisfies BackendSessionRef),
+      logMode: 'backend_file',
+      logPath,
     });
     return {
       backend,
-      backendSessionName: backendMetadata.backendSessionName,
-      logPath: backendMetadata.logPath,
+      logPath,
       command: shell.command,
       args: shell.args,
       env: shell.env,
@@ -348,8 +348,7 @@ function prepareLaunch(
 
 interface PreparedLaunch {
   readonly backend: PtyBackendShape;
-  readonly backendSessionName: string | null;
-  readonly logPath: string | null;
+  readonly logPath: string;
   readonly command: string;
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv;
@@ -361,26 +360,18 @@ function spawnBackendProcess(
   metadata: PtyProcessLaunchMetadata,
   terminalQueries: TerminalQueryFilter,
 ): Effect.Effect<LaunchedBackendSession, PtyStartError> {
-  return prepared.backend
-    .launch({
-      ptyProcessId: metadata.ptyProcessId,
-      backendSessionName: prepared.backendSessionName,
-      command: prepared.command,
-      args: prepared.args,
-      cwd: metadata.cwd,
-      env: prepared.env,
-      shellIntegration: prepared.shellIntegration,
-      cols: defaultCols,
-      rows: defaultRows,
-      logPath: prepared.logPath,
-      terminalQueries,
-    })
-    .pipe(
-      Effect.map((launched) => ({
-        ref: refWithShellIntegrationToken(launched.ref, prepared.shellIntegration),
-        events: launched.events,
-      })),
-    );
+  return prepared.backend.launch({
+    ptyProcessId: metadata.ptyProcessId,
+    command: prepared.command,
+    args: prepared.args,
+    cwd: metadata.cwd,
+    env: prepared.env,
+    shellIntegration: prepared.shellIntegration,
+    cols: defaultCols,
+    rows: defaultRows,
+    logPath: prepared.logPath,
+    terminalQueries,
+  });
 }
 
 /**
@@ -549,4 +540,10 @@ function withPersistedLogPath(
     ),
     Effect.map((row) => ({ ...metadata, logPath: row?.logPath ?? null })),
   );
+}
+
+function spawnFailureMessage(command: string, cwd: string, error: unknown) {
+  const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : error;
+  const reason = cause instanceof Error && cause.message ? cause.message : String(cause);
+  return `\r\nFailed to start ${command} in ${cwd}: ${reason}\r\n`;
 }

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Cause, Effect, Exit, Option } from 'effect';
 
-import { PtyKillError, PtyServiceError } from '../../pty-processes/index.js';
+import { PtyKillError } from '../../pty-processes/index.js';
 import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
   commandRun,
@@ -154,10 +154,9 @@ test('a nonterminal survivor is re-adopted with the cleanup wording so a retry c
     pty: {
       cleanupProcess: () =>
         Effect.fail(
-          new PtyServiceError({
-            code: 'backend_unavailable',
-            message: 'PTY backend node_pty is unavailable.',
+          new PtyKillError({
             ptyProcessId: 801,
+            cause: new Error('the process would not stop'),
           }),
         ),
     },
