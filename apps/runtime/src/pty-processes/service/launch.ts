@@ -58,15 +58,13 @@ export interface PtyLaunchDependencies {
   readonly pendingExits: PtyPendingExits;
   readonly reservations: PtyReservations;
   readonly activeAttachments: Map<number, ActiveAttachment>;
-  readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly launchEnvironment: LaunchEnvironment['Service'];
   /** Read per launch for the theme whose palette answers the new process's colour queries. */
   readonly config: RuntimeConfig['Service'];
   /**
    * Each live process's terminal-query filter, which attach drives (state-query forwarding). Registered once the spawn
-   * succeeds and removed when the process's supervisor ends, so no filter outlives its incarnation. A tmux process's
-   * supervisor ends at once (tmux has no live event stream and ignores the filter), so it never has an entry.
+   * succeeds and removed when the process's supervisor ends, so no filter outlives its incarnation.
    */
   readonly terminalQueryFilters: Map<number, TerminalQueryFilter>;
 }
@@ -310,17 +308,11 @@ function prepareLaunch(
       env: processEnvironment,
     });
     // The only read of the launch preference in the whole flow: a new
-    // incarnation is created by the configured adapter unless the caller named
-    // one, while every operation on an existing one dispatches through its
-    // persisted backend. An explicit selection resolves through the same
-    // catalog, which already rejects an unknown name loudly.
-    const backend = input.backend
-      ? yield* deps.catalog.forBackend(input.backend)
-      : deps.catalog.configured;
+    // incarnation is created by the configured adapter, while every operation on
+    // an existing one dispatches through its persisted backend.
+    const backend = deps.catalog.configured;
     const backendMetadata = backendMetadataForLaunch(
-      backend,
       { ptyProcessId, logPath: null },
-      deps.runtimeNamespace,
       deps.sessionsPath,
     );
     const logPath = backendMetadata.logPath;

@@ -211,110 +211,6 @@ test('PTY GC keeps orphan running processes when backend kill fails', async () =
   }
 });
 
-test('PTY GC cleans a live orphan through its own backend while another backend is configured', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-cross-backend-'));
-  try {
-    const output = await Effect.runPromise(
-      Effect.gen(function* () {
-        const repository = yield* PtyRepository;
-        const sessionsPath = join(dataRoot, 'sessions');
-        mkdirSync(sessionsPath, { recursive: true });
-        const process = yield* insertPtyProcess({
-          status: 'running',
-          backend: 'tmux',
-          logPath: join(sessionsPath, 'running.ptylog'),
-          updatedAt: oldIso(),
-        });
-        writeFileSync(process.logPath, 'session log', 'utf8');
-        // The incarnation is a tmux one while node-pty is the launch preference.
-        // Before the backend catalog this row was retained indefinitely; now it
-        // is reached through the transport that actually created it.
-        const kills: string[] = [];
-        const tmux: PtyBackend = {
-          ...fakeBackend({ name: 'tmux' }),
-          available: Effect.succeed(true),
-          inspect: () => Effect.succeed({ status: 'alive' as const }),
-          kill: (ref) =>
-            Effect.sync(() => {
-              kills.push(ref.backend);
-              return { terminated: true };
-            }),
-        };
-        const nodePty = fakeBackend({
-          inspect: () => Effect.die('a node-pty adapter must not inspect a tmux incarnation'),
-          kill: () => Effect.die('a node-pty adapter must not kill a tmux incarnation'),
-        });
-
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(nodePty, tmux),
-          'test-runtime',
-          sessionsPath,
-          { nowMs: nowMs() },
-        );
-
-        return {
-          process: yield* repository.findProcess(process.id),
-          logExists: existsSync(process.logPath),
-          kills,
-        };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.equal(output.process, null);
-    assert.equal(output.logExists, false);
-    assert.deepEqual(output.kills, ['tmux']);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('PTY GC keeps a live orphan when its own backend is unavailable', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-backend-unavailable-'));
-  try {
-    const output = await Effect.runPromise(
-      Effect.gen(function* () {
-        const repository = yield* PtyRepository;
-        const sessionsPath = join(dataRoot, 'sessions');
-        mkdirSync(sessionsPath, { recursive: true });
-        const process = yield* insertPtyProcess({
-          status: 'running',
-          backend: 'tmux',
-          logPath: join(sessionsPath, 'running.ptylog'),
-          updatedAt: oldIso(),
-        });
-        writeFileSync(process.logPath, 'session log', 'utf8');
-        // Retention now means one thing only: the row's own adapter genuinely
-        // cannot answer, so the live process must not be orphaned silently.
-        const tmux: PtyBackend = {
-          ...fakeBackend({ name: 'tmux' }),
-          available: Effect.succeed(false),
-          inspect: () => Effect.succeed({ status: 'unavailable' as const }),
-          kill: () => Effect.die('an unavailable backend must not be asked to kill'),
-        };
-
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(fakeBackend(), tmux),
-          'test-runtime',
-          sessionsPath,
-          { nowMs: nowMs() },
-        );
-
-        return {
-          process: yield* repository.findProcess(process.id),
-          logExists: existsSync(process.logPath),
-        };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.notEqual(output.process, null);
-    assert.equal(output.logExists, true);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
 test('PTY GC keeps orphan running processes when backend inspection is unavailable', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-inspect-unavailable-'));
   try {
@@ -837,7 +733,6 @@ function insertPtyProcess(input: {
   readonly status: 'running' | 'killed';
   readonly logPath: string;
   readonly updatedAt: string;
-  readonly backend?: 'node_pty' | 'tmux';
   readonly backendRefJson?: string;
 }) {
   return Effect.gen(function* () {
@@ -848,17 +743,12 @@ function insertPtyProcess(input: {
       args: [],
       cwd: '/repo/isagi',
     });
-    const backend = input.backend ?? 'node_pty';
     yield* repository.updateBackendMetadata({
       ptyProcessId: id,
-      backend,
+      backend: 'node_pty',
       backendRefJson:
         input.backendRefJson ??
-        JSON.stringify(
-          backend === 'tmux'
-            ? { schemaVersion: 1, backend: 'tmux', sessionName: `isagi_test-runtime_${id}` }
-            : { schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: null },
-        ),
+        JSON.stringify({ schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: null }),
       logMode: 'backend_file',
       logPath: input.logPath,
     });
@@ -877,18 +767,8 @@ function insertPtyProcess(input: {
   });
 }
 
-// Node-pty is the launch preference throughout this file; the tmux slot is a
-// real fake so the per-adapter backend-session sweep has something to call, and
-// it is unavailable by default so it stays out of the way unless a test opts in.
-function nodePtyCatalog(nodePty: PtyBackend, tmux: PtyBackend = unavailableTmuxBackend()) {
-  return fakeBackendCatalog({ configured: 'node_pty', nodePty, tmux });
-}
-
-function unavailableTmuxBackend(): PtyBackend {
-  return {
-    ...fakeBackend({ name: 'tmux' }),
-    available: Effect.succeed(false),
-  };
+function nodePtyCatalog(nodePty: PtyBackend) {
+  return fakeBackendCatalog({ nodePty });
 }
 
 function fakeBackend(

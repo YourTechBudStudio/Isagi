@@ -87,14 +87,6 @@ const make = Effect.gen(function* () {
     }),
     attach: (input) => {
       const ref = input.ref;
-      if (ref.backend !== 'node_pty') {
-        return Effect.fail(
-          attachError(
-            undefined,
-            new Error(`Cannot attach node-pty backend to ${ref.backend} ref.`),
-          ),
-        );
-      }
       const sink: NodePtyAttachmentSink = { output: input.output };
       return Effect.acquireRelease(
         // Registration and the log size are read in one synchronous step, so no byte is both replayed and delivered.
@@ -142,13 +134,6 @@ const make = Effect.gen(function* () {
     },
     writeInput: (input) => {
       const ref = input.ref;
-      if (ref.backend !== 'node_pty') {
-        return Effect.fail(
-          new PtyWriteError({
-            cause: new Error(`Cannot write node-pty input to ${ref.backend} ref.`),
-          }),
-        );
-      }
       return Effect.suspend(() => {
         const live = liveSessions.get(ref.ptyProcessId);
         if (!live?.running) {
@@ -168,7 +153,7 @@ const make = Effect.gen(function* () {
     replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
     inspect: (ref) =>
       Effect.succeed(
-        ref.backend === 'node_pty' && liveSessions.get(ref.ptyProcessId)?.running
+        liveSessions.get(ref.ptyProcessId)?.running
           ? { status: 'alive' as const }
           : { status: 'missing' as const },
       ),
@@ -190,13 +175,8 @@ const make = Effect.gen(function* () {
     terminate: (input) =>
       Effect.gen(function* () {
         const ref = input.ref;
-        const ptyProcessId = ref.backend === 'node_pty' ? ref.ptyProcessId : undefined;
+        const ptyProcessId = ref.ptyProcessId;
         const toKillError = (cause: unknown) => new PtyKillError({ ptyProcessId, cause });
-        if (ref.backend !== 'node_pty') {
-          return yield* Effect.fail(
-            toKillError(new Error(`Cannot terminate node-pty backend for ${ref.backend} ref.`)),
-          );
-        }
         const live = liveSessions.get(ref.ptyProcessId);
         if (!live) {
           return { terminated: false } satisfies BackendTerminateResult;
@@ -252,13 +232,8 @@ const make = Effect.gen(function* () {
       }),
     kill: (ref) =>
       Effect.gen(function* () {
-        const ptyProcessId = ref.backend === 'node_pty' ? ref.ptyProcessId : undefined;
+        const ptyProcessId = ref.ptyProcessId;
         const toKillError = (cause: unknown) => new PtyKillError({ ptyProcessId, cause });
-        if (ref.backend !== 'node_pty') {
-          return yield* Effect.fail(
-            toKillError(new Error(`Cannot kill node-pty backend for ${ref.backend} ref.`)),
-          );
-        }
         const live = liveSessions.get(ref.ptyProcessId);
         if (!live) {
           return { terminated: false } satisfies BackendTerminateResult;
@@ -367,7 +342,7 @@ function startNodePtyProcess(
     live.running = false;
     // Release any bytes the parser and then the filter were holding back as a potential partial
     // marker or query prefix, so a mid-escape exit doesn't drop them from the log/replay
-    // (mirrors tmux's push+flush on replay). No reply is written: the process has exited.
+    // No reply is written: the process has exited.
     const trailing = filter.push(parser.flush());
     const released = filter.flush();
     appendLog(trailing.log + released);

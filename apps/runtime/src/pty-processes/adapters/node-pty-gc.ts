@@ -18,7 +18,7 @@ export function collectNodePtyGarbage(
 
     for (const ref of backendSessions) {
       const session = persisted.get(ref.ptyProcessId);
-      if (!session || session.ref.backend !== 'node_pty') {
+      if (!session) {
         findings.push({
           type: 'orphan_backend_session',
           ref,

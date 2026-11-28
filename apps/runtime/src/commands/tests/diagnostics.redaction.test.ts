@@ -92,7 +92,7 @@ test('a schema decode that echoes a ref value reaches neither logs nor durable d
     Effect.flip(
       decodeBackendRef({
         id: 801,
-        backend: 'tmux',
+        backend: 'node_pty',
         backendRefJson: refEchoingSentinel,
       } as never),
     ),
@@ -104,7 +104,7 @@ test('a schema decode that echoes a ref value reaches neither logs nor durable d
   // the sentinel.
   const echoingSchemaError = await Effect.runPromise(
     Effect.flip(
-      Schema.decodeUnknownEffect(Schema.Struct({ backend: Schema.Literal('tmux') }))(
+      Schema.decodeUnknownEffect(Schema.Struct({ backend: Schema.Literal('node_pty') }))(
         JSON.parse(refEchoingSentinel),
         { reportInput: true },
       ),
@@ -124,7 +124,7 @@ test('a schema decode that echoes a ref value reaches neither logs nor durable d
   );
 
   const result = await auditWithFailure({
-    row: fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' }),
+    row: fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' }),
     cleanupProcess: () =>
       Effect.fail(
         new PtyServiceError({
@@ -143,18 +143,18 @@ test('a schema decode that echoes a ref value reaches neither logs nor durable d
   assert.ok(!result.detail.includes(SESSION_NAME));
   // The coordinates that make the failure diagnosable are still there.
   assert.ok(result.logs.includes('ptyProcessId=801'));
-  assert.ok(result.logs.includes('backend=tmux'));
+  assert.ok(result.logs.includes('backend=node_pty'));
   assert.match(result.detail, /backend_session_missing/);
 });
 
 test('a foreign backend error message reaches neither logs nor durable diagnostics', async () => {
   const result = await auditWithFailure({
-    row: fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' }),
+    row: fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' }),
     cleanupProcess: () =>
       Effect.fail(
         new PtyKillError({
           // Real backends put their stderr here, which is arbitrary foreign text.
-          cause: new Error(`tmux: kill-session ${SESSION_NAME} failed: ${SENTINEL}`),
+          cause: new Error(`kill ${SESSION_NAME} failed: ${SENTINEL}`),
           ptyProcessId: 801,
         }),
       ) as Effect.Effect<never, PtyKillError>,
@@ -189,7 +189,7 @@ test('the command wrapper stays total over failures it does not own', () => {
     describeOperationalCause(
       new PtyServiceError({
         code: 'backend_unavailable',
-        message: `Could not replay tmux session ${SESSION_NAME}.`,
+        message: `Could not replay PTY session ${SESSION_NAME}.`,
         ptyProcessId: 7,
       }),
     ),

@@ -77,7 +77,7 @@ test('a PTY service error renders its code and coordinates, never its message', 
   const rendered = describeOperationalCause(
     new PtyServiceError({
       code: 'backend_unavailable',
-      message: `Could not replay tmux session ${SESSION_NAME}.`,
+      message: `Could not replay PTY session ${SESSION_NAME}.`,
       ptyProcessId: 7,
       worktreeId: 9,
     }),

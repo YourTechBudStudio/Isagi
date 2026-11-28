@@ -35,10 +35,7 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const directory = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const repository = PtyRepository.layer.pipe(Layer.provide(database));
-  const backendLayer = Layer.succeed(
-    PtyBackendCatalog,
-    fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
-  );
+  const backendLayer = Layer.succeed(PtyBackendCatalog, fakeBackendCatalog({ nodePty: backend }));
   const userShellLayer = testUserShellLayer({ environment: loginShellEnvironment });
   const service = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
@@ -52,23 +49,6 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
     Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);
-}
-
-// These tests exercise node-pty-configured behaviour; the tmux slot exists only
-// so the catalog is complete. Any dispatch to it is a test defect, not a
-// fallback, so it dies rather than answering.
-function unusedTmuxBackend(): PtyBackendShape {
-  return {
-    name: 'tmux',
-    available: Effect.die('tmux availability is not expected in these tests'),
-    launch: () => Effect.die('tmux launch is not expected in these tests'),
-    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
-    attach: () => Effect.die('tmux attach is not expected in these tests'),
-    replay: () => Effect.die('tmux replay is not expected in these tests'),
-    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
-    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
-    kill: () => Effect.die('tmux kill is not expected in these tests'),
-  };
 }
 
 /** A login-shell environment carrying the runtime controls the launch environment must strip. */

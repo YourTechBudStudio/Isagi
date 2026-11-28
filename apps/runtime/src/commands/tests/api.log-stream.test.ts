@@ -547,7 +547,7 @@ test('command log stream preserves replay-before-attach for null-cursor live bac
       pty: fakeCommandLogPtyService({
         getAttachmentPlan: () =>
           Effect.succeed({
-            session: fakePtyProcess({ backend: 'tmux', logMode: 'none' }),
+            session: fakePtyProcess({ backend: 'node_pty', logMode: 'none' }),
             replayBytes: null,
             live: true,
             replaySource: 'backend',

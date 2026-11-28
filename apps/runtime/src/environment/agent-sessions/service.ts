@@ -490,8 +490,7 @@ const make = Effect.gen(function* () {
               return yield* expectLiveIncarnation(session, options.expectedIncarnation);
             yield* validateHarnessMetadata(session);
             const process = session.activePtyProcess;
-            const replaceEphemeralProcess =
-              options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+            const replaceEphemeralProcess = options?.replaceEphemeralProcess === true;
             const canReuseActiveProcess =
               session.activePtyProcessId &&
               !replaceEphemeralProcess &&

@@ -58,20 +58,6 @@ const lifecycleUserShell = testUserShellLayer({
   environment: { HOME: process.env.HOME ?? '/tmp', PATH: process.env.PATH ?? '/usr/bin:/bin' },
 });
 
-function unavailableTmux(): PtyBackendShape {
-  return {
-    name: 'tmux',
-    available: Effect.succeed(false),
-    launch: () => Effect.die('tmux launch is not expected in these tests'),
-    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
-    attach: () => Effect.die('tmux attach is not expected in these tests'),
-    replay: () => Effect.die('tmux replay is not expected in these tests'),
-    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
-    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
-    kill: () => Effect.die('tmux kill is not expected in these tests'),
-  };
-}
-
 function fakeNodePty(overrides: Partial<PtyBackendShape> = {}): PtyBackendShape {
   return {
     name: 'node_pty',
@@ -100,15 +86,12 @@ const realNodePtyCatalog = Layer.effect(
   PtyBackendCatalog,
   Effect.gen(function* () {
     const nodePty = yield* NodePtyBackend;
-    return fakeBackendCatalog({ configured: 'node_pty', nodePty, tmux: unavailableTmux() });
+    return fakeBackendCatalog({ nodePty });
   }),
 ).pipe(Layer.provide(NodePtyBackend.layer));
 
 function fakeCatalog(nodePty: PtyBackendShape) {
-  return Layer.succeed(
-    PtyBackendCatalog,
-    fakeBackendCatalog({ configured: 'node_pty', nodePty, tmux: unavailableTmux() }),
-  );
+  return Layer.succeed(PtyBackendCatalog, fakeBackendCatalog({ nodePty }));
 }
 
 /**

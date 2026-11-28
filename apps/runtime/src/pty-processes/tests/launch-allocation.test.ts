@@ -58,13 +58,7 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
 }
 
 function catalogWith(nodePty: PtyBackendShape) {
-  return fakeBackendCatalog({
-    configured: 'node_pty',
-    nodePty,
-    tmux: backendStub('tmux', {
-      launch: () => Effect.die('the tmux adapter is not the configured launch backend here'),
-    }),
-  });
+  return fakeBackendCatalog({ nodePty });
 }
 
 interface Harness {
@@ -121,7 +115,6 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             activeAttachments: new Map(),
             config: ptyTestRuntimeConfigService(),
             terminalQueryFilters: new Map(),
-            runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
             launchEnvironment: {
               userEnvironment: baseEnvironment,

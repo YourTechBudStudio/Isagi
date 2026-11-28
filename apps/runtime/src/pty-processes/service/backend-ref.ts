@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { Effect, Schema } from 'effect';
 
 import type { PtyProcessRecord } from '../types.js';
-import { PtyServiceError, type BackendSessionRef, type PtyBackend } from '../types.js';
+import { PtyServiceError, type BackendSessionRef } from '../types.js';
 
 const nodePtyBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
@@ -13,29 +13,26 @@ const nodePtyBackendRefSchema = Schema.Struct({
   shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const tmuxBackendRefSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  backend: Schema.Literal('tmux'),
-  sessionName: Schema.String.check(Schema.isMinLength(1)),
-  shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
-});
-
 export function decodeBackendRef(
   session: PtyProcessRecord,
 ): Effect.Effect<BackendSessionRef, PtyServiceError> {
   return Effect.try({
     try: () => {
       const raw = JSON.parse(session.backendRefJson);
-      if (session.backend === 'tmux') {
-        return Schema.decodeUnknownSync(tmuxBackendRefSchema)(raw);
-      }
       const ref = Schema.decodeUnknownSync(nodePtyBackendRefSchema)(raw);
-      if (ref.ptyProcessId === session.id) {
-        return ref;
+      // The ref must describe this row: the transport the row records and the row itself. A row whose backend has no
+      // operable ref (a retired backend, or corruption) fails here rather than being operated as something else.
+      if (ref.backend !== session.backend) {
+        throw new Error(
+          `Backend ref backend ${ref.backend} does not match row backend ${String(session.backend)}.`,
+        );
       }
-      throw new Error(
-        `Backend ref ptyProcessId ${ref.ptyProcessId} does not match row id ${session.id}.`,
-      );
+      if (ref.ptyProcessId !== session.id) {
+        throw new Error(
+          `Backend ref ptyProcessId ${ref.ptyProcessId} does not match row id ${session.id}.`,
+        );
+      }
+      return ref;
     },
     catch: (cause) =>
       new PtyServiceError({
@@ -48,24 +45,9 @@ export function decodeBackendRef(
 }
 
 export function backendMetadataForLaunch(
-  backend: PtyBackend,
   metadata: { readonly ptyProcessId: number; readonly logPath: string | null },
-  runtimeNamespace: string,
   sessionsPath: string,
 ) {
-  if (backend.name === 'tmux') {
-    const sessionName = `isagi_${runtimeNamespace}_${metadata.ptyProcessId}`;
-    return {
-      backendSessionName: sessionName,
-      logMode: 'none' as const,
-      logPath: null,
-      ref: {
-        schemaVersion: 1,
-        backend: 'tmux',
-        sessionName,
-      } as const,
-    };
-  }
   const logPath = join(sessionsPath, `${metadata.ptyProcessId}.ptylog`);
   return {
     backendSessionName: null,

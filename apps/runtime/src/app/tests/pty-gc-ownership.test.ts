@@ -296,13 +296,8 @@ function insertPtyProcess(input: {
   });
 }
 
-// Node-pty is the launch preference; the tmux slot is unavailable so it stays out of the way.
 function nodePtyCatalog(nodePty: PtyBackend) {
-  return fakeBackendCatalog({
-    configured: 'node_pty',
-    nodePty,
-    tmux: { ...fakeBackend({ name: 'tmux' }), available: Effect.succeed(false) },
-  });
+  return fakeBackendCatalog({ nodePty });
 }
 
 function fakeBackend(overrides: Partial<Pick<PtyBackend, 'name'>> = {}): PtyBackend {

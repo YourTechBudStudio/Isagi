@@ -95,8 +95,8 @@ function failureCode(exit: Exit.Exit<void, unknown>) {
 
 test('every command-linked incarnation is audited with a gating absence check', async () => {
   const rows = new Map([
-    [801, fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' })],
-    [802, fakePtyProcessRow({ id: 802, backend: 'tmux', status: 'exited' })],
+    [801, fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' })],
+    [802, fakePtyProcessRow({ id: 802, backend: 'node_pty', status: 'exited' })],
   ]);
   const result = await audit({
     // `dev` is stopped by the ordinary preDelete pass first, which clears its
@@ -123,8 +123,8 @@ test('every command-linked incarnation is audited with a gating absence check', 
 
 test('the audit does not stop at the first failure', async () => {
   const rows = new Map([
-    [801, fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' })],
-    [802, fakePtyProcessRow({ id: 802, backend: 'tmux', status: 'running' })],
+    [801, fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' })],
+    [802, fakePtyProcessRow({ id: 802, backend: 'node_pty', status: 'running' })],
   ]);
   const result = await audit({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 801 })],
@@ -133,7 +133,9 @@ test('the audit does not stop at the first failure', async () => {
     pty: {
       cleanupProcess: (callInput) =>
         callInput.ptyProcessId === 801
-          ? Effect.fail(new PtyKillError({ cause: new Error('tmux refused to kill the session') }))
+          ? Effect.fail(
+              new PtyKillError({ cause: new Error('the backend refused to kill the process') }),
+            )
           : Effect.succeed('terminated' as const),
     },
   });
@@ -148,13 +150,13 @@ test('a nonterminal survivor is re-adopted with the cleanup wording so a retry c
   const result = await audit({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 801 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 801 })],
-    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' }),
     pty: {
       cleanupProcess: () =>
         Effect.fail(
           new PtyServiceError({
             code: 'backend_unavailable',
-            message: 'PTY backend tmux is unavailable.',
+            message: 'PTY backend node_pty is unavailable.',
             ptyProcessId: 801,
           }),
         ),
@@ -177,9 +179,10 @@ test('a terminal row whose gating kill fails aborts the delete without reopening
   const result = await audit({
     states: [commandState({ commandName: 'dev', status: 'exited', activePtyProcessId: null })],
     runs: [commandRun({ commandName: 'dev', status: 'exited', ptyProcessId: 801 })],
-    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'exited' }),
+    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'exited' }),
     pty: {
-      cleanupProcess: () => Effect.fail(new PtyKillError({ cause: new Error('tmux is unusable') })),
+      cleanupProcess: () =>
+        Effect.fail(new PtyKillError({ cause: new Error('the backend is unusable') })),
     },
   });
 
@@ -197,7 +200,7 @@ test('a terminal row whose gating kill fails aborts the delete without reopening
     result.recorder.logs.some(
       (line) =>
         line.includes('Command incarnation cleanup failed') &&
-        line.includes('backend=tmux') &&
+        line.includes('backend=node_pty') &&
         line.includes('classification=terminal_gated'),
     ),
   );
@@ -210,7 +213,8 @@ test('a row that cannot be classified after its failure is gated, never repaired
     // The row is gone by the time the classifying read runs.
     ptyProcess: null,
     pty: {
-      cleanupProcess: () => Effect.fail(new PtyKillError({ cause: new Error('tmux is unusable') })),
+      cleanupProcess: () =>
+        Effect.fail(new PtyKillError({ cause: new Error('the backend is unusable') })),
     },
   });
 
@@ -220,8 +224,8 @@ test('a row that cannot be classified after its failure is gated, never repaired
 
 test('out-of-model divergence during a delete mutates nothing and still refuses', async () => {
   const rows = new Map([
-    [901, fakePtyProcessRow({ id: 901, backend: 'tmux', status: 'running' })],
-    [902, fakePtyProcessRow({ id: 902, backend: 'tmux', status: 'running' })],
+    [901, fakePtyProcessRow({ id: 901, backend: 'node_pty', status: 'running' })],
+    [902, fakePtyProcessRow({ id: 902, backend: 'node_pty', status: 'running' })],
   ]);
   const result = await audit({
     // `preDelete.stop: false` keeps the ordinary stop pass out of the way, so
@@ -238,7 +242,8 @@ commands:
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 902 })],
     ptyProcessById: (id) => rows.get(id) ?? null,
     pty: {
-      cleanupProcess: () => Effect.fail(new PtyKillError({ cause: new Error('tmux is unusable') })),
+      cleanupProcess: () =>
+        Effect.fail(new PtyKillError({ cause: new Error('the backend is unusable') })),
     },
   });
 
@@ -258,8 +263,8 @@ test('a mixed failure set preserves every link instead of repairing one of them'
   // Re-adopting 901 would repoint that run at it and erase the last reference
   // to 902 — whose backend session nobody was able to verify as gone.
   const rows = new Map([
-    [901, fakePtyProcessRow({ id: 901, backend: 'tmux', status: 'running' })],
-    [902, fakePtyProcessRow({ id: 902, backend: 'tmux', status: 'exited' })],
+    [901, fakePtyProcessRow({ id: 901, backend: 'node_pty', status: 'running' })],
+    [902, fakePtyProcessRow({ id: 902, backend: 'node_pty', status: 'exited' })],
   ]);
   const result = await audit({
     config: `
@@ -279,7 +284,7 @@ commands:
       // links reach the audit exactly as the database holds them.
       cleanupProcess: (callInput) =>
         callInput.ensureBackendAbsence
-          ? Effect.fail(new PtyKillError({ cause: new Error('tmux is unusable') }))
+          ? Effect.fail(new PtyKillError({ cause: new Error('the backend is unusable') }))
           : Effect.succeed('terminated' as const),
     },
   });
@@ -302,7 +307,7 @@ test('a retry after the survivor is gone completes the delete', async () => {
   const result = await audit({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 801 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 801 })],
-    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' }),
     pty: { cleanupProcess: () => Effect.succeed('terminated' as const) },
   });
 
@@ -315,7 +320,7 @@ test('prune audits the same links as delete', async () => {
     prune: true,
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 801 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 801 })],
-    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 801, backend: 'node_pty', status: 'running' }),
     pty: { cleanupProcess: () => Effect.succeed('terminated' as const) },
   });
 

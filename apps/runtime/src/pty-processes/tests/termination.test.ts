@@ -46,13 +46,7 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
 }
 
 function catalogWith(nodePty: PtyBackendShape) {
-  return fakeBackendCatalog({
-    configured: 'node_pty',
-    nodePty,
-    tmux: backendStub('tmux', {
-      kill: () => Effect.die('the tmux adapter must never touch a node-pty incarnation'),
-    }),
-  });
+  return fakeBackendCatalog({ nodePty });
 }
 
 interface Harness {

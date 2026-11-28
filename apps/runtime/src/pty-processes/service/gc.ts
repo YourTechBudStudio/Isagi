@@ -137,7 +137,7 @@ function tagGcPhaseError<A, E, R>(phase: string) {
 
 // Backend-only sessions have no persisted row to dispatch from, so this sweep
 // cannot be driven by the rows the runtime knows about — gating it on persisted
-// tmux rows would miss exactly the orphans it exists to find. Every registered
+// rows would miss exactly the orphans it exists to find. Every registered
 // adapter that is actually available therefore collects, whatever the current
 // launch preference is.
 function cleanupBackendProcesses(

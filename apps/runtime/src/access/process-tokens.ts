@@ -61,7 +61,7 @@ const make = Effect.gen(function* () {
 /**
  * The bearer tokens of processes the runtime launched (`ISAGI_RUNTIME_TOKEN`), one per holder, released when the
  * holder ends: PTYs through their end events, SDK executions by their owner. Lost with the runtime by design, so a
- * process that outlives a restart (an adopted tmux session) loses CLI access.
+ * process that somehow outlives a restart loses CLI access.
  */
 export class ProcessTokens extends Context.Service<
   ProcessTokens,

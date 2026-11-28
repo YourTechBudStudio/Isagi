@@ -95,8 +95,7 @@ const make = Effect.gen(function* () {
                 `Terminal session ${terminalSessionId} is no longer running ${options.expectedIncarnation}.`,
               );
             }
-            const replaceEphemeralProcess =
-              options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+            const replaceEphemeralProcess = options?.replaceEphemeralProcess === true;
             const canReuseActiveProcess =
               session.activePtyProcessId &&
               !replaceEphemeralProcess &&

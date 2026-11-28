@@ -158,12 +158,9 @@ export const launchEditorIncarnation = Effect.fn('EditorContextService.launchInc
             command: prepared.spec.command,
             args: prepared.spec.args,
             cwd: prepared.cwd,
+            // Code Server relies on a runtime-owned incarnation with a file log,
+            // which the PTY layer guarantees.
             launchMode: 'direct',
-            // Never the configured backend. A tmux incarnation would retain no
-            // startup output for diagnostics and would survive a runtime restart
-            // holding its sockets — a live process this runtime does not
-            // own, which is exactly the hazard the lifecycle is built to avoid.
-            backend: 'node_pty',
           }),
           (acquired) => acquired.abandon,
         ).pipe(

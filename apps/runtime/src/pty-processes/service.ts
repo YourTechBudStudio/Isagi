@@ -65,9 +65,7 @@ import {
   PtyServiceError,
   PtyTerminationInProgressError,
   PtyWriteError,
-  type BackendSessionRef,
   type LaunchPtyProcessInput,
-  type PtyBackend as PtyBackendShape,
   type PtyForegroundCommandState,
   type PtyOutputMessage,
   type PtyProcessAllocation,
@@ -180,7 +178,6 @@ const make = Effect.gen(function* () {
     pendingExits,
     reservations,
     activeAttachments,
-    runtimeNamespace: namespace,
     sessionsPath: directory.paths.sessionsPath,
     launchEnvironment,
     config,
@@ -205,7 +202,7 @@ const make = Effect.gen(function* () {
     });
 
   // Runs while the supervisors still consume exits, before they are interrupted: detach every websocket, then end
-  // every live node-pty incarnation as a `runtime_shutdown`. Every incarnation is terminated at once under one shared
+  // every live incarnation as a `runtime_shutdown`. Every incarnation is terminated at once under one shared
   // grace, so the sweep takes one grace however many PTYs are live and finishes inside the desktop's stop budget.
   // Best effort per row: an already-dead incarnation is an `already_absent` that commits nothing false, and a genuine
   // control failure is logged and leaves the row running for the next startup reconciliation to classify honestly.
@@ -224,9 +221,7 @@ const make = Effect.gen(function* () {
           failurePolicy: 'best_effort',
           gracefulTimeoutMs: SHUTDOWN_GRACEFUL_TIMEOUT_MS,
           operation: 'runtime_shutdown',
-          ptyProcessIds: sessions
-            .filter((session) => session.backend === 'node_pty')
-            .map((session) => session.id),
+          ptyProcessIds: sessions.map((session) => session.id),
         },
       ).pipe(Effect.ignore);
     }),
@@ -311,7 +306,7 @@ const make = Effect.gen(function* () {
       }
       const ref = yield* decodeBackendRef(plan.session);
       // `getAttachmentPlan` already probed this row's adapter; re-checking
-      // availability here would only buy a second `tmux -V`.
+      // availability here would only buy a second probe.
       const backend = yield* catalog.forBackend(plan.session.backend);
       yield* backend.writeInput({ ref, data: input.data });
     }),
@@ -556,15 +551,7 @@ function attachToProcess(
         .pipe(Scope.provide(attachScope), Effect.result);
       if (Result.isFailure(attachResult)) {
         yield* release;
-        yield* handleAttachFailure(
-          repository,
-          backend,
-          eventBus,
-          reservations,
-          pendingExits,
-          session,
-          ref,
-        );
+        yield* handleAttachFailure(repository, eventBus, reservations, pendingExits, session);
         return yield* new PtyServiceError({
           code: 'backend_attach_failed',
           message: `Could not attach to PTY process ${session.id}.`,
@@ -611,7 +598,7 @@ function attachToProcess(
       // Only an interactive attachment can answer the program's state queries (cursor position); while none exists the
       // runtime answers them itself. Switched with the `activeAttachments` entry, and switched back only by the
       // finalizer of the attachment that is still current, so a displaced attachment's late finalizer can't turn
-      // forwarding off under its replacement. tmux processes have no filter (they answer their own queries).
+      // forwarding off under its replacement.
       terminalQueryFilters.get(session.id)?.setStateQueryForwarding(input.mode === 'interactive');
       // Registered last, so it runs first when the attachment scope closes: the entry stops routing writes before the
       // backend detaches.
@@ -739,7 +726,10 @@ export function reconcilePersistedProcesses(
       // process one demonstrably killed or is still starting, and immutability
       // would make that misattribution permanent.
       if (yield* skipReservedRow(reservations, session.id, warnAfterMs)) continue;
-      if (session.backend === 'node_pty' && options.startup) {
+      // A live process does not outlive the runtime that launched it, so at
+      // startup every unreserved live row is a process this runtime lost,
+      // whatever transport it records. ADR 0012 treats it as interrupted.
+      if (options.startup) {
         yield* transitionIfChanged(repository, eventBus, session, {
           status: 'failed',
           statusReason: 'runtime_ephemeral_lost',
@@ -763,13 +753,10 @@ export function reconcilePersistedProcesses(
         .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
       switch (inspection.status) {
         case 'alive':
-          yield* transitionIfChanged(
-            repository,
-            eventBus,
-            session,
-            { status: 'running', statusReason: null },
-            options.startup ? new Date().toISOString() : undefined,
-          );
+          yield* transitionIfChanged(repository, eventBus, session, {
+            status: 'running',
+            statusReason: null,
+          });
           break;
         case 'unavailable':
           yield* transitionIfChanged(repository, eventBus, session, {
@@ -782,8 +769,7 @@ export function reconcilePersistedProcesses(
           if (isExitPending(pendingExits, session.id)) break;
           yield* transitionIfChanged(repository, eventBus, session, {
             status: 'failed',
-            statusReason:
-              session.backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing',
+            statusReason: 'runtime_ephemeral_lost',
           });
           break;
       }
@@ -793,12 +779,10 @@ export function reconcilePersistedProcesses(
 
 function handleAttachFailure(
   repository: PtyRepository['Service'],
-  backend: PtyBackendShape,
   eventBus: InternalEvents['Service'],
   reservations: PtyReservations,
   pendingExits: PtyPendingExits,
   session: PtyProcessRecord,
-  ref: BackendSessionRef,
 ) {
   return Effect.gen(function* () {
     // Silently defer to the reserving attempt or launch. Unlike the poller this
@@ -809,29 +793,10 @@ function handleAttachFailure(
     // "not live" in exactly that window, and the supervisor (or the retry it handed a failed write to) is about to
     // write the real exit code.
     if (isExitPending(pendingExits, session.id)) return;
-    if (session.backend === 'node_pty') {
-      yield* transitionIfChanged(repository, eventBus, session, {
-        status: 'failed',
-        statusReason: 'runtime_ephemeral_lost',
-      });
-      return;
-    }
-    const inspection = yield* backend
-      .inspect(ref)
-      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
-    if (inspection.status === 'missing') {
-      yield* transitionIfChanged(repository, eventBus, session, {
-        status: 'failed',
-        statusReason: 'backend_process_missing',
-      });
-      return;
-    }
-    if (inspection.status === 'unavailable') {
-      yield* transitionIfChanged(repository, eventBus, session, {
-        status: 'running',
-        statusReason: 'backend_unavailable',
-      });
-    }
+    yield* transitionIfChanged(repository, eventBus, session, {
+      status: 'failed',
+      statusReason: 'runtime_ephemeral_lost',
+    });
   });
 }
 
@@ -843,13 +808,8 @@ function transitionIfChanged(
     readonly status: PtyProcessRecord['status'];
     readonly statusReason: PtyProcessRecord['statusReason'];
   },
-  lastSeenAt?: string,
 ) {
-  if (
-    session.status === next.status &&
-    session.statusReason === next.statusReason &&
-    lastSeenAt === undefined
-  )
+  if (session.status === next.status && session.statusReason === next.statusReason)
     return Effect.void;
   return transitionProcessAndPublish(repository, eventBus, session, {
     ptyProcessId: session.id,
@@ -857,6 +817,5 @@ function transitionIfChanged(
     statusReason: next.statusReason,
     exitCode: next.status === 'running' ? null : session.exitCode,
     signal: next.status === 'running' ? null : session.signal,
-    ...(lastSeenAt !== undefined ? { lastSeenAt } : {}),
   });
 }

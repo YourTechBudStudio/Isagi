@@ -25,7 +25,6 @@ import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
 import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
-import type { PtyBackend as PtyBackendShape } from '../types.js';
 
 // The runtime is a node-pty program's terminal of record for queries (`service/terminal-queries.ts`). These tests
 // run a real program under the real node-pty backend through the PTY service and check what it is answered, what an
@@ -72,25 +71,11 @@ function testUserShell(): UserShell['Service'] {
   };
 }
 
-function unavailableTmux(): PtyBackendShape {
-  return {
-    name: 'tmux',
-    available: Effect.succeed(false),
-    launch: () => Effect.die('tmux launch is not expected in these tests'),
-    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
-    attach: () => Effect.die('tmux attach is not expected in these tests'),
-    replay: () => Effect.die('tmux replay is not expected in these tests'),
-    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
-    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
-    kill: () => Effect.die('tmux kill is not expected in these tests'),
-  };
-}
-
 const realNodePtyCatalog = Layer.effect(
   PtyBackendCatalog,
   Effect.gen(function* () {
     const nodePty = yield* NodePtyBackend;
-    return fakeBackendCatalog({ configured: 'node_pty', nodePty, tmux: unavailableTmux() });
+    return fakeBackendCatalog({ nodePty });
   }),
 ).pipe(Layer.provide(NodePtyBackend.layer));
 

@@ -4,40 +4,25 @@ import { terminalPalette, type AppearanceTheme } from '@isagi/shared/contracts';
 
 import { RuntimeConfig } from '../runtime-config/index.js';
 import { defaultRuntimeConfig } from '../runtime-config/testing.js';
-import { resolveRegisteredBackend, type PtyBackendCatalog } from './backend.js';
+import { backendRegistry, catalogFromRegistry, type PtyBackendCatalog } from './backend.js';
 import type { PtyService } from './service.js';
 import type { PtyPersistenceRetry } from './service/retry.js';
 import { createTerminalQueryFilter, type TerminalQueryFilter } from './service/terminal-queries.js';
 import { terminatePtyProcesses } from './service/termination.js';
 import type {
-  PtyBackendName,
   PtyProcessAllocation,
   PtyProcessLaunchMetadata,
   PtyBackend as PtyBackendShape,
 } from './types.js';
 
 /**
- * Test-only catalog. Every field is explicit on purpose: a cross-backend test
- * has to state its launch preference and both registered adapters, so a test
- * can never silently pass because the helper defaulted the very thing under
- * test. The internal registry mirrors production, so a widened
- * `PtyBackendName` breaks here first and adding the required parameter then
- * forces every call site to state the new adapter too.
+ * Test-only catalog. It builds the production registry and resolves through the production catalog code, so a fake
+ * can never be more permissive than production.
  */
 export function fakeBackendCatalog(input: {
-  readonly configured: PtyBackendName;
   readonly nodePty: PtyBackendShape;
-  readonly tmux: PtyBackendShape;
 }): PtyBackendCatalog['Service'] {
-  const backends = {
-    node_pty: input.nodePty,
-    tmux: input.tmux,
-  } satisfies Record<PtyBackendName, PtyBackendShape>;
-  return {
-    configured: backends[input.configured],
-    forBackend: (name) => resolveRegisteredBackend(backends, name),
-    all: Object.values(backends),
-  };
+  return catalogFromRegistry(input.nodePty, backendRegistry(input));
 }
 
 /**

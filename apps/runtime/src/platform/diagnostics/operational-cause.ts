@@ -15,11 +15,10 @@
 //
 // The reason is concrete rather than theoretical. A PTY backend ref is decoded
 // with Effect Schema, and a schema mismatch renders the offending value —
-// `Expected "tmux", actual "<the whole ref field>"`. A ref can carry a
+// `Expected "node_pty", actual "<the whole ref field>"`. A ref can carry a
 // shell-integration token, so echoing that message would publish a secret into a
-// durable, user-visible field. Two authored messages are unsafe for the same
-// reason: one interpolates a tmux session name, and `log-replay`'s carries a
-// caller-supplied string. So `.message` is never read — not even ours.
+// durable, user-visible field. Authored messages are unsafe for the same
+// reason: `log-replay`'s, for one, carries a caller-supplied string. So `.message` is never read — not even ours.
 //
 // What may appear: stable tags and codes, database operation names, backend
 // enums, and identifiers (PTY, worktree). What may never appear: secrets, backend refs or any component of one, environment
@@ -114,7 +113,7 @@ const knownSystemErrorCodes: ReadonlySet<string> = new Set([
   // Port allocation and loopback probes.
   'EADDRINUSE',
   'EADDRNOTAVAIL',
-  // A missing executable (`tmux`, `git`, `ps`, `tar` spawn failures) or file.
+  // A missing executable (`git`, `ps`, `tar` spawn failures) or file.
   'ENOENT',
   // Data-directory writes, artifact folders and orphan sweeps: a full disk, a
   // read-only or busy volume, an I/O fault, and the shape conditions mkdir,

@@ -6,7 +6,6 @@ import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyRepository } from '../repository.js';
 import {
   isTerminalPtyProcessStatus,
-  missingStatusReasonForBackend,
   PtyServiceError,
   type PtyKillError,
   type PtyTerminationInProgressError,
@@ -26,7 +25,8 @@ import { terminatePtyProcess } from './termination.js';
 // What this cleanup attempt established about the incarnation's process, and
 // nothing more. `terminated` means it killed something live. `already_terminal`
 // means nothing is left behind the incarnation to kill: its row is already
-// terminal, or this attempt verified that the backend has nothing (`inspect`
+// terminal (and, when absence must be ensured, records a retired backend this
+// runtime cannot host), or this attempt verified that the backend has nothing (`inspect`
 // answered `missing`, or a kill found the process already gone), or the backend
 // has reported an exit that is about to be recorded (`isExitPending`).
 //
@@ -87,6 +87,11 @@ export function cleanupPtyProcess(
 
     if (isTerminalPtyProcessStatus(session.status)) {
       if (!input.ensureBackendAbsence) return 'already_terminal' as const;
+      // A retired backend has no adapter that could host this process, so this
+      // runtime owns none behind the row: nothing is left to verify or kill.
+      // Checked before resolving or decoding anything, which a historical row
+      // could never pass.
+      if (deps.catalog.isRetired(session.backend)) return 'already_terminal' as const;
 
       // The gating check. `kill` has no `unavailable` outcome of its own, so
       // the adapter is probed first to keep a genuinely missing backend a
@@ -129,7 +134,7 @@ export function cleanupPtyProcess(
       yield* transitionProcessAndPublish(deps.repository, deps.eventBus, session, {
         ptyProcessId: session.id,
         status: 'failed',
-        statusReason: missingStatusReasonForBackend(session.backend),
+        statusReason: 'runtime_ephemeral_lost',
         exitCode: session.exitCode,
         signal: session.signal,
       });

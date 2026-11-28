@@ -11,7 +11,10 @@ import { coordinates, describeSafely, type SafeDiagnostic } from '../platform/di
 import type { ShellLaunchMode } from '../platform/process/index.js';
 import type { TerminalQueryStream } from './service/terminal-queries.js';
 
-export type PtyBackendName = PtyProcessBackend;
+// The backends this runtime can launch and operate. Narrower than the persisted
+// `PtyProcessBackend` vocabulary a row may hold: a historical row can name a
+// retired backend that no adapter exists for (`backend.ts`).
+export type PtyBackendName = 'node_pty';
 export type PtyProcessStatus = SessionStatus;
 export type PtyProcessStatusReason =
   | 'user_requested'
@@ -34,15 +37,6 @@ const terminalPtyProcessStatuses: ReadonlySet<PtyProcessStatus> = new Set([
 
 export function isTerminalPtyProcessStatus(status: PtyProcessStatus) {
   return terminalPtyProcessStatuses.has(status);
-}
-
-// Why an incarnation the backend can no longer find is gone. A node-pty process
-// lives and dies with the runtime, so its absence is an ephemeral loss rather
-// than a missing backend process. The two operational flows that classify an
-// absent process — the status poller and generic cleanup — must not drift on
-// this, so the split lives here rather than being spelled out at each site.
-export function missingStatusReasonForBackend(backend: PtyBackendName): PtyProcessStatusReason {
-  return backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing';
 }
 
 // Whether an incarnation ended because the runtime itself stopped: a graceful
@@ -104,14 +98,7 @@ export interface NodePtyBackendRef {
   readonly shellIntegrationToken?: string | null | undefined;
 }
 
-export interface TmuxBackendRef {
-  readonly schemaVersion: 1;
-  readonly backend: 'tmux';
-  readonly sessionName: string;
-  readonly shellIntegrationToken?: string | null | undefined;
-}
-
-export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
+export type BackendSessionRef = NodePtyBackendRef;
 
 export interface PtyBackendGcSession {
   readonly ptyProcessId: number;
@@ -424,13 +411,6 @@ export interface LaunchPtyProcessInput {
   readonly envForProcess?:
     | ((input: { readonly ptyProcessId: number }) => Effect.Effect<NodeJS.ProcessEnv, never>)
     | undefined;
-  /** Which adapter creates this incarnation. Omitted — the default — keeps the
-   *  existing behaviour exactly: the process-wide configured backend. A caller
-   *  supplies it only when the incarnation's transport is part of its own
-   *  correctness rather than a user preference. Every operation on an *existing*
-   *  row still dispatches through its persisted backend, so ADR 0005's
-   *  disposable-process model is untouched. */
-  readonly backend?: PtyBackendName | undefined;
 }
 
 export type PtyLaunchMode = ShellLaunchMode;

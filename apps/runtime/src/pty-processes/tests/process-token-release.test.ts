@@ -65,11 +65,6 @@ function backend(overrides: Partial<PtyBackendShape>): PtyBackendShape {
   };
 }
 
-const unusedTmux = backend({
-  name: 'tmux',
-  launch: () => Effect.die('tmux is not configured here'),
-});
-
 /** Runs `body` against the PTY service, the tokens and the repository over a fresh data root. */
 function withPty(
   nodePty: PtyBackendShape,
@@ -88,12 +83,7 @@ function withPty(
     Layer.provide(tokenOnlyCliAccess),
     Layer.provideMerge(tokens),
     Layer.provideMerge(repository),
-    Layer.provide(
-      Layer.succeed(
-        PtyBackendCatalog,
-        fakeBackendCatalog({ configured: 'node_pty', nodePty, tmux: unusedTmux }),
-      ),
-    ),
+    Layer.provide(Layer.succeed(PtyBackendCatalog, fakeBackendCatalog({ nodePty }))),
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),
     // One bus: the PTY service publishes on it and `ProcessTokens` subscribes to it.

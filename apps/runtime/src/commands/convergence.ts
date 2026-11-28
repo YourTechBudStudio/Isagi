@@ -80,7 +80,7 @@ export interface CommandCleanupFailure {
   readonly kind: CommandCleanupFailureKind;
   // Which transport could not be verified, taken from the same fresh read that
   // decided the classification. This is the first thing a maintainer needs in
-  // order to tell "tmux is uninstalled" from "this ref is corrupt" — and for a
+  // order to tell "the backend is unavailable" from "this ref is corrupt" — and for a
   // `terminal_gated` failure the log is the *only* artifact that carries it,
   // because nothing is written to any command row.
   readonly backend: string | null;

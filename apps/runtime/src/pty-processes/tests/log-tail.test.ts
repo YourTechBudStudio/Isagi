@@ -31,7 +31,7 @@ import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js
 
 // The tail reads a row and a file. No adapter is ever consulted, which is the
 // point: it works for an incarnation whose process is long gone.
-function unusedBackend(name: 'node_pty' | 'tmux'): PtyBackendShape {
+function unusedBackend(name: 'node_pty'): PtyBackendShape {
   return {
     name,
     available: Effect.succeed(true),
@@ -55,14 +55,7 @@ function serviceLayer(dataRoot: string) {
     Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(
-      Layer.succeed(
-        PtyBackendCatalog,
-        fakeBackendCatalog({
-          configured: 'node_pty',
-          nodePty: unusedBackend('node_pty'),
-          tmux: unusedBackend('tmux'),
-        }),
-      ),
+      Layer.succeed(PtyBackendCatalog, fakeBackendCatalog({ nodePty: unusedBackend('node_pty') })),
     ),
     Layer.provide(PtyForegroundState.layer),
     Layer.provide(directory),

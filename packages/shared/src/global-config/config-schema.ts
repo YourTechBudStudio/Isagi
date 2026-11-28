@@ -10,9 +10,9 @@ function optionalBoundedInteger(maximum: number, description: string) {
   });
 }
 
-export const runtimeConfigPtyBackendSchema = Schema.Literals(['node-pty', 'tmux']).annotate({
+export const runtimeConfigPtyBackendSchema = Schema.Literals(['node-pty']).annotate({
   description:
-    'PTY backend used for new runtime-managed processes. Missing or null defaults to node-pty. Any other value prevents Isagi from starting. Changing this setting requires restarting Isagi. node-pty needs no external process; tmux is only a transport for the processes Isagi launches, not a restoration mechanism (Isagi restores sessions from its own state either way), so choose it only for a specific reason and when tmux is installed.',
+    'PTY backend used for new runtime-managed processes. node-pty is currently the only backend. Missing or null defaults to node-pty. Any other value prevents Isagi from starting. Changing this setting requires restarting Isagi.',
 });
 
 export const runtimeHarnessPolicyEntrySchema = Schema.Struct({
