@@ -232,22 +232,6 @@ const streamProcess = Effect.fnUntraced(function* <
     forkSupervised(ws, strategy),
   );
 
-  // A backend without a byte cursor cannot say where its replay ends, so it replays first and goes live from the
-  // attach.
-  if (plan.replayBytes === null) {
-    const replayResult = yield* replayFrames(sendOutput, (send) =>
-      pty.replay({ session: plan.session, bytes: plan.replayBytes, send }),
-    );
-    if (Result.isFailure(replayResult)) {
-      return yield* closeWithMappedError(
-        ws,
-        strategy,
-        `${strategy.logLabel} replay failed`,
-        replayResult.failure,
-      );
-    }
-  }
-
   const attachResult = yield* attachLive(ws, strategy, liveTarget, live).pipe(Effect.result);
   if (Result.isFailure(attachResult)) {
     const recovered = yield* recoverReplayOnlyAfterAttachFailure(
@@ -270,19 +254,17 @@ const streamProcess = Effect.fnUntraced(function* <
   const attachment = attachResult.success;
 
   // Output produced while the replay runs waits in `live`, so the client sees the log up to the attach instant and
-  // then everything after it, with no gap and no duplicate.
-  if (plan.replayBytes !== null && attachment.replayBytes !== null) {
-    const replayResult = yield* replayFrames(sendOutput, (send) =>
-      pty.replay({ session: plan.session, bytes: attachment.replayBytes, send }),
+  // then everything after it, with no gap and no duplicate. A row that retained no log replays empty.
+  const replayResult = yield* replayFrames(sendOutput, (send) =>
+    pty.replay({ session: plan.session, bytes: attachment.replayBytes, send }),
+  );
+  if (Result.isFailure(replayResult)) {
+    return yield* closeWithMappedError(
+      ws,
+      strategy,
+      `${strategy.logLabel} replay failed`,
+      replayResult.failure,
     );
-    if (Result.isFailure(replayResult)) {
-      return yield* closeWithMappedError(
-        ws,
-        strategy,
-        `${strategy.logLabel} replay failed`,
-        replayResult.failure,
-      );
-    }
   }
 
   yield* forwardLive;

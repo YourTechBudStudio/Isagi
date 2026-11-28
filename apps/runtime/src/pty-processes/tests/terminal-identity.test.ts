@@ -19,7 +19,6 @@ import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
 import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
-import type { PtyBackend as PtyBackendShape } from '../types.js';
 
 // What a TUI inside a real node-pty PTY sees about its terminal. The environment the runtime was launched with names
 // another terminal and multiplexer; the PTY must carry none of that, and must declare an SSH-style session so Codex
@@ -33,20 +32,6 @@ const launchingTerminalEnvironment = {
   VTE_VERSION: '7600',
 };
 
-function unavailableTmux(): PtyBackendShape {
-  return {
-    name: 'tmux',
-    available: Effect.succeed(false),
-    launch: () => Effect.die('tmux launch is not expected in these tests'),
-    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
-    attach: () => Effect.die('tmux attach is not expected in these tests'),
-    replay: () => Effect.die('tmux replay is not expected in these tests'),
-    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
-    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
-    kill: () => Effect.die('tmux kill is not expected in these tests'),
-  };
-}
-
 function serviceLayer(dataRoot: string) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
@@ -56,7 +41,7 @@ function serviceLayer(dataRoot: string) {
     PtyBackendCatalog,
     Effect.gen(function* () {
       const nodePty = yield* NodePtyBackend;
-      return fakeBackendCatalog({ configured: 'node_pty', nodePty, tmux: unavailableTmux() });
+      return fakeBackendCatalog({ nodePty });
     }),
   ).pipe(Layer.provide(NodePtyBackend.layer));
   const service = PtyService.layerNoDeps.pipe(

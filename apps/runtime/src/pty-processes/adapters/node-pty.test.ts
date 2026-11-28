@@ -41,7 +41,6 @@ test('node-pty backend launch boundary passes structured args to spawn', () => {
   const spawned = spawnNodePty(
     {
       ptyProcessId: 1,
-      backendSessionName: null,
       command: 'pi',
       args: ['-e', '/tmp/ext.ts', '--session', 'abc$(nope)'],
       cwd: '/repo/isagi',
@@ -115,7 +114,6 @@ test('node-pty terminate affirms a kill when it signalled a live handle', async 
       assert.ok(backend.terminate);
       const { ref } = yield* backend.launch({
         ptyProcessId: 4_244,
-        backendSessionName: null,
         command: '/bin/sh',
         args: ['-c', 'sleep 30'],
         cwd: process.cwd(),
@@ -144,7 +142,6 @@ test('node-pty terminate ends its grace as soon as the process tree honours SIGT
       assert.ok(backend.terminate);
       const { ref } = yield* backend.launch({
         ptyProcessId: 4_247,
-        backendSessionName: null,
         command: '/bin/sh',
         args: ['-c', 'sleep 30 & wait'],
         cwd: process.cwd(),
@@ -175,7 +172,6 @@ function shellLaunch(
 ): LaunchBackendSessionInput {
   return {
     ptyProcessId,
-    backendSessionName: null,
     command: '/bin/sh',
     args: ['-c', script],
     cwd: process.cwd(),
@@ -245,10 +241,9 @@ test('a node-pty attachment replays nothing twice, receives live output and exit
             Effect.timeout('10 seconds'),
           );
           const output = yield* Queue.unbounded<PtyOutputMessage>();
-          const foreground = yield* Queue.unbounded<'idle' | 'working'>();
           const scope = yield* Scope.make();
           const attachment = yield* backend
-            .attach({ ref: launched.ref, cols: 80, rows: 24, output, foreground })
+            .attach({ ref: launched.ref, cols: 80, rows: 24, output })
             .pipe(Scope.provide(scope));
           const replayBytes = attachment.replayBytes;
           yield* attachment.write('x\n');

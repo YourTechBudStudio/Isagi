@@ -275,7 +275,6 @@ function ptyServiceStreamError(error: PtyServiceError): {
   readonly message?: string;
 } {
   switch (error.code) {
-    case 'backend_unavailable':
     case 'backend_session_missing':
     case 'backend_attach_failed':
     case 'log_read_failed':

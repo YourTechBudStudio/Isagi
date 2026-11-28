@@ -19,6 +19,7 @@ import { allocateLaunch, type PtyLaunchDependencies } from '../service/launch.js
 import type { PtyPendingExits, PtyReservations } from '../service/lifecycle.js';
 import {
   fakeBackendCatalog,
+  fakePtyBackend,
   manualPtyPersistenceRetry,
   ptyTestRuntimeConfigService,
 } from '../testing.js';
@@ -34,9 +35,8 @@ import {
 // responsible for it, and no generic observer may assign it an outcome.
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
-  return {
+  return fakePtyBackend({
     name,
-    available: Effect.succeed(true),
     launch: () =>
       Effect.succeed({
         ref: {
@@ -47,24 +47,12 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
         } satisfies BackendSessionRef,
         events: Stream.empty,
       }),
-    writeInput: () => Effect.void,
-    attach: () => Effect.die(`${name} attach is not expected here`),
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
     ...overrides,
-  } satisfies PtyBackendShape;
+  });
 }
 
 function catalogWith(nodePty: PtyBackendShape) {
-  return fakeBackendCatalog({
-    configured: 'node_pty',
-    nodePty,
-    tmux: backendStub('tmux', {
-      launch: () => Effect.die('the tmux adapter is not the configured launch backend here'),
-    }),
-  });
+  return fakeBackendCatalog({ nodePty });
 }
 
 interface Harness {
@@ -121,7 +109,6 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             activeAttachments: new Map(),
             config: ptyTestRuntimeConfigService(),
             terminalQueryFilters: new Map(),
-            runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
             launchEnvironment: {
               userEnvironment: baseEnvironment,
@@ -663,16 +650,10 @@ test('a launch pending past the retention window is excluded from orphan GC', as
 
       // Far past the five-minute retention window: without the exclusion the
       // row and its live process would be collected mid-launch.
-      yield* collectPtyGarbage(
-        harness.repository,
-        catalogWith(backend),
-        'testns',
-        harness.sessionsPath,
-        {
-          nowMs: Date.now() + 60 * 60_000,
-          pendingLaunches: harness.reservations.launches,
-        },
-      );
+      yield* collectPtyGarbage(harness.repository, catalogWith(backend), harness.sessionsPath, {
+        nowMs: Date.now() + 60 * 60_000,
+        pendingLaunches: harness.reservations.launches,
+      });
 
       const row = yield* harness.repository.findProcess(allocation.ptyProcessId);
       assert.notEqual(row, null);

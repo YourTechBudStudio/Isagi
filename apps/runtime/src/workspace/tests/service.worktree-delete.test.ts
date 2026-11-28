@@ -13,7 +13,7 @@ import { InternalEvents } from '../../platform/events/index.js';
 import { Git, GitCommandError } from '../../platform/git/index.js';
 import { DataDirectory } from '../../platform/persistence/index.js';
 import { ProjectRepository } from '../../projects/index.js';
-import { PtyService, PtyServiceError } from '../../pty-processes/index.js';
+import { PtyKillError, PtyService } from '../../pty-processes/index.js';
 import { fakeTerminateMany } from '../../pty-processes/testing.js';
 import { WorktreeDeleteDiagnosticsReader } from '../delete-diagnostics.js';
 import { WorkspaceError } from '../errors.js';
@@ -374,10 +374,9 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
       events.push(`pty:${input.ptyProcessId}`);
       if (input.ptyProcessId === 21) {
         return yield* Effect.fail(
-          new PtyServiceError({
-            code: 'backend_unavailable',
-            message: 'PTY backend is unavailable.',
+          new PtyKillError({
             ptyProcessId: input.ptyProcessId,
+            cause: new Error('the process would not stop'),
           }),
         );
       }

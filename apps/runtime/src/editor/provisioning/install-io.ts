@@ -292,8 +292,7 @@ export class EditorInstallIo extends Context.Service<
       readonly destination: string;
     }) => Effect.Effect<{ readonly sha256: string }, EditorInstallIoError>;
     /** `tar -xzf <archive> -C <into> --strip-components <n>`, run through the shared
-     *  `platform/process` `execCommand` adapter like `git` (`platform/git/command.ts`) and
-     *  `tmux` (`pty-processes/adapters/tmux.ts`). */
+     *  `platform/process` `execCommand` adapter like `git` (`platform/git/command.ts`). */
     readonly extractTarGz: (input: {
       readonly archive: string;
       readonly into: string;

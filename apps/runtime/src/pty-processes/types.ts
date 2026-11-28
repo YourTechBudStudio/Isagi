@@ -11,7 +11,10 @@ import { coordinates, describeSafely, type SafeDiagnostic } from '../platform/di
 import type { ShellLaunchMode } from '../platform/process/index.js';
 import type { TerminalQueryStream } from './service/terminal-queries.js';
 
-export type PtyBackendName = PtyProcessBackend;
+// The backends this runtime can launch and operate. Narrower than the persisted
+// `PtyProcessBackend` vocabulary a row may hold: a historical row can name a
+// retired backend that no adapter exists for (`backend.ts`).
+export type PtyBackendName = 'node_pty';
 export type PtyProcessStatus = SessionStatus;
 export type PtyProcessStatusReason =
   | 'user_requested'
@@ -34,15 +37,6 @@ const terminalPtyProcessStatuses: ReadonlySet<PtyProcessStatus> = new Set([
 
 export function isTerminalPtyProcessStatus(status: PtyProcessStatus) {
   return terminalPtyProcessStatuses.has(status);
-}
-
-// Why an incarnation the backend can no longer find is gone. A node-pty process
-// lives and dies with the runtime, so its absence is an ephemeral loss rather
-// than a missing backend process. The two operational flows that classify an
-// absent process — the status poller and generic cleanup — must not drift on
-// this, so the split lives here rather than being spelled out at each site.
-export function missingStatusReasonForBackend(backend: PtyBackendName): PtyProcessStatusReason {
-  return backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing';
 }
 
 // Whether an incarnation ended because the runtime itself stopped: a graceful
@@ -101,17 +95,9 @@ export interface NodePtyBackendRef {
   readonly backend: 'node_pty';
   readonly ptyProcessId: number;
   readonly pid: number | null;
-  readonly shellIntegrationToken?: string | null | undefined;
 }
 
-export interface TmuxBackendRef {
-  readonly schemaVersion: 1;
-  readonly backend: 'tmux';
-  readonly sessionName: string;
-  readonly shellIntegrationToken?: string | null | undefined;
-}
-
-export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
+export type BackendSessionRef = NodePtyBackendRef;
 
 export interface PtyBackendGcSession {
   readonly ptyProcessId: number;
@@ -120,7 +106,6 @@ export interface PtyBackendGcSession {
 }
 
 export interface PtyBackendGcInput {
-  readonly runtimeNamespace: string;
   readonly sessions: readonly PtyBackendGcSession[];
 }
 
@@ -139,7 +124,6 @@ export type PtyBackendGcFinding =
 
 export interface LaunchBackendSessionInput {
   readonly ptyProcessId: number;
-  readonly backendSessionName: string | null;
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd: string;
@@ -152,8 +136,7 @@ export interface LaunchBackendSessionInput {
    * This process's terminal-query filter (`service/terminal-queries.ts`), which makes the runtime the program's
    * terminal of record for queries. node-pty runs every output chunk through it after the shell-integration parser:
    * it writes the returned replies back to the PTY, appends `log` to the log and delivers `live` to the attachment,
-   * then flushes it at exit. tmux ignores it: tmux is a real terminal emulator and answers the program's queries
-   * itself, so they never reach the runtime raw.
+   * then flushes it at exit.
    */
   readonly terminalQueries: TerminalQueryStream;
 }
@@ -179,7 +162,7 @@ export interface LaunchedBackendSession {
   readonly ref: BackendSessionRef;
   /**
    * Ends after `Exited`, or without one when the process was killed through `kill`/`terminate` (the killer owns
-   * that terminal fact). A backend with no live exit signal (tmux) returns an empty stream.
+   * that terminal fact).
    */
   readonly events: Stream.Stream<PtyProcessEvent>;
 }
@@ -310,7 +293,6 @@ export class PtyServiceError
       | 'active_process_missing'
       | 'active_process_not_running'
       | 'session_already_attached'
-      | 'backend_unavailable'
       | 'backend_session_missing'
       | 'backend_attach_failed'
       | 'log_read_failed';
@@ -333,31 +315,13 @@ export class PtyServiceError
   }
 }
 
-export class PtyInspectError
-  extends Data.TaggedError('PtyInspectError')<{
-    readonly ptyProcessId?: number | undefined;
-    readonly cause: unknown;
-  }>
-  implements SafeDiagnostic
-{
-  [describeSafely]() {
-    return {
-      label: `PTY inspect error${coordinates({ ptyProcess: this.ptyProcessId })}`,
-      cause: this.cause,
-    };
-  }
-}
-
 // Attempt-honest kill result. `false` means this attempt found no live process
 // for the ref: it terminated nothing and must persist no `killed` fact.
 export interface BackendTerminateResult {
   readonly terminated: boolean;
 }
 
-export type BackendInspection =
-  | { readonly status: 'alive' }
-  | { readonly status: 'missing' }
-  | { readonly status: 'unavailable'; readonly cause?: unknown };
+export type BackendInspection = { readonly status: 'alive' } | { readonly status: 'missing' };
 
 /** A live attachment. It detaches when the scope it was acquired in closes. */
 export interface BackendAttachment {
@@ -371,43 +335,38 @@ export interface BackendAttachment {
 
 export interface PtyBackend {
   readonly name: PtyBackendName;
-  readonly available: Effect.Effect<boolean, never>;
   /** Spawns. Every later fact about the process arrives on the returned `events` stream. */
   readonly launch: (
     input: LaunchBackendSessionInput,
   ) => Effect.Effect<LaunchedBackendSession, PtyStartError>;
+  /** Writes to a live process without an attachment. Fails when the process is not live. */
   readonly writeInput: (input: {
     readonly ref: BackendSessionRef;
     readonly data: string;
   }) => Effect.Effect<void, PtyWriteError>;
   /**
    * Live output goes to `output` from this instant, and `replayBytes` is the log size at the same instant, so no
-   * byte is both replayed and delivered. Backends that only learn foreground state while attached (tmux) also write
-   * `foreground`. Detaches when the scope closes (tmux: kills its attach client).
+   * byte is both replayed and delivered. Detaches when the scope closes: output stops being routed to `output`.
    */
   readonly attach: (input: {
     readonly ref: BackendSessionRef;
     readonly cols: number;
     readonly rows: number;
     readonly output: Queue.Enqueue<PtyOutputMessage>;
-    readonly foreground: Queue.Enqueue<PtyForegroundCommandState>;
   }) => Effect.Effect<BackendAttachment, PtyStartError, Scope.Scope>;
-  readonly replay: (input: {
-    readonly ref: BackendSessionRef;
-    readonly logPath: string | null;
-    readonly bytes: number | null;
-    readonly send: (message: PtyStreamOutputMessageSet) => void;
-  }) => Effect.Effect<void, PtyServiceError>;
-  readonly inspect: (ref: BackendSessionRef) => Effect.Effect<BackendInspection, PtyInspectError>;
-  readonly listSessions: Effect.Effect<readonly BackendSessionRef[], PtyInspectError>;
-  readonly terminate?: (input: {
+  /** Whether this runtime holds a live process for the ref. Answered from the runtime's own process table. */
+  readonly inspect: (ref: BackendSessionRef) => Effect.Effect<BackendInspection>;
+  /** SIGTERM with a grace, then SIGKILL, across the process tree. */
+  readonly terminate: (input: {
     readonly ref: BackendSessionRef;
     readonly gracefulTimeoutMs: number;
   }) => Effect.Effect<BackendTerminateResult, PtyKillError>;
+  /** Immediate SIGKILL across the process tree. */
   readonly kill: (ref: BackendSessionRef) => Effect.Effect<BackendTerminateResult, PtyKillError>;
-  readonly collectGarbage?: (
+  /** Live processes this runtime holds that no persisted row accounts for, or whose row is already terminal. */
+  readonly collectGarbage: (
     input: PtyBackendGcInput,
-  ) => Effect.Effect<readonly PtyBackendGcFinding[], PtyInspectError>;
+  ) => Effect.Effect<readonly PtyBackendGcFinding[]>;
 }
 
 export interface LaunchPtyProcessInput {
@@ -424,13 +383,6 @@ export interface LaunchPtyProcessInput {
   readonly envForProcess?:
     | ((input: { readonly ptyProcessId: number }) => Effect.Effect<NodeJS.ProcessEnv, never>)
     | undefined;
-  /** Which adapter creates this incarnation. Omitted — the default — keeps the
-   *  existing behaviour exactly: the process-wide configured backend. A caller
-   *  supplies it only when the incarnation's transport is part of its own
-   *  correctness rather than a user preference. Every operation on an *existing*
-   *  row still dispatches through its persisted backend, so ADR 0005's
-   *  disposable-process model is untouched. */
-  readonly backend?: PtyBackendName | undefined;
 }
 
 export type PtyLaunchMode = ShellLaunchMode;

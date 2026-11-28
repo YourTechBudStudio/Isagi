@@ -175,7 +175,7 @@ describe('execCommand', () => {
   });
 });
 
-/** A recognized wrapper, the way `PtyKillError` and friends carry an `ExecFailed` from tmux. */
+/** A recognized wrapper, the way `PtyKillError` and friends carry an `ExecFailed` from a command. */
 class KillFailed extends Error implements SafeDiagnostic {
   constructor(
     readonly ptyProcessId: number,
@@ -195,7 +195,7 @@ class KillFailed extends Error implements SafeDiagnostic {
 describe('ExecFailed safe diagnostic', () => {
   const SECRET = 'SUPERSECRETTOKEN12345';
 
-  const failed = (failure: ExecFailed['failure'], command = 'tmux') =>
+  const failed = (failure: ExecFailed['failure'], command = 'git') =>
     new ExecFailed({
       command,
       args: ['send-keys', SECRET],
@@ -210,14 +210,14 @@ describe('ExecFailed safe diagnostic', () => {
 
   test('names the executable and the failure kind, and nothing it did not author', () => {
     const cases: ReadonlyArray<readonly [ExecFailed['failure'], string]> = [
-      [{ kind: 'exited', exitCode: 1 }, 'tmux exited with code 1'],
-      [{ kind: 'signalled', signal: 'SIGTERM' }, 'tmux was killed by SIGTERM'],
-      [{ kind: 'aborted' }, 'tmux was aborted'],
-      [{ kind: 'spawn_failed', systemErrorCode: 'ENOENT' }, 'tmux could not be started (ENOENT)'],
-      [{ kind: 'spawn_failed', systemErrorCode: null }, 'tmux could not be started'],
+      [{ kind: 'exited', exitCode: 1 }, 'git exited with code 1'],
+      [{ kind: 'signalled', signal: 'SIGTERM' }, 'git was killed by SIGTERM'],
+      [{ kind: 'aborted' }, 'git was aborted'],
+      [{ kind: 'spawn_failed', systemErrorCode: 'ENOENT' }, 'git could not be started (ENOENT)'],
+      [{ kind: 'spawn_failed', systemErrorCode: null }, 'git could not be started'],
       // A code or signal outside the allowlists is dropped rather than echoed.
-      [{ kind: 'spawn_failed', systemErrorCode: `E${SECRET}` }, 'tmux could not be started'],
-      [{ kind: 'signalled', signal: SECRET }, 'tmux was killed by a signal'],
+      [{ kind: 'spawn_failed', systemErrorCode: `E${SECRET}` }, 'git could not be started'],
+      [{ kind: 'signalled', signal: SECRET }, 'git was killed by a signal'],
     ];
     for (const [failure, expected] of cases) {
       const rendered = describeOperationalCause(failed(failure));
@@ -229,7 +229,7 @@ describe('ExecFailed safe diagnostic', () => {
   test('renders inside a recognized wrapper instead of collapsing to "Error"', () => {
     assert.equal(
       describeOperationalCause(new KillFailed(5, failed({ kind: 'exited', exitCode: 1 }))),
-      'Kill failed (ptyProcess=5): tmux exited with code 1',
+      'Kill failed (ptyProcess=5): git exited with code 1',
     );
   });
 

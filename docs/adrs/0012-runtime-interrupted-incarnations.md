@@ -15,7 +15,7 @@ Each domain keeps its own relaunch path, and only the rule and its trigger are s
 - A command interrupted by the runtime is `suspended`, not `failed`. Its run still closes as `failed` with `runtime_stopped`, so history stays honest. A run boot finds still open is classified from its linked PTY's own terminal facts through the same mapping the event path uses, so a process that exited or was lost by its backend just before shutdown keeps that outcome and is not resumed; only a run with no terminal facts to read counts as interrupted. The startup `worktree_activation_change` (`startup_restored`) resumes the active worktree's suspended commands through the same plan a worktree switch uses, then resumes `deactivate.stop: false` commands in every other worktree. Other suspended commands resume when their worktree is next active.
 - An editor context whose incarnation was runtime-interrupted returns to idle at boot. Nothing launches then: Code Server starts only when its pane asks, and the pane's ordinary `reuse` launches a fresh incarnation exactly as a first open does. A mounted pane also issues `reuse` whenever the runtime events connection opens, so a pane that stays on screen through a runtime restart relaunches too; against a live or settled context `reuse` changes nothing.
 
-Every other ending (an exit, a user kill, a failed launch, a missing tmux process) stays a visible outcome with the domain's existing recovery affordance.
+Every other ending (an exit, a user kill, a failed launch) stays a visible outcome with the domain's existing recovery affordance.
 
 ## Motivation
 

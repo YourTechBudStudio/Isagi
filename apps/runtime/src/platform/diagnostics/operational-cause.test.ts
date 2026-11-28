@@ -61,7 +61,7 @@ test('the renderer composes from authored fields and never from foreign text', (
   // — two authored messages embed ref-derived values today.
   assert.equal(
     describeOperationalCause(
-      new OperationFailed('replay', null, `Could not replay tmux session ${SESSION_NAME}.`, 7),
+      new OperationFailed('replay', null, `Could not replay PTY session ${SESSION_NAME}.`, 7),
     ),
     'Operation replay failed (ptyProcess=7)',
   );

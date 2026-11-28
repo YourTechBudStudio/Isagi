@@ -13,7 +13,7 @@ import {
 } from '../../../editor/testing.js';
 import { tapInternalEvents } from '../../../platform/events/testing.js';
 import { DatabaseError } from '../../../platform/persistence/index.js';
-import { PtyServiceError } from '../../../pty-processes/index.js';
+import { PtyKillError } from '../../../pty-processes/index.js';
 import { SurfaceService } from '../../index.js';
 import {
   addPaneToSurface,
@@ -284,12 +284,7 @@ test('delete surface still succeeds when live PTY termination fails', async () =
           testLayer(dataRoot, {
             ptyService: {
               terminate: () =>
-                Effect.fail(
-                  new PtyServiceError({
-                    code: 'backend_unavailable',
-                    message: 'test termination failed',
-                  }),
-                ),
+                Effect.fail(new PtyKillError({ cause: new Error('test termination failed') })),
             },
           }),
         ),
@@ -494,12 +489,7 @@ test('a refused editor termination still deletes the surface and retains ownersh
           testLayer(dataRoot, {
             ptyService: {
               terminate: () =>
-                Effect.fail(
-                  new PtyServiceError({
-                    code: 'backend_unavailable',
-                    message: 'the process refused to stop',
-                  }),
-                ),
+                Effect.fail(new PtyKillError({ cause: new Error('the process refused to stop') })),
             },
           }),
         ),

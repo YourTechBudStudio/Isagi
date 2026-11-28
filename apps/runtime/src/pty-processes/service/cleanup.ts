@@ -6,7 +6,6 @@ import type { PtyBackendCatalog } from '../backend.js';
 import type { PtyRepository } from '../repository.js';
 import {
   isTerminalPtyProcessStatus,
-  missingStatusReasonForBackend,
   PtyServiceError,
   type PtyKillError,
   type PtyTerminationInProgressError,
@@ -26,7 +25,8 @@ import { terminatePtyProcess } from './termination.js';
 // What this cleanup attempt established about the incarnation's process, and
 // nothing more. `terminated` means it killed something live. `already_terminal`
 // means nothing is left behind the incarnation to kill: its row is already
-// terminal, or this attempt verified that the backend has nothing (`inspect`
+// terminal (and, when absence must be ensured, records a retired backend this
+// runtime cannot host), or this attempt verified that the backend has nothing (`inspect`
 // answered `missing`, or a kill found the process already gone), or the backend
 // has reported an exit that is about to be recorded (`isExitPending`).
 //
@@ -87,15 +87,13 @@ export function cleanupPtyProcess(
 
     if (isTerminalPtyProcessStatus(session.status)) {
       if (!input.ensureBackendAbsence) return 'already_terminal' as const;
+      // A retired backend has no adapter that could host this process, so this
+      // runtime owns none behind the row: nothing is left to verify or kill.
+      // Checked before resolving or decoding anything, which a historical row
+      // could never pass.
+      if (deps.catalog.isRetired(session.backend)) return 'already_terminal' as const;
 
-      // The gating check. `kill` has no `unavailable` outcome of its own, so
-      // the adapter is probed first to keep a genuinely missing backend a
-      // structured `backend_unavailable` rather than a raw kill failure — the
-      // same rule termination follows.
       const backend = yield* deps.catalog.forBackend(session.backend);
-      if (!(yield* backend.available)) {
-        return yield* Effect.fail(backendUnavailable(session.backend, session.id));
-      }
       const ref = yield* decodeBackendRef(session);
       const result = yield* backend.kill(ref);
       // `{terminated:false}` is verified absence, not a failure: the backend
@@ -105,18 +103,10 @@ export function cleanupPtyProcess(
       return result.terminated ? ('terminated' as const) : ('already_terminal' as const);
     }
 
-    // Nonterminal. No `available` pre-check here: `inspect` already answers
-    // alive | missing | unavailable, so probing first would only buy a second
-    // round-trip to the same backend for an outcome it is about to report.
+    // Nonterminal: ask the backend whether the process is still live.
     const ref = yield* decodeBackendRef(session);
     const backend = yield* deps.catalog.forBackend(session.backend);
-    const inspection = yield* backend
-      .inspect(ref)
-      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
-
-    if (inspection.status === 'unavailable') {
-      return yield* Effect.fail(backendUnavailable(session.backend, session.id));
-    }
+    const inspection = yield* backend.inspect(ref);
 
     if (inspection.status === 'missing') {
       // The backend has reported this exit but the row does not record it yet. Nothing is left to kill, and the real
@@ -129,7 +119,7 @@ export function cleanupPtyProcess(
       yield* transitionProcessAndPublish(deps.repository, deps.eventBus, session, {
         ptyProcessId: session.id,
         status: 'failed',
-        statusReason: missingStatusReasonForBackend(session.backend),
+        statusReason: 'runtime_ephemeral_lost',
         exitCode: session.exitCode,
         signal: session.signal,
       });
@@ -157,13 +147,5 @@ export function cleanupPtyProcess(
     // its own independent terminal fact lands, and the caller is still entitled
     // to conclude that this incarnation is not something it has to stop.
     return outcome === 'terminated_live' ? ('terminated' as const) : ('already_terminal' as const);
-  });
-}
-
-function backendUnavailable(backend: string, ptyProcessId: number) {
-  return new PtyServiceError({
-    code: 'backend_unavailable',
-    message: `PTY backend ${backend} is unavailable.`,
-    ptyProcessId,
   });
 }

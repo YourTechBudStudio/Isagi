@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Effect, FiberMap, Result, Stream } from 'effect';
 
@@ -17,6 +18,7 @@ import {
   PtyLogError,
   type LaunchedBackendSession,
   type LaunchPtyProcessInput,
+  type BackendSessionRef,
   type PtyBackend as PtyBackendShape,
   type PtyProcessAllocation,
   type PtyProcessEvent,
@@ -24,7 +26,6 @@ import {
   type PtyStartError,
 } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
-import { backendMetadataForLaunch } from './backend-ref.js';
 import { recordForegroundCommandState, transitionProcessByIdAndPublish } from './events.js';
 import {
   handleExit,
@@ -34,8 +35,7 @@ import {
   type PtyReservations,
 } from './lifecycle.js';
 import type { PtyPersistenceRetry } from './retry.js';
-import { spawnFailureMessage } from './runtime-namespace.js';
-import { prepareShellIntegration, refWithShellIntegrationToken } from './shell-integration.js';
+import { prepareShellIntegration } from './shell-integration.js';
 import type { ShellIntegrationConfig } from './shell-integration.js';
 import { createTerminalQueryFilter, type TerminalQueryFilter } from './terminal-queries.js';
 import { terminatePtyProcess } from './termination.js';
@@ -58,15 +58,13 @@ export interface PtyLaunchDependencies {
   readonly pendingExits: PtyPendingExits;
   readonly reservations: PtyReservations;
   readonly activeAttachments: Map<number, ActiveAttachment>;
-  readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly launchEnvironment: LaunchEnvironment['Service'];
   /** Read per launch for the theme whose palette answers the new process's colour queries. */
   readonly config: RuntimeConfig['Service'];
   /**
    * Each live process's terminal-query filter, which attach drives (state-query forwarding). Registered once the spawn
-   * succeeds and removed when the process's supervisor ends, so no filter outlives its incarnation. A tmux process's
-   * supervisor ends at once (tmux has no live event stream and ignores the filter), so it never has an entry.
+   * succeeds and removed when the process's supervisor ends, so no filter outlives its incarnation.
    */
   readonly terminalQueryFilters: Map<number, TerminalQueryFilter>;
 }
@@ -310,21 +308,11 @@ function prepareLaunch(
       env: processEnvironment,
     });
     // The only read of the launch preference in the whole flow: a new
-    // incarnation is created by the configured adapter unless the caller named
-    // one, while every operation on an existing one dispatches through its
-    // persisted backend. An explicit selection resolves through the same
-    // catalog, which already rejects an unknown name loudly.
-    const backend = input.backend
-      ? yield* deps.catalog.forBackend(input.backend)
-      : deps.catalog.configured;
-    const backendMetadata = backendMetadataForLaunch(
-      backend,
-      { ptyProcessId, logPath: null },
-      deps.runtimeNamespace,
-      deps.sessionsPath,
-    );
-    const logPath = backendMetadata.logPath;
-    if (logPath && !existsSync(logPath)) {
+    // incarnation is created by the configured adapter, while every operation on
+    // an existing one dispatches through its persisted backend.
+    const backend = deps.catalog.configured;
+    const logPath = join(deps.sessionsPath, `${ptyProcessId}.ptylog`);
+    if (!existsSync(logPath)) {
       // A log that cannot be created is an expected launch failure (full disk, refused permission, a removed sessions
       // directory): it folds into the row like any other pre-spawn failure instead of dying as a defect.
       yield* Effect.try({
@@ -338,14 +326,18 @@ function prepareLaunch(
     yield* deps.repository.updateBackendMetadata({
       ptyProcessId,
       backend: backend.name,
-      backendRefJson: JSON.stringify(backendMetadata.ref),
-      logMode: backendMetadata.logMode,
-      logPath: backendMetadata.logPath,
+      backendRefJson: JSON.stringify({
+        schemaVersion: 1,
+        backend: backend.name,
+        ptyProcessId,
+        pid: null,
+      } satisfies BackendSessionRef),
+      logMode: 'backend_file',
+      logPath,
     });
     return {
       backend,
-      backendSessionName: backendMetadata.backendSessionName,
-      logPath: backendMetadata.logPath,
+      logPath,
       command: shell.command,
       args: shell.args,
       env: shell.env,
@@ -356,8 +348,7 @@ function prepareLaunch(
 
 interface PreparedLaunch {
   readonly backend: PtyBackendShape;
-  readonly backendSessionName: string | null;
-  readonly logPath: string | null;
+  readonly logPath: string;
   readonly command: string;
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv;
@@ -369,26 +360,18 @@ function spawnBackendProcess(
   metadata: PtyProcessLaunchMetadata,
   terminalQueries: TerminalQueryFilter,
 ): Effect.Effect<LaunchedBackendSession, PtyStartError> {
-  return prepared.backend
-    .launch({
-      ptyProcessId: metadata.ptyProcessId,
-      backendSessionName: prepared.backendSessionName,
-      command: prepared.command,
-      args: prepared.args,
-      cwd: metadata.cwd,
-      env: prepared.env,
-      shellIntegration: prepared.shellIntegration,
-      cols: defaultCols,
-      rows: defaultRows,
-      logPath: prepared.logPath,
-      terminalQueries,
-    })
-    .pipe(
-      Effect.map((launched) => ({
-        ref: refWithShellIntegrationToken(launched.ref, prepared.shellIntegration),
-        events: launched.events,
-      })),
-    );
+  return prepared.backend.launch({
+    ptyProcessId: metadata.ptyProcessId,
+    command: prepared.command,
+    args: prepared.args,
+    cwd: metadata.cwd,
+    env: prepared.env,
+    shellIntegration: prepared.shellIntegration,
+    cols: defaultCols,
+    rows: defaultRows,
+    logPath: prepared.logPath,
+    terminalQueries,
+  });
 }
 
 /**
@@ -557,4 +540,10 @@ function withPersistedLogPath(
     ),
     Effect.map((row) => ({ ...metadata, logPath: row?.logPath ?? null })),
   );
+}
+
+function spawnFailureMessage(command: string, cwd: string, error: unknown) {
+  const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : error;
+  const reason = cause instanceof Error && cause.message ? cause.message : String(cause);
+  return `\r\nFailed to start ${command} in ${cwd}: ${reason}\r\n`;
 }

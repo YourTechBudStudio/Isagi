@@ -16,10 +16,9 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import {
   PtyKillError,
-  PtyInspectError,
   type PtyBackend as PtyBackendShape,
   type PtyBackendName,
   type PtyProcessStatus,
@@ -32,29 +31,15 @@ import {
 // writes a command's terminal outcome, the other cascades a worktree away.
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
-  return {
-    name,
-    available: Effect.succeed(true),
-    launch: () => Effect.die(`${name} launch is not expected here`),
-    writeInput: () => Effect.void,
-    attach: () => Effect.die(`${name} attach is not expected here`),
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ status: 'alive' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-    ...overrides,
-  } satisfies PtyBackendShape;
+  return fakePtyBackend({ name, ...overrides });
 }
 
-// Never-touched adapter for the backend that did not create the row. Any call
-// through it is a dispatch bug, not a test failure to be interpreted.
+// Never-touched adapter. Any call through it is a bug, not a test failure to be
+// interpreted.
 function forbiddenBackend(name: PtyBackendName) {
   return backendStub(name, {
-    inspect: () => Effect.die(`${name} must never inspect another backend's incarnation`),
-    kill: () => Effect.die(`${name} must never kill another backend's incarnation`),
-    available: Effect.sync(() => {
-      throw new Error(`${name} must never be probed for another backend's incarnation`);
-    }),
+    inspect: () => Effect.die(`${name} must never be inspected here`),
+    kill: () => Effect.die(`${name} must never be killed here`),
   });
 }
 
@@ -77,7 +62,6 @@ function serviceLayer(dataRoot: string, catalog: ReturnType<typeof fakeBackendCa
 }
 
 function seedRow(input: {
-  readonly backend: PtyBackendName;
   readonly status: PtyProcessStatus;
   readonly backendRefJson?: string | undefined;
 }) {
@@ -90,12 +74,10 @@ function seedRow(input: {
     });
     yield* repository.updateBackendMetadata({
       ptyProcessId: id,
-      backend: input.backend,
+      backend: 'node_pty',
       backendRefJson:
         input.backendRefJson ??
-        (input.backend === 'tmux'
-          ? JSON.stringify({ schemaVersion: 1, backend: 'tmux', sessionName: `isagi_test_${id}` })
-          : JSON.stringify({ schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: 4242 })),
+        JSON.stringify({ schemaVersion: 1, backend: 'node_pty', ptyProcessId: id, pid: 4242 }),
       logMode: 'none',
       logPath: null,
     });
@@ -112,7 +94,7 @@ function seedRow(input: {
 
 // The row is seeded *inside* the built service so a node-pty row can be
 // nonterminal: startup reconciliation deliberately terminal-izes every
-// surviving node-pty row, so seeding one before construction would only ever
+// surviving live row, so seeding one before construction would only ever
 // reproduce the ephemeral-loss case.
 function withCleanup<A, E>(
   dataRoot: string,
@@ -140,14 +122,13 @@ function withTempRoot(label: string, run: (dataRoot: string) => Promise<void>) {
   };
 }
 
-const nodePtyAndTmux = (tmux: PtyBackendShape) =>
-  fakeBackendCatalog({ configured: 'node_pty', nodePty: forbiddenBackend('node_pty'), tmux });
+const catalogWith = (nodePty: PtyBackendShape) => fakeBackendCatalog({ nodePty });
 
 test(
   'a missing row is already terminal and touches no backend',
   withTempRoot('absent', async (dataRoot) => {
     const outcome = await Effect.runPromise(
-      withCleanup(dataRoot, nodePtyAndTmux(forbiddenBackend('tmux')), ({ pty }) =>
+      withCleanup(dataRoot, catalogWith(forbiddenBackend('node_pty')), ({ pty }) =>
         pty.cleanupProcess({ ptyProcessId: 9999, reason: 'runtime_shutdown' }),
       ),
     );
@@ -162,8 +143,8 @@ test(
     const results = await Effect.runPromise(
       withCleanup(
         dataRoot,
-        nodePtyAndTmux(
-          backendStub('tmux', {
+        catalogWith(
+          backendStub('node_pty', {
             kill: () =>
               Effect.sync(() => {
                 kills += 1;
@@ -173,7 +154,7 @@ test(
         ),
         ({ pty }) =>
           Effect.gen(function* () {
-            const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'exited' });
+            const ptyProcessId = yield* seedRow({ status: 'exited' });
             const trusted = yield* pty.cleanupProcess({ ptyProcessId, reason: 'user_requested' });
             const gated = yield* pty.cleanupProcess({
               ptyProcessId,
@@ -198,10 +179,10 @@ test(
     const result = await Effect.runPromise(
       withCleanup(
         dataRoot,
-        nodePtyAndTmux(backendStub('tmux', { kill: () => Effect.succeed({ terminated: true }) })),
+        catalogWith(backendStub('node_pty', { kill: () => Effect.succeed({ terminated: true }) })),
         ({ pty, repository }) =>
           Effect.gen(function* () {
-            const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'failed' });
+            const ptyProcessId = yield* seedRow({ status: 'failed' });
             const outcome = yield* pty.cleanupProcess({
               ptyProcessId,
               reason: 'user_requested',
@@ -223,34 +204,13 @@ test(
 test(
   'every observable gating failure propagates instead of allowing a cascade',
   withTempRoot('terminal-gate-failures', async (dataRoot) => {
-    const unavailable = await Effect.runPromise(
-      Effect.flip(
-        withCleanup(
-          dataRoot,
-          nodePtyAndTmux(backendStub('tmux', { available: Effect.succeed(false) })),
-          ({ pty }) =>
-            Effect.gen(function* () {
-              const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'exited' });
-              return yield* pty.cleanupProcess({
-                ptyProcessId,
-                reason: 'user_requested',
-                ensureBackendAbsence: true,
-              });
-            }),
-        ),
-      ),
-    );
-    assert.equal(unavailable._tag, 'PtyServiceError');
-    assert.equal(unavailable.code, 'backend_unavailable');
-
     const undecodable = await Effect.runPromise(
       Effect.flip(
-        withCleanup(dataRoot, nodePtyAndTmux(backendStub('tmux')), ({ pty }) =>
+        withCleanup(dataRoot, catalogWith(backendStub('node_pty')), ({ pty }) =>
           Effect.gen(function* () {
             const ptyProcessId = yield* seedRow({
-              backend: 'tmux',
               status: 'exited',
-              backendRefJson: '{"schemaVersion":1,"backend":"tmux"}',
+              backendRefJson: '{"schemaVersion":1,"backend":"node_pty"}',
             });
             return yield* pty.cleanupProcess({
               ptyProcessId,
@@ -268,14 +228,15 @@ test(
       Effect.flip(
         withCleanup(
           dataRoot,
-          nodePtyAndTmux(
-            backendStub('tmux', {
-              kill: () => Effect.fail(new PtyKillError({ cause: new Error('tmux is unusable') })),
+          catalogWith(
+            backendStub('node_pty', {
+              kill: () =>
+                Effect.fail(new PtyKillError({ cause: new Error('the backend is unusable') })),
             }),
           ),
           ({ pty }) =>
             Effect.gen(function* () {
-              const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'exited' });
+              const ptyProcessId = yield* seedRow({ status: 'exited' });
               return yield* pty.cleanupProcess({
                 ptyProcessId,
                 reason: 'user_requested',
@@ -290,107 +251,19 @@ test(
 );
 
 test(
-  'a nonterminal row whose process is missing is classified by its own backend',
+  'a nonterminal row whose process is missing is recorded as an ephemeral loss',
   withTempRoot('missing', async (dataRoot) => {
     const result = await Effect.runPromise(
       withCleanup(
         dataRoot,
-        fakeBackendCatalog({
-          configured: 'node_pty',
-          nodePty: backendStub('node_pty', {
+        catalogWith(
+          backendStub('node_pty', {
             inspect: () => Effect.succeed({ status: 'missing' as const }),
-          }),
-          tmux: backendStub('tmux', {
-            inspect: () => Effect.succeed({ status: 'missing' as const }),
-          }),
-        }),
-        ({ pty, repository }) =>
-          Effect.gen(function* () {
-            const tmuxId = yield* seedRow({ backend: 'tmux', status: 'running' });
-            const nodeId = yield* seedRow({ backend: 'node_pty', status: 'running' });
-            const tmuxOutcome = yield* pty.cleanupProcess({
-              ptyProcessId: tmuxId,
-              reason: 'runtime_shutdown',
-            });
-            const nodeOutcome = yield* pty.cleanupProcess({
-              ptyProcessId: nodeId,
-              reason: 'runtime_shutdown',
-            });
-            return {
-              tmuxOutcome,
-              nodeOutcome,
-              tmuxRow: yield* repository.findProcess(tmuxId),
-              nodeRow: yield* repository.findProcess(nodeId),
-            };
-          }),
-      ),
-    );
-
-    assert.equal(result.tmuxOutcome, 'already_terminal');
-    assert.equal(result.tmuxRow?.status, 'failed');
-    assert.equal(result.tmuxRow?.statusReason, 'backend_process_missing');
-
-    assert.equal(result.nodeOutcome, 'already_terminal');
-    assert.equal(result.nodeRow?.status, 'failed');
-    // A node-pty process cannot outlive the runtime, so its absence is an
-    // ephemeral loss rather than a backend that lost track of a process.
-    assert.equal(result.nodeRow?.statusReason, 'runtime_ephemeral_lost');
-  }),
-);
-
-test(
-  'an unavailable adapter fails a nonterminal cleanup rather than declaring the process gone',
-  withTempRoot('nonterminal-unavailable', async (dataRoot) => {
-    const error = await Effect.runPromise(
-      Effect.flip(
-        withCleanup(
-          dataRoot,
-          nodePtyAndTmux(
-            backendStub('tmux', {
-              inspect: () =>
-                Effect.fail(new PtyInspectError({ cause: new Error('tmux binary is gone') })),
-            }),
-          ),
-          ({ pty, repository }) =>
-            Effect.gen(function* () {
-              const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'running' });
-              const outcome = yield* pty.cleanupProcess({
-                ptyProcessId,
-                reason: 'runtime_shutdown',
-              });
-              // Unreachable: proves the row was not terminal-ized on the way out.
-              const row = yield* repository.findProcess(ptyProcessId);
-              return { outcome, row };
-            }),
-        ),
-      ),
-    );
-
-    assert.equal(error._tag, 'PtyServiceError');
-    assert.equal(error.code, 'backend_unavailable');
-  }),
-);
-
-test(
-  'a live incarnation is terminated through its persisted backend',
-  withTempRoot('alive', async (dataRoot) => {
-    let killedRefs: string[] = [];
-    const result = await Effect.runPromise(
-      withCleanup(
-        dataRoot,
-        nodePtyAndTmux(
-          backendStub('tmux', {
-            inspect: () => Effect.succeed({ status: 'alive' as const }),
-            kill: (ref) =>
-              Effect.sync(() => {
-                killedRefs.push(ref.backend === 'tmux' ? ref.sessionName : 'wrong-backend');
-                return { terminated: true };
-              }),
           }),
         ),
         ({ pty, repository }) =>
           Effect.gen(function* () {
-            const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'running' });
+            const ptyProcessId = yield* seedRow({ status: 'running' });
             const outcome = yield* pty.cleanupProcess({
               ptyProcessId,
               reason: 'runtime_shutdown',
@@ -400,11 +273,51 @@ test(
       ),
     );
 
+    assert.equal(result.outcome, 'already_terminal');
+    assert.equal(result.row?.status, 'failed');
+    // A node-pty process cannot outlive the runtime, so its absence is an
+    // ephemeral loss rather than a backend that lost track of a process.
+    assert.equal(result.row?.statusReason, 'runtime_ephemeral_lost');
+  }),
+);
+
+test(
+  'a live incarnation is terminated through its persisted backend',
+  withTempRoot('alive', async (dataRoot) => {
+    let killedRefs: number[] = [];
+    const result = await Effect.runPromise(
+      withCleanup(
+        dataRoot,
+        catalogWith(
+          backendStub('node_pty', {
+            inspect: () => Effect.succeed({ status: 'alive' as const }),
+            kill: (ref) =>
+              Effect.sync(() => {
+                killedRefs.push(ref.ptyProcessId);
+                return { terminated: true };
+              }),
+          }),
+        ),
+        ({ pty, repository }) =>
+          Effect.gen(function* () {
+            const ptyProcessId = yield* seedRow({ status: 'running' });
+            const outcome = yield* pty.cleanupProcess({
+              ptyProcessId,
+              reason: 'runtime_shutdown',
+            });
+            return {
+              ptyProcessId,
+              outcome,
+              row: yield* repository.findProcess(ptyProcessId),
+            };
+          }),
+      ),
+    );
+
     assert.equal(result.outcome, 'terminated');
     assert.equal(result.row?.status, 'killed');
     assert.equal(result.row?.statusReason, 'runtime_shutdown');
-    assert.equal(killedRefs.length, 1);
-    assert.ok(killedRefs[0]?.startsWith('isagi_test_'));
+    assert.deepEqual(killedRefs, [result.ptyProcessId]);
   }),
 );
 
@@ -414,16 +327,16 @@ test(
     const result = await Effect.runPromise(
       withCleanup(
         dataRoot,
-        nodePtyAndTmux(
-          backendStub('tmux', {
+        catalogWith(
+          backendStub('node_pty', {
             inspect: () => Effect.succeed({ status: 'alive' as const }),
-            // Verified absence at kill time: the session ended on its own.
+            // Verified absence at kill time: the process ended on its own.
             kill: () => Effect.succeed({ terminated: false }),
           }),
         ),
         ({ pty, repository }) =>
           Effect.gen(function* () {
-            const ptyProcessId = yield* seedRow({ backend: 'tmux', status: 'running' });
+            const ptyProcessId = yield* seedRow({ status: 'running' });
             const outcome = yield* pty.cleanupProcess({
               ptyProcessId,
               reason: 'runtime_shutdown',

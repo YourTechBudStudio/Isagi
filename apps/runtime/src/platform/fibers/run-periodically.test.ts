@@ -37,7 +37,7 @@ test('a failed or dying tick is logged as Warn with its cause and the next tick 
       const tick = Ref.updateAndGet(ticks, (n) => n + 1).pipe(
         Effect.flatMap((n) =>
           n === 1
-            ? Effect.fail(new Error('tmux gone'))
+            ? Effect.fail(new Error('backend gone'))
             : n === 2
               ? Effect.die(new Error('broken invariant'))
               : Effect.void,
@@ -55,7 +55,7 @@ test('a failed or dying tick is logged as Warn with its cause and the next tick 
           ['Warn', 'PTY GC failed', 'PTY GC'],
         ],
       );
-      assert.match(logs.lines[0]?.cause ?? '', /tmux gone/);
+      assert.match(logs.lines[0]?.cause ?? '', /backend gone/);
       assert.match(logs.lines[1]?.cause ?? '', /broken invariant/);
     }).pipe(Effect.provide(logs.layer)),
   );

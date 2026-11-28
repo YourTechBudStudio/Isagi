@@ -26,14 +26,14 @@ test('runtime config creates config.yaml with node-pty as the default PTY backen
   }
 });
 
-test('runtime config reads a configured tmux PTY backend', async () => {
+test('runtime config reads a configured node-pty PTY backend', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-runtime-config-'));
   try {
-    writeFileSync(join(root, 'config.yaml'), 'pty:\n  backend: tmux\n', 'utf8');
+    writeFileSync(join(root, 'config.yaml'), 'pty:\n  backend: node-pty\n', 'utf8');
 
     const config = await Effect.runPromise(readConfig(root));
 
-    assert.deepEqual(config, { pty: { backend: 'tmux' } });
+    assert.deepEqual(config, { pty: { backend: 'node-pty' } });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -73,21 +73,25 @@ test('runtime config defaults a null PTY backend', async () => {
   }
 });
 
-test('runtime config rejects unsupported PTY backends', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-runtime-config-'));
-  try {
-    writeFileSync(join(root, 'config.yaml'), 'pty:\n  backend: imaginary\n', 'utf8');
+// node-pty is the only backend, so every other value, the removed tmux backend
+// included, stops startup through the ordinary invalid-config path.
+for (const backend of ['imaginary', 'tmux']) {
+  test(`runtime config rejects unsupported PTY backend ${backend}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'isagi-runtime-config-'));
+    try {
+      writeFileSync(join(root, 'config.yaml'), `pty:\n  backend: ${backend}\n`, 'utf8');
 
-    const result = await Effect.runPromise(readConfig(root).pipe(Effect.result));
+      const result = await Effect.runPromise(readConfig(root).pipe(Effect.result));
 
-    assert.equal(Result.isFailure(result), true);
-    if (Result.isFailure(result)) {
-      assert.equal(result.failure instanceof RuntimeConfigError, true);
+      assert.equal(Result.isFailure(result), true);
+      if (Result.isFailure(result)) {
+        assert.equal(result.failure instanceof RuntimeConfigError, true);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+  });
+}
 
 test('runtime config rejects malformed workflow settings with RuntimeConfigError', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-runtime-config-'));

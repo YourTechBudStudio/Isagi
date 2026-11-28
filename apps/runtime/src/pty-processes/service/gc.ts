@@ -37,7 +37,6 @@ const orphanShellIntegrationRetentionMs = orphanPtyProcessRetentionMs;
 export function collectPtyGarbage(
   repository: PtyRepository['Service'],
   catalog: PtyBackendCatalog['Service'],
-  runtimeNamespace: string,
   sessionsPath: string,
   options: {
     readonly nowMs?: number | undefined;
@@ -55,8 +54,8 @@ export function collectPtyGarbage(
   return Effect.gen(function* () {
     yield* diagnosticPhase(
       'pty.gc.backend_processes',
-      { runtimeNamespace },
-      cleanupBackendProcesses(repository, catalog, runtimeNamespace),
+      {},
+      cleanupBackendProcesses(repository, catalog),
     ).pipe(tagGcPhaseError('backend_processes'));
     yield* diagnosticPhase(
       'pty.gc.orphan_processes',
@@ -137,30 +136,16 @@ function tagGcPhaseError<A, E, R>(phase: string) {
 
 // Backend-only sessions have no persisted row to dispatch from, so this sweep
 // cannot be driven by the rows the runtime knows about — gating it on persisted
-// tmux rows would miss exactly the orphans it exists to find. Every registered
-// adapter that is actually available therefore collects, whatever the current
-// launch preference is.
+// rows would miss exactly the orphans it exists to find. Every registered
+// adapter therefore collects, whatever the current launch preference is.
 function cleanupBackendProcesses(
   repository: PtyRepository['Service'],
   catalog: PtyBackendCatalog['Service'],
-  runtimeNamespace: string,
 ) {
   return Effect.gen(function* () {
     const sessions = yield* collectGcSessions(repository);
     for (const backend of catalog.all) {
-      if (!backend.collectGarbage) continue;
-      if (!(yield* backend.available)) continue;
-      const findings = yield* backend.collectGarbage({ runtimeNamespace, sessions }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning('Could not collect PTY backend GC findings').pipe(
-            Effect.annotateLogs({
-              backend: backend.name,
-              cause: describeOperationalCause(error),
-            }),
-            Effect.as([] as readonly PtyBackendGcFinding[]),
-          ),
-        ),
-      );
+      const findings = yield* backend.collectGarbage({ sessions });
       for (const finding of findings) {
         yield* applyGcFinding(backend, finding);
       }
@@ -275,9 +260,7 @@ function cleanupLiveOrphanPtyBackend(
       return false;
     }
 
-    const inspection = yield* backend
-      .inspect(ref)
-      .pipe(Effect.catch((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
+    const inspection = yield* backend.inspect(ref);
     if (inspection.status === 'missing') {
       // An exit the backend reported but the row does not record yet: collecting the row now would race that write.
       // The next pass finds the row terminal and collects it then.
@@ -288,18 +271,6 @@ function cleanupLiveOrphanPtyBackend(
         return false;
       }
       return true;
-    }
-    if (inspection.status === 'unavailable') {
-      yield* Effect.logWarning(
-        'Keeping orphan PTY process because backend inspection is unavailable',
-      ).pipe(
-        Effect.annotateLogs({
-          backend: backend.name,
-          ptyProcessId: process.id,
-          cause: describeOperationalCause(inspection.cause),
-        }),
-      );
-      return false;
     }
 
     const killResult = yield* backend.kill(ref).pipe(Effect.result);

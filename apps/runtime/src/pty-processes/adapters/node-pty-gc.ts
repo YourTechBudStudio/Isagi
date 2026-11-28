@@ -1,15 +1,10 @@
 import { Effect } from 'effect';
 
-import type {
-  NodePtyBackendRef,
-  PtyBackendGcFinding,
-  PtyBackendGcInput,
-  PtyInspectError,
-} from '../types.js';
+import type { NodePtyBackendRef, PtyBackendGcFinding, PtyBackendGcInput } from '../types.js';
 
 export function collectNodePtyGarbage(
   input: PtyBackendGcInput,
-  listSessions: Effect.Effect<readonly NodePtyBackendRef[], PtyInspectError>,
+  listSessions: Effect.Effect<readonly NodePtyBackendRef[]>,
 ) {
   return Effect.gen(function* () {
     const backendSessions = yield* listSessions;
@@ -18,7 +13,7 @@ export function collectNodePtyGarbage(
 
     for (const ref of backendSessions) {
       const session = persisted.get(ref.ptyProcessId);
-      if (!session || session.ref.backend !== 'node_pty') {
+      if (!session) {
         findings.push({
           type: 'orphan_backend_session',
           ref,

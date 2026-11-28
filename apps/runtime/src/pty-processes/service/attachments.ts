@@ -7,9 +7,8 @@ export interface ActiveAttachment {
   readonly attachmentId: symbol;
   readonly attachment: BackendAttachment;
   /**
-   * Closes the attachment's own scope: the backend detaches (node-pty stops routing output to it, tmux kills its
-   * attach client) and its output and foreground forwarders stop. Idempotent; the attaching caller's scope runs it
-   * too when it closes.
+   * Closes the attachment's own scope: the backend stops routing output to it and its output forwarder stops.
+   * Idempotent; the attaching caller's scope runs it too when it closes.
    */
   readonly release: Effect.Effect<void>;
   readonly displace?: Effect.Effect<void, never> | undefined;

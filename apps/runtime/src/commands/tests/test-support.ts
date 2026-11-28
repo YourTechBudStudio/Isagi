@@ -94,7 +94,6 @@ export function fakeCommandLogPtyService(
         session: fakePtyProcess(),
         replayBytes: 0,
         live: true,
-        replaySource: 'file_log',
       }),
     replay: () => Effect.void,
     pin: () => Effect.void,

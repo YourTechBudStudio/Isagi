@@ -169,7 +169,6 @@ function launchLeakyRoot(backend: PtyBackend, ptyProcessId: number, pidFile: str
   return backend
     .launch({
       ptyProcessId,
-      backendSessionName: null,
       command: process.execPath,
       args: ['-e', leakyRootScript, pidFile],
       cwd: process.cwd(),

@@ -24,7 +24,7 @@ import {
   PtyRepository,
   ptyTestRuntimeConfig,
 } from '../pty-processes/testing.js';
-import type { PtyBackendName } from '../pty-processes/testing.js';
+import { fakePtyBackend, type PtyBackendName } from '../pty-processes/testing.js';
 import { EditorReadinessProbe, type EditorProbeRunner } from './contexts/readiness.js';
 import { EditorContextRepository } from './contexts/repository.js';
 import { EditorContextService } from './contexts/service.js';
@@ -166,29 +166,21 @@ export function editorBackendStub(
   name: PtyBackendName,
   overrides: Partial<PtyBackend> = {},
 ): PtyBackend {
-  return {
+  return fakePtyBackend({
     name,
-    available: Effect.succeed(true),
     launch: ({ ptyProcessId }) =>
       Effect.succeed({
         ref: {
           schemaVersion: 1 as const,
           backend: name,
-          ...(name === 'tmux'
-            ? { sessionName: `isagi_test_${ptyProcessId}` }
-            : { ptyProcessId, pid: 4_242 }),
-        } as never,
+          ptyProcessId,
+          pid: 4_242,
+        },
         events: Stream.empty,
       }),
-    writeInput: () => Effect.void,
     attach: () => Effect.die(`${name} attach is not expected in editor tests`),
-    resize: () => Effect.void,
-    replay: () => Effect.void,
-    inspect: () => Effect.succeed({ alive: true }),
-    kill: () => Effect.succeed({ terminated: true }),
-    collectGarbage: () => Effect.succeed([]),
     ...overrides,
-  } as PtyBackend;
+  });
 }
 
 /** What a test may change about the editor context service it builds. */
@@ -217,10 +209,7 @@ export interface EditorServiceHarnessInput {
     | undefined;
   /** Override the installation, for the socket-budget refusal. */
   readonly installation?: ResolvedEditorInstallation | undefined;
-  /** The launch preference. Editor incarnations must ignore it. */
-  readonly configured?: PtyBackendName | undefined;
   readonly nodePty?: PtyBackend | undefined;
-  readonly tmux?: PtyBackend | undefined;
   readonly events: InternalEvent[];
   readonly options?: EditorContextServiceOptions | undefined;
 }
@@ -278,11 +267,7 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
   const bus = recordingInternalEventBusLayer(input.events);
   const catalog = Layer.succeed(
     PtyBackendCatalog,
-    fakeBackendCatalog({
-      configured: input.configured ?? 'node_pty',
-      nodePty: input.nodePty ?? editorBackendStub('node_pty'),
-      tmux: input.tmux ?? editorBackendStub('tmux'),
-    }),
+    fakeBackendCatalog({ nodePty: input.nodePty ?? editorBackendStub('node_pty') }),
   );
   const pty = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),

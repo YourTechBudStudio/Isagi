@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { DatabaseError } from '../../platform/persistence/index.js';
-import { PtyServiceError } from '../../pty-processes/index.js';
+import { PtyKillError } from '../../pty-processes/index.js';
 import { terminalCommandOutcomeForPtyRow } from '../outcomes.js';
 import type { CommandRunRow, CommandStateRow } from '../repository.js';
 import {
@@ -71,12 +71,8 @@ async function boot(
   }
 }
 
-const unavailable = (ptyProcessId: number) =>
-  new PtyServiceError({
-    code: 'backend_unavailable',
-    message: 'PTY backend tmux is unavailable.',
-    ptyProcessId,
-  });
+const unstoppable = (ptyProcessId: number) =>
+  new PtyKillError({ ptyProcessId, cause: new Error('the process would not stop') });
 
 test('an ordinary crash suspends the command and fails its run with the interruption diagnostic', async () => {
   // The common case: the state still says running, and the incarnation's row is
@@ -127,7 +123,7 @@ test('an open run whose process exited on its own records the exit and is not re
 });
 
 test('an open run whose backend lost its process records a failure and is not resumed', async () => {
-  // A missing tmux session is not the runtime stopping, so it is not suspended.
+  // A process its backend lost is not the runtime stopping, so it is not suspended.
   const result = await boot({
     states: [
       commandState({
@@ -139,7 +135,7 @@ test('an open run whose backend lost its process records a failure and is not re
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
     ptyProcess: fakePtyProcessRow({
       id: 501,
-      backend: 'tmux',
+      backend: 'node_pty',
       status: 'failed',
       statusReason: 'backend_process_missing',
     }),
@@ -204,7 +200,7 @@ test('a surviving incarnation is cleaned up through the shutdown reason', async 
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
     pty: { cleanupProcess: () => Effect.succeed('terminated' as const) },
   });
 
@@ -221,12 +217,12 @@ test('a surviving incarnation is cleaned up through the shutdown reason', async 
 });
 
 test('a terminal-state command with a live linked incarnation is drained without touching its record', async () => {
-  // A legacy row whose command already ended, but whose tmux session outlived
-  // the runtime. The process must go; the record was already true.
+  // A row whose command already ended, but whose process is still live. The
+  // process must go; the record was already true.
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'exited', activePtyProcessId: null })],
     runs: [commandRun({ commandName: 'dev', status: 'exited', ptyProcessId: 501 })],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
     pty: { cleanupProcess: () => Effect.succeed('terminated' as const) },
   });
 
@@ -244,7 +240,7 @@ test('one command appearing in both workset halves is reconciled once', async ()
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
     pty: { cleanupProcess: () => Effect.succeed('terminated' as const) },
   });
 
@@ -255,8 +251,8 @@ test('a single unresolved incarnation is re-adopted and always announced', async
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
-    pty: { cleanupProcess: () => Effect.fail(unavailable(501)) },
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(501)) },
   });
 
   assert.equal(result.recorder.readopted.length, 1);
@@ -279,8 +275,8 @@ test('a re-adoption with no retained run still takes ownership', async () => {
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
-    pty: { cleanupProcess: () => Effect.fail(unavailable(501)) },
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(501)) },
   });
 
   assert.equal(result.recorder.readopted.length, 1);
@@ -292,14 +288,14 @@ test('out-of-model divergence is logged and left completely unrepaired', async (
   // unresolvable. Re-adoption binds one and would erase the last durable link to
   // the other — possibly to a live process. Draining is the only safe move.
   const rows = new Map([
-    [601, fakePtyProcessRow({ id: 601, backend: 'tmux', status: 'running' })],
-    [602, fakePtyProcessRow({ id: 602, backend: 'tmux', status: 'running' })],
+    [601, fakePtyProcessRow({ id: 601, backend: 'node_pty', status: 'running' })],
+    [602, fakePtyProcessRow({ id: 602, backend: 'node_pty', status: 'running' })],
   ]);
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 601 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 602 })],
     ptyProcessById: (id) => rows.get(id) ?? null,
-    pty: { cleanupProcess: (input) => Effect.fail(unavailable(input.ptyProcessId)) },
+    pty: { cleanupProcess: (input) => Effect.fail(unstoppable(input.ptyProcessId)) },
   });
 
   assert.equal(result.recorder.cleaned.length, 2, 'every candidate is still attempted');
@@ -308,13 +304,13 @@ test('out-of-model divergence is logged and left completely unrepaired', async (
   assert.equal(result.runs[0]?.ptyProcessId, 602, 'both links survive for the next retry');
   assert.equal(result.runs[0]?.status, 'running');
   // The log is the only artifact this branch produces, so it has to name every
-  // incarnation *and* its transport — "tmux is uninstalled" and "this ref is
+  // incarnation *and* its transport — "the kill failed" and "this ref is
   // corrupt" are different user problems with different recoveries.
   assert.ok(
     result.recorder.logs.some(
       (line) =>
         line.includes('multiple unrepairable incarnations') &&
-        line.includes('incarnations=601/tmux/unresolved,602/tmux/unresolved'),
+        line.includes('incarnations=601/node_pty/unresolved,602/node_pty/unresolved'),
     ),
   );
 });
@@ -324,7 +320,7 @@ test('an unreadable linked row is treated as unresolved rather than as a dead pr
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
     ptyProcessReadFault: () => {
       reads += 1;
       return reads === 1
@@ -381,8 +377,8 @@ test('the residue sweep cannot undo a re-adoption', async () => {
   const result = await boot({
     states: [commandState({ commandName: 'dev', status: 'running', activePtyProcessId: 501 })],
     runs: [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 501 })],
-    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'tmux', status: 'running' }),
-    pty: { cleanupProcess: () => Effect.fail(unavailable(501)) },
+    ptyProcess: fakePtyProcessRow({ id: 501, backend: 'node_pty', status: 'running' }),
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(501)) },
   });
 
   assert.equal(result.recorder.readopted.length, 1);
@@ -392,8 +388,8 @@ test('the residue sweep cannot undo a re-adoption', async () => {
 
 test('one command’s convergence failure does not abort the pass', async () => {
   const rows = new Map([
-    [701, fakePtyProcessRow({ id: 701, backend: 'tmux', status: 'running' })],
-    [702, fakePtyProcessRow({ id: 702, backend: 'tmux', status: 'running' })],
+    [701, fakePtyProcessRow({ id: 701, backend: 'node_pty', status: 'running' })],
+    [702, fakePtyProcessRow({ id: 702, backend: 'node_pty', status: 'running' })],
   ]);
   const result = await boot({
     config: `
@@ -412,7 +408,7 @@ commands:
       commandRun({ commandName: 'api', status: 'running', ptyProcessId: 702, id: 2 }),
     ],
     ptyProcessById: (id) => rows.get(id) ?? null,
-    pty: { cleanupProcess: () => Effect.fail(unavailable(0)) },
+    pty: { cleanupProcess: () => Effect.fail(unstoppable(0)) },
     readoptFault: () =>
       new DatabaseError({ operation: 'boot_convergence', cause: new Error('unavailable') }),
   });

@@ -25,7 +25,7 @@ import {
   type RuntimeDatabase,
 } from '../../platform/persistence/index.js';
 import { makeRuntimeDatabase } from '../../platform/persistence/testing.js';
-import { PtyServiceError } from '../../pty-processes/index.js';
+import { PtyKillError } from '../../pty-processes/index.js';
 import { DetachedWorktreeError, WorkspaceError } from '../../workspace/index.js';
 import { checkNewDirectory } from '../../workspace/testing.js';
 import { makeCheckpointsPort } from '../checkpoints/port.js';
@@ -848,10 +848,9 @@ export class FakeHeadless {
       terminate: (ptyProcessId) =>
         this.terminateFails
           ? Effect.fail(
-              new PtyServiceError({
-                code: 'backend_unavailable',
-                message: `Process ${ptyProcessId} would not stop.`,
+              new PtyKillError({
                 ptyProcessId,
+                cause: new Error(`Process ${ptyProcessId} would not stop.`),
               }),
             )
           : Effect.sync(() => {

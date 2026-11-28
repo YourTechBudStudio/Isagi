@@ -17,6 +17,7 @@ import { ptyProcesses } from '../../pty-processes/tables.js';
 import {
   collectPtyGarbage,
   fakeBackendCatalog,
+  fakePtyBackend,
   PtyRepository,
   ptyProcessOwnerColumns,
 } from '../../pty-processes/testing.js';
@@ -82,15 +83,9 @@ test('PTY GC keeps PTY rows referenced only by a running command state', async (
         // must survive (and its log too) until the command releases it.
         yield* seedCommandStateReference(database, process.id);
 
-        yield* collectPtyGarbage(
-          repository,
-          nodePtyCatalog(fakeBackend()),
-          'test-runtime',
-          sessionsPath,
-          {
-            nowMs: nowMs(),
-          },
-        );
+        yield* collectPtyGarbage(repository, nodePtyCatalog(fakeBackend()), sessionsPath, {
+          nowMs: nowMs(),
+        });
 
         return {
           process: yield* repository.findProcess(process.id),
@@ -296,29 +291,15 @@ function insertPtyProcess(input: {
   });
 }
 
-// Node-pty is the launch preference; the tmux slot is unavailable so it stays out of the way.
 function nodePtyCatalog(nodePty: PtyBackend) {
-  return fakeBackendCatalog({
-    configured: 'node_pty',
-    nodePty,
-    tmux: { ...fakeBackend({ name: 'tmux' }), available: Effect.succeed(false) },
-  });
+  return fakeBackendCatalog({ nodePty });
 }
 
 function fakeBackend(overrides: Partial<Pick<PtyBackend, 'name'>> = {}): PtyBackend {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
-    launch: () => Effect.die('launch is not used by PTY GC tests'),
-    writeInput: () => Effect.die('writeInput is not used by PTY GC tests'),
-    attach: () => Effect.die('attach is not used by PTY GC tests'),
-    replay: () => Effect.die('replay is not used by PTY GC tests'),
+  return fakePtyBackend({
     inspect: () => Effect.succeed({ status: 'missing' as const }),
-    listSessions: Effect.succeed([]),
-    kill: () => Effect.succeed({ terminated: true }),
-    collectGarbage: () => Effect.succeed([]),
     ...overrides,
-  };
+  });
 }
 
 function nowMs() {

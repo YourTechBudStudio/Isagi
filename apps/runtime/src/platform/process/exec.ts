@@ -78,7 +78,7 @@ export interface ExecResult {
 
 /**
  * Runs a short-lived command (no shell) and collects its UTF-8 output. `command` must be a literal executable name
- * authored at the call site (`git`, `tmux`, `ps`, `tar`): its base name is rendered into `ExecFailed`'s safe diagnostic. Interrupting the effect aborts the child (Node
+ * authored at the call site (`git`, `ps`, `tar`): its base name is rendered into `ExecFailed`'s safe diagnostic. Interrupting the effect aborts the child (Node
  * sends `SIGTERM`), so a cancelled request never leaves the command running.
  *
  * Use `spawnProcessGroup` instead for commands that run a user-authored shell line or may start their own children.

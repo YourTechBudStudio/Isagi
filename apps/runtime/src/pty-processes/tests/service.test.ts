@@ -16,7 +16,7 @@ import { PtyForegroundState } from '../foreground-state.js';
 import { LaunchEnvironment } from '../launch-environment.js';
 import { PtyRepository } from '../repository.js';
 import { PtyService } from '../service.js';
-import { fakeBackendCatalog, ptyTestRuntimeConfig } from '../testing.js';
+import { fakeBackendCatalog, fakePtyBackend, ptyTestRuntimeConfig } from '../testing.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from '../types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
@@ -35,10 +35,7 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const directory = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabase.layer.pipe(Layer.provide(directory));
   const repository = PtyRepository.layer.pipe(Layer.provide(database));
-  const backendLayer = Layer.succeed(
-    PtyBackendCatalog,
-    fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
-  );
+  const backendLayer = Layer.succeed(PtyBackendCatalog, fakeBackendCatalog({ nodePty: backend }));
   const userShellLayer = testUserShellLayer({ environment: loginShellEnvironment });
   const service = PtyService.layerNoDeps.pipe(
     Layer.provide(LaunchEnvironment.layerNoDeps),
@@ -52,23 +49,6 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
     Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);
-}
-
-// These tests exercise node-pty-configured behaviour; the tmux slot exists only
-// so the catalog is complete. Any dispatch to it is a test defect, not a
-// fallback, so it dies rather than answering.
-function unusedTmuxBackend(): PtyBackendShape {
-  return {
-    name: 'tmux',
-    available: Effect.die('tmux availability is not expected in these tests'),
-    launch: () => Effect.die('tmux launch is not expected in these tests'),
-    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
-    attach: () => Effect.die('tmux attach is not expected in these tests'),
-    replay: () => Effect.die('tmux replay is not expected in these tests'),
-    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
-    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
-    kill: () => Effect.die('tmux kill is not expected in these tests'),
-  };
 }
 
 /** A login-shell environment carrying the runtime controls the launch environment must strip. */
@@ -396,9 +376,7 @@ test('PTY read-only supersede awaits displaced detach before replacement attach'
 });
 
 function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -424,24 +402,16 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
         return Effect.sync(() => clearTimeout(timer));
       }),
     writeInput: () => Effect.void,
-    replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: 0 });
-        input.send({ type: 'replay_end' });
-      }),
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
-  } satisfies PtyBackendShape;
+  });
 }
 
 function launchCaptureBackend(
   onLaunch: (environment: NodeJS.ProcessEnv) => void,
   overrides: Partial<PtyBackendShape> = {},
 ): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.sync(() => {
         onLaunch(input.env);
@@ -457,19 +427,15 @@ function launchCaptureBackend(
       }),
     attach: () => Effect.die('launch environment test should not attach'),
     writeInput: () => Effect.void,
-    replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
     ...overrides,
-  } satisfies PtyBackendShape;
+  });
 }
 
 function singleAttachmentBackend(events: string[]): PtyBackendShape {
   let attached = false;
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -500,21 +466,13 @@ function singleAttachmentBackend(events: string[]): PtyBackendShape {
           }),
       ),
     writeInput: () => Effect.void,
-    replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: 0 });
-        input.send({ type: 'replay_end' });
-      }),
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
-  } satisfies PtyBackendShape;
+  });
 }
 
 function writeInputBackend(writes: string[]): PtyBackendShape {
-  return {
-    name: 'node_pty',
-    available: Effect.succeed(true),
+  return fakePtyBackend({
     launch: (input) =>
       Effect.succeed({
         ref: {
@@ -530,15 +488,9 @@ function writeInputBackend(writes: string[]): PtyBackendShape {
         writes.push(data);
       }),
     attach: () => Effect.die('writeInput test should not attach'),
-    replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: 0 });
-        input.send({ type: 'replay_end' });
-      }),
     inspect: () => Effect.succeed({ status: 'alive' }),
-    listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
-  } satisfies PtyBackendShape;
+  });
 }
 
 // The composed `launch` is now `allocateLaunch` plus a one-shot `start`. These

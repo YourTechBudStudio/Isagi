@@ -7,102 +7,65 @@ import { makeLogCapture } from '../../test/test-support.js';
 import { RuntimeConfig } from '../runtime-config/index.js';
 import { defaultRuntimeConfig } from '../runtime-config/testing.js';
 import { NodePtyBackend } from './adapters/node-pty.js';
-import { TmuxBackend } from './adapters/tmux.js';
 import { PtyBackendCatalog } from './backend.js';
 import type { PtyBackendShape } from './index.js';
 
-test('PTY backend catalog defaults its launch preference to configured node-pty even when tmux is available', async () => {
-  const catalog = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'node-pty' } }, { tmuxAvailable: true }),
-  );
+test('PTY backend catalog selects configured node-pty for launches and logs it', async () => {
+  const logs = makeLogCapture();
+  const catalog = await Effect.runPromise(builtCatalog().pipe(Effect.provide(logs.layer)));
 
   assert.equal(catalog.configured.name, 'node_pty');
+  assert.ok(logs.lines.some((line) => line.message === 'PTY launch backend selected'));
+  assert.equal(logs.lines.filter((line) => line.level === 'Warn').length, 0);
 });
 
-test('PTY backend catalog selects configured tmux for launches', async () => {
-  const catalog = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'tmux' } }, { tmuxAvailable: true }),
-  );
+test('PTY backend catalog resolves a persisted node-pty row to its adapter', async () => {
+  const catalog = await Effect.runPromise(builtCatalog());
 
-  assert.equal(catalog.configured.name, 'tmux');
+  assert.equal(Effect.runSync(catalog.forBackend('node_pty')).name, 'node_pty');
+  assert.equal(catalog.isRetired('node_pty'), false);
 });
 
-test('PTY backend catalog warns when configured tmux is unavailable', async () => {
-  const logs = makeLogCapture();
-  const catalog = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'tmux' } }, { tmuxAvailable: false }).pipe(
-      Effect.provide(logs.layer),
-    ),
-  );
+test('PTY backend catalog knows a retired persisted backend and refuses to resolve it', async () => {
+  const catalog = await Effect.runPromise(builtCatalog());
 
-  assert.equal(catalog.configured.name, 'tmux');
-  const warnings = logs.lines.filter((line) => line.level === 'Warn');
-  assert.match(warnings[0]?.message ?? '', /Configured PTY backend tmux is unavailable/);
-});
-
-test('PTY backend catalog resolves a persisted backend regardless of launch preference', async () => {
-  const nodePtyConfigured = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'node-pty' } }, { tmuxAvailable: true }),
-  );
-  const tmuxConfigured = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'tmux' } }, { tmuxAvailable: true }),
-  );
-
-  // The whole point of the catalog: an existing incarnation is operated through
-  // the transport that created it, never through the current preference.
-  const nameOf = (catalog: PtyBackendCatalog['Service'], name: PtyBackendShape['name']) =>
-    Effect.runSync(catalog.forBackend(name)).name;
-  assert.equal(nameOf(nodePtyConfigured, 'tmux'), 'tmux');
-  assert.equal(nameOf(nodePtyConfigured, 'node_pty'), 'node_pty');
-  assert.equal(nameOf(tmuxConfigured, 'node_pty'), 'node_pty');
-  assert.equal(nameOf(tmuxConfigured, 'tmux'), 'tmux');
-});
-
-test('PTY backend catalog resolves an unavailable adapter rather than substituting the configured one', async () => {
-  const catalog = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'node-pty' } }, { tmuxAvailable: false }),
-  );
-
-  const tmux = Effect.runSync(catalog.forBackend('tmux'));
-  assert.equal(tmux.name, 'tmux');
-  // Unavailability is reported by the adapter, not papered over by dispatch:
-  // silently returning node-pty here would aim a kill at the wrong process.
-  assert.equal(await Effect.runPromise(tmux.available), false);
+  // A historical row may still say `tmux`. It is known vocabulary, not
+  // corruption, but no adapter can operate it.
+  assert.equal(catalog.isRetired('tmux'), true);
+  assert.match(defectOf(catalog, 'tmux'), /Persisted PTY backend tmux is retired/);
 });
 
 test('PTY backend catalog fails loudly on an out-of-model persisted backend', async () => {
-  const catalog = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'node-pty' } }, { tmuxAvailable: true }),
-  );
+  const catalog = await Effect.runPromise(builtCatalog());
 
   // `backend` is bare text in SQLite with no CHECK constraint, so corruption is
   // reachable. It must not resolve to the configured adapter: it is a defect.
-  const defectOf = (name: string) => {
-    const exit = Effect.runSyncExit(catalog.forBackend(name as never));
-    assert.ok(Exit.isFailure(exit) && Cause.hasDies(exit.cause));
-    return String(Cause.squash(exit.cause));
-  };
-  assert.match(defectOf('screen'), /Unknown persisted PTY backend screen/);
+  assert.match(defectOf(catalog, 'screen'), /Unknown persisted PTY backend screen/);
+  assert.equal(catalog.isRetired('screen' as never), false);
   // And an inherited key must not resolve to something that is not an adapter at
   // all — the reason resolution is own-property guarded rather than a bare index.
-  assert.match(defectOf('toString'), /Unknown persisted PTY backend toString/);
+  assert.match(defectOf(catalog, 'toString'), /Unknown persisted PTY backend toString/);
+  assert.equal(catalog.isRetired('toString' as never), false);
 });
 
-test('PTY backend catalog exposes every registered adapter for backend-only sweeps', async () => {
-  const catalog = await Effect.runPromise(
-    builtCatalog({ pty: { backend: 'node-pty' } }, { tmuxAvailable: true }),
+test('PTY backend catalog exposes only registered adapters for backend-only sweeps', async () => {
+  const catalog = await Effect.runPromise(builtCatalog());
+
+  assert.deepEqual(
+    catalog.all.map((backend) => backend.name),
+    ['node_pty'],
   );
-
-  assert.deepEqual(catalog.all.map((backend) => backend.name).sort(), ['node_pty', 'tmux']);
 });
 
-function builtCatalog(
-  config: { readonly pty: { readonly backend: 'node-pty' | 'tmux' } },
-  options: { readonly tmuxAvailable: boolean },
-) {
-  const value = { ...defaultRuntimeConfig, pty: config.pty };
+function defectOf(catalog: PtyBackendCatalog['Service'], name: string) {
+  const exit = Effect.runSyncExit(catalog.forBackend(name as never));
+  assert.ok(Exit.isFailure(exit) && Cause.hasDies(exit.cause));
+  return String(Cause.squash(exit.cause));
+}
+
+function builtCatalog() {
   const service = {
-    get: Effect.succeed(value),
+    get: Effect.succeed(defaultRuntimeConfig),
     acceptHarnessPolicy: () => Effect.die('acceptHarnessPolicy is not used'),
   } satisfies RuntimeConfig['Service'];
   return Effect.gen(function* () {
@@ -110,21 +73,19 @@ function builtCatalog(
   }).pipe(
     Effect.provide(PtyBackendCatalog.layerNoDeps),
     Effect.provideService(RuntimeConfig, service),
-    Effect.provide(Layer.succeed(NodePtyBackend, fakeBackend('node_pty', true))),
-    Effect.provide(Layer.succeed(TmuxBackend, fakeBackend('tmux', options.tmuxAvailable))),
+    Effect.provide(Layer.succeed(NodePtyBackend, fakeBackend())),
   );
 }
 
-function fakeBackend(name: PtyBackendShape['name'], available: boolean): PtyBackendShape {
+function fakeBackend(): PtyBackendShape {
   return {
-    name,
-    available: Effect.succeed(available),
+    name: 'node_pty',
     launch: () => Effect.die('launch is not used by backend catalog tests'),
     writeInput: () => Effect.die('writeInput is not used by backend catalog tests'),
     attach: () => Effect.die('attach is not used by backend catalog tests'),
-    replay: () => Effect.die('replay is not used by backend catalog tests'),
     inspect: () => Effect.die('inspect is not used by backend catalog tests'),
-    listSessions: Effect.die('listSessions is not used by backend catalog tests'),
+    terminate: () => Effect.die('terminate is not used by backend catalog tests'),
     kill: () => Effect.die('kill is not used by backend catalog tests'),
+    collectGarbage: () => Effect.die('collectGarbage is not used by backend catalog tests'),
   };
 }

@@ -112,24 +112,6 @@ export function prepareShellIntegration(input: {
   }
 }
 
-export function shellIntegrationTokenFromRef(ref: {
-  readonly shellIntegrationToken?: string | null | undefined;
-}): ShellIntegrationConfig | null {
-  return ref.shellIntegrationToken ? { token: ref.shellIntegrationToken } : null;
-}
-
-// The token is the per-process secret that prevents arbitrary program output
-// from spoofing the foreground signal. It is persisted into the (runtime-internal)
-// backend-ref column so tmux replay can strip markers after a runtime restart;
-// it is never surfaced over a client/API contract.
-export function refWithShellIntegrationToken<T extends object>(
-  ref: T,
-  shellIntegration: ShellIntegrationConfig | null,
-): T & { readonly shellIntegrationToken?: string | null } {
-  if (!shellIntegration) return ref;
-  return { ...ref, shellIntegrationToken: shellIntegration.token };
-}
-
 export function createShellIntegrationParser(input: {
   readonly shellIntegration: ShellIntegrationConfig | null;
   readonly onEvent?: ((event: ShellIntegrationEvent) => void) | undefined;

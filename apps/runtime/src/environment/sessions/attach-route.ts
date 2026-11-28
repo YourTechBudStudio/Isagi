@@ -231,7 +231,7 @@ function registerSessionAttachRoute(
         const lifecycle = yield* SessionLifecycle;
         const expected = target.expectedIncarnation;
         if (expected === null) return yield* lifecycle.supersedeAttachment(target.sessionKey);
-        // Planning and replay can suspend after the target resolved, and a newer process may have
+        // Attachment planning and sending the preamble can suspend after the target resolved, and a newer process may have
         // launched and been attached to meanwhile. Re-check, under the lock every launch takes,
         // that the expected process is still the live one before displacing anything, so a stale
         // rejoin refuses instead of moving a newer process's holder aside.
